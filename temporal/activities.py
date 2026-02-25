@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from temporalio import activity
+from typing import Any
 
 @dataclass(frozen=True)
 class Game:
@@ -17,6 +18,12 @@ class OddsSnapshot:
     source: str
     captured_at_utc_iso: str
     payload: dict
+    
+@dataclass(frozen=True)
+class OddsBatch:
+    source: str
+    captured_at_utc_iso: str
+    games: dict[str, dict[str, Any]]
 
 @dataclass(frozen=True)
 class FetchCloseSnapshotInput:
@@ -35,37 +42,22 @@ async def fetch_games_for_today() -> list[Game]:
     """
     now = datetime.now(timezone.utc)
     start = now.replace(minute=(now.minute + 2) % 60)
-    activity.logger.info("[fetch_games_for_today] returning stub game")
+    activity.logger.info(f"[fetch_games_for_today] returning game_id=GAME123 start={start.isoformat()}")
     return [Game(game_id="GAME123", start_time_utc_iso=start.isoformat())]
 
 @activity.defn
-async def fetch_odds_snapshot(inp: FetchPollSnapshotInput) -> OddsSnapshot:
+async def fetch_odds_batch(inp: FetchPollSnapshotInput) -> OddsBatch:
     """
     Side effect boundary: eventually this hits an odds provider. Return a snapshot with required metadata: source + timestamp
     """
     captured_at = datetime.now(timezone.utc).isoformat()
     source = "stubbook"
     
-    payload = {gid: {"spread": -4.5, "price": -110} for gid in inp.game_ids}
-
-    activity.logger.info(f"[fetch_poll_odds_snapshot] {inp.snapshot_id=} game_count={len(inp.game_ids)}")
-
-    return OddsSnapshot(
-        snapshot_id=inp.snapshot_id,
-        kind="poll",
-        game_id="__BATCH__",
+    games = {gid: {"spread": -4.5, "price": -110} for gid in inp.game_ids}
+    return OddsBatch(
         source=source,
         captured_at_utc_iso=captured_at,
-        payload=payload,
-    )
-
-@activity.defn
-async def persist_odds_snapshot(snapshot: OddsSnapshot) -> None:
-    """
-    Side effect boundary: eventually inserts into odds_snapshots table. For now, just log
-    """
-    activity.logger.info(
-        f"[persist_odds_snapshot] source={snapshot.source} ts={snapshot.captured_at_utc_iso}"
+        games=games,
     )
 
 @activity.defn

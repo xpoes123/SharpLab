@@ -11,8 +11,7 @@ from .workflows import OddsPollingWorkflow, CloseCaptureWorkflow
 from .activities import (
     fetch_games_for_today,
     fetch_close_odds_snapshot,
-    fetch_odds_snapshot,
-    persist_odds_snapshot,
+    fetch_odds_batch,
     upsert_odds_snapshot
 )
 
@@ -25,7 +24,7 @@ async def main() -> None:
         client,
         task_queue=TASK_QUEUE,
         workflows=[OddsPollingWorkflow, CloseCaptureWorkflow],
-        activities=[fetch_games_for_today, upsert_odds_snapshot, fetch_odds_snapshot, persist_odds_snapshot, fetch_close_odds_snapshot],
+        activities=[fetch_games_for_today, upsert_odds_snapshot, fetch_odds_batch, fetch_close_odds_snapshot],
     )
     
     print(f"Worker started on task queue: {TASK_QUEUE}")
