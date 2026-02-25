@@ -1,4 +1,3 @@
-from temporal.activities import fetch_close_odds_snapshot
 import asyncio
 from temporalio.client import Client
 from temporalio.worker import Worker
@@ -11,6 +10,7 @@ logging.basicConfig(
 from .workflows import OddsPollingWorkflow, CloseCaptureWorkflow
 from .activities import (
     fetch_games_for_today,
+    fetch_close_odds_snapshot,
     fetch_odds_snapshot,
     persist_odds_snapshot,
     upsert_odds_snapshot

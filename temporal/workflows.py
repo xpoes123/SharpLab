@@ -1,5 +1,7 @@
 from datetime import timedelta, datetime, timezone
 from temporalio import workflow
+from temporalio.common import RetryPolicy
+from temporalio.exceptions import WorkflowAlreadyStartedError
 
 with workflow.unsafe.imports_passed_through():
     from .activities import (
@@ -27,6 +29,21 @@ class OddsPollingWorkflow:
                 fetch_games_for_today,
                 start_to_close_timeout=timedelta(seconds=10),
             )
+            
+            for g in games:
+                close_wf_id = f"close-capture-{g.game_id}"
+                
+                try:
+                    await workflow.start_child_workflow(
+                        "CloseCaptureWorkflow",
+                        (g.game_id, g.start_time_utc_iso),
+                        id=close_wf_id,
+                        task_queue=workflow.info().task_queue,
+                    )
+                    workflow.logger.info(f"Started CloseCaptureWorkflow for game {g.game_id} with workflow id {close_wf_id}")
+                except WorkflowAlreadyStartedError:
+                    pass
+            
             game_ids = [g.game_id for g in games]
             
             now = workflow.now()
