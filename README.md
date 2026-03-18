@@ -10,10 +10,10 @@ Not a gambling product. Not a SaaS. A long-term quant notebook with real infrast
 
 SharpLab automates the unglamorous parts of sports modeling:
 
-- **Odds ingestion** — snapshot lines across books every 15–30 minutes
-- **Close capture** — lock in the final line at game time for every tracked game
-- **CLV tracking** — measure every prediction against the closing line
-- **Evaluation** — weekly reports on calibration, margin error, and beat-close rate
+- **Odds ingestion** — snapshot lines across all major books every 30 minutes via [The Odds API](https://the-odds-api.com)
+- **Close capture** — lock in the final line at tip-off for every tracked game
+- **CLV tracking** — measure every bet against the closing line
+- **Discord bot** — log bets, pull live lines, run quick math from your server
 
 The goal is a system that runs quietly in the background and generates a disciplined paper trail. Model sophistication comes later. Automation and evaluation discipline come first.
 
@@ -30,55 +30,45 @@ Temporal handles:
 - Retry logic for flaky API calls
 - Clean separation between orchestration and side effects
 
-This also serves as a hands-on learning project for distributed workflow design — relevant professional context for working with Temporal at scale.
-
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────┐
-│           Temporal Worker           │
-│                                     │
-│  OddsPollingWorkflow                │
-│    └─ fetch games                   │
-│    └─ snapshot odds  (every N min)  │
-│    └─ persist snapshot              │
-│                                     │
-│  CloseCaptureWorkflow  (per-game)   │
-│    └─ sleep until tip-off           │
-│    └─ capture final close           │
-│    └─ persist snapshot              │
-└─────────────────────────────────────┘
-          │
-          ▼
-┌──────────────────┐    ┌──────────────────────┐
-│   Data Layer     │    │   Modeling Layer      │
-│                  │    │                       │
-│  games           │    │  Runs once daily      │
-│  odds_snapshots  │    │  Logs features +      │
-│  bets            │    │  version + prediction │
-│  predictions     │    │  Walk-forward eval    │
-│  results         │    │                       │
-└──────────────────┘    └──────────────────────┘
+┌─────────────────────────────────────────┐
+│            Temporal Worker              │
+│                                         │
+│  OddsPollingWorkflow  (every 30 min)    │
+│    └─ fetch today's games               │
+│    └─ snapshot odds (all books)         │
+│    └─ persist per-game, per-book        │
+│    └─ spawn CloseCaptureWorkflow        │
+│                                         │
+│  CloseCaptureWorkflow  (per-game)       │
+│    └─ sleep until tip-off               │
+│    └─ capture final closing line        │
+│    └─ persist close snapshot            │
+└─────────────────────────────────────────┘
+               │
+               ▼
+   ┌───────────────────────┐
+   │   SQLite (WAL mode)   │
+   │                       │
+   │  games                │
+   │  odds_snapshots       │
+   │  bets                 │
+   └───────────────────────┘
+               │
+               ▼
+   ┌───────────────────────┐
+   │    Discord Bot        │
+   │                       │
+   │  /odds  /line-move    │
+   │  /log   /record       │
+   │  /ev    /kelly        │
+   │  /convert  /kalshi    │
+   └───────────────────────┘
 ```
-
-**Key constraint:** No modeling logic inside workflows. No orchestration logic inside models. Clean separation throughout.
-
----
-
-## Evaluation
-
-Primary metric: **Closing Line Value (CLV)**
-
-> Did we beat the market before it closed?
-
-Secondary metrics:
-- Margin MAE
-- Calibration (Brier score / log loss)
-- Beat-close rate distribution
-
-ROI alone is not a valid performance signal at low sample sizes. CLV consistency is.
 
 ---
 
@@ -86,32 +76,46 @@ ROI alone is not a valid performance signal at low sample sizes. CLV consistency
 
 | Layer | Tech |
 |---|---|
-| Language | Python 3.14 |
-| Workflow orchestration | [Temporal](https://temporal.io) (`temporalio`) |
-| Initial model | Baseline Elo / regression margin |
-| Database | TBD (Postgres likely) |
+| Language | Python 3.14, async everywhere |
+| Package manager | `uv` |
+| Pipeline orchestration | [Temporal](https://temporal.io) (`temporalio`) |
+| Discord | `discord.py` with slash commands |
+| HTTP client | `httpx` (async) |
+| Database | SQLite (`aiosqlite`), WAL mode |
+| Odds | [The Odds API](https://the-odds-api.com) — all major US books in one call |
+| NBA schedule | The Odds API events endpoint (exact tip-off times) |
+
+---
+
+## Data Sources
+
+| Source | Used for | Auth |
+|---|---|---|
+| The Odds API | Game schedule + live odds (spread, ML, total) across all books | `ODDS_API_KEY` |
+| Kalshi | NBA game contracts (yes/no prices) | `KALSHI_API_KEY` (coming soon) |
+| Polymarket | Secondary market signal | None (public) |
+
+**Quota management:** The Odds API free tier is 500 req/month. Smart polling — only on game days, 30-min intervals during game window — keeps usage around 360 req/month.
 
 ---
 
 ## Project Status
 
-Early infrastructure phase. Stubs in place, real data sources not yet wired.
+Pipeline infrastructure complete. Bot not yet built.
 
-**Current priorities:**
-1. Temporal fundamentals — durable loops, crash recovery, schedule management
-2. Real odds ingestion (replacing stubs)
-3. Close capture automation
-4. Baseline margin model
-5. CLV logging
-6. Weekly evaluation reports
+**Done:**
+- ✅ Temporal workflows (`OddsPollingWorkflow`, `CloseCaptureWorkflow`)
+- ✅ Real odds ingestion via The Odds API (per-game, per-book snapshots)
+- ✅ SQLite persistence layer (`db/schema.py`, `db/queries.py`)
+- ✅ Shared model + odds conversion utilities (`shared/`)
+- ✅ Unit tests for payload extraction and odds math
 
-**Explicitly deferred:**
-- UI / dashboards
-- Live betting
-- Advanced ML (GBMs, neural nets)
-- Multi-league expansion
-
-Scope increases only after automation is stable and 100+ bets are logged.
+**Up next:**
+- Discord bot skeleton + pure-math commands (`/ev`, `/kelly`, `/convert`, `/parlay`)
+- `/odds` and `/best-line` (live lines)
+- `/log` and `/record` (bet tracking)
+- `/line-move` (reads pipeline history)
+- CLV auto-post on game close
 
 ---
 
@@ -121,27 +125,45 @@ Scope increases only after automation is stable and 100+ bets are logged.
 # Install dependencies (requires uv)
 uv sync
 
+# Copy env template and fill in your keys
+cp .env.example .env
+
 # Start a local Temporal server
 temporal server start-dev
 
-# Start the worker
+# Start the worker (also initialises the DB)
 python -m temporal.worker
 
-# Start odds polling
+# Start odds polling (30-min interval)
 python -m temporal.start_odds_polling
+```
 
-# Start close capture for a game
-python -m temporal.start_close_capture
+### Environment variables
+
+```
+ODDS_API_KEY=        # https://the-odds-api.com
+KALSHI_API_KEY=      # https://kalshi.com (optional for now)
+DISCORD_BOT_TOKEN=   # https://discord.com/developers
+```
+
+### Running tests
+
+```bash
+# Unit tests (fast, no external deps)
+uv run pytest tests/test_activities.py -v
+
+# Workflow tests (downloads Temporal test server on first run — slow)
+uv run pytest tests/test_workflows.py -v -s
 ```
 
 ---
 
 ## Design Principles
 
-**Observability over magic.** Every prediction must answer: what features were used, what data timestamp, what changed since last week, did we beat closing line.
+**Observability over magic.** Every bet must answer: what line did we get, what did the market close at, did we beat it.
 
-**Interpretable before complex.** Linear models before gradient boosting. Correct evaluation before model sophistication.
+**Automation before modeling.** A stable pipeline with no model beats a great model with manual processes.
 
-**Automation before modeling.** A stable pipeline with a weak model beats a great model with manual processes.
+**CLV over ROI at small sample sizes.** ROI is noise below ~500 bets. Closing line value is signal.
 
-**Flat sizing until sample is large enough.** No confidence-based multipliers. No emotional scaling.
+**Flat sizing until the sample is large enough.** No confidence-based multipliers until the edge is demonstrated.
