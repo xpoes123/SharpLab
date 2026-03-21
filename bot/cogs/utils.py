@@ -6,42 +6,16 @@ from discord.ext import commands
 from shared.odds_utils import (
     american_to_decimal,
     american_to_prob,
-    decimal_to_american,
-    prob_to_american,
+    parse_odds_input,
 )
 
 
-def _parse_odds(raw: str) -> tuple[str, float, int, float, float]:
-    """
-    Auto-detect odds format and return (format_label, decimal, american, prob, vig_free_prob).
-    Accepts: American (-110, +150, 150), decimal (1.91), probability (0.52, 52%).
-    """
-    raw = raw.strip()
-
-    if raw.endswith("%"):
-        prob = float(raw[:-1]) / 100
-        decimal = american_to_decimal(prob_to_american(prob))
-        american = prob_to_american(prob)
-        return ("implied %", decimal, american, prob)
-
-    if "." in raw:
-        val = float(raw)
-        if 0 < val < 1.0:
-            prob = val
-            american = prob_to_american(prob)
-            decimal = american_to_decimal(american)
-            return ("implied prob", decimal, american, prob)
-        else:
-            decimal = val
-            american = decimal_to_american(decimal)
-            prob = american_to_prob(american)
-            return ("decimal", decimal, american, prob)
-
-    # American
-    american = int(raw.lstrip("+"))
+def _parse_odds(raw: str) -> tuple[str, float, int, float]:
+    """Wrapper around shared parse_odds_input that also returns decimal and prob."""
+    american, fmt = parse_odds_input(raw)
     decimal = american_to_decimal(american)
     prob = american_to_prob(american)
-    return ("American", decimal, american, prob)
+    return (fmt, decimal, american, prob)
 
 
 class UtilsCog(commands.Cog):
@@ -50,8 +24,8 @@ class UtilsCog(commands.Cog):
 
     # ── /convert ──────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="convert", description="Convert odds between American, decimal, and implied %")
-    @app_commands.describe(odds="Odds to convert: American (-110), decimal (1.91), or probability (0.52 / 52%)")
+    @app_commands.command(name="convert", description="Convert odds between American, decimal, cents, and implied %")
+    @app_commands.describe(odds="Odds to convert: American (-110), decimal (1.91), cents (52), or probability (0.52 / 52%)")
     async def convert(self, interaction: discord.Interaction, odds: str) -> None:
         try:
             fmt, decimal, american, prob = _parse_odds(odds)

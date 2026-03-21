@@ -6,11 +6,14 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
+from db import schema
+
 load_dotenv()
 
 COGS = [
     "bot.cogs.utils",
     "bot.cogs.odds",
+    "bot.cogs.bets",
 ]
 
 intents = discord.Intents.default()
@@ -21,6 +24,7 @@ class SharpBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self) -> None:
+        await schema.init_db()
         for cog in COGS:
             await self.load_extension(cog)
         await self.tree.sync()

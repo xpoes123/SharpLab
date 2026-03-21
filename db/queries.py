@@ -2,7 +2,7 @@
 from __future__ import annotations
 import json
 import aiosqlite
-from shared.models import Game, OddsSnapshot
+from shared.models import Bet, Game, OddsSnapshot
 from db.schema import DB_PATH
 
 
@@ -150,3 +150,63 @@ async def get_close_snapshot(game_id: str, source: str) -> OddsSnapshot | None:
         captured_at_utc_iso=row["captured_at"],
         payload=json.loads(row["payload"]),
     )
+
+
+# ── Bets ───────────────────────────────────────────────────────────────────────
+
+def _row_to_bet(row: aiosqlite.Row) -> Bet:
+    return Bet(
+        bet_id=row["bet_id"],
+        game_id=row["game_id"],
+        placed_at=row["placed_at"],
+        discord_user=row["discord_user"],
+        book=row["book"],
+        market=row["market"],
+        side=row["side"],
+        odds=row["odds"],
+        units=row["units"],
+        line=row["line"],
+        status=row["status"],
+        clv=row["clv"],
+        notes=row["notes"],
+    )
+
+
+async def insert_bet(bet: Bet) -> int:
+    """Insert a new bet and return the assigned bet_id."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """
+            INSERT INTO bets
+                (game_id, placed_at, discord_user, book, market, side, line, odds, units, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (bet.game_id, bet.placed_at, bet.discord_user, bet.book,
+             bet.market, bet.side, bet.line, bet.odds, bet.units, bet.notes),
+        )
+        await db.commit()
+        return cursor.lastrowid  # type: ignore[return-value]
+
+
+async def get_bets_for_user(discord_user: str) -> list[Bet]:
+    """Return all bets for a user, newest first."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM bets WHERE discord_user = ? ORDER BY placed_at DESC",
+            (discord_user,),
+        )
+        rows = await cursor.fetchall()
+    return [_row_to_bet(r) for r in rows]
+
+
+async def get_open_bets_for_game(game_id: str) -> list[Bet]:
+    """Return all open bets for a game (used by CLV auto-post)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM bets WHERE game_id = ? AND status = 'open'",
+            (game_id,),
+        )
+        rows = await cursor.fetchall()
+    return [_row_to_bet(r) for r in rows]
