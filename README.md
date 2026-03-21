@@ -101,7 +101,7 @@ Temporal handles:
 
 ## Project Status
 
-Pipeline infrastructure complete. Bot not yet built.
+Pipeline complete. Bot partially built.
 
 **Done:**
 - ✅ Temporal workflows (`OddsPollingWorkflow`, `CloseCaptureWorkflow`)
@@ -109,12 +109,14 @@ Pipeline infrastructure complete. Bot not yet built.
 - ✅ SQLite persistence layer (`db/schema.py`, `db/queries.py`)
 - ✅ Shared model + odds conversion utilities (`shared/`)
 - ✅ Unit tests for payload extraction and odds math
+- ✅ Discord bot skeleton (`bot/main.py`)
+- ✅ Pure-math commands: `/convert`, `/ev`, `/kelly`, `/parlay`
+- ✅ `/odds` — current lines across all books (reads from DB, 30 min freshness)
+- ✅ `/best-line` — best spread, ML, and total across all books
 
 **Up next:**
-- Discord bot skeleton + pure-math commands (`/ev`, `/kelly`, `/convert`, `/parlay`)
-- `/odds` and `/best-line` (live lines)
 - `/log` and `/record` (bet tracking)
-- `/line-move` (reads pipeline history)
+- `/line-move` (reads pipeline history from DB)
 - CLV auto-post on game close
 
 ---

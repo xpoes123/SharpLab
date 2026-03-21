@@ -10,6 +10,7 @@ load_dotenv()
 
 COGS = [
     "bot.cogs.utils",
+    "bot.cogs.odds",
 ]
 
 intents = discord.Intents.default()

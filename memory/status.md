@@ -1,6 +1,6 @@
 # SharpLab — Current Status
 
-Last updated: 2026-03-17
+Last updated: 2026-03-21
 
 ## Architecture Decided
 
@@ -18,7 +18,8 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
 
 ### DB layer
 - `db/schema.py` — SQLite schema + `init_db()` (WAL mode, games/odds_snapshots/bets tables)
-- `db/queries.py` — `upsert_game`, `upsert_odds_snapshot`, `get_latest_snapshots_for_game`, `get_snapshots_for_game_since`, `get_close_snapshot`
+- `db/queries.py` — `upsert_game`, `upsert_odds_snapshot`, `get_latest_snapshots_for_game`,
+  `get_snapshots_for_game_since`, `get_close_snapshot`, `find_games_by_team`
 
 ### Temporal pipeline (real, not stubs)
 - `temporal/activities.py`:
@@ -28,6 +29,11 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
   - `fetch_close_odds_snapshot` → The Odds API filtered by eventId, returns `list[OddsSnapshot]`
 - `temporal/workflows.py` — `OddsPollingWorkflow` + `CloseCaptureWorkflow` (durable, correct)
 - `temporal/worker.py` — calls `init_db()` on startup
+
+### Discord bot
+- `bot/main.py` — `SharpBot` entrypoint, loads cogs, syncs slash commands on startup
+- `bot/cogs/utils.py` — `/convert`, `/ev`, `/kelly`, `/parlay` (pure math, no API/DB)
+- `bot/cogs/odds.py` — `/odds`, `/best-line` (reads from DB, zero API quota)
 
 ### Tests
 - `tests/test_activities.py` — 8 unit tests, all passing (payload extraction + odds utils)
@@ -39,10 +45,14 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
 - **Poll interval = 30 min** during game window → ~360 req/month, within free tier.
 - **`fetch_close_odds_snapshot` returns `list[OddsSnapshot]`** not `Optional` — Temporal SDK can't deserialize union return types.
 - **DraftKings = canonical close source** (falls back to first available bookmaker).
+- **`/odds` and `/best-line` read from DB** (not live API) to protect quota. Staleness shown in output.
 
 ## What Doesn't Exist Yet
 
-- `bot/` — all of it
+- `bot/cogs/bets.py` — `/log`, `/record`
+- `bot/cogs/markets.py` — `/kalshi`
+- CLV auto-post (background task in bot that fires when a close snapshot lands)
+- `/line-move` command
 - Kalshi and Polymarket activities (future)
 - `data/sharplab.db` — created at runtime by `init_db()`
 
@@ -50,14 +60,12 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
 
 - `ODDS_API_KEY` ✅
 - `BALLDONTLIE_API_KEY` ✅
-- `KALSHI_API_KEY` — not yet
-- `DISCORD_BOT_TOKEN` — not yet
+- `KALSHI_API_KEY` ✅
+- `DISCORD_BOT_TOKEN` ✅
 
 ## Build Order (next steps)
 
-1. Discord bot skeleton + pure-math commands (`/convert`, `/ev`, `/kelly`, `/parlay`)
-2. `/odds` and `/best-line` (live API call or DB read)
-3. `/log` and `/record` (DB read/write)
-4. `/line-move` (reads pipeline history from DB)
-5. `/kalshi` (Kalshi API call)
-6. CLV auto-post on game close
+1. `/log` and `/record` (bets cog — DB read/write)
+2. CLV auto-post (background task: detect close snapshot → compute CLV → post to Discord)
+3. `/line-move` (reads pipeline history from DB)
+4. `/kalshi` (Kalshi API call)

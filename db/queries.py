@@ -102,6 +102,31 @@ async def get_snapshots_for_game_since(game_id: str, since_utc_iso: str) -> list
     ]
 
 
+async def find_games_by_team(team_name: str) -> list[Game]:
+    """Find games where either team name contains the query (case-insensitive)."""
+    pattern = f"%{team_name}%"
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM games
+            WHERE home_team LIKE ? OR away_team LIKE ?
+            ORDER BY start_time ASC
+            """,
+            (pattern, pattern),
+        )
+        rows = await cursor.fetchall()
+    return [
+        Game(
+            game_id=row["game_id"],
+            home_team=row["home_team"],
+            away_team=row["away_team"],
+            start_time_utc_iso=row["start_time"],
+        )
+        for row in rows
+    ]
+
+
 async def get_close_snapshot(game_id: str, source: str) -> OddsSnapshot | None:
     """Returns the close snapshot for a game/source pair."""
     async with aiosqlite.connect(DB_PATH) as db:
