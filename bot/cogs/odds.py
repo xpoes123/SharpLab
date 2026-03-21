@@ -1,14 +1,136 @@
-"""Odds commands — read from DB (pipeline keeps it fresh every 30 min)."""
+"""Odds commands — live-poll The Odds API with a 10-min per-game cooldown."""
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
+from typing import Any
 
 import discord
+import httpx
 from discord import app_commands
 from discord.ext import commands
+from dotenv import load_dotenv
 
 from db import queries
 from shared.models import OddsSnapshot
+
+load_dotenv()
+
+ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")
+ODDS_API_BASE = "https://api.the-odds-api.com/v4"
+COOLDOWN_SECONDS = 600  # one live poll per game per 10 minutes
+
+
+# ── Live fetch helpers ──────────────────────────────────────────────────────────
+
+def _extract_payload(bookmaker: dict, home_team: str) -> dict[str, Any]:
+    """Normalize one bookmaker's markets into our standard payload shape.
+    Mirrors temporal/activities.py — keep in sync if API shape changes."""
+    payload: dict[str, Any] = {}
+    for market in bookmaker.get("markets", []):
+        key = market["key"]
+        outcomes = {o["name"]: o for o in market["outcomes"]}
+
+        if key == "spreads":
+            home = outcomes.get(home_team, {})
+            away = [o for n, o in outcomes.items() if n != home_team]
+            payload["spread"] = home.get("point")
+            payload["spread_odds"] = home.get("price")
+            if away:
+                payload["spread_away"] = away[0].get("point")
+
+        elif key == "h2h":
+            home = outcomes.get(home_team, {})
+            away = [o for n, o in outcomes.items() if n != home_team]
+            payload["ml_home"] = home.get("price")
+            payload["ml_away"] = away[0].get("price") if away else None
+
+        elif key == "totals":
+            over = outcomes.get("Over", {})
+            under = outcomes.get("Under", {})
+            payload["total"] = over.get("point")
+            payload["total_over_odds"] = over.get("price")
+            payload["total_under_odds"] = under.get("price")
+
+    return payload
+
+
+async def _live_poll_and_store(game_id: str) -> list[OddsSnapshot]:
+    """Fetch fresh odds for one game from The Odds API and write to DB."""
+    captured_at = datetime.now(timezone.utc).isoformat()
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{ODDS_API_BASE}/sports/basketball_nba/odds",
+            params={
+                "apiKey": ODDS_API_KEY,
+                "regions": "us",
+                "markets": "spreads,totals,h2h",
+                "oddsFormat": "american",
+                "eventIds": game_id,
+            },
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        events = resp.json()
+
+    snapshots: list[OddsSnapshot] = []
+    for event in events:
+        home_team = event["home_team"]
+        for bookmaker in event.get("bookmakers", []):
+            payload = _extract_payload(bookmaker, home_team)
+            if not payload:
+                continue
+            snap = OddsSnapshot(
+                snapshot_id=f"poll:{game_id}:{bookmaker['key']}:{captured_at}",
+                game_id=game_id,
+                kind="poll",
+                source=bookmaker["key"],
+                captured_at_utc_iso=captured_at,
+                payload=payload,
+            )
+            await queries.upsert_odds_snapshot(snap)
+            snapshots.append(snap)
+
+    return snapshots
+
+
+def _age_seconds(iso_str: str) -> float:
+    """Seconds since an ISO 8601 timestamp. Returns inf on parse failure."""
+    try:
+        dt = datetime.fromisoformat(iso_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - dt).total_seconds()
+    except Exception:
+        return float("inf")
+
+
+async def _get_snapshots(game_id: str) -> tuple[list[OddsSnapshot], str]:
+    """Return snapshots for a game, live-polling if data is stale.
+
+    Returns (snapshots, source_label) where source_label is 'live' or 'cached · X min ago'.
+    """
+    existing = await queries.get_latest_snapshots_for_game(game_id)
+    most_recent = max(existing, key=lambda s: s.captured_at_utc_iso) if existing else None
+    age = _age_seconds(most_recent.captured_at_utc_iso) if most_recent else float("inf")
+    cached_label = f"cached · {_staleness(most_recent.captured_at_utc_iso)}" if most_recent else "cached"
+
+    if age < COOLDOWN_SECONDS:
+        return existing, cached_label
+
+    # Stale or missing — go live
+    try:
+        fresh = await _live_poll_and_store(game_id)
+        if fresh:
+            return fresh, "live"
+        # API returned nothing (game may have started/closed)
+        if existing:
+            return existing, cached_label
+        return [], "no data"
+    except Exception:
+        if existing:
+            return existing, f"{cached_label} (poll failed)"
+        return [], "poll failed"
 
 
 # Books to display in order (skip obscure ones)
@@ -92,7 +214,7 @@ class OddsCog(commands.Cog):
 
     # ── /odds ──────────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="odds", description="Current lines for a game across all books (from DB)")
+    @app_commands.command(name="odds", description="Live lines for a game across all books (polls API, 10-min cooldown per game)")
     @app_commands.describe(game="Team name to search for (e.g. 'Lakers', 'Boston')")
     async def odds(self, interaction: discord.Interaction, game: str) -> None:
         await interaction.response.defer()
@@ -109,17 +231,13 @@ class OddsCog(commands.Cog):
         upcoming = [g for g in games if g.start_time_utc_iso >= now_iso]
         target = upcoming[0] if upcoming else games[-1]
 
-        snapshots = await queries.get_latest_snapshots_for_game(target.game_id)
+        snapshots, source_label = await _get_snapshots(target.game_id)
         if not snapshots:
             await interaction.followup.send(
-                f"Found **{target.away_team} @ {target.home_team}** but no odds snapshots yet. "
-                "Pipeline may not have polled this game."
+                f"Found **{target.away_team} @ {target.home_team}** but no odds available. "
+                f"({source_label})"
             )
             return
-
-        # Freshness: use most recent snapshot's captured_at
-        most_recent = max(snapshots, key=lambda s: s.captured_at_utc_iso)
-        staleness = _staleness(most_recent.captured_at_utc_iso)
 
         table = _build_odds_table(snapshots)
 
@@ -130,7 +248,7 @@ class OddsCog(commands.Cog):
 
         embed = discord.Embed(
             title=f"{target.away_team} @ {target.home_team}",
-            description=f"**{start_fmt}**\n*Lines as of {staleness}*\n\n```\n{table}\n```",
+            description=f"**{start_fmt}**\n*{source_label}*\n\n```\n{table}\n```",
             color=0x5865F2,
         )
         await interaction.followup.send(embed=embed)
@@ -151,15 +269,13 @@ class OddsCog(commands.Cog):
         upcoming = [g for g in games if g.start_time_utc_iso >= now_iso]
         target = upcoming[0] if upcoming else games[-1]
 
-        snapshots = await queries.get_latest_snapshots_for_game(target.game_id)
+        snapshots, source_label = await _get_snapshots(target.game_id)
         if not snapshots:
             await interaction.followup.send(
-                f"Found **{target.away_team} @ {target.home_team}** but no odds snapshots yet."
+                f"Found **{target.away_team} @ {target.home_team}** but no odds available. "
+                f"({source_label})"
             )
             return
-
-        most_recent = max(snapshots, key=lambda s: s.captured_at_utc_iso)
-        staleness = _staleness(most_recent.captured_at_utc_iso)
 
         def best(key: str, snapshots: list[OddsSnapshot], reverse: bool) -> tuple[str, float | int] | None:
             candidates = [(s.source, s.payload[key]) for s in snapshots if s.payload.get(key) is not None]
@@ -214,7 +330,7 @@ class OddsCog(commands.Cog):
 
         embed = discord.Embed(
             title=f"Best Lines — {away} @ {home}",
-            description=f"*As of {staleness}*",
+            description=f"*{source_label}*",
             color=0x57F287,
         )
         for name, value in fields:

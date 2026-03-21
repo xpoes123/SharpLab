@@ -16,6 +16,8 @@ COGS = [
     "bot.cogs.bets",
 ]
 
+GUILD_ID = int(os.environ["DISCORD_GUILD_ID"])
+
 intents = discord.Intents.default()
 
 
@@ -27,8 +29,10 @@ class SharpBot(commands.Bot):
         await schema.init_db()
         for cog in COGS:
             await self.load_extension(cog)
-        await self.tree.sync()
-        print("Slash commands synced.")
+        guild = discord.Object(id=GUILD_ID)
+        self.tree.copy_global_to(guild=guild)
+        await self.tree.sync(guild=guild)
+        print(f"Slash commands synced to guild {GUILD_ID}.")
 
     async def on_ready(self) -> None:
         print(f"Logged in as {self.user} (id={self.user.id})")
