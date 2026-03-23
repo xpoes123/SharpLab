@@ -14,7 +14,7 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 from db import queries
-from shared.models import OddsSnapshot
+from shared.models import TEAM_ABBR, OddsSnapshot
 from shared.odds_utils import american_to_prob, prob_to_american
 
 load_dotenv()
@@ -25,8 +25,9 @@ POLYMARKET_GAMMA = "https://gamma-api.polymarket.com"
 BALLDONTLIE_API_KEY = os.getenv("BALLDONTLIE_API_KEY", "")
 BALLDONTLIE_BASE = "https://api.balldontlie.io/v1"
 
-# Sources that are always fetched fresh; exclude from DB staleness check.
-LIVE_SOURCES = {"kalshi", "polymarket"}
+# Sources fetched live on demand; exclude from DB staleness calculation.
+# Kalshi is now written to DB by the pipeline — only polymarket remains live-only.
+LIVE_SOURCES = {"polymarket"}
 
 # ── Display helpers ──────────────────────────────────────────────────────────
 
@@ -113,23 +114,25 @@ def _build_odds_table(snapshots: list[OddsSnapshot]) -> str:
 
 async def _fetch_kalshi_ml(home_team: str, away_team: str) -> tuple[int, int] | None:
     """
-    Fetch Kalshi yes/no prices for an NBA game winner market.
-    Searches open KXNBA markets for one matching both team names.
-    Returns (home_american, away_american) or None if not found.
+    Live Kalshi ML fallback — used only when the pipeline hasn't written Kalshi to DB yet.
+    Matches by 3-char team abbreviation embedded in the KXNBAGAME event ticker
+    (last 6 chars = {away_abbr}{home_abbr}).  Titles truncate for LA teams so
+    we cannot use title-based matching.
     """
     if not KALSHI_API_KEY:
         return None
 
-    # Short names are most distinctive: "Celtics" from "Boston Celtics"
-    home_short = home_team.split()[-1].lower()
-    away_short = away_team.split()[-1].lower()
+    h_abbr = TEAM_ABBR.get(home_team)
+    a_abbr = TEAM_ABBR.get(away_team)
+    if not h_abbr or not a_abbr:
+        return None
 
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 f"{KALSHI_BASE}/markets",
                 headers={"Authorization": f"Bearer {KALSHI_API_KEY}"},
-                params={"limit": 200, "status": "open", "series_ticker": "KXNBA"},
+                params={"limit": 200, "status": "open", "series_ticker": "KXNBAGAME"},
                 timeout=10.0,
             )
             if resp.status_code != 200:
@@ -138,31 +141,33 @@ async def _fetch_kalshi_ml(home_team: str, away_team: str) -> tuple[int, int] | 
     except Exception:
         return None
 
-    for market in markets:
-        title = market.get("title", "").lower()
-        if home_short not in title or away_short not in title:
+    home_prob: float | None = None
+    away_prob: float | None = None
+
+    for m in markets:
+        et = m.get("event_ticker", "")
+        team_part = et.split("-")[-1]           # e.g. "26MAR24DENPHX"
+        if team_part[-3:].upper() != h_abbr or team_part[-6:-3].upper() != a_abbr:
             continue
 
-        yes_bid = market.get("yes_bid", 0)
-        yes_ask = market.get("yes_ask", 100)
-        yes_mid = (yes_bid + yes_ask) / 2 / 100
-        if not (0 < yes_mid < 1):
+        suffix = m.get("ticker", "").split("-")[-1].upper()
+        yes_bid = m.get("yes_bid_dollars") or 0
+        yes_ask = m.get("yes_ask_dollars") or 0
+        mid = (float(yes_bid) + float(yes_ask)) / 2 if (yes_bid or yes_ask) else float(m.get("last_price_dollars") or 0)
+        if not (0 < mid < 1):
             continue
 
-        # YES side = whichever team appears first in the title
-        home_idx = title.find(home_short)
-        away_idx = title.find(away_short)
-        if home_idx < away_idx:
-            home_prob, away_prob = yes_mid, 1 - yes_mid
-        else:
-            away_prob, home_prob = yes_mid, 1 - yes_mid
+        if suffix == h_abbr:
+            home_prob = mid
+        elif suffix == a_abbr:
+            away_prob = mid
 
-        try:
-            return prob_to_american(home_prob), prob_to_american(away_prob)
-        except ValueError:
-            continue
-
-    return None
+    if home_prob is None or away_prob is None:
+        return None
+    try:
+        return prob_to_american(home_prob), prob_to_american(away_prob)
+    except ValueError:
+        return None
 
 
 # ── Polymarket live fetch ────────────────────────────────────────────────────
@@ -351,20 +356,21 @@ class OddsCog(commands.Cog):
             return
 
         now_iso = datetime.now(timezone.utc).isoformat()
-        kalshi, polymarket = await asyncio.gather(
-            _fetch_kalshi_ml(target.home_team, target.away_team),
-            _fetch_polymarket_ml(target.home_team, target.away_team),
-        )
-        if kalshi:
-            home_ml, away_ml = kalshi
-            snapshots.append(OddsSnapshot(
-                snapshot_id="kalshi-live",
-                game_id=game,
-                kind="poll",
-                source="kalshi",
-                captured_at_utc_iso=now_iso,
-                payload={"ml_home": home_ml, "ml_away": away_ml},
-            ))
+        has_kalshi = any(s.source == "kalshi" for s in snapshots)
+        # Fetch Kalshi live only if pipeline hasn't written it to DB yet
+        if not has_kalshi:
+            kalshi_live = await _fetch_kalshi_ml(target.home_team, target.away_team)
+            if kalshi_live:
+                home_ml, away_ml = kalshi_live
+                snapshots.append(OddsSnapshot(
+                    snapshot_id="kalshi-live",
+                    game_id=game,
+                    kind="poll",
+                    source="kalshi",
+                    captured_at_utc_iso=now_iso,
+                    payload={"ml_home": home_ml, "ml_away": away_ml},
+                ))
+        polymarket = await _fetch_polymarket_ml(target.home_team, target.away_team)
         if polymarket:
             home_ml, away_ml = polymarket
             snapshots.append(OddsSnapshot(
@@ -418,20 +424,20 @@ class OddsCog(commands.Cog):
             return
 
         now_iso = datetime.now(timezone.utc).isoformat()
-        kalshi, polymarket = await asyncio.gather(
-            _fetch_kalshi_ml(target.home_team, target.away_team),
-            _fetch_polymarket_ml(target.home_team, target.away_team),
-        )
-        if kalshi:
-            home_ml, away_ml = kalshi
-            snapshots.append(OddsSnapshot(
-                snapshot_id="kalshi-live",
-                game_id=game,
-                kind="poll",
-                source="kalshi",
-                captured_at_utc_iso=now_iso,
-                payload={"ml_home": home_ml, "ml_away": away_ml},
-            ))
+        has_kalshi = any(s.source == "kalshi" for s in snapshots)
+        if not has_kalshi:
+            kalshi_live = await _fetch_kalshi_ml(target.home_team, target.away_team)
+            if kalshi_live:
+                home_ml, away_ml = kalshi_live
+                snapshots.append(OddsSnapshot(
+                    snapshot_id="kalshi-live",
+                    game_id=game,
+                    kind="poll",
+                    source="kalshi",
+                    captured_at_utc_iso=now_iso,
+                    payload={"ml_home": home_ml, "ml_away": away_ml},
+                ))
+        polymarket = await _fetch_polymarket_ml(target.home_team, target.away_team)
         if polymarket:
             home_ml, away_ml = polymarket
             snapshots.append(OddsSnapshot(

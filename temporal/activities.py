@@ -19,12 +19,16 @@ from dotenv import load_dotenv
 from temporalio import activity
 
 from db import queries, schema
-from shared.models import Game, OddsBatch, OddsSnapshot
+from shared.models import TEAM_ABBR, Game, OddsBatch, OddsSnapshot
+from shared.odds_utils import prob_to_american
 
 load_dotenv()
 
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")
 ODDS_API_BASE = "https://api.the-odds-api.com/v4"
+
+KALSHI_API_KEY = os.getenv("KALSHI_API_KEY", "")
+KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 
 
 # ── Input types ────────────────────────────────────────────────────────────────
@@ -226,3 +230,188 @@ async def fetch_close_odds_snapshot(inp: FetchCloseSnapshotInput) -> list[OddsSn
             payload=payload,
         )
     ]
+
+
+# ── Kalshi helpers ──────────────────────────────────────────────────────────────
+
+def _kalshi_mid(market: dict) -> float | None:
+    """Return mid price (0–1) from a Kalshi market dict, or None if unavailable."""
+    yes_bid = market.get("yes_bid_dollars") or 0
+    yes_ask = market.get("yes_ask_dollars") or 0
+    if yes_bid or yes_ask:
+        mid = (float(yes_bid) + float(yes_ask)) / 2
+    else:
+        last = market.get("last_price_dollars")
+        mid = float(last) if last else 0.0
+    return mid if 0 < mid < 1 else None
+
+
+def _kalshi_ml_from_markets(
+    game_markets: list[dict], home_abbr: str, away_abbr: str
+) -> tuple[int, int] | None:
+    """
+    Extract (ml_home, ml_away) American odds from a pair of Kalshi KXNBAGAME markets.
+    Returns None if prices are missing or not in (0, 1).
+    """
+    home_prob: float | None = None
+    away_prob: float | None = None
+
+    for m in game_markets:
+        ticker = m.get("ticker", "")
+        suffix = ticker.split("-")[-1].upper()
+        mid = _kalshi_mid(m)
+        if mid is None:
+            continue
+        if suffix == home_abbr:
+            home_prob = mid
+        elif suffix == away_abbr:
+            away_prob = mid
+
+    if home_prob is None or away_prob is None:
+        return None
+    try:
+        return prob_to_american(home_prob), prob_to_american(away_prob)
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+# ── Kalshi activities ────────────────────────────────────────────────────────────
+
+@activity.defn
+async def fetch_kalshi_odds_batch(games: list[Game]) -> OddsBatch:
+    """
+    Fetch Kalshi KXNBAGAME winner market prices for today's games.
+    Matches games to Kalshi events by 3-char team abbreviation embedded in the
+    event ticker (last 6 chars = {away_abbr}{home_abbr}, e.g. DENPHX).
+    Returns one OddsSnapshot per matched game with {ml_home, ml_away}.
+    """
+    captured_at = datetime.now(timezone.utc).isoformat()
+    empty = OddsBatch(source="kalshi", captured_at_utc_iso=captured_at, snapshots=[])
+
+    if not KALSHI_API_KEY:
+        return empty
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{KALSHI_BASE}/markets",
+            headers={"Authorization": f"Bearer {KALSHI_API_KEY}"},
+            params={"limit": 200, "status": "open", "series_ticker": "KXNBAGAME"},
+            timeout=10.0,
+        )
+        if resp.status_code != 200:
+            activity.logger.warning(f"[fetch_kalshi_odds_batch] HTTP {resp.status_code}")
+            return empty
+        markets = resp.json().get("markets", [])
+
+    # Group markets by event_ticker; build (away_abbr, home_abbr) → event_ticker lookup.
+    # Event ticker format: KXNBAGAME-{date}{away3}{home3}  e.g. KXNBAGAME-26MAR24DENPHX
+    event_markets: dict[str, list[dict]] = {}
+    abbr_pair_to_event: dict[tuple[str, str], str] = {}
+    for m in markets:
+        et = m.get("event_ticker", "")
+        event_markets.setdefault(et, []).append(m)
+        team_part = et.split("-")[-1]           # e.g. "26MAR24DENPHX"
+        home_abbr = team_part[-3:].upper()      # "PHX"
+        away_abbr = team_part[-6:-3].upper()    # "DEN"
+        abbr_pair_to_event[(away_abbr, home_abbr)] = et
+
+    snapshots: list[OddsSnapshot] = []
+    for game in games:
+        h_abbr = TEAM_ABBR.get(game.home_team)
+        a_abbr = TEAM_ABBR.get(game.away_team)
+        if not h_abbr or not a_abbr:
+            activity.logger.debug(
+                f"[fetch_kalshi_odds_batch] No abbreviation for {game.home_team!r} or {game.away_team!r}"
+            )
+            continue
+
+        et = abbr_pair_to_event.get((a_abbr, h_abbr))
+        if et is None:
+            continue
+
+        result = _kalshi_ml_from_markets(event_markets[et], h_abbr, a_abbr)
+        if result is None:
+            continue
+        ml_home, ml_away = result
+
+        snapshots.append(OddsSnapshot(
+            snapshot_id=f"poll:{game.game_id}:kalshi:{captured_at}",
+            game_id=game.game_id,
+            kind="poll",
+            source="kalshi",
+            captured_at_utc_iso=captured_at,
+            payload={"ml_home": ml_home, "ml_away": ml_away},
+        ))
+
+    activity.logger.info(
+        f"[fetch_kalshi_odds_batch] matched {len(snapshots)}/{len(games)} games"
+    )
+    return OddsBatch(source="kalshi", captured_at_utc_iso=captured_at, snapshots=snapshots)
+
+
+@activity.defn
+async def fetch_kalshi_close_snapshot(inp: FetchCloseSnapshotInput) -> list[OddsSnapshot]:
+    """
+    Capture Kalshi ML close for a game at tip-off.
+    Looks up team names from DB then finds the matching KXNBAGAME event.
+    Returns a one-item list on success, empty list on failure.
+    (Same list-as-Optional convention as fetch_close_odds_snapshot.)
+    """
+    captured_at = datetime.now(timezone.utc).isoformat()
+
+    if not KALSHI_API_KEY:
+        return []
+
+    game = await queries.get_game_by_id(inp.game_id)
+    if game is None:
+        activity.logger.warning(
+            f"[fetch_kalshi_close_snapshot] game {inp.game_id} not found in DB"
+        )
+        return []
+
+    h_abbr = TEAM_ABBR.get(game.home_team)
+    a_abbr = TEAM_ABBR.get(game.away_team)
+    if not h_abbr or not a_abbr:
+        activity.logger.warning(
+            f"[fetch_kalshi_close_snapshot] No abbreviation for {game.home_team!r}/{game.away_team!r}"
+        )
+        return []
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{KALSHI_BASE}/markets",
+            headers={"Authorization": f"Bearer {KALSHI_API_KEY}"},
+            params={"limit": 200, "status": "open", "series_ticker": "KXNBAGAME"},
+            timeout=10.0,
+        )
+        if resp.status_code != 200:
+            return []
+        markets = resp.json().get("markets", [])
+
+    # Find markets for this specific game
+    game_markets = [
+        m for m in markets
+        if (lambda tp: tp[-3:].upper() == h_abbr and tp[-6:-3].upper() == a_abbr)(
+            m.get("event_ticker", "").split("-")[-1]
+        )
+    ]
+
+    if not game_markets:
+        activity.logger.warning(
+            f"[fetch_kalshi_close_snapshot] No open market for {a_abbr}@{h_abbr}"
+        )
+        return []
+
+    result = _kalshi_ml_from_markets(game_markets, h_abbr, a_abbr)
+    if result is None:
+        return []
+
+    ml_home, ml_away = result
+    return [OddsSnapshot(
+        snapshot_id=inp.snapshot_id,
+        game_id=inp.game_id,
+        kind="close",
+        source="kalshi",
+        captured_at_utc_iso=captured_at,
+        payload={"ml_home": ml_home, "ml_away": ml_away},
+    )]

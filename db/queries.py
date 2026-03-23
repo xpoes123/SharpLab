@@ -285,14 +285,20 @@ async def get_games_with_close_and_open_bets() -> list[str]:
 
 
 async def get_any_close_snapshot(game_id: str) -> OddsSnapshot | None:
-    """Return the close snapshot for a game (DraftKings preferred)."""
+    """Return the close snapshot for a game (Kalshi preferred, then DraftKings)."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             """
             SELECT * FROM odds_snapshots
             WHERE game_id = ? AND kind = 'close'
-            ORDER BY CASE WHEN source = 'draftkings' THEN 0 ELSE 1 END, captured_at DESC
+            ORDER BY
+                CASE source
+                    WHEN 'kalshi'     THEN 0
+                    WHEN 'draftkings' THEN 1
+                    ELSE 2
+                END,
+                captured_at DESC
             LIMIT 1
             """,
             (game_id,),

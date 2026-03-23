@@ -9,7 +9,7 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 from db import queries
-from shared.models import Bet, Game, OddsSnapshot
+from shared.models import Bet, Game
 from shared.odds_utils import american_to_prob
 
 load_dotenv()
@@ -97,16 +97,25 @@ class CLVCog(commands.Cog):
         game_ids = await queries.get_games_with_close_and_open_bets()
         for game_id in game_ids:
             game = await queries.get_game_by_id(game_id)
-            close = await queries.get_any_close_snapshot(game_id)
             bets = await queries.get_open_bets_for_game(game_id)
 
-            if game is None or close is None or not bets:
+            if game is None or not bets:
+                continue
+
+            # Prefer Kalshi close for moneyline CLV; fall back to DraftKings for
+            # spread/total (Kalshi only carries ml_home / ml_away in its payload).
+            kalshi_close = await queries.get_close_snapshot(game_id, "kalshi")
+            dk_close = await queries.get_any_close_snapshot(game_id)
+
+            if kalshi_close is None and dk_close is None:
                 continue
 
             # Compute CLV for each bet, write to DB, then post
+            # Use whichever close snapshot has the field we need
             results: list[tuple[Bet, int | None, float | None]] = []
             for bet in bets:
-                close_odds = _close_odds_for_bet(bet, game, close.payload)
+                ref = kalshi_close if (bet.market.lower() == "moneyline" and kalshi_close) else dk_close
+                close_odds = _close_odds_for_bet(bet, game, ref.payload) if ref else None
                 clv: float | None = None
                 if close_odds is not None:
                     bet_prob = american_to_prob(bet.odds)
@@ -115,15 +124,21 @@ class CLVCog(commands.Cog):
                 results.append((bet, close_odds, clv))
                 await queries.update_bet_clv(bet.bet_id, clv)
 
-            captured_dt = datetime.fromisoformat(close.captured_at_utc_iso)
+            # Use the best available close for embed metadata
+            ref_snap = kalshi_close or dk_close
+            captured_dt = datetime.fromisoformat(ref_snap.captured_at_utc_iso)
             if captured_dt.tzinfo is None:
                 captured_dt = captured_dt.replace(tzinfo=timezone.utc)
             captured_str = captured_dt.strftime("%H:%M UTC")
+            sources = ", ".join(
+                s for s, snap in [("Kalshi", kalshi_close), ("DraftKings", dk_close)]
+                if snap is not None
+            )
 
             embed = discord.Embed(
                 title=f"Closing Lines — {game.away_team} @ {game.home_team}",
                 description=(
-                    f"Source: **{close.source.capitalize()}** at {captured_str}\n"
+                    f"Source: **{sources}** at {captured_str}\n"
                     f"Positive CLV = you beat the close (lower implied prob than closing line)"
                 ),
                 color=0xF1C40F,

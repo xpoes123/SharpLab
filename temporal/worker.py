@@ -11,6 +11,8 @@ from .activities import (
     fetch_odds_batch,
     upsert_odds_snapshot,
     fetch_close_odds_snapshot,
+    fetch_kalshi_odds_batch,
+    fetch_kalshi_close_snapshot,
 )
 
 logging.basicConfig(
@@ -35,6 +37,8 @@ async def main() -> None:
             fetch_odds_batch,
             upsert_odds_snapshot,
             fetch_close_odds_snapshot,
+            fetch_kalshi_odds_batch,
+            fetch_kalshi_close_snapshot,
         ],
     )
 

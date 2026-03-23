@@ -9,6 +9,8 @@ with workflow.unsafe.imports_passed_through():
         fetch_odds_batch,
         upsert_odds_snapshot,
         fetch_close_odds_snapshot,
+        fetch_kalshi_odds_batch,
+        fetch_kalshi_close_snapshot,
         FetchCloseSnapshotInput,
     )
 
@@ -77,6 +79,23 @@ class OddsPollingWorkflow:
                     retry_policy=RetryPolicy(maximum_attempts=3),
                 )
 
+            # ── Step 5: fetch Kalshi ML for all today's games ─────────────────
+            kalshi_batch = await workflow.execute_activity(
+                fetch_kalshi_odds_batch,
+                games,
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+
+            # ── Step 6: persist Kalshi snapshots ──────────────────────────────
+            for snapshot in kalshi_batch.snapshots:
+                await workflow.execute_activity(
+                    upsert_odds_snapshot,
+                    snapshot,
+                    start_to_close_timeout=timedelta(seconds=10),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                )
+
             await workflow.sleep(timedelta(minutes=interval_minutes))
 
 
@@ -110,11 +129,28 @@ class CloseCaptureWorkflow:
 
         if not results:
             workflow.logger.warning(f"No close snapshot available for {game_id} — lines already closed")
-            return
+        else:
+            await workflow.execute_activity(
+                upsert_odds_snapshot,
+                results[0],
+                start_to_close_timeout=timedelta(seconds=10),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
 
-        await workflow.execute_activity(
-            upsert_odds_snapshot,
-            results[0],
-            start_to_close_timeout=timedelta(seconds=10),
+        # Also capture Kalshi close (ML only) — used as source of truth for CLV
+        kalshi_results = await workflow.execute_activity(
+            fetch_kalshi_close_snapshot,
+            FetchCloseSnapshotInput(
+                snapshot_id=f"close:kalshi:{game_id}",
+                game_id=game_id,
+            ),
+            start_to_close_timeout=timedelta(seconds=30),
             retry_policy=RetryPolicy(maximum_attempts=3),
         )
+        if kalshi_results:
+            await workflow.execute_activity(
+                upsert_odds_snapshot,
+                kalshi_results[0],
+                start_to_close_timeout=timedelta(seconds=10),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )

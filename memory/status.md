@@ -1,6 +1,6 @@
 # SharpLab — Current Status
 
-Last updated: 2026-03-22
+Last updated: 2026-03-23
 
 ## Architecture Decided
 
@@ -26,7 +26,9 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
   get_games_with_close_and_open_bets, get_any_close_snapshot, update_bet_clv
 
 ### Temporal pipeline (real, not stubs)
-- `temporal/activities.py` — fetch_games_for_today, fetch_odds_batch, upsert_odds_snapshot, fetch_close_odds_snapshot
+- `temporal/activities.py` — fetch_games_for_today, fetch_odds_batch, upsert_odds_snapshot, fetch_close_odds_snapshot, fetch_kalshi_odds_batch, fetch_kalshi_close_snapshot
+  - Kalshi matching: KXNBAGAME series, team abbr from last 6 chars of event ticker
+  - `TEAM_ABBR` dict in `shared/models.py` maps full team names → 3-char abbreviations
 - `temporal/workflows.py` — OddsPollingWorkflow + CloseCaptureWorkflow (durable, correct)
 - `temporal/worker.py` — calls init_db() on startup
 
@@ -49,6 +51,7 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
   - Posts embed to CLV_CHANNEL_ID (default: 1485475287054418151) with per-user mention
   - Updates bets: clv=X, status='graded' (prevents re-posting)
   - Supports: moneyline (home+away), spread (home side), total (over/under)
+  - **Kalshi close = source of truth for ML CLV; DraftKings fallback for spread/total**
 
 ### Dev tooling
 - `justfile` — `just dev` starts all services at once (Temporal server + worker + odds poller + bot)
@@ -56,7 +59,7 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
   - `just` installed via winget; PATH added to `~/.bashrc`
 
 ### Tests
-- `tests/test_activities.py` — 8 unit tests, all passing
+- `tests/test_activities.py` — 19 unit tests, all passing
 
 ## Key Decisions Made
 
@@ -74,7 +77,7 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
 
 - `/line-move` command (reads odds_snapshots history from DB)
 - `bot/cogs/markets.py` — `/kalshi`
-- Kalshi and Polymarket pipeline activities
+- Polymarket pipeline activity
 
 ## API Keys in .env
 
@@ -88,4 +91,4 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
 
 1. `/line-move` — reads odds_snapshots history from DB, shows how spread/ML moved since open
 2. `/kalshi` — live Kalshi API call (bot/cogs/markets.py)
-3. Kalshi + Polymarket pipeline activities (temporal/activities.py)
+3. Polymarket pipeline activity
