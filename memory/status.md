@@ -21,7 +21,9 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
 - `db/schema.py` — SQLite schema + `init_db()` (WAL mode, games/odds_snapshots/bets tables)
 - `db/queries.py` — upsert_game, upsert_odds_snapshot, get_latest_snapshots_for_game,
   get_snapshots_for_game_since, get_close_snapshot, find_games_by_team,
-  insert_bet, get_bets_for_user, get_open_bets_for_game
+  get_upcoming_games, get_game_by_id, get_games_in_window,
+  insert_bet, get_bets_for_user, get_open_bets_for_game,
+  get_games_with_close_and_open_bets, get_any_close_snapshot, update_bet_clv
 
 ### Temporal pipeline (real, not stubs)
 - `temporal/activities.py` — fetch_games_for_today, fetch_odds_batch, upsert_odds_snapshot, fetch_close_odds_snapshot
@@ -33,13 +35,20 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
   - Uses `DISCORD_GUILD_ID` env var — guild sync is instant vs global sync (1 hour delay)
 - `bot/cogs/utils.py` — /convert, /ev, /kelly, /parlay (pure math, no API/DB)
   - /convert accepts: American (-110), decimal (1.91), cents (52), probability (0.52/52%)
-- `bot/cogs/odds.py` — /odds, /best-line
-  - Live-polls The Odds API on demand, writes snapshots to DB
-  - 10-min per-game cooldown: serves cached DB data if fresh enough
-  - Embed shows "live" or "cached · X min ago"
+- `bot/cogs/odds.py` — /odds, /best-line, /scores
+  - /odds and /best-line: game autocomplete from DB, Kalshi + Polymarket live ML overlay
+  - /scores: balldontlie live scores with ET time formatting, spread for finished games,
+    ML implied probs (away%/home%) for upcoming games from DB
+  - NBA day rollover at 11 AM UTC (7 AM ET) — fetches yesterday+today when post-midnight
 - `bot/cogs/bets.py` — /log, /record
   - /log odds param accepts all formats (American, decimal, cents) — converts to American for storage
   - Books: DraftKings, FanDuel, BetMGM, Caesars, Bet365, PointsBet, Kalshi, Polymarket, Other
+- `bot/cogs/clv.py` — CLV auto-post background task
+  - `@tasks.loop(minutes=5)` — polls DB for games with close snapshot + open bets
+  - Computes CLV in probability points (close_prob − bet_prob × 100)
+  - Posts embed to CLV_CHANNEL_ID (default: 1485475287054418151) with per-user mention
+  - Updates bets: clv=X, status='graded' (prevents re-posting)
+  - Supports: moneyline (home+away), spread (home side), total (over/under)
 
 ### Dev tooling
 - `justfile` — `just dev` starts all services at once (Temporal server + worker + odds poller + bot)
@@ -55,13 +64,14 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
 - **Poll interval = 30 min** → ~360 req/month, within free tier.
 - **`fetch_close_odds_snapshot` returns `list[OddsSnapshot]`** not Optional — Temporal SDK limitation.
 - **DraftKings = canonical close source** (falls back to first available).
-- **`/odds` and `/best-line` live-poll the API** with a 10-min per-game cooldown.
 - **All odds stored as American** in DB. Convert at input boundary in `shared/odds_utils.py`.
 - **Guild sync** (`tree.sync(guild=guild)`) not global sync — commands appear instantly.
+- **CLV auto-post channel** = `1485475287054418151` (env var `CLV_CHANNEL_ID` to override).
+- **Bet status lifecycle**: `open` → `graded` (CLV computed at tip-off) → `won`/`lost`/`push`/`void` (manual).
+- **tzdata** added as dependency for `zoneinfo` ET timezone support on Windows.
 
 ## What Doesn't Exist Yet
 
-- CLV auto-post (background task: detect close snapshot → compute CLV → post to Discord)
 - `/line-move` command (reads odds_snapshots history from DB)
 - `bot/cogs/markets.py` — `/kalshi`
 - Kalshi and Polymarket pipeline activities
@@ -76,6 +86,6 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
 
 ## Build Order (next steps)
 
-1. CLV auto-post — background task in bot, polls for new close snapshots, posts CLV for logged bets
-2. `/line-move` — reads odds_snapshots history from DB
-3. `/kalshi` — live Kalshi API call
+1. `/line-move` — reads odds_snapshots history from DB, shows how spread/ML moved since open
+2. `/kalshi` — live Kalshi API call (bot/cogs/markets.py)
+3. Kalshi + Polymarket pipeline activities (temporal/activities.py)

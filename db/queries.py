@@ -128,6 +128,26 @@ async def find_games_by_team(team_name: str) -> list[Game]:
     ]
 
 
+async def get_games_in_window(start_utc_iso: str, end_utc_iso: str) -> list[Game]:
+    """Return all games with start_time in [start, end] (UTC ISO strings)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM games WHERE start_time >= ? AND start_time <= ? ORDER BY start_time ASC",
+            (start_utc_iso, end_utc_iso),
+        )
+        rows = await cursor.fetchall()
+    return [
+        Game(
+            game_id=row["game_id"],
+            home_team=row["home_team"],
+            away_team=row["away_team"],
+            start_time_utc_iso=row["start_time"],
+        )
+        for row in rows
+    ]
+
+
 async def get_upcoming_games(filter_str: str = "") -> list[Game]:
     """Return upcoming games (start_time >= now), optionally filtered by team name."""
     now = datetime.now(timezone.utc).isoformat()
@@ -246,6 +266,58 @@ async def get_bets_for_user(discord_user: str) -> list[Bet]:
         )
         rows = await cursor.fetchall()
     return [_row_to_bet(r) for r in rows]
+
+
+async def get_games_with_close_and_open_bets() -> list[str]:
+    """Return game_ids that have a close snapshot and at least one open bet."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """
+            SELECT DISTINCT b.game_id
+            FROM bets b
+            INNER JOIN odds_snapshots os
+                ON b.game_id = os.game_id AND os.kind = 'close'
+            WHERE b.status = 'open'
+            """
+        )
+        rows = await cursor.fetchall()
+    return [row[0] for row in rows]
+
+
+async def get_any_close_snapshot(game_id: str) -> OddsSnapshot | None:
+    """Return the close snapshot for a game (DraftKings preferred)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM odds_snapshots
+            WHERE game_id = ? AND kind = 'close'
+            ORDER BY CASE WHEN source = 'draftkings' THEN 0 ELSE 1 END, captured_at DESC
+            LIMIT 1
+            """,
+            (game_id,),
+        )
+        row = await cursor.fetchone()
+    if row is None:
+        return None
+    return OddsSnapshot(
+        snapshot_id=row["snapshot_id"],
+        game_id=row["game_id"],
+        kind=row["kind"],
+        source=row["source"],
+        captured_at_utc_iso=row["captured_at"],
+        payload=json.loads(row["payload"]),
+    )
+
+
+async def update_bet_clv(bet_id: int, clv: float | None) -> None:
+    """Set CLV on a bet and mark it as graded (awaiting final result)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE bets SET clv = ?, status = 'graded' WHERE bet_id = ?",
+            (clv, bet_id),
+        )
+        await db.commit()
 
 
 async def get_open_bets_for_game(game_id: str) -> list[Bet]:

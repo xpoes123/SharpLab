@@ -4,7 +4,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import discord
 import httpx
@@ -238,19 +239,67 @@ async def _fetch_polymarket_ml(home_team: str, away_team: str) -> tuple[int, int
 
 # ── balldontlie scores fetch ─────────────────────────────────────────────────
 
-async def _fetch_today_scores() -> list[dict]:
-    """Fetch today's NBA games with live scores from balldontlie."""
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+_ET = ZoneInfo("America/New_York")
+
+
+def _fmt_tipoff_et(status: str) -> str:
+    """Convert an ISO tipoff timestamp (balldontlie not-started status) to '7:30 PM EDT'."""
+    try:
+        dt = datetime.fromisoformat(status.replace("Z", "+00:00"))
+        dt_et = dt.astimezone(_ET)
+        h = dt_et.hour % 12 or 12
+        ampm = "AM" if dt_et.hour < 12 else "PM"
+        return f"{h}:{dt_et.strftime('%M')} {ampm} {dt_et.strftime('%Z')}"
+    except (ValueError, AttributeError):
+        return status
+
+
+async def _fetch_scores(dates: list[str]) -> list[dict]:
+    """Fetch NBA games for one or more dates from balldontlie."""
     headers = {"Authorization": BALLDONTLIE_API_KEY} if BALLDONTLIE_API_KEY else {}
+    params: list[tuple[str, str | int]] = [("per_page", 100)]
+    for d in dates:
+        params.append(("dates[]", d))
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{BALLDONTLIE_BASE}/games",
-            params={"dates[]": today, "per_page": 100},
+            params=params,
             headers=headers,
             timeout=10.0,
         )
         resp.raise_for_status()
         return resp.json().get("data", [])
+
+
+async def _preload_game_odds(dates: list[str]) -> dict[tuple[str, str], dict]:
+    """
+    Returns {(home_last_word, away_last_word): {spread, ml_home_prob, ml_away_prob}}
+    for all DB games in the window covered by `dates`.
+
+    Window: start of earliest date to noon UTC of the day after latest date.
+    The +1 day buffer catches late West Coast games whose UTC date rolls over.
+    """
+    start_utc = min(dates) + "T00:00:00"
+    end_utc = (
+        datetime.strptime(max(dates), "%Y-%m-%d") + timedelta(days=1)
+    ).strftime("%Y-%m-%dT12:00:00")
+
+    result: dict[tuple[str, str], dict] = {}
+    games = await queries.get_games_in_window(start_utc, end_utc)
+    for game in games:
+        snapshots = await queries.get_latest_snapshots_for_game(game.game_id)
+        home_key = game.home_team.split()[-1].lower()
+        away_key = game.away_team.split()[-1].lower()
+        for s in snapshots:
+            p = s.payload
+            if p.get("ml_home") or p.get("spread") is not None:
+                result[(home_key, away_key)] = {
+                    "spread": p.get("spread"),
+                    "ml_home_prob": american_to_prob(p["ml_home"]) * 100 if p.get("ml_home") else None,
+                    "ml_away_prob": american_to_prob(p["ml_away"]) * 100 if p.get("ml_away") else None,
+                }
+                break
+    return result
 
 
 # ── Autocomplete ─────────────────────────────────────────────────────────────
@@ -459,25 +508,36 @@ class OddsCog(commands.Cog):
     async def scores(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer()
 
+        _now = datetime.now(timezone.utc)
+        # NBA day rolls over at ~11 AM UTC (7 AM ET). Before that we're still
+        # in yesterday's slate — fetch both so late games aren't missing.
+        post_midnight = _now.hour < 11
+        nba_day = (_now - timedelta(days=1)) if post_midnight else _now
+        dates = [nba_day.strftime("%Y-%m-%d")]
+        if post_midnight:
+            dates.append(_now.strftime("%Y-%m-%d"))
+
         try:
-            games = await _fetch_today_scores()
+            games, odds_lookup = await asyncio.gather(
+                _fetch_scores(dates),
+                _preload_game_odds(dates),
+            )
         except Exception as e:
             await interaction.followup.send(f"Could not fetch scores: {e}")
             return
 
         if not games:
-            await interaction.followup.send("No NBA games scheduled today.")
+            await interaction.followup.send("No NBA games found.")
             return
 
         def _sort_key(g: dict) -> int:
-            # Live games first, then not-started, then final
             period = g.get("period", 0)
             status = g.get("status", "")
             if period > 0 and not status.startswith("Final"):
-                return 0
+                return 0   # live — always first
             if status.startswith("Final"):
-                return 2
-            return 1
+                return 1 if post_midnight else 3
+            return 2   # not started
 
         games.sort(key=_sort_key)
 
@@ -491,26 +551,32 @@ class OddsCog(commands.Cog):
             status = g.get("status", "")
             time_left = (g.get("time") or "").strip()
 
+            home_key = g["home_team"]["full_name"].split()[-1].lower()
+            away_key = g["visitor_team"]["full_name"].split()[-1].lower()
+            odds = odds_lookup.get((home_key, away_key))
+
             if period > 0:
                 score_str = f"{away} {away_score:>3} @ {home_score:<3} {home}"
                 if status.startswith("Final"):
-                    status_str = status
-                    dot = " "
+                    spread_str = ""
+                    if odds and odds["spread"] is not None:
+                        spread_str = f"  {home} {odds['spread']:+.1f}"
+                    line = f"  {score_str:<20} {status}{spread_str}"
                 else:
-                    status_str = f"{status} {time_left}".strip()
-                    dot = "●"
+                    line = f"● {score_str:<20} {status} {time_left}".rstrip()
             else:
-                # Not yet started — status contains the scheduled tip-off time
                 score_str = f"{away}     @     {home}"
-                status_str = status or "—"
-                dot = " "
+                time_str = _fmt_tipoff_et(status) if status else "—"
+                ml_str = ""
+                if odds and odds["ml_home_prob"] and odds["ml_away_prob"]:
+                    ml_str = f"  {odds['ml_away_prob']:.0f}%/{odds['ml_home_prob']:.0f}%"
+                line = f"  {score_str:<20} {time_str:<14}{ml_str}"
 
-            lines.append(f"{dot} {score_str:<26} {status_str}")
+            lines.append(line)
 
-        _now = datetime.now(timezone.utc)
-        today_str = f"{_now.strftime('%a %b')} {_now.day}"
+        day_str = f"{nba_day.strftime('%a %b')} {nba_day.day}"
         embed = discord.Embed(
-            title=f"NBA Scores — {today_str}",
+            title=f"NBA Scores — {day_str}",
             description="```\n" + "\n".join(lines) + "\n```",
             color=0xE67E22,
         )
