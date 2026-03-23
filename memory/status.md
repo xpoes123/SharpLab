@@ -1,6 +1,6 @@
 # SharpLab — Current Status
 
-Last updated: 2026-03-23
+Last updated: 2026-03-23 (session 2)
 
 ## Architecture Decided
 
@@ -37,11 +37,17 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
   - Uses `DISCORD_GUILD_ID` env var — guild sync is instant vs global sync (1 hour delay)
 - `bot/cogs/utils.py` — /convert, /ev, /kelly, /parlay (pure math, no API/DB)
   - /convert accepts: American (-110), decimal (1.91), cents (52), probability (0.52/52%)
-- `bot/cogs/odds.py` — /odds, /best-line, /scores
+- `bot/cogs/odds.py` — /odds, /best-line, /line-move, /scores
   - /odds and /best-line: game autocomplete from DB, Kalshi + Polymarket live ML overlay
-  - /scores: balldontlie live scores with ET time formatting, spread for finished games,
-    ML implied probs (away%/home%) for upcoming games from DB
+  - /line-move: Kalshi (+ Polymarket later) ML open vs current delta in probability points
+    - Shows pp move with ↑/↓ arrow, snapshot count, "opened X ago"
+    - `PREDICTION_MARKET_SOURCES = ["kalshi", "polymarket"]` — add polymarket by adding to list
+  - /scores: balldontlie live scores with ET time formatting
+    - Finals: spread result + ✅/❌/➖ cover emoji (home_score - away_score + spread > 0 = covered)
+    - Upcoming: ML implied probs (away%/home%) — **Kalshi preferred over DK** (no vig)
+    - Blank line separator between finals / live / upcoming sections
   - NBA day rollover at 11 AM UTC (7 AM ET) — fetches yesterday+today when post-midnight
+  - `_preload_game_odds`: prefers Kalshi for ML (no vig), falls back to any book; spread from separate snap
 - `bot/cogs/bets.py` — /log, /record
   - /log odds param accepts all formats (American, decimal, cents) — converts to American for storage
   - Books: DraftKings, FanDuel, BetMGM, Caesars, Bet365, PointsBet, Kalshi, Polymarket, Other
@@ -75,9 +81,9 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
 
 ## What Doesn't Exist Yet
 
-- `/line-move` command (reads odds_snapshots history from DB)
-- `bot/cogs/markets.py` — `/kalshi`
+- `bot/cogs/markets.py` — `/kalshi` command
 - Polymarket pipeline activity
+- Polymarket in `/line-move` (slot reserved — just add "polymarket" to PREDICTION_MARKET_SOURCES)
 
 ## API Keys in .env
 
@@ -89,6 +95,5 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
 
 ## Build Order (next steps)
 
-1. `/line-move` — reads odds_snapshots history from DB, shows how spread/ML moved since open
-2. `/kalshi` — live Kalshi API call (bot/cogs/markets.py)
-3. Polymarket pipeline activity
+1. `/kalshi` — live Kalshi market explorer (bot/cogs/markets.py)
+2. Polymarket pipeline activity → then add to `/line-move` via PREDICTION_MARKET_SOURCES

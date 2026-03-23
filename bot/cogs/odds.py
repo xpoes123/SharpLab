@@ -36,6 +36,9 @@ LIVE_SOURCES = {"polymarket"}
 # Kalshi + Polymarket fetched live on demand.
 TRACKED_BOOKS = ["draftkings", "fanduel", "betmgm", "pinnacle", "kalshi", "polymarket"]
 
+# Prediction market sources shown in /line-move. Polymarket added later.
+PREDICTION_MARKET_SOURCES = ["kalshi", "polymarket"]
+
 BOOK_LABELS = {
     "draftkings": "DraftKings",
     "fanduel": "FanDuel",
@@ -44,6 +47,19 @@ BOOK_LABELS = {
     "kalshi": "Kalshi",
     "polymarket": "Polymarket",
 }
+
+
+def _fmt_move(open_odds: int | None, curr_odds: int | None) -> str:
+    """Format probability change between two American odds as pp movement."""
+    if open_odds is None or curr_odds is None:
+        return "—"
+    open_p = american_to_prob(open_odds) * 100
+    curr_p = american_to_prob(curr_odds) * 100
+    delta = curr_p - open_p
+    if abs(delta) < 0.05:
+        return "no change"
+    arrow = "↑" if delta > 0 else "↓"
+    return f"{delta:+.1f}pp {arrow}"
 
 
 def _fmt_prob(odds: int | None) -> str:
@@ -295,15 +311,23 @@ async def _preload_game_odds(dates: list[str]) -> dict[tuple[str, str], dict]:
         snapshots = await queries.get_latest_snapshots_for_game(game.game_id)
         home_key = game.home_team.split()[-1].lower()
         away_key = game.away_team.split()[-1].lower()
-        for s in snapshots:
-            p = s.payload
-            if p.get("ml_home") or p.get("spread") is not None:
-                result[(home_key, away_key)] = {
-                    "spread": p.get("spread"),
-                    "ml_home_prob": american_to_prob(p["ml_home"]) * 100 if p.get("ml_home") else None,
-                    "ml_away_prob": american_to_prob(p["ml_away"]) * 100 if p.get("ml_away") else None,
-                }
-                break
+        # Prefer Kalshi for ML (no vig, closer to true probability).
+        # Fall back to any book with ML, then layer in spread from any book.
+        by_source = {s.source: s for s in snapshots}
+        ml_snap = by_source.get("kalshi") or next(
+            (s for s in snapshots if s.payload.get("ml_home")), None
+        )
+        spread_snap = next(
+            (s for s in snapshots if s.payload.get("spread") is not None), None
+        )
+        if ml_snap or spread_snap:
+            ml_p = ml_snap.payload if ml_snap else {}
+            sp_p = spread_snap.payload if spread_snap else {}
+            result[(home_key, away_key)] = {
+                "spread": sp_p.get("spread"),
+                "ml_home_prob": american_to_prob(ml_p["ml_home"]) * 100 if ml_p.get("ml_home") else None,
+                "ml_away_prob": american_to_prob(ml_p["ml_away"]) * 100 if ml_p.get("ml_away") else None,
+            }
     return result
 
 
@@ -508,6 +532,87 @@ class OddsCog(commands.Cog):
         await interaction.followup.send(embed=embed)
 
 
+    # ── /line-move ──────────────────────────────────────────────────────────
+
+    @app_commands.command(name="line-move", description="How Kalshi odds have moved since open")
+    @app_commands.describe(game="Select a game")
+    @app_commands.autocomplete(game=game_autocomplete)
+    async def line_move(self, interaction: discord.Interaction, game: str) -> None:
+        await interaction.response.defer()
+
+        target = await queries.get_game_by_id(game)
+        if target is None:
+            await interaction.followup.send("Game not found.")
+            return
+
+        all_snaps = await queries.get_snapshots_for_game_since(game, "2000-01-01T00:00:00Z")
+        snaps = [s for s in all_snaps if s.source in PREDICTION_MARKET_SOURCES]
+
+        if not snaps:
+            await interaction.followup.send(
+                f"No prediction market data yet for **{target.away_team} @ {target.home_team}**. "
+                "The pipeline polls Kalshi every 30 min — check back soon."
+            )
+            return
+
+        sections: list[str] = []
+        for source in PREDICTION_MARKET_SOURCES:
+            source_snaps = [s for s in snaps if s.source == source]
+            if not source_snaps:
+                continue
+
+            label = BOOK_LABELS.get(source, source.title())
+            open_s = source_snaps[0]
+            curr_s = source_snaps[-1]
+            count = len(source_snaps)
+
+            open_home = open_s.payload.get("ml_home")
+            open_away = open_s.payload.get("ml_away")
+            curr_home = curr_s.payload.get("ml_home")
+            curr_away = curr_s.payload.get("ml_away")
+
+            def _fmt_ml(o: int | None) -> str:
+                if o is None:
+                    return "—"
+                return f"{o:+d} ({american_to_prob(o) * 100:.0f}%)"
+
+            home_name = target.home_team.split()[-1]
+            away_name = target.away_team.split()[-1]
+            W = 15
+
+            header = f"{'Side':<12}{'Open':<{W}}{'Now':<{W}}Move"
+            divider = "─" * (12 + W + W + 10)
+            home_row = (
+                f"{home_name:<12}{_fmt_ml(open_home):<{W}}"
+                f"{_fmt_ml(curr_home):<{W}}{_fmt_move(open_home, curr_home)}"
+            )
+            away_row = (
+                f"{away_name:<12}{_fmt_ml(open_away):<{W}}"
+                f"{_fmt_ml(curr_away):<{W}}{_fmt_move(open_away, curr_away)}"
+            )
+
+            count_str = f"{count} snapshot{'s' if count != 1 else ''}"
+            sections.append("\n".join([
+                f"{label} · {count_str} · opened {_staleness(open_s.captured_at_utc_iso)}",
+                header,
+                divider,
+                home_row,
+                away_row,
+            ]))
+
+        description = (
+            f"**{_fmt_game_time(target.start_time_utc_iso)}**\n\n"
+            "```\n"
+            + "\n\n".join(sections)
+            + "\n```"
+        )
+        embed = discord.Embed(
+            title=f"Line Movement — {target.away_team} @ {target.home_team}",
+            description=description,
+            color=0x5865F2,
+        )
+        await interaction.followup.send(embed=embed)
+
     # ── /scores ─────────────────────────────────────────────────────────────
 
     @app_commands.command(name="scores", description="Live scores for today's NBA games")
@@ -547,7 +652,8 @@ class OddsCog(commands.Cog):
 
         games.sort(key=_sort_key)
 
-        lines = []
+        lines: list[str] = []
+        prev_section: str | None = None
         for g in games:
             away = g["visitor_team"]["abbreviation"]
             home = g["home_team"]["abbreviation"]
@@ -564,20 +670,28 @@ class OddsCog(commands.Cog):
             if period > 0:
                 score_str = f"{away} {away_score:>3} @ {home_score:<3} {home}"
                 if status.startswith("Final"):
+                    section = "final"
                     spread_str = ""
                     if odds and odds["spread"] is not None:
-                        spread_str = f"  {home} {odds['spread']:+.1f}"
+                        margin = (home_score - away_score) + odds["spread"]
+                        cover = "➖" if abs(margin) < 0.1 else ("✅" if margin > 0 else "❌")
+                        spread_str = f"  {home} {odds['spread']:+.1f} {cover}"
                     line = f"  {score_str:<20} {status}{spread_str}"
                 else:
+                    section = "live"
                     line = f"● {score_str:<20} {status} {time_left}".rstrip()
             else:
+                section = "upcoming"
                 score_str = f"{away}     @     {home}"
                 time_str = _fmt_tipoff_et(status) if status else "—"
                 ml_str = ""
                 if odds and odds["ml_home_prob"] and odds["ml_away_prob"]:
-                    ml_str = f"  {odds['ml_away_prob']:.0f}%/{odds['ml_home_prob']:.0f}%"
+                    ml_str = f"  {odds['ml_away_prob']:>2.0f}%/{odds['ml_home_prob']:>2.0f}%"
                 line = f"  {score_str:<20} {time_str:<14}{ml_str}"
 
+            if prev_section is not None and section != prev_section:
+                lines.append("")
+            prev_section = section
             lines.append(line)
 
         day_str = f"{nba_day.strftime('%a %b')} {nba_day.day}"
