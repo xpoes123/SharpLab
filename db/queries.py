@@ -1,6 +1,7 @@
 """All DB access lives here. No raw SQL anywhere else."""
 from __future__ import annotations
 import json
+from datetime import datetime, timezone
 import aiosqlite
 from shared.models import Bet, Game, OddsSnapshot
 from db.schema import DB_PATH
@@ -125,6 +126,53 @@ async def find_games_by_team(team_name: str) -> list[Game]:
         )
         for row in rows
     ]
+
+
+async def get_upcoming_games(filter_str: str = "") -> list[Game]:
+    """Return upcoming games (start_time >= now), optionally filtered by team name."""
+    now = datetime.now(timezone.utc).isoformat()
+    pattern = f"%{filter_str}%"
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM games
+            WHERE start_time >= ?
+              AND (home_team LIKE ? OR away_team LIKE ?)
+            ORDER BY start_time ASC
+            LIMIT 25
+            """,
+            (now, pattern, pattern),
+        )
+        rows = await cursor.fetchall()
+    return [
+        Game(
+            game_id=row["game_id"],
+            home_team=row["home_team"],
+            away_team=row["away_team"],
+            start_time_utc_iso=row["start_time"],
+        )
+        for row in rows
+    ]
+
+
+async def get_game_by_id(game_id: str) -> Game | None:
+    """Return a single game by its ID."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM games WHERE game_id = ?",
+            (game_id,),
+        )
+        row = await cursor.fetchone()
+    if row is None:
+        return None
+    return Game(
+        game_id=row["game_id"],
+        home_team=row["home_team"],
+        away_team=row["away_team"],
+        start_time_utc_iso=row["start_time"],
+    )
 
 
 async def get_close_snapshot(game_id: str, source: str) -> OddsSnapshot | None:

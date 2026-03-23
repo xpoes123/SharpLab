@@ -1,9 +1,10 @@
-"""Odds commands — live-poll The Odds API with a 10-min per-game cooldown."""
+"""Odds commands — read from DB (Temporal pipeline writes every 30 min)."""
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 from datetime import datetime, timezone
-from typing import Any
 
 import discord
 import httpx
@@ -13,153 +14,53 @@ from dotenv import load_dotenv
 
 from db import queries
 from shared.models import OddsSnapshot
+from shared.odds_utils import american_to_prob, prob_to_american
 
 load_dotenv()
 
-ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")
-ODDS_API_BASE = "https://api.the-odds-api.com/v4"
-COOLDOWN_SECONDS = 600  # one live poll per game per 10 minutes
+KALSHI_API_KEY = os.getenv("KALSHI_API_KEY", "")
+KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
+POLYMARKET_GAMMA = "https://gamma-api.polymarket.com"
+BALLDONTLIE_API_KEY = os.getenv("BALLDONTLIE_API_KEY", "")
+BALLDONTLIE_BASE = "https://api.balldontlie.io/v1"
 
+# Sources that are always fetched fresh; exclude from DB staleness check.
+LIVE_SOURCES = {"kalshi", "polymarket"}
 
-# ── Live fetch helpers ──────────────────────────────────────────────────────────
+# ── Display helpers ──────────────────────────────────────────────────────────
 
-def _extract_payload(bookmaker: dict, home_team: str) -> dict[str, Any]:
-    """Normalize one bookmaker's markets into our standard payload shape.
-    Mirrors temporal/activities.py — keep in sync if API shape changes."""
-    payload: dict[str, Any] = {}
-    for market in bookmaker.get("markets", []):
-        key = market["key"]
-        outcomes = {o["name"]: o for o in market["outcomes"]}
-
-        if key == "spreads":
-            home = outcomes.get(home_team, {})
-            away = [o for n, o in outcomes.items() if n != home_team]
-            payload["spread"] = home.get("point")
-            payload["spread_odds"] = home.get("price")
-            if away:
-                payload["spread_away"] = away[0].get("point")
-
-        elif key == "h2h":
-            home = outcomes.get(home_team, {})
-            away = [o for n, o in outcomes.items() if n != home_team]
-            payload["ml_home"] = home.get("price")
-            payload["ml_away"] = away[0].get("price") if away else None
-
-        elif key == "totals":
-            over = outcomes.get("Over", {})
-            under = outcomes.get("Under", {})
-            payload["total"] = over.get("point")
-            payload["total_over_odds"] = over.get("price")
-            payload["total_under_odds"] = under.get("price")
-
-    return payload
-
-
-async def _live_poll_and_store(game_id: str) -> list[OddsSnapshot]:
-    """Fetch fresh odds for one game from The Odds API and write to DB."""
-    captured_at = datetime.now(timezone.utc).isoformat()
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"{ODDS_API_BASE}/sports/basketball_nba/odds",
-            params={
-                "apiKey": ODDS_API_KEY,
-                "regions": "us",
-                "markets": "spreads,totals,h2h",
-                "oddsFormat": "american",
-                "eventIds": game_id,
-            },
-            timeout=15.0,
-        )
-        resp.raise_for_status()
-        events = resp.json()
-
-    snapshots: list[OddsSnapshot] = []
-    for event in events:
-        home_team = event["home_team"]
-        for bookmaker in event.get("bookmakers", []):
-            payload = _extract_payload(bookmaker, home_team)
-            if not payload:
-                continue
-            snap = OddsSnapshot(
-                snapshot_id=f"poll:{game_id}:{bookmaker['key']}:{captured_at}",
-                game_id=game_id,
-                kind="poll",
-                source=bookmaker["key"],
-                captured_at_utc_iso=captured_at,
-                payload=payload,
-            )
-            await queries.upsert_odds_snapshot(snap)
-            snapshots.append(snap)
-
-    return snapshots
-
-
-def _age_seconds(iso_str: str) -> float:
-    """Seconds since an ISO 8601 timestamp. Returns inf on parse failure."""
-    try:
-        dt = datetime.fromisoformat(iso_str)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return (datetime.now(timezone.utc) - dt).total_seconds()
-    except Exception:
-        return float("inf")
-
-
-async def _get_snapshots(game_id: str) -> tuple[list[OddsSnapshot], str]:
-    """Return snapshots for a game, live-polling if data is stale.
-
-    Returns (snapshots, source_label) where source_label is 'live' or 'cached · X min ago'.
-    """
-    existing = await queries.get_latest_snapshots_for_game(game_id)
-    most_recent = max(existing, key=lambda s: s.captured_at_utc_iso) if existing else None
-    age = _age_seconds(most_recent.captured_at_utc_iso) if most_recent else float("inf")
-    cached_label = f"cached · {_staleness(most_recent.captured_at_utc_iso)}" if most_recent else "cached"
-
-    if age < COOLDOWN_SECONDS:
-        return existing, cached_label
-
-    # Stale or missing — go live
-    try:
-        fresh = await _live_poll_and_store(game_id)
-        if fresh:
-            return fresh, "live"
-        # API returned nothing (game may have started/closed)
-        if existing:
-            return existing, cached_label
-        return [], "no data"
-    except Exception:
-        if existing:
-            return existing, f"{cached_label} (poll failed)"
-        return [], "poll failed"
-
-
-# Books to display in order (skip obscure ones)
-DISPLAY_BOOKS = [
-    "draftkings", "fanduel", "betmgm", "caesars", "pointsbet",
-    "bet365", "williamhill_us", "barstool", "betonlineag",
-]
+# Books shown in /odds and used for best-line comparisons.
+# Pinnacle not available on current Odds API tier.
+# Kalshi + Polymarket fetched live on demand.
+TRACKED_BOOKS = ["draftkings", "fanduel", "betmgm", "pinnacle", "kalshi", "polymarket"]
 
 BOOK_LABELS = {
     "draftkings": "DraftKings",
     "fanduel": "FanDuel",
     "betmgm": "BetMGM",
-    "caesars": "Caesars",
-    "pointsbet": "PointsBet",
-    "bet365": "Bet365",
-    "williamhill_us": "Caesars (WH)",
-    "barstool": "Barstool",
-    "betonlineag": "BetOnline",
+    "pinnacle": "Pinnacle",
+    "kalshi": "Kalshi",
+    "polymarket": "Polymarket",
 }
 
 
-def _fmt_american(odds: int | None) -> str:
+def _fmt_prob(odds: int | None) -> str:
+    """Format American odds as implied probability (e.g. -110 → 52.4%)."""
     if odds is None:
         return "n/a"
-    return f"+{odds}" if odds > 0 else str(odds)
+    return f"{american_to_prob(odds) * 100:.1f}%"
+
+
+def _fmt_game_time(iso: str) -> str:
+    dt = datetime.fromisoformat(iso)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    h = dt.hour % 12 or 12
+    ampm = "AM" if dt.hour < 12 else "PM"
+    return f"{dt.strftime('%a %b')} {dt.day}, {h}:{dt.strftime('%M')} {ampm} UTC"
 
 
 def _staleness(captured_at_iso: str) -> str:
-    """Human-readable staleness string, e.g. '12 min ago'."""
     try:
         captured = datetime.fromisoformat(captured_at_iso)
         if captured.tzinfo is None:
@@ -176,108 +77,329 @@ def _staleness(captured_at_iso: str) -> str:
 
 
 def _build_odds_table(snapshots: list[OddsSnapshot]) -> str:
-    """Render a fixed-width table of odds across books."""
-    # Prefer display order, then include any remaining books
-    book_order = [s.source for s in snapshots if s.source in DISPLAY_BOOKS]
-    book_order += [s.source for s in snapshots if s.source not in DISPLAY_BOOKS]
-    snap_by_source = {s.source: s for s in snapshots}
+    ordered = [s for s in snapshots if s.source in TRACKED_BOOKS]
+    ordered.sort(key=lambda s: TRACKED_BOOKS.index(s.source))
 
-    lines = [f"{'Book':<14} {'Spread':>12}  {'ML':>14}  {'Total':>18}"]
+    if not ordered:
+        return "(no data for tracked books)"
+
+    lines = [f"{'Book':<14}{'Spread':<18}{'ML':<18}Total"]
     lines.append("─" * 62)
 
-    for source in book_order:
-        snap = snap_by_source[source]
+    for snap in ordered:
         p = snap.payload
-        label = BOOK_LABELS.get(source, source)[:13]
+        label = BOOK_LABELS.get(snap.source, snap.source)
 
         spread_str = (
-            f"{p.get('spread', ''):>+.1f} ({_fmt_american(p.get('spread_odds'))})"
+            f"{p['spread']:+.1f} ({_fmt_prob(p.get('spread_odds'))})"
             if p.get("spread") is not None else "—"
         )
         ml_str = (
-            f"{_fmt_american(p.get('ml_home'))} / {_fmt_american(p.get('ml_away'))}"
+            f"{_fmt_prob(p.get('ml_home'))}/{_fmt_prob(p.get('ml_away'))}"
             if p.get("ml_home") is not None else "—"
         )
         total_str = (
-            f"O/U {p.get('total', '—')} ({_fmt_american(p.get('total_over_odds'))}/{_fmt_american(p.get('total_under_odds'))})"
+            f"{p['total']} ({_fmt_prob(p.get('total_over_odds'))}/{_fmt_prob(p.get('total_under_odds'))})"
             if p.get("total") is not None else "—"
         )
 
-        lines.append(f"{label:<14} {spread_str:>12}  {ml_str:>14}  {total_str}")
+        lines.append(f"{label:<14}{spread_str:<18}{ml_str:<18}{total_str}")
 
     return "\n".join(lines)
 
+
+# ── Kalshi live fetch ────────────────────────────────────────────────────────
+
+async def _fetch_kalshi_ml(home_team: str, away_team: str) -> tuple[int, int] | None:
+    """
+    Fetch Kalshi yes/no prices for an NBA game winner market.
+    Searches open KXNBA markets for one matching both team names.
+    Returns (home_american, away_american) or None if not found.
+    """
+    if not KALSHI_API_KEY:
+        return None
+
+    # Short names are most distinctive: "Celtics" from "Boston Celtics"
+    home_short = home_team.split()[-1].lower()
+    away_short = away_team.split()[-1].lower()
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{KALSHI_BASE}/markets",
+                headers={"Authorization": f"Bearer {KALSHI_API_KEY}"},
+                params={"limit": 200, "status": "open", "series_ticker": "KXNBA"},
+                timeout=10.0,
+            )
+            if resp.status_code != 200:
+                return None
+            markets = resp.json().get("markets", [])
+    except Exception:
+        return None
+
+    for market in markets:
+        title = market.get("title", "").lower()
+        if home_short not in title or away_short not in title:
+            continue
+
+        yes_bid = market.get("yes_bid", 0)
+        yes_ask = market.get("yes_ask", 100)
+        yes_mid = (yes_bid + yes_ask) / 2 / 100
+        if not (0 < yes_mid < 1):
+            continue
+
+        # YES side = whichever team appears first in the title
+        home_idx = title.find(home_short)
+        away_idx = title.find(away_short)
+        if home_idx < away_idx:
+            home_prob, away_prob = yes_mid, 1 - yes_mid
+        else:
+            away_prob, home_prob = yes_mid, 1 - yes_mid
+
+        try:
+            return prob_to_american(home_prob), prob_to_american(away_prob)
+        except ValueError:
+            continue
+
+    return None
+
+
+# ── Polymarket live fetch ────────────────────────────────────────────────────
+
+async def _fetch_polymarket_ml(home_team: str, away_team: str) -> tuple[int, int] | None:
+    """
+    Fetch Polymarket game winner market prices for an NBA game.
+    Searches open markets via the Gamma API for one matching both team names.
+    Returns (home_american, away_american) or None if not found.
+    """
+    home_short = home_team.split()[-1].lower()
+    away_short = away_team.split()[-1].lower()
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{POLYMARKET_GAMMA}/markets",
+                params={"q": f"{home_short} {away_short}", "active": "true", "closed": "false", "limit": 20},
+                timeout=10.0,
+            )
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+    except Exception:
+        return None
+
+    # Response may be a list or {"markets": [...]} or {"data": [...]}
+    markets = data if isinstance(data, list) else data.get("markets", data.get("data", []))
+
+    target = None
+    for m in markets:
+        title = (m.get("question") or m.get("title") or "").lower()
+        if home_short in title and away_short in title:
+            target = m
+            break
+
+    if not target:
+        return None
+
+    tokens = target.get("tokens", [])
+    if isinstance(tokens, str):
+        try:
+            tokens = json.loads(tokens)
+        except Exception:
+            return None
+
+    if not tokens:
+        return None
+
+    home_prob: float | None = None
+    away_prob: float | None = None
+
+    for token in tokens:
+        outcome = (token.get("outcome") or "").lower()
+        price = token.get("price")
+        if price is None:
+            continue
+        price = float(price)
+        if not (0 < price < 1):
+            continue
+        if home_short in outcome:
+            home_prob = price
+        elif away_short in outcome:
+            away_prob = price
+
+    if home_prob is None or away_prob is None:
+        return None
+
+    try:
+        return prob_to_american(home_prob), prob_to_american(away_prob)
+    except ValueError:
+        return None
+
+
+# ── balldontlie scores fetch ─────────────────────────────────────────────────
+
+async def _fetch_today_scores() -> list[dict]:
+    """Fetch today's NBA games with live scores from balldontlie."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    headers = {"Authorization": BALLDONTLIE_API_KEY} if BALLDONTLIE_API_KEY else {}
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{BALLDONTLIE_BASE}/games",
+            params={"dates[]": today, "per_page": 100},
+            headers=headers,
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        return resp.json().get("data", [])
+
+
+# ── Autocomplete ─────────────────────────────────────────────────────────────
+
+async def game_autocomplete(
+    _interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    games = await queries.get_upcoming_games(current)
+    return [
+        app_commands.Choice(
+            name=f"{g.away_team} @ {g.home_team} — {_fmt_game_time(g.start_time_utc_iso)}"[:100],
+            value=g.game_id,
+        )
+        for g in games
+    ]
+
+
+# ── Cog ──────────────────────────────────────────────────────────────────────
 
 class OddsCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
-    # ── /odds ──────────────────────────────────────────────────────────────────
+    # ── /odds ───────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="odds", description="Live lines for a game across all books (polls API, 10-min cooldown per game)")
-    @app_commands.describe(game="Team name to search for (e.g. 'Lakers', 'Boston')")
+    @app_commands.command(name="odds", description="Lines for a game across all books")
+    @app_commands.describe(game="Select a game")
+    @app_commands.autocomplete(game=game_autocomplete)
     async def odds(self, interaction: discord.Interaction, game: str) -> None:
         await interaction.response.defer()
 
-        games = await queries.find_games_by_team(game)
-        if not games:
+        target = await queries.get_game_by_id(game)
+        if target is None:
             await interaction.followup.send(
-                f"No games found matching `{game}`. Is the pipeline running and the DB populated?"
+                "Game not found. The Temporal pipeline polls every 30 min — DB may not be populated yet."
             )
             return
 
-        # If multiple matches, use the first upcoming one
-        now_iso = datetime.now(timezone.utc).isoformat()
-        upcoming = [g for g in games if g.start_time_utc_iso >= now_iso]
-        target = upcoming[0] if upcoming else games[-1]
-
-        snapshots, source_label = await _get_snapshots(target.game_id)
+        snapshots = [
+            s for s in await queries.get_latest_snapshots_for_game(game)
+            if s.source in TRACKED_BOOKS
+        ]
         if not snapshots:
             await interaction.followup.send(
-                f"Found **{target.away_team} @ {target.home_team}** but no odds available. "
-                f"({source_label})"
+                f"Found **{target.away_team} @ {target.home_team}** but no odds in DB yet. "
+                "Temporal polls every 30 min — try again shortly."
             )
             return
 
-        table = _build_odds_table(snapshots)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        kalshi, polymarket = await asyncio.gather(
+            _fetch_kalshi_ml(target.home_team, target.away_team),
+            _fetch_polymarket_ml(target.home_team, target.away_team),
+        )
+        if kalshi:
+            home_ml, away_ml = kalshi
+            snapshots.append(OddsSnapshot(
+                snapshot_id="kalshi-live",
+                game_id=game,
+                kind="poll",
+                source="kalshi",
+                captured_at_utc_iso=now_iso,
+                payload={"ml_home": home_ml, "ml_away": away_ml},
+            ))
+        if polymarket:
+            home_ml, away_ml = polymarket
+            snapshots.append(OddsSnapshot(
+                snapshot_id="polymarket-live",
+                game_id=game,
+                kind="poll",
+                source="polymarket",
+                captured_at_utc_iso=now_iso,
+                payload={"ml_home": home_ml, "ml_away": away_ml},
+            ))
 
-        start_dt = datetime.fromisoformat(target.start_time_utc_iso)
-        if start_dt.tzinfo is None:
-            start_dt = start_dt.replace(tzinfo=timezone.utc)
-        start_fmt = start_dt.strftime("%a %b %-d, %-I:%M %p UTC")
+        most_recent = max(
+            (s for s in snapshots if s.source not in LIVE_SOURCES),
+            key=lambda s: s.captured_at_utc_iso,
+        )
+        table = _build_odds_table(snapshots)
 
         embed = discord.Embed(
             title=f"{target.away_team} @ {target.home_team}",
-            description=f"**{start_fmt}**\n*{source_label}*\n\n```\n{table}\n```",
+            description=(
+                f"**{_fmt_game_time(target.start_time_utc_iso)}**\n"
+                f"*updated {_staleness(most_recent.captured_at_utc_iso)}*\n\n"
+                f"```\n{table}\n```"
+            ),
             color=0x5865F2,
         )
         await interaction.followup.send(embed=embed)
 
-    # ── /best-line ─────────────────────────────────────────────────────────────
+    # ── /best-line ──────────────────────────────────────────────────────────
 
     @app_commands.command(name="best-line", description="Best available number across all books for a game")
-    @app_commands.describe(game="Team name to search for (e.g. 'Lakers', 'Boston')")
+    @app_commands.describe(game="Select a game")
+    @app_commands.autocomplete(game=game_autocomplete)
     async def best_line(self, interaction: discord.Interaction, game: str) -> None:
         await interaction.response.defer()
 
-        games = await queries.find_games_by_team(game)
-        if not games:
-            await interaction.followup.send(f"No games found matching `{game}`.")
+        target = await queries.get_game_by_id(game)
+        if target is None:
+            await interaction.followup.send("Game not found.")
             return
 
-        now_iso = datetime.now(timezone.utc).isoformat()
-        upcoming = [g for g in games if g.start_time_utc_iso >= now_iso]
-        target = upcoming[0] if upcoming else games[-1]
-
-        snapshots, source_label = await _get_snapshots(target.game_id)
+        snapshots = [
+            s for s in await queries.get_latest_snapshots_for_game(game)
+            if s.source in TRACKED_BOOKS
+        ]
         if not snapshots:
             await interaction.followup.send(
-                f"Found **{target.away_team} @ {target.home_team}** but no odds available. "
-                f"({source_label})"
+                f"Found **{target.away_team} @ {target.home_team}** but no odds in DB yet. "
+                "Temporal polls every 30 min — try again shortly."
             )
             return
 
-        def best(key: str, snapshots: list[OddsSnapshot], reverse: bool) -> tuple[str, float | int] | None:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        kalshi, polymarket = await asyncio.gather(
+            _fetch_kalshi_ml(target.home_team, target.away_team),
+            _fetch_polymarket_ml(target.home_team, target.away_team),
+        )
+        if kalshi:
+            home_ml, away_ml = kalshi
+            snapshots.append(OddsSnapshot(
+                snapshot_id="kalshi-live",
+                game_id=game,
+                kind="poll",
+                source="kalshi",
+                captured_at_utc_iso=now_iso,
+                payload={"ml_home": home_ml, "ml_away": away_ml},
+            ))
+        if polymarket:
+            home_ml, away_ml = polymarket
+            snapshots.append(OddsSnapshot(
+                snapshot_id="polymarket-live",
+                game_id=game,
+                kind="poll",
+                source="polymarket",
+                captured_at_utc_iso=now_iso,
+                payload={"ml_home": home_ml, "ml_away": away_ml},
+            ))
+
+        most_recent = max(
+            (s for s in snapshots if s.source not in LIVE_SOURCES),
+            key=lambda s: s.captured_at_utc_iso,
+        )
+
+        def best(key: str, reverse: bool) -> tuple[str, float | int] | None:
             candidates = [(s.source, s.payload[key]) for s in snapshots if s.payload.get(key) is not None]
             if not candidates:
                 return None
@@ -285,57 +407,113 @@ class OddsCog(commands.Cog):
 
         home = target.home_team
         away = target.away_team
-
         fields = []
 
-        b = best("spread", snapshots, reverse=True)
+        b = best("spread", reverse=True)
         if b:
             src, val = b
             snap = next(s for s in snapshots if s.source == src)
-            odds_val = _fmt_american(snap.payload.get("spread_odds"))
-            fields.append((f"Spread ({home})", f"`{val:+.1f}` ({odds_val}) — {BOOK_LABELS.get(src, src)}"))
+            fields.append((f"Spread ({home})", f"`{val:+.1f}` ({_fmt_prob(snap.payload.get('spread_odds'))}) — {BOOK_LABELS.get(src, src)}"))
 
-        b = best("spread_away", snapshots, reverse=True)
+        b = best("spread_away", reverse=True)
         if b:
             src, val = b
-            snap = next(s for s in snapshots if s.source == src)
-            # away spread odds isn't stored separately — use spread_odds as proxy isn't right,
-            # but The Odds API doesn't give us away odds separately in the current payload.
             fields.append((f"Spread ({away})", f"`{val:+.1f}` — {BOOK_LABELS.get(src, src)}"))
 
-        b = best("ml_home", snapshots, reverse=True)
+        b = best("ml_home", reverse=True)
         if b:
             src, val = b
-            fields.append((f"ML ({home})", f"`{_fmt_american(int(val))}` — {BOOK_LABELS.get(src, src)}"))
+            fields.append((f"ML ({home})", f"`{_fmt_prob(int(val))}` — {BOOK_LABELS.get(src, src)}"))
 
-        b = best("ml_away", snapshots, reverse=True)
+        b = best("ml_away", reverse=True)
         if b:
             src, val = b
-            fields.append((f"ML ({away})", f"`{_fmt_american(int(val))}` — {BOOK_LABELS.get(src, src)}"))
+            fields.append((f"ML ({away})", f"`{_fmt_prob(int(val))}` — {BOOK_LABELS.get(src, src)}"))
 
-        # For totals: best over = lowest total, best under = highest total
-        b = best("total", snapshots, reverse=False)  # lowest = best for over
+        b = best("total", reverse=False)
         if b:
             src, val = b
             snap = next(s for s in snapshots if s.source == src)
-            o_odds = _fmt_american(snap.payload.get("total_over_odds"))
-            fields.append(("Best Over", f"`O {val}` ({o_odds}) — {BOOK_LABELS.get(src, src)}"))
+            fields.append(("Best Over", f"`O {val}` ({_fmt_prob(snap.payload.get('total_over_odds'))}) — {BOOK_LABELS.get(src, src)}"))
 
-        b = best("total", snapshots, reverse=True)  # highest = best for under
+        b = best("total", reverse=True)
         if b:
             src, val = b
             snap = next(s for s in snapshots if s.source == src)
-            u_odds = _fmt_american(snap.payload.get("total_under_odds"))
-            fields.append(("Best Under", f"`U {val}` ({u_odds}) — {BOOK_LABELS.get(src, src)}"))
+            fields.append(("Best Under", f"`U {val}` ({_fmt_prob(snap.payload.get('total_under_odds'))}) — {BOOK_LABELS.get(src, src)}"))
 
         embed = discord.Embed(
             title=f"Best Lines — {away} @ {home}",
-            description=f"*{source_label}*",
+            description=f"*updated {_staleness(most_recent.captured_at_utc_iso)}*",
             color=0x57F287,
         )
         for name, value in fields:
             embed.add_field(name=name, value=value, inline=True)
 
+        await interaction.followup.send(embed=embed)
+
+
+    # ── /scores ─────────────────────────────────────────────────────────────
+
+    @app_commands.command(name="scores", description="Live scores for today's NBA games")
+    async def scores(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+
+        try:
+            games = await _fetch_today_scores()
+        except Exception as e:
+            await interaction.followup.send(f"Could not fetch scores: {e}")
+            return
+
+        if not games:
+            await interaction.followup.send("No NBA games scheduled today.")
+            return
+
+        def _sort_key(g: dict) -> int:
+            # Live games first, then not-started, then final
+            period = g.get("period", 0)
+            status = g.get("status", "")
+            if period > 0 and not status.startswith("Final"):
+                return 0
+            if status.startswith("Final"):
+                return 2
+            return 1
+
+        games.sort(key=_sort_key)
+
+        lines = []
+        for g in games:
+            away = g["visitor_team"]["abbreviation"]
+            home = g["home_team"]["abbreviation"]
+            away_score = g.get("visitor_team_score") or 0
+            home_score = g.get("home_team_score") or 0
+            period = g.get("period", 0)
+            status = g.get("status", "")
+            time_left = (g.get("time") or "").strip()
+
+            if period > 0:
+                score_str = f"{away} {away_score:>3} @ {home_score:<3} {home}"
+                if status.startswith("Final"):
+                    status_str = status
+                    dot = " "
+                else:
+                    status_str = f"{status} {time_left}".strip()
+                    dot = "●"
+            else:
+                # Not yet started — status contains the scheduled tip-off time
+                score_str = f"{away}     @     {home}"
+                status_str = status or "—"
+                dot = " "
+
+            lines.append(f"{dot} {score_str:<26} {status_str}")
+
+        _now = datetime.now(timezone.utc)
+        today_str = f"{_now.strftime('%a %b')} {_now.day}"
+        embed = discord.Embed(
+            title=f"NBA Scores — {today_str}",
+            description="```\n" + "\n".join(lines) + "\n```",
+            color=0xE67E22,
+        )
         await interaction.followup.send(embed=embed)
 
 

@@ -8,7 +8,7 @@ async def main() -> None:
     
     handle = await client.start_workflow(
         "OddsPollingWorkflow",
-        1,
+        30,
         id="odds-polling-v1",
         task_queue=TASK_QUEUE,
     )
