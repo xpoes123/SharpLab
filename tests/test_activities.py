@@ -9,7 +9,9 @@ from temporal.activities import (
     _kalshi_mid,
     _parse_espn_detail,
     _parse_espn_injuries_response,
+    _resolve_bet,
 )
+from shared.models import Bet
 from shared.models import TEAM_ABBR
 from shared.odds_utils import prob_to_american, american_to_prob, american_to_decimal
 
@@ -255,3 +257,74 @@ def test_parse_espn_detail_partial():
 def test_parse_espn_detail_none():
     assert _parse_espn_detail(None) is None
     assert _parse_espn_detail({}) is None
+
+
+# ── _resolve_bet ───────────────────────────────────────────────────────────────
+
+def _bet(**kwargs) -> Bet:
+    defaults = dict(
+        game_id="g1", placed_at="2026-01-01T00:00:00",
+        discord_user="123", book="draftkings",
+        market="moneyline", side="celtics", odds=-200, units=1.0,
+    )
+    return Bet(**{**defaults, **kwargs})
+
+HOME = "Boston Celtics"
+AWAY = "Los Angeles Lakers"
+
+# Moneyline
+def test_resolve_ml_home_win():
+    assert _resolve_bet(_bet(market="moneyline", side="celtics"), HOME, AWAY, 110, 100) == "won"
+
+def test_resolve_ml_home_loss():
+    assert _resolve_bet(_bet(market="moneyline", side="celtics"), HOME, AWAY, 100, 110) == "lost"
+
+def test_resolve_ml_away_win():
+    assert _resolve_bet(_bet(market="moneyline", side="lakers"), HOME, AWAY, 100, 110) == "won"
+
+def test_resolve_ml_yes_means_home():
+    assert _resolve_bet(_bet(market="kalshi", side="yes"), HOME, AWAY, 110, 100) == "won"
+
+def test_resolve_ml_no_means_away():
+    assert _resolve_bet(_bet(market="kalshi", side="no"), HOME, AWAY, 100, 110) == "won"
+
+# Spread
+def test_resolve_spread_home_covers():
+    # Home -4.5, wins by 10 → margin = 10 + (-4.5) = 5.5 → won
+    assert _resolve_bet(_bet(market="spread", side="celtics", line=-4.5), HOME, AWAY, 110, 100) == "won"
+
+def test_resolve_spread_home_fails_to_cover():
+    # Home -4.5, wins by 3 → margin = 3 + (-4.5) = -1.5 → lost
+    assert _resolve_bet(_bet(market="spread", side="celtics", line=-4.5), HOME, AWAY, 103, 100) == "lost"
+
+def test_resolve_spread_push():
+    # Home -4.5, wins by exactly 4.5 (half-point spreads can't push, but test the logic)
+    # Home -3, wins by exactly 3 → push
+    assert _resolve_bet(_bet(market="spread", side="celtics", line=-3.0), HOME, AWAY, 103, 100) == "push"
+
+def test_resolve_spread_away_covers():
+    # Away +4.5, home wins by 3 → margin = (100-103) + 4.5 = 1.5 → won
+    assert _resolve_bet(_bet(market="spread", side="lakers", line=4.5), HOME, AWAY, 103, 100) == "won"
+
+def test_resolve_spread_no_line_voids():
+    assert _resolve_bet(_bet(market="spread", side="celtics", line=None), HOME, AWAY, 110, 100) == "void"
+
+# Total
+def test_resolve_total_over_hits():
+    assert _resolve_bet(_bet(market="total", side="over", line=220.5), HOME, AWAY, 115, 110) == "won"
+
+def test_resolve_total_over_misses():
+    assert _resolve_bet(_bet(market="total", side="over", line=220.5), HOME, AWAY, 100, 110) == "lost"
+
+def test_resolve_total_under_hits():
+    assert _resolve_bet(_bet(market="total", side="under", line=220.5), HOME, AWAY, 100, 110) == "won"
+
+def test_resolve_total_push():
+    assert _resolve_bet(_bet(market="total", side="over", line=210.0), HOME, AWAY, 100, 110) == "push"
+
+def test_resolve_total_no_line_voids():
+    assert _resolve_bet(_bet(market="total", side="over", line=None), HOME, AWAY, 110, 100) == "void"
+
+# Unknown side → void
+def test_resolve_unknown_side_voids():
+    assert _resolve_bet(_bet(market="moneyline", side="unknown_team"), HOME, AWAY, 110, 100) == "void"

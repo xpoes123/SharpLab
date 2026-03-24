@@ -1,8 +1,17 @@
 {
-  "outputStyle": "default",
   "permissions": {
     "allow": [
-      "Bash(uv run pytest:*)"
+      "Bash(uv run pytest:*)",
+      "Bash(uv run python:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(just:*)",
+      "Bash(winget install:*)",
+      "WebFetch(domain:trading-api.readme.io)",
+      "WebFetch(domain:docs.kalshi.com)",
+      "Bash(python:*)"
     ]
-  }
+  },
+  "outputStyle": "default"
 }
