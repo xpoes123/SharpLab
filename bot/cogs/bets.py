@@ -216,6 +216,7 @@ class BetsCog(commands.Cog):
         pick="Your pick — autocomplete shows live lines (team, spread side, over/under, yes/no)",
         odds="Odds in any format: American (-110, +150), decimal (1.91), or cents (52)",
         units="Units risked (e.g. 1.0)",
+        line="Spread or total number if not auto-filled by autocomplete (e.g. -4.5, 224.5)",
         notes="Optional notes",
     )
     @app_commands.choices(book=BOOK_CHOICES, market=MARKET_CHOICES)
@@ -228,9 +229,10 @@ class BetsCog(commands.Cog):
         pick: str,
         odds: str,
         units: float,
+        line: float | None = None,
         notes: str | None = None,
     ) -> None:
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer()
 
         try:
             american_odds, odds_fmt = parse_odds_input(odds)
@@ -249,7 +251,9 @@ class BetsCog(commands.Cog):
             )
             return
 
-        side, line = _parse_pick(pick)
+        side, pick_line = _parse_pick(pick)
+        # Explicit line param overrides autocomplete-encoded line
+        final_line = line if line is not None else pick_line
 
         now_iso = datetime.now(timezone.utc).isoformat()
         bet = Bet(
@@ -261,13 +265,13 @@ class BetsCog(commands.Cog):
             side=side,
             odds=american_odds,
             units=units,
-            line=line,
+            line=final_line,
             notes=notes,
         )
         bet_id = await queries.insert_bet(bet)
 
         sign = "+" if american_odds > 0 else ""
-        line_str = f" {line:+.1f}" if line is not None else ""
+        line_str = f" {final_line:+.1f}" if final_line is not None else ""
         implied = american_to_prob(american_odds)
         if odds_fmt == "american":
             odds_display = f"`{sign}{american_odds}`"
