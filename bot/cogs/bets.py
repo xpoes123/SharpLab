@@ -255,6 +255,14 @@ class BetsCog(commands.Cog):
         # Explicit line param overrides autocomplete-encoded line
         final_line = line if line is not None else pick_line
 
+        if market in ("spread", "total") and final_line is None:
+            await interaction.followup.send(
+                "Spread and total bets require a line number. "
+                "Either select from autocomplete (if lines are available) or enter it in the `line` field.",
+                ephemeral=True,
+            )
+            return
+
         now_iso = datetime.now(timezone.utc).isoformat()
         bet = Bet(
             game_id=target.game_id,
