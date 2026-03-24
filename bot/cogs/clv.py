@@ -78,8 +78,8 @@ def _build_bet_line(bet: Bet, close_odds: int | None, clv: float | None) -> str:
     return f"{desc}\n→ closed **{_fmt_odds(close_odds)}** | CLV **{clv_str}** {emoji}"
 
 
-def _build_closing_lines_field(kalshi_close, dk_close) -> str:
-    """Build a summary of the actual closing line numbers."""
+def _build_closing_lines_field(kalshi_close, dk_close, dk_open=None) -> str:
+    """Build a summary of the actual closing line numbers, with spread movement if available."""
     lines = []
 
     if kalshi_close:
@@ -98,7 +98,13 @@ def _build_closing_lines_field(kalshi_close, dk_close) -> str:
         total_over = p.get("total_over_odds")
         total_under = p.get("total_under_odds")
         if spread is not None and spread_odds is not None:
-            lines.append(f"Spread: **{spread:+.1f}** ({_fmt_odds(spread_odds)})")
+            open_spread = dk_open.payload.get("spread") if dk_open else None
+            if open_spread is not None and open_spread != spread:
+                lines.append(
+                    f"Spread: **{open_spread:+.1f} → {spread:+.1f}** ({_fmt_odds(spread_odds)})"
+                )
+            else:
+                lines.append(f"Spread: **{spread:+.1f}** ({_fmt_odds(spread_odds)})")
         if total is not None:
             over_str = _fmt_odds(total_over) if total_over is not None else "n/a"
             under_str = _fmt_odds(total_under) if total_under is not None else "n/a"
@@ -135,6 +141,8 @@ class CLVCog(commands.Cog):
             if kalshi_close is None and dk_close is None:
                 continue
 
+            dk_open = await queries.get_first_poll_snapshot(game_id, "draftkings")
+
             ref_snap = kalshi_close or dk_close
             captured_dt = datetime.fromisoformat(ref_snap.captured_at_utc_iso)
             if captured_dt.tzinfo is None:
@@ -157,7 +165,7 @@ class CLVCog(commands.Cog):
             # Always show the closing line numbers
             embed.add_field(
                 name="Close",
-                value=_build_closing_lines_field(kalshi_close, dk_close),
+                value=_build_closing_lines_field(kalshi_close, dk_close, dk_open),
                 inline=False,
             )
 

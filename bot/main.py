@@ -16,6 +16,7 @@ COGS = [
     "bot.cogs.bets",
     "bot.cogs.clv",
     "bot.cogs.injuries",
+    "bot.cogs.history",
 ]
 
 GUILD_ID = int(os.environ["DISCORD_GUILD_ID"])

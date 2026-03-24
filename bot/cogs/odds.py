@@ -347,6 +347,28 @@ async def game_autocomplete(
     ]
 
 
+async def historical_game_autocomplete(
+    _interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    """Autocomplete for /line-move: searches all games (past + upcoming).
+    If the typed value looks like a game ID prefix (hex/dash, no spaces),
+    search by ID prefix; otherwise search by team name.
+    """
+    stripped = current.strip().lower()
+    if stripped and " " not in stripped and all(c in "0123456789abcdef-" for c in stripped):
+        games = await queries.get_games_by_id_prefix(stripped)
+    else:
+        games = await queries.get_recent_games(current)
+    return [
+        app_commands.Choice(
+            name=f"{g.away_team} @ {g.home_team} — {_fmt_game_time(g.start_time_utc_iso)}"[:100],
+            value=g.game_id,
+        )
+        for g in games
+    ]
+
+
 # ── Cog ──────────────────────────────────────────────────────────────────────
 
 class OddsCog(commands.Cog):
@@ -531,8 +553,8 @@ class OddsCog(commands.Cog):
     # ── /line-move ──────────────────────────────────────────────────────────
 
     @app_commands.command(name="line-move", description="How Kalshi odds have moved since open")
-    @app_commands.describe(game="Select a game")
-    @app_commands.autocomplete(game=game_autocomplete)
+    @app_commands.describe(game="Select a game (type team name or paste ID from /db)")
+    @app_commands.autocomplete(game=historical_game_autocomplete)
     async def line_move(self, interaction: discord.Interaction, game: str) -> None:
         await interaction.response.defer()
 

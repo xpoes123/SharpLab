@@ -452,6 +452,172 @@ async def mark_injury_notified(record_id: str) -> None:
         await db.commit()
 
 
+async def get_past_game_count() -> int:
+    """Count of games with start_time in the past."""
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM games WHERE start_time <= ?", (now,)
+        )
+        row = await cursor.fetchone()
+    return row[0] if row else 0
+
+
+async def get_history_page(offset: int, limit: int) -> list[dict]:
+    """
+    Returns past games ordered newest first with close snapshot spread if available.
+    Each dict: game_id, home_team, away_team, start_time, status, spread, spread_odds.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT
+                g.game_id, g.home_team, g.away_team, g.start_time, g.status,
+                (
+                    SELECT payload FROM odds_snapshots
+                    WHERE game_id = g.game_id AND kind = 'close'
+                    ORDER BY
+                        CASE source WHEN 'draftkings' THEN 0 WHEN 'kalshi' THEN 1 ELSE 2 END,
+                        captured_at DESC
+                    LIMIT 1
+                ) AS close_payload
+            FROM games g
+            WHERE g.start_time <= ?
+            ORDER BY g.start_time DESC
+            LIMIT ? OFFSET ?
+            """,
+            (now, limit, offset),
+        )
+        rows = await cursor.fetchall()
+
+    result = []
+    for row in rows:
+        spread = spread_odds = None
+        if row["close_payload"]:
+            p = json.loads(row["close_payload"])
+            spread = p.get("spread")
+            spread_odds = p.get("spread_odds")
+        result.append({
+            "game_id": row["game_id"],
+            "home_team": row["home_team"],
+            "away_team": row["away_team"],
+            "start_time": row["start_time"],
+            "status": row["status"],
+            "spread": spread,
+            "spread_odds": spread_odds,
+        })
+    return result
+
+
+async def get_first_poll_snapshot(game_id: str, source: str) -> OddsSnapshot | None:
+    """Return the earliest poll snapshot for a game/source (opening line)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM odds_snapshots
+            WHERE game_id = ? AND source = ? AND kind = 'poll'
+            ORDER BY captured_at ASC LIMIT 1
+            """,
+            (game_id, source),
+        )
+        row = await cursor.fetchone()
+    if row is None:
+        return None
+    return OddsSnapshot(
+        snapshot_id=row["snapshot_id"],
+        game_id=row["game_id"],
+        kind=row["kind"],
+        source=row["source"],
+        captured_at_utc_iso=row["captured_at"],
+        payload=json.loads(row["payload"]),
+    )
+
+
+async def get_recent_games(filter_str: str = "") -> list[Game]:
+    """Return games from yesterday through future (for /line-move autocomplete)."""
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ).isoformat()
+    pattern = f"%{filter_str}%"
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM games
+            WHERE start_time >= ?
+              AND (home_team LIKE ? OR away_team LIKE ?)
+            ORDER BY start_time DESC
+            LIMIT 25
+            """,
+            (cutoff, pattern, pattern),
+        )
+        rows = await cursor.fetchall()
+    return [
+        Game(
+            game_id=row["game_id"],
+            home_team=row["home_team"],
+            away_team=row["away_team"],
+            start_time_utc_iso=row["start_time"],
+        )
+        for row in rows
+    ]
+
+
+async def get_games_by_id_prefix(prefix: str, limit: int = 25) -> list[Game]:
+    """Search games by game_id prefix (for historical autocomplete)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM games
+            WHERE game_id LIKE ?
+            ORDER BY start_time DESC
+            LIMIT ?
+            """,
+            (f"{prefix}%", limit),
+        )
+        rows = await cursor.fetchall()
+    return [
+        Game(
+            game_id=row["game_id"],
+            home_team=row["home_team"],
+            away_team=row["away_team"],
+            start_time_utc_iso=row["start_time"],
+        )
+        for row in rows
+    ]
+
+
+async def get_all_games_filtered(filter_str: str = "", limit: int = 25) -> list[Game]:
+    """Search all games (past and future) by team name, newest first."""
+    pattern = f"%{filter_str}%"
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM games
+            WHERE home_team LIKE ? OR away_team LIKE ?
+            ORDER BY start_time DESC
+            LIMIT ?
+            """,
+            (pattern, pattern, limit),
+        )
+        rows = await cursor.fetchall()
+    return [
+        Game(
+            game_id=row["game_id"],
+            home_team=row["home_team"],
+            away_team=row["away_team"],
+            start_time_utc_iso=row["start_time"],
+        )
+        for row in rows
+    ]
+
+
 async def get_todays_game_for_team(team: str) -> Game | None:
     """Return the next unfinished game today for a given team (exact name match)."""
     today_prefix = datetime.now(timezone.utc).strftime("%Y-%m-%d")
