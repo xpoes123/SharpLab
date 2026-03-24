@@ -151,5 +151,43 @@ class UtilsCog(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
 
+    # ── /help ──────────────────────────────────────────────────────────────────
+
+    @app_commands.command(name="help", description="List all SharpLab commands")
+    async def help(self, interaction: discord.Interaction) -> None:
+        embed = discord.Embed(title="SharpLab Commands", color=0x5865F2)
+
+        embed.add_field(
+            name="Odds & Lines",
+            value=(
+                "`/odds [game]` — Live lines across all books\n"
+                "`/best-line [game]` — Best number available per market\n"
+                "`/line-move [game]` — How lines have moved since open\n"
+                "`/scores` — Live scores for today's slate"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Bet Tracking",
+            value=(
+                "`/log` — Log a bet to your record\n"
+                "`/record [@user]` — W/L record and ROI"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Math",
+            value=(
+                "`/ev [odds] [true_prob]` — Expected value per unit\n"
+                "`/kelly [bankroll] [odds] [edge]` — Kelly stake sizing\n"
+                "`/parlay [legs]` — Parlay odds calculator\n"
+                "`/convert [odds]` — American ↔ decimal ↔ implied %"
+            ),
+            inline=False,
+        )
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(UtilsCog(bot))

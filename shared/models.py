@@ -82,6 +82,15 @@ class OddsBatch:
 
 
 @dataclass(frozen=True)
+class GameResult:
+    """Final score for a completed game (from balldontlie), keyed by last word of each team name."""
+    home_last: str   # last word of home team full_name, lowercased (e.g. "celtics")
+    away_last: str   # last word of away team full_name, lowercased (e.g. "knicks")
+    home_score: int
+    away_score: int
+
+
+@dataclass(frozen=True)
 class InjuryAlert:
     record_id: str           # ESPN athlete ID
     player_name: str

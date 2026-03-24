@@ -12,6 +12,8 @@ with workflow.unsafe.imports_passed_through():
         fetch_close_odds_snapshot,
         fetch_kalshi_odds_batch,
         fetch_kalshi_close_snapshot,
+        fetch_final_scores,
+        resolve_bets_for_game,
         FetchCloseSnapshotInput,
     )
 
@@ -155,6 +157,38 @@ class CloseCaptureWorkflow:
                 start_to_close_timeout=timedelta(seconds=10),
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )
+
+
+@workflow.defn
+class BetResolutionWorkflow:
+    """
+    Polling loop: every N hours, fetch final scores for yesterday + today and
+    resolve any open/graded bets whose games have finished.
+    """
+
+    @workflow.run
+    async def run(self, interval_hours: int = 2) -> None:
+        while True:
+            now = workflow.now()
+            yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+            today = now.strftime("%Y-%m-%d")
+
+            results = await workflow.execute_activity(
+                fetch_final_scores,
+                [yesterday, today],
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+
+            for result in results:
+                await workflow.execute_activity(
+                    resolve_bets_for_game,
+                    result,
+                    start_to_close_timeout=timedelta(seconds=15),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                )
+
+            await workflow.sleep(timedelta(hours=interval_hours))
 
 
 @workflow.defn

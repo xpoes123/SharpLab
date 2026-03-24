@@ -364,6 +364,67 @@ async def get_open_bets_for_game(game_id: str) -> list[Bet]:
     return [_row_to_bet(r) for r in rows]
 
 
+async def get_resolvable_bets_for_game(game_id: str) -> list[Bet]:
+    """Return open/graded bets for a game that haven't received a final result yet."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM bets WHERE game_id = ? AND status IN ('open', 'graded')",
+            (game_id,),
+        )
+        rows = await cursor.fetchall()
+    return [_row_to_bet(r) for r in rows]
+
+
+async def get_game_by_team_suffixes(
+    home_last: str, away_last: str, after_utc_iso: str
+) -> Game | None:
+    """Find the most recent non-final game matching both team name suffixes (case-insensitive)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM games
+            WHERE lower(home_team) LIKE ?
+              AND lower(away_team) LIKE ?
+              AND start_time >= ?
+              AND status != 'final'
+            ORDER BY start_time DESC
+            LIMIT 1
+            """,
+            (f"%{home_last.lower()}", f"%{away_last.lower()}", after_utc_iso),
+        )
+        row = await cursor.fetchone()
+    if row is None:
+        return None
+    return Game(
+        game_id=row["game_id"],
+        home_team=row["home_team"],
+        away_team=row["away_team"],
+        start_time_utc_iso=row["start_time"],
+    )
+
+
+async def update_bet_result(bet_id: int, status: str) -> None:
+    """Set the final result (won/lost/push/void) on a resolved bet."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE bets SET status = ? WHERE bet_id = ?",
+            (status, bet_id),
+        )
+        await db.commit()
+
+
+async def update_game_status(game_id: str, status: str) -> None:
+    """Update the status column of a game (e.g. 'final')."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE games SET status = ? WHERE game_id = ?",
+            (status, game_id),
+        )
+        await db.commit()
+
+
 # ── Injuries ───────────────────────────────────────────────────────────────────
 
 _SIGNIFICANT_STATUSES = {"Out", "Doubtful", "Questionable", "Day-To-Day"}
@@ -537,9 +598,13 @@ async def get_first_poll_snapshot(game_id: str, source: str) -> OddsSnapshot | N
 
 
 async def get_recent_games(filter_str: str = "") -> list[Game]:
-    """Return games from yesterday through future (for /line-move autocomplete)."""
+    """Return games from yesterday through end of tomorrow (for /line-move autocomplete)."""
     from datetime import timedelta
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).replace(
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ).isoformat()
+    future_cutoff = (now + timedelta(days=2)).replace(
         hour=0, minute=0, second=0, microsecond=0
     ).isoformat()
     pattern = f"%{filter_str}%"
@@ -549,11 +614,12 @@ async def get_recent_games(filter_str: str = "") -> list[Game]:
             """
             SELECT * FROM games
             WHERE start_time >= ?
+              AND start_time < ?
               AND (home_team LIKE ? OR away_team LIKE ?)
             ORDER BY start_time DESC
             LIMIT 25
             """,
-            (cutoff, pattern, pattern),
+            (cutoff, future_cutoff, pattern, pattern),
         )
         rows = await cursor.fetchall()
     return [

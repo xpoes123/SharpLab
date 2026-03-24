@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 from temporalio import activity
 
 from db import queries, schema
-from shared.models import TEAM_ABBR, Game, InjuryAlert, OddsBatch, OddsSnapshot
+from shared.models import TEAM_ABBR, Bet, Game, GameResult, InjuryAlert, OddsBatch, OddsSnapshot
 from shared.odds_utils import prob_to_american
 
 load_dotenv()
@@ -29,6 +29,9 @@ ODDS_API_BASE = "https://api.the-odds-api.com/v4"
 
 KALSHI_API_KEY = os.getenv("KALSHI_API_KEY", "")
 KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
+
+BALLDONTLIE_API_KEY = os.getenv("BALLDONTLIE_API_KEY", "")
+BALLDONTLIE_BASE = "https://api.balldontlie.io/v1"
 
 ESPN_INJURIES_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries"
 
@@ -494,3 +497,136 @@ async def fetch_kalshi_close_snapshot(inp: FetchCloseSnapshotInput) -> list[Odds
         captured_at_utc_iso=captured_at,
         payload={"ml_home": ml_home, "ml_away": ml_away},
     )]
+
+
+# ── Bet resolution activities ─────────────────────────────────────────────────
+
+@activity.defn
+async def fetch_final_scores(dates: list[str]) -> list[GameResult]:
+    """
+    Fetch final scores from balldontlie for the given dates.
+    Returns only completed games (status starts with "Final").
+    """
+    headers = {"Authorization": BALLDONTLIE_API_KEY} if BALLDONTLIE_API_KEY else {}
+    params: list[tuple[str, str | int]] = [("per_page", 100)]
+    for d in dates:
+        params.append(("dates[]", d))
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{BALLDONTLIE_BASE}/games",
+            params=params,
+            headers=headers,
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        games_data = resp.json().get("data", [])
+
+    results: list[GameResult] = []
+    for g in games_data:
+        status = g.get("status", "")
+        period = g.get("period", 0)
+        if not status.startswith("Final") or not period:
+            continue
+        home_score = g.get("home_team_score") or 0
+        away_score = g.get("visitor_team_score") or 0
+        if home_score == 0 and away_score == 0:
+            continue
+        results.append(GameResult(
+            home_last=g["home_team"]["full_name"].split()[-1].lower(),
+            away_last=g["visitor_team"]["full_name"].split()[-1].lower(),
+            home_score=home_score,
+            away_score=away_score,
+        ))
+
+    activity.logger.info(f"[fetch_final_scores] {len(results)} final games on {dates}")
+    return results
+
+
+def _resolve_bet(
+    bet: Bet, home_team: str, away_team: str, home_score: int, away_score: int
+) -> str:
+    """Return won/lost/push/void for a bet given the final score."""
+    side = bet.side.lower()
+    market = bet.market.lower()
+    home_l = home_team.lower()
+    away_l = away_team.lower()
+
+    def _is_home(s: str) -> bool:
+        return s in home_l or home_l.split()[-1] in s
+
+    def _is_away(s: str) -> bool:
+        return s in away_l or away_l.split()[-1] in s
+
+    if market in ("moneyline", "kalshi"):
+        if side == "yes" or _is_home(side):
+            return "won" if home_score > away_score else "lost"
+        if side == "no" or _is_away(side):
+            return "won" if away_score > home_score else "lost"
+
+    elif market == "spread":
+        if bet.line is None:
+            return "void"
+        if _is_home(side):
+            side_score, opp_score = home_score, away_score
+        elif _is_away(side):
+            side_score, opp_score = away_score, home_score
+        else:
+            return "void"
+        margin = (side_score - opp_score) + bet.line
+        if abs(margin) < 0.01:
+            return "push"
+        return "won" if margin > 0 else "lost"
+
+    elif market == "total":
+        if bet.line is None:
+            return "void"
+        total = home_score + away_score
+        diff = total - bet.line
+        if abs(diff) < 0.01:
+            return "push"
+        if side == "over":
+            return "won" if diff > 0 else "lost"
+        if side == "under":
+            return "won" if diff < 0 else "lost"
+
+    return "void"
+
+
+@activity.defn
+async def resolve_bets_for_game(result: GameResult) -> int:
+    """
+    Match a completed game to a DB game by team suffix, then resolve all open/graded bets.
+    Marks the game 'final' so it won't be reprocessed. Returns the count of bets resolved.
+    """
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+
+    game = await queries.get_game_by_team_suffixes(result.home_last, result.away_last, cutoff)
+    if game is None:
+        activity.logger.debug(
+            f"[resolve_bets_for_game] No unresolved DB game for "
+            f"{result.away_last} @ {result.home_last}"
+        )
+        return 0
+
+    bets = await queries.get_resolvable_bets_for_game(game.game_id)
+    resolved = 0
+    for bet in bets:
+        outcome = _resolve_bet(
+            bet, game.home_team, game.away_team, result.home_score, result.away_score
+        )
+        await queries.update_bet_result(bet.bet_id, outcome)
+        activity.logger.info(
+            f"[resolve_bets_for_game] bet {bet.bet_id} → {outcome} "
+            f"({result.away_last} @ {result.home_last} "
+            f"{result.away_score}-{result.home_score})"
+        )
+        resolved += 1
+
+    await queries.update_game_status(game.game_id, "final")
+    activity.logger.info(
+        f"[resolve_bets_for_game] {game.away_team} @ {game.home_team}: "
+        f"{result.away_score}-{result.home_score}, {resolved} bets resolved"
+    )
+    return resolved

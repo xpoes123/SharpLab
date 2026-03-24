@@ -9,7 +9,7 @@ default:
 
 # ── Dev ────────────────────────────────────────────────────────────────────────
 
-# Start everything: Temporal server + worker + odds poller + injury poller + Discord bot
+# Start everything: Temporal server + worker + odds poller + injury poller + bet resolver + Discord bot
 dev:
     #!/usr/bin/env bash
     trap 'echo "Shutting down..."; kill $(jobs -p) 2>/dev/null' INT TERM EXIT
@@ -24,6 +24,8 @@ dev:
     uv run python -m temporal.start_odds_polling
     echo "▶ Starting injury polling workflow..."
     uv run python -m temporal.start_injury_polling
+    echo "▶ Starting bet resolution workflow..."
+    uv run python -m temporal.start_bet_resolution
     echo "▶ Starting Discord bot..."
     uv run python -m bot.main &
     echo "✓ All services running. Ctrl+C to stop."
@@ -46,6 +48,10 @@ poll:
 # Kick off the injury polling workflow (one-shot — Temporal keeps it running)
 injuries:
     uv run python -m temporal.start_injury_polling
+
+# Kick off the bet resolution workflow (one-shot — Temporal keeps it running)
+resolve:
+    uv run python -m temporal.start_bet_resolution
 
 # Start the Discord bot
 bot:
