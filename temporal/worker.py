@@ -5,10 +5,11 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from db.schema import init_db
-from .workflows import OddsPollingWorkflow, CloseCaptureWorkflow
+from .workflows import OddsPollingWorkflow, CloseCaptureWorkflow, InjuryPollingWorkflow
 from .activities import (
     fetch_games_for_today,
     fetch_odds_batch,
+    fetch_injuries,
     upsert_odds_snapshot,
     fetch_close_odds_snapshot,
     fetch_kalshi_odds_batch,
@@ -31,10 +32,11 @@ async def main() -> None:
     worker = Worker(
         client,
         task_queue=TASK_QUEUE,
-        workflows=[OddsPollingWorkflow, CloseCaptureWorkflow],
+        workflows=[OddsPollingWorkflow, CloseCaptureWorkflow, InjuryPollingWorkflow],
         activities=[
             fetch_games_for_today,
             fetch_odds_batch,
+            fetch_injuries,
             upsert_odds_snapshot,
             fetch_close_odds_snapshot,
             fetch_kalshi_odds_batch,

@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 from temporalio import activity
 
 from db import queries, schema
-from shared.models import TEAM_ABBR, Game, OddsBatch, OddsSnapshot
+from shared.models import TEAM_ABBR, Game, InjuryAlert, OddsBatch, OddsSnapshot
 from shared.odds_utils import prob_to_american
 
 load_dotenv()
@@ -29,6 +29,8 @@ ODDS_API_BASE = "https://api.the-odds-api.com/v4"
 
 KALSHI_API_KEY = os.getenv("KALSHI_API_KEY", "")
 KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
+
+ESPN_INJURIES_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries"
 
 
 # ── Input types ────────────────────────────────────────────────────────────────
@@ -347,6 +349,83 @@ async def fetch_kalshi_odds_batch(games: list[Game]) -> OddsBatch:
         f"[fetch_kalshi_odds_batch] matched {len(snapshots)}/{len(games)} games"
     )
     return OddsBatch(source="kalshi", captured_at_utc_iso=captured_at, snapshots=snapshots)
+
+
+# ── ESPN injuries helpers ─────────────────────────────────────────────────────
+
+def _parse_espn_detail(details: dict) -> str | None:
+    """Build a readable detail string from an ESPN injury details dict."""
+    if not details:
+        return None
+    parts = [str(details[k]) for k in ("type", "side", "detail") if details.get(k)]
+    return " - ".join(parts) if parts else None
+
+
+def _parse_espn_injuries_response(
+    data: dict,
+) -> list[tuple[str, str, str, str, str | None]]:
+    """
+    Parse ESPN injury report API response.
+    Returns list of (record_id, player_name, team, status, detail).
+    """
+    results = []
+    for team_entry in data.get("injuries", []):
+        team_name = team_entry.get("team", {}).get("displayName", "")
+        if not team_name:
+            continue
+        for inj in team_entry.get("injuries", []):
+            athlete = inj.get("athlete", {})
+            athlete_id = str(athlete.get("id", ""))
+            player_name = athlete.get("displayName", "")
+            if not athlete_id or not player_name:
+                continue
+            status = inj.get("status", "")
+            if not status:
+                continue
+            detail = _parse_espn_detail(inj.get("details") or {})
+            results.append((athlete_id, player_name, team_name, status, detail))
+    return results
+
+
+# ── ESPN injuries activity ────────────────────────────────────────────────────
+
+@activity.defn
+async def fetch_injuries() -> list[InjuryAlert]:
+    """
+    Poll ESPN unofficial API for NBA injury updates.
+    Detects status changes vs. what's stored in the DB.
+    Returns InjuryAlert entries only for players whose status changed (or new
+    significant listings). The bot's InjuryCog handles Discord notifications.
+    """
+    await schema.init_db()
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(ESPN_INJURIES_URL, timeout=15.0)
+        if resp.status_code != 200:
+            activity.logger.warning(f"[fetch_injuries] ESPN returned HTTP {resp.status_code}")
+            return []
+        data = resp.json()
+
+    entries = _parse_espn_injuries_response(data)
+    activity.logger.info(f"[fetch_injuries] {len(entries)} players in ESPN report")
+
+    changes: list[InjuryAlert] = []
+    for record_id, player_name, team, status, detail in entries:
+        prev = await queries.upsert_injury_status(record_id, player_name, team, status, detail, now_iso)
+        if prev is not None:
+            changes.append(InjuryAlert(
+                record_id=record_id,
+                player_name=player_name,
+                team=team,
+                status=status,
+                prev_status=prev if prev else None,
+                detail=detail,
+                updated_at_utc_iso=now_iso,
+            ))
+
+    activity.logger.info(f"[fetch_injuries] {len(changes)} status changes detected")
+    return changes
 
 
 @activity.defn

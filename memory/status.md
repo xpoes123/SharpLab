@@ -1,6 +1,6 @@
 # SharpLab — Current Status
 
-Last updated: 2026-03-23 (session 2)
+Last updated: 2026-03-24 (session 3)
 
 ## Architecture Decided
 
@@ -14,23 +14,31 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
 
 ### Shared layer
 - `shared/odds_utils.py` — prob↔American↔decimal↔cents conversions + `parse_odds_input()` (fully tested)
-- `shared/models.py` — `Game`, `OddsSnapshot`, `OddsBatch`, `Bet` dataclasses
+- `shared/models.py` — `Game`, `OddsSnapshot`, `OddsBatch`, `Bet`, `InjuryAlert` dataclasses
   - NOTE: NO `from __future__ import annotations` — breaks Temporal's get_type_hints() on Python 3.14
 
 ### DB layer
-- `db/schema.py` — SQLite schema + `init_db()` (WAL mode, games/odds_snapshots/bets tables)
+- `db/schema.py` — SQLite schema + `init_db()` (WAL mode, games/odds_snapshots/bets/injuries tables)
 - `db/queries.py` — upsert_game, upsert_odds_snapshot, get_latest_snapshots_for_game,
   get_snapshots_for_game_since, get_close_snapshot, find_games_by_team,
   get_upcoming_games, get_game_by_id, get_games_in_window,
   insert_bet, get_bets_for_user, get_open_bets_for_game,
-  get_games_with_close_and_open_bets, get_any_close_snapshot, update_bet_clv
+  get_games_with_close_and_open_bets, get_any_close_snapshot, update_bet_clv,
+  upsert_injury_status, get_unnotified_injuries, mark_injury_notified, get_todays_game_for_team
 
 ### Temporal pipeline (real, not stubs)
-- `temporal/activities.py` — fetch_games_for_today, fetch_odds_batch, upsert_odds_snapshot, fetch_close_odds_snapshot, fetch_kalshi_odds_batch, fetch_kalshi_close_snapshot
+- `temporal/activities.py` — fetch_games_for_today, fetch_odds_batch, upsert_odds_snapshot,
+  fetch_close_odds_snapshot, fetch_kalshi_odds_batch, fetch_kalshi_close_snapshot, **fetch_injuries**
   - Kalshi matching: KXNBAGAME series, team abbr from last 6 chars of event ticker
   - `TEAM_ABBR` dict in `shared/models.py` maps full team names → 3-char abbreviations
-- `temporal/workflows.py` — OddsPollingWorkflow + CloseCaptureWorkflow (durable, correct)
-- `temporal/worker.py` — calls init_db() on startup
+  - ESPN injuries: polls `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries`
+    - No auth needed. Parses athlete.id, displayName, team.displayName, status, details.
+    - `_parse_espn_injuries_response` + `_parse_espn_detail` are pure helpers (unit-tested).
+- `temporal/workflows.py` — OddsPollingWorkflow + CloseCaptureWorkflow + **InjuryPollingWorkflow**
+  - InjuryPollingWorkflow: every 5 min, polls ESPN → if any status change → re-runs odds activities
+    so bot notification shows fresh lines alongside the injury news
+- `temporal/worker.py` — calls init_db() on startup, all 3 workflows + all activities registered
+- `temporal/start_injury_polling.py` — entry point for InjuryPollingWorkflow (`just injuries`)
 
 ### Discord bot
 - `bot/main.py` — SharpBot entrypoint, loads cogs, calls init_db(), guild-syncs slash commands (instant)
@@ -58,14 +66,23 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
   - Updates bets: clv=X, status='graded' (prevents re-posting)
   - Supports: moneyline (home+away), spread (home side), total (over/under)
   - **Kalshi close = source of truth for ML CLV; DraftKings fallback for spread/total**
+- `bot/cogs/injuries.py` — **Injury alert auto-post background task** (NEW)
+  - `@tasks.loop(minutes=1)` — polls DB for `notified=0` injury rows
+  - Looks up today's game for the team, fetches latest odds snapshots
+  - Posts embed to same channel as CLV (CLV_CHANNEL_ID)
+    - Red for Out/Doubtful, yellow for Questionable/Day-To-Day
+    - Shows status change arrow ("Probable → Questionable") or "(new listing)"
+    - Shows current ML per book (refreshed by workflow post-news)
+  - Notification logic: Probable-only first inserts are silently suppressed (notified=1)
+    all other first inserts and any status change trigger a post
 
 ### Dev tooling
-- `justfile` — `just dev` starts all services at once (Temporal server + worker + odds poller + bot)
-  - Individual recipes: `just temporal`, `just worker`, `just poll`, `just bot`, `just test`
+- `justfile` — `just dev` starts all services (Temporal server + worker + odds poller + injury poller + bot)
+  - Individual recipes: `just temporal`, `just worker`, `just poll`, `just injuries`, `just bot`, `just test`
   - `just` installed via winget; PATH added to `~/.bashrc`
 
 ### Tests
-- `tests/test_activities.py` — 19 unit tests, all passing
+- `tests/test_activities.py` — 26 unit tests, all passing
 
 ## Key Decisions Made
 
@@ -75,9 +92,11 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
 - **DraftKings = canonical close source** (falls back to first available).
 - **All odds stored as American** in DB. Convert at input boundary in `shared/odds_utils.py`.
 - **Guild sync** (`tree.sync(guild=guild)`) not global sync — commands appear instantly.
-- **CLV auto-post channel** = `1485475287054418151` (env var `CLV_CHANNEL_ID` to override).
+- **CLV + injury auto-post channel** = `1485475287054418151` (env var `CLV_CHANNEL_ID` to override).
 - **Bet status lifecycle**: `open` → `graded` (CLV computed at tip-off) → `won`/`lost`/`push`/`void` (manual).
 - **tzdata** added as dependency for `zoneinfo` ET timezone support on Windows.
+- **ESPN injuries**: record_id = ESPN athlete ID. Probable-only first inserts are silent (notified=1).
+  Status changes and new Out/Doubtful/Questionable/Day-To-Day listings trigger Discord post.
 
 ## What Doesn't Exist Yet
 

@@ -7,6 +7,7 @@ with workflow.unsafe.imports_passed_through():
     from .activities import (
         fetch_games_for_today,
         fetch_odds_batch,
+        fetch_injuries,
         upsert_odds_snapshot,
         fetch_close_odds_snapshot,
         fetch_kalshi_odds_batch,
@@ -154,3 +155,61 @@ class CloseCaptureWorkflow:
                 start_to_close_timeout=timedelta(seconds=10),
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )
+
+
+@workflow.defn
+class InjuryPollingWorkflow:
+    """
+    Polls ESPN for NBA injury updates every N minutes.
+    When status changes are detected, immediately re-fetches odds so the bot's
+    InjuryCog notification shows fresh lines alongside the injury news.
+    """
+
+    @workflow.run
+    async def run(self, interval_minutes: int = 5) -> None:
+        while True:
+            games = await workflow.execute_activity(
+                fetch_games_for_today,
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+
+            if games:
+                changes = await workflow.execute_activity(
+                    fetch_injuries,
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                )
+
+                if changes:
+                    # Re-poll odds so the notification shows lines post-news
+                    game_ids = [g.game_id for g in games]
+                    batch = await workflow.execute_activity(
+                        fetch_odds_batch,
+                        game_ids,
+                        start_to_close_timeout=timedelta(seconds=30),
+                        retry_policy=RetryPolicy(maximum_attempts=3),
+                    )
+                    for snapshot in batch.snapshots:
+                        await workflow.execute_activity(
+                            upsert_odds_snapshot,
+                            snapshot,
+                            start_to_close_timeout=timedelta(seconds=10),
+                            retry_policy=RetryPolicy(maximum_attempts=3),
+                        )
+
+                    kalshi_batch = await workflow.execute_activity(
+                        fetch_kalshi_odds_batch,
+                        games,
+                        start_to_close_timeout=timedelta(seconds=30),
+                        retry_policy=RetryPolicy(maximum_attempts=3),
+                    )
+                    for snapshot in kalshi_batch.snapshots:
+                        await workflow.execute_activity(
+                            upsert_odds_snapshot,
+                            snapshot,
+                            start_to_close_timeout=timedelta(seconds=10),
+                            retry_policy=RetryPolicy(maximum_attempts=3),
+                        )
+
+            await workflow.sleep(timedelta(minutes=interval_minutes))

@@ -40,6 +40,17 @@ CREATE TABLE IF NOT EXISTS bets (
     clv           REAL,
     notes         TEXT
 );
+
+CREATE TABLE IF NOT EXISTS injuries (
+    record_id    TEXT PRIMARY KEY,
+    player_name  TEXT NOT NULL,
+    team         TEXT NOT NULL,
+    status       TEXT NOT NULL,
+    prev_status  TEXT,
+    detail       TEXT,
+    updated_at   TEXT NOT NULL,
+    notified     INTEGER DEFAULT 0
+);
 """
 
 

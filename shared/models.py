@@ -79,3 +79,14 @@ class OddsBatch:
     source: str
     captured_at_utc_iso: str
     snapshots: list[OddsSnapshot]
+
+
+@dataclass(frozen=True)
+class InjuryAlert:
+    record_id: str           # ESPN athlete ID
+    player_name: str
+    team: str                # ESPN team displayName (matches games table)
+    status: str              # Out | Doubtful | Questionable | Day-To-Day | Probable
+    prev_status: str | None  # None = new listing; old value = status change
+    detail: str | None       # e.g. "Ankle - Left - Sprain"
+    updated_at_utc_iso: str

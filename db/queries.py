@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 import aiosqlite
-from shared.models import Bet, Game, OddsSnapshot
+from shared.models import Bet, Game, InjuryAlert, OddsSnapshot
 from db.schema import DB_PATH
 
 
@@ -336,3 +336,118 @@ async def get_open_bets_for_game(game_id: str) -> list[Bet]:
         )
         rows = await cursor.fetchall()
     return [_row_to_bet(r) for r in rows]
+
+
+# ── Injuries ───────────────────────────────────────────────────────────────────
+
+_SIGNIFICANT_STATUSES = {"Out", "Doubtful", "Questionable", "Day-To-Day"}
+
+
+async def upsert_injury_status(
+    record_id: str,
+    player_name: str,
+    team: str,
+    status: str,
+    detail: str | None,
+    now_iso: str,
+) -> str | None:
+    """
+    Upsert a player's injury status.
+    Returns None if nothing changed, "" if this is a new significant entry,
+    or the previous status string if the status changed.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT status FROM injuries WHERE record_id = ?",
+            (record_id,),
+        )
+        row = await cursor.fetchone()
+
+        if row is None:
+            notified = 0 if status in _SIGNIFICANT_STATUSES else 1
+            await db.execute(
+                """
+                INSERT INTO injuries
+                    (record_id, player_name, team, status, prev_status, detail, updated_at, notified)
+                VALUES (?, ?, ?, ?, NULL, ?, ?, ?)
+                """,
+                (record_id, player_name, team, status, detail, now_iso, notified),
+            )
+            await db.commit()
+            return "" if status in _SIGNIFICANT_STATUSES else None
+
+        current_status = row["status"]
+        if current_status == status:
+            return None
+
+        # Status changed — reset notification flag
+        await db.execute(
+            """
+            UPDATE injuries
+            SET player_name=?, team=?, status=?, prev_status=?, detail=?, updated_at=?, notified=0
+            WHERE record_id=?
+            """,
+            (player_name, team, status, current_status, detail, now_iso, record_id),
+        )
+        await db.commit()
+        return current_status
+
+
+async def get_unnotified_injuries() -> list[InjuryAlert]:
+    """Return injury alerts that haven't been posted to Discord yet."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM injuries WHERE notified = 0 ORDER BY updated_at ASC"
+        )
+        rows = await cursor.fetchall()
+    return [
+        InjuryAlert(
+            record_id=row["record_id"],
+            player_name=row["player_name"],
+            team=row["team"],
+            status=row["status"],
+            prev_status=row["prev_status"],
+            detail=row["detail"],
+            updated_at_utc_iso=row["updated_at"],
+        )
+        for row in rows
+    ]
+
+
+async def mark_injury_notified(record_id: str) -> None:
+    """Mark an injury alert as posted."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE injuries SET notified = 1 WHERE record_id = ?",
+            (record_id,),
+        )
+        await db.commit()
+
+
+async def get_todays_game_for_team(team: str) -> Game | None:
+    """Return the next unfinished game today for a given team (exact name match)."""
+    today_prefix = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM games
+            WHERE (home_team = ? OR away_team = ?)
+              AND start_time LIKE ?
+              AND status != 'final'
+            ORDER BY start_time ASC
+            LIMIT 1
+            """,
+            (team, team, f"{today_prefix}%"),
+        )
+        row = await cursor.fetchone()
+    if row is None:
+        return None
+    return Game(
+        game_id=row["game_id"],
+        home_team=row["home_team"],
+        away_team=row["away_team"],
+        start_time_utc_iso=row["start_time"],
+    )

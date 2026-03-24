@@ -3,7 +3,13 @@ Unit tests for activity helper logic.
 These test pure functions with no API calls or DB access.
 """
 import pytest
-from temporal.activities import _extract_payload, _kalshi_ml_from_markets, _kalshi_mid
+from temporal.activities import (
+    _extract_payload,
+    _kalshi_ml_from_markets,
+    _kalshi_mid,
+    _parse_espn_detail,
+    _parse_espn_injuries_response,
+)
 from shared.models import TEAM_ABBR
 from shared.odds_utils import prob_to_american, american_to_prob, american_to_decimal
 
@@ -177,3 +183,75 @@ def test_american_to_prob_roundtrip():
 def test_american_to_decimal():
     assert american_to_decimal(-110) == pytest.approx(1.909, abs=0.01)
     assert american_to_decimal(+150) == pytest.approx(2.5, abs=0.01)
+
+
+# ── ESPN injury parsing ─────────────────────────────────────────────────────────
+
+_ESPN_RESPONSE = {
+    "injuries": [
+        {
+            "team": {"displayName": "Atlanta Hawks"},
+            "injuries": [
+                {
+                    "athlete": {"id": "3136193", "displayName": "Trae Young"},
+                    "status": "Questionable",
+                    "details": {"type": "Ankle", "side": "Left", "detail": "Sprain"},
+                },
+                {
+                    "athlete": {"id": "9999999", "displayName": "Bogdan Bogdanovic"},
+                    "status": "Out",
+                    "details": {"type": "Knee"},
+                },
+            ],
+        },
+        {
+            "team": {"displayName": "Boston Celtics"},
+            "injuries": [],
+        },
+    ]
+}
+
+
+def test_parse_espn_injuries_response_basic():
+    result = _parse_espn_injuries_response(_ESPN_RESPONSE)
+    assert len(result) == 2
+    r_id, r_name, r_team, r_status, r_detail = result[0]
+    assert r_id == "3136193"
+    assert r_name == "Trae Young"
+    assert r_team == "Atlanta Hawks"
+    assert r_status == "Questionable"
+    assert r_detail == "Ankle - Left - Sprain"
+
+
+def test_parse_espn_injuries_response_partial_detail():
+    result = _parse_espn_injuries_response(_ESPN_RESPONSE)
+    _, _, _, _, detail = result[1]
+    assert detail == "Knee"
+
+
+def test_parse_espn_injuries_response_empty_team():
+    data = {"injuries": [{"team": {"displayName": "Boston Celtics"}, "injuries": []}]}
+    assert _parse_espn_injuries_response(data) == []
+
+
+def test_parse_espn_injuries_response_skips_missing_athlete_id():
+    data = {
+        "injuries": [{
+            "team": {"displayName": "Dallas Mavericks"},
+            "injuries": [{"athlete": {"displayName": "Luka Doncic"}, "status": "Out"}],
+        }]
+    }
+    assert _parse_espn_injuries_response(data) == []
+
+
+def test_parse_espn_detail_full():
+    assert _parse_espn_detail({"type": "Ankle", "side": "Left", "detail": "Sprain"}) == "Ankle - Left - Sprain"
+
+
+def test_parse_espn_detail_partial():
+    assert _parse_espn_detail({"type": "Knee"}) == "Knee"
+
+
+def test_parse_espn_detail_none():
+    assert _parse_espn_detail(None) is None
+    assert _parse_espn_detail({}) is None
