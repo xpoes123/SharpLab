@@ -123,6 +123,16 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
 - Polymarket pipeline activity
 - Polymarket in `/line-move` (slot reserved — just add "polymarket" to PREDICTION_MARKET_SOURCES)
 
+### Bot backlog (prioritized)
+
+1. **`/kalshi [game]`** — Show full Kalshi contract: yes/no prices, bid/ask, volume. `bot/cogs/markets.py` is empty.
+2. **`/open`** — List your open + graded bets. Currently no way to see live exposure without scrolling `/record`.
+3. **`/clv-summary`** — Aggregate CLV across all graded bets: avg CLV by market type and by book. The core KPI — currently not surfaced anywhere.
+4. **`/void [bet_id]`** — Manually void a bet (game cancelled, scratch before tip). Status exists in schema; just needs a command.
+5. **`/record` improvements** — Time-period filter (last 30 days / season / all time) + per-book ROI breakdown.
+6. **Sharp move flag in `/line-move`** — Detect reverse line movement (line moved against the public side) and flag it in the embed.
+7. **Line alerts** — `/alert` command: ping user when a line crosses a threshold (e.g. "ping me if Lakers ML > +150"). Needs an `alerts` table + check on each pipeline poll.
+
 ## API Keys in .env
 
 - `ODDS_API_KEY` ✅
@@ -135,3 +145,4 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
 
 1. `/kalshi` — live Kalshi market explorer (bot/cogs/markets.py)
 2. Polymarket pipeline activity → then add to `/line-move` via PREDICTION_MARKET_SOURCES
+3. See bot backlog above for subsequent bot features

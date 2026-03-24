@@ -6,6 +6,7 @@ from discord.ext import commands
 from shared.odds_utils import (
     american_to_decimal,
     american_to_prob,
+    decimal_to_american,
     parse_odds_input,
 )
 

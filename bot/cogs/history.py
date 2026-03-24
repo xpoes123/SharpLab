@@ -37,7 +37,7 @@ def _fmt_date(iso: str) -> str:
     dt = datetime.fromisoformat(iso)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    return dt.strftime("%b %-d")
+    return dt.strftime("%b %#d")
 
 
 def _fmt_status(status: str | None) -> str:
