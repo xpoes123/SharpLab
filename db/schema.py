@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS games (
     away_team   TEXT NOT NULL,
     start_time  TEXT NOT NULL,
     season      TEXT,
-    status      TEXT DEFAULT 'scheduled'
+    status      TEXT DEFAULT 'scheduled',
+    clv_posted  INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS odds_snapshots (
@@ -57,4 +58,9 @@ CREATE TABLE IF NOT EXISTS injuries (
 async def init_db() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.executescript(_SCHEMA)
-        await db.commit()
+        # Migration: add clv_posted if DB predates this column
+        try:
+            await db.execute("ALTER TABLE games ADD COLUMN clv_posted INTEGER DEFAULT 0")
+            await db.commit()
+        except Exception:
+            pass  # column already exists

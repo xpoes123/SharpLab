@@ -284,6 +284,32 @@ async def get_games_with_close_and_open_bets() -> list[str]:
     return [row[0] for row in rows]
 
 
+async def get_games_with_close_not_posted() -> list[str]:
+    """Return game_ids that have a close snapshot but haven't had CLV posted yet."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """
+            SELECT DISTINCT g.game_id
+            FROM games g
+            INNER JOIN odds_snapshots os
+                ON g.game_id = os.game_id AND os.kind = 'close'
+            WHERE g.clv_posted = 0
+            """
+        )
+        rows = await cursor.fetchall()
+    return [row[0] for row in rows]
+
+
+async def mark_game_clv_posted(game_id: str) -> None:
+    """Mark a game's closing lines as posted so we don't re-post."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE games SET clv_posted = 1 WHERE game_id = ?",
+            (game_id,),
+        )
+        await db.commit()
+
+
 async def get_any_close_snapshot(game_id: str) -> OddsSnapshot | None:
     """Return the close snapshot for a game (Kalshi preferred, then DraftKings)."""
     async with aiosqlite.connect(DB_PATH) as db:

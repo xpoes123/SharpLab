@@ -493,11 +493,7 @@ class OddsCog(commands.Cog):
             src, val = b
             snap = next(s for s in snapshots if s.source == src)
             fields.append((f"Spread ({home})", f"`{val:+.1f}` ({_fmt_prob(snap.payload.get('spread_odds'))}) — {BOOK_LABELS.get(src, src)}"))
-
-        b = best("spread_away", reverse=True)
-        if b:
-            src, val = b
-            fields.append((f"Spread ({away})", f"`{val:+.1f}` — {BOOK_LABELS.get(src, src)}"))
+            fields.append((f"Spread ({away})", f"`{-val:+.1f}` ({_fmt_prob(snap.payload.get('spread_odds'))}) — {BOOK_LABELS.get(src, src)}"))
 
         b = best("ml_home", reverse=True)
         if b:
@@ -546,18 +542,41 @@ class OddsCog(commands.Cog):
             return
 
         all_snaps = await queries.get_snapshots_for_game_since(game, "2000-01-01T00:00:00Z")
-        snaps = [s for s in all_snaps if s.source in PREDICTION_MARKET_SOURCES]
+        ml_snaps = [s for s in all_snaps if s.source in PREDICTION_MARKET_SOURCES]
+        dk_snaps = [
+            s for s in all_snaps
+            if s.source == "draftkings" and s.payload.get("spread") is not None
+        ]
 
-        if not snaps:
+        if not ml_snaps and not dk_snaps:
             await interaction.followup.send(
-                f"No prediction market data yet for **{target.away_team} @ {target.home_team}**. "
-                "The pipeline polls Kalshi every 30 min — check back soon."
+                f"No line movement data yet for **{target.away_team} @ {target.home_team}**. "
+                "The pipeline polls every 30 min — check back soon."
             )
             return
 
+        home_name = target.home_team.split()[-1]
+        away_name = target.away_team.split()[-1]
+        W = 15
+        header = f"{'Side':<12}{'Open':<{W}}{'Now':<{W}}Move"
+        divider = "─" * (12 + W + W + 10)
+
+        def _fmt_ml(o: int | None) -> str:
+            if o is None:
+                return "—"
+            return f"{o:+d} ({american_to_prob(o) * 100:.0f}%)"
+
+        def _fmt_spread_cell(spread: float | None, odds: int | None) -> str:
+            if spread is None:
+                return "—"
+            odds_str = f" ({odds:+d})" if odds is not None else ""
+            return f"{spread:+.1f}{odds_str}"
+
         sections: list[str] = []
+
+        # ── ML sections (Kalshi / Polymarket) ─────────────────────────────────
         for source in PREDICTION_MARKET_SOURCES:
-            source_snaps = [s for s in snaps if s.source == source]
+            source_snaps = [s for s in ml_snaps if s.source == source]
             if not source_snaps:
                 continue
 
@@ -571,33 +590,44 @@ class OddsCog(commands.Cog):
             curr_home = curr_s.payload.get("ml_home")
             curr_away = curr_s.payload.get("ml_away")
 
-            def _fmt_ml(o: int | None) -> str:
-                if o is None:
-                    return "—"
-                return f"{o:+d} ({american_to_prob(o) * 100:.0f}%)"
-
-            home_name = target.home_team.split()[-1]
-            away_name = target.away_team.split()[-1]
-            W = 15
-
-            header = f"{'Side':<12}{'Open':<{W}}{'Now':<{W}}Move"
-            divider = "─" * (12 + W + W + 10)
-            home_row = (
-                f"{home_name:<12}{_fmt_ml(open_home):<{W}}"
-                f"{_fmt_ml(curr_home):<{W}}{_fmt_move(open_home, curr_home)}"
-            )
-            away_row = (
-                f"{away_name:<12}{_fmt_ml(open_away):<{W}}"
-                f"{_fmt_ml(curr_away):<{W}}{_fmt_move(open_away, curr_away)}"
-            )
-
             count_str = f"{count} snapshot{'s' if count != 1 else ''}"
             sections.append("\n".join([
-                f"{label} · {count_str} · opened {_staleness(open_s.captured_at_utc_iso)}",
+                f"{label} ML · {count_str} · opened {_staleness(open_s.captured_at_utc_iso)}",
                 header,
                 divider,
-                home_row,
-                away_row,
+                f"{home_name:<12}{_fmt_ml(open_home):<{W}}{_fmt_ml(curr_home):<{W}}{_fmt_move(open_home, curr_home)}",
+                f"{away_name:<12}{_fmt_ml(open_away):<{W}}{_fmt_ml(curr_away):<{W}}{_fmt_move(open_away, curr_away)}",
+            ]))
+
+        # ── Spread section (DraftKings) ────────────────────────────────────────
+        if dk_snaps:
+            open_s = dk_snaps[0]
+            curr_s = dk_snaps[-1]
+            count = len(dk_snaps)
+
+            o_spread = open_s.payload.get("spread")
+            c_spread = curr_s.payload.get("spread")
+            o_odds   = open_s.payload.get("spread_odds")
+            c_odds   = curr_s.payload.get("spread_odds")
+
+            def _spread_move(open_val: float | None, curr_val: float | None) -> str:
+                if open_val is None or curr_val is None:
+                    return "—"
+                delta = curr_val - open_val
+                if abs(delta) < 0.05:
+                    return "no change"
+                arrow = "↑" if delta > 0 else "↓"
+                return f"{delta:+.1f} {arrow}"
+
+            count_str = f"{count} snapshot{'s' if count != 1 else ''}"
+            o_spread_away = open_s.payload.get("spread_away")
+            c_spread_away = curr_s.payload.get("spread_away")
+            sections.append("\n".join([
+                f"Spread · DraftKings · {count_str} · opened {_staleness(open_s.captured_at_utc_iso)}",
+                header,
+                divider,
+                f"{home_name:<12}{_fmt_spread_cell(o_spread, o_odds):<{W}}{_fmt_spread_cell(c_spread, c_odds):<{W}}{_spread_move(o_spread, c_spread)}",
+                f"{away_name:<12}{_fmt_spread_cell(o_spread_away, None):<{W}}{_fmt_spread_cell(c_spread_away, None):<{W}}{_spread_move(o_spread_away, c_spread_away)}",
             ]))
 
         description = (

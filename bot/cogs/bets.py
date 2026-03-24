@@ -10,6 +10,7 @@ from discord.ext import commands
 from db import queries
 from shared.models import Bet
 from shared.odds_utils import american_to_decimal, american_to_prob, parse_odds_input
+from .odds import game_autocomplete
 
 
 # ── Choices ────────────────────────────────────────────────────────────────────
@@ -111,8 +112,9 @@ class BetsCog(commands.Cog):
     # ── /log ──────────────────────────────────────────────────────────────────
 
     @app_commands.command(name="log", description="Log a bet to your record")
+    @app_commands.autocomplete(game=game_autocomplete)
     @app_commands.describe(
-        game="Team name to search for (e.g. 'Lakers')",
+        game="Select a game",
         book="Sportsbook",
         market="Market type",
         side="Side (team name, 'over', 'under', 'yes', 'no')",
@@ -145,17 +147,15 @@ class BetsCog(commands.Cog):
             )
             return
 
-        games = await queries.find_games_by_team(game)
-        if not games:
+        target = await queries.get_game_by_id(game)
+        if target is None:
             await interaction.followup.send(
-                f"No games found matching `{game}`. The pipeline needs to have run at least once."
+                "Game not found. Select a game from the autocomplete dropdown.",
+                ephemeral=True,
             )
             return
 
         now_iso = datetime.now(timezone.utc).isoformat()
-        upcoming = [g for g in games if g.start_time_utc_iso >= now_iso]
-        target = upcoming[0] if upcoming else games[-1]
-
         bet = Bet(
             game_id=target.game_id,
             placed_at=now_iso,

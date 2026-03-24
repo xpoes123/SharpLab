@@ -1,4 +1,4 @@
-"""CLV auto-post — background task that fires when a close snapshot lands for a game with logged bets."""
+"""CLV auto-post — fires when a close snapshot lands, posts closing lines and pings bettors."""
 from __future__ import annotations
 
 import os
@@ -78,6 +78,35 @@ def _build_bet_line(bet: Bet, close_odds: int | None, clv: float | None) -> str:
     return f"{desc}\n→ closed **{_fmt_odds(close_odds)}** | CLV **{clv_str}** {emoji}"
 
 
+def _build_closing_lines_field(kalshi_close, dk_close) -> str:
+    """Build a summary of the actual closing line numbers."""
+    lines = []
+
+    if kalshi_close:
+        p = kalshi_close.payload
+        ml_home = p.get("ml_home")
+        ml_away = p.get("ml_away")
+        if ml_home is not None and ml_away is not None:
+            lines.append(f"ML (Kalshi): **{_fmt_odds(ml_home)}** / **{_fmt_odds(ml_away)}**")
+
+    ref = dk_close or kalshi_close
+    if ref:
+        p = ref.payload
+        spread = p.get("spread")
+        spread_odds = p.get("spread_odds")
+        total = p.get("total")
+        total_over = p.get("total_over_odds")
+        total_under = p.get("total_under_odds")
+        if spread is not None and spread_odds is not None:
+            lines.append(f"Spread: **{spread:+.1f}** ({_fmt_odds(spread_odds)})")
+        if total is not None:
+            over_str = _fmt_odds(total_over) if total_over is not None else "n/a"
+            under_str = _fmt_odds(total_under) if total_under is not None else "n/a"
+            lines.append(f"Total: **{total}** (O {over_str} / U {under_str})")
+
+    return "\n".join(lines) if lines else "No line data available"
+
+
 # ── Cog ───────────────────────────────────────────────────────────────────────
 
 class CLVCog(commands.Cog):
@@ -94,37 +123,18 @@ class CLVCog(commands.Cog):
         if channel is None:
             return
 
-        game_ids = await queries.get_games_with_close_and_open_bets()
+        game_ids = await queries.get_games_with_close_not_posted()
         for game_id in game_ids:
             game = await queries.get_game_by_id(game_id)
-            bets = await queries.get_open_bets_for_game(game_id)
-
-            if game is None or not bets:
+            if game is None:
                 continue
 
-            # Prefer Kalshi close for moneyline CLV; fall back to DraftKings for
-            # spread/total (Kalshi only carries ml_home / ml_away in its payload).
             kalshi_close = await queries.get_close_snapshot(game_id, "kalshi")
             dk_close = await queries.get_any_close_snapshot(game_id)
 
             if kalshi_close is None and dk_close is None:
                 continue
 
-            # Compute CLV for each bet, write to DB, then post
-            # Use whichever close snapshot has the field we need
-            results: list[tuple[Bet, int | None, float | None]] = []
-            for bet in bets:
-                ref = kalshi_close if (bet.market.lower() == "moneyline" and kalshi_close) else dk_close
-                close_odds = _close_odds_for_bet(bet, game, ref.payload) if ref else None
-                clv: float | None = None
-                if close_odds is not None:
-                    bet_prob = american_to_prob(bet.odds)
-                    close_prob = american_to_prob(close_odds)
-                    clv = (close_prob - bet_prob) * 100  # probability points
-                results.append((bet, close_odds, clv))
-                await queries.update_bet_clv(bet.bet_id, clv)
-
-            # Use the best available close for embed metadata
             ref_snap = kalshi_close or dk_close
             captured_dt = datetime.fromisoformat(ref_snap.captured_at_utc_iso)
             if captured_dt.tzinfo is None:
@@ -143,14 +153,37 @@ class CLVCog(commands.Cog):
                 ),
                 color=0xF1C40F,
             )
-            for bet, close_odds, clv in results:
+
+            # Always show the closing line numbers
+            embed.add_field(
+                name="Close",
+                value=_build_closing_lines_field(kalshi_close, dk_close),
+                inline=False,
+            )
+
+            # If anyone has bets, compute CLV and add their lines
+            bets = await queries.get_open_bets_for_game(game_id)
+            mention_ids: set[str] = set()
+            for bet in bets:
+                ref = kalshi_close if (bet.market.lower() == "moneyline" and kalshi_close) else dk_close
+                close_odds = _close_odds_for_bet(bet, game, ref.payload) if ref else None
+                clv: float | None = None
+                if close_odds is not None:
+                    bet_prob = american_to_prob(bet.odds)
+                    close_prob = american_to_prob(close_odds)
+                    clv = (close_prob - bet_prob) * 100
+                await queries.update_bet_clv(bet.bet_id, clv)
                 embed.add_field(
                     name=f"<@{bet.discord_user}>",
                     value=_build_bet_line(bet, close_odds, clv),
                     inline=False,
                 )
+                mention_ids.add(bet.discord_user)
 
-            await channel.send(embed=embed)
+            # Ping bettors in message content so Discord actually notifies them
+            ping_str = " ".join(f"<@{uid}>" for uid in mention_ids) if mention_ids else None
+            await channel.send(content=ping_str, embed=embed)
+            await queries.mark_game_clv_posted(game_id)
 
     @clv_check.before_loop
     async def before_clv_check(self) -> None:

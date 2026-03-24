@@ -1,6 +1,6 @@
 # SharpLab — Current Status
 
-Last updated: 2026-03-24 (session 3)
+Last updated: 2026-03-24 (session 4)
 
 ## Architecture Decided
 
@@ -24,6 +24,7 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
   get_upcoming_games, get_game_by_id, get_games_in_window,
   insert_bet, get_bets_for_user, get_open_bets_for_game,
   get_games_with_close_and_open_bets, get_any_close_snapshot, update_bet_clv,
+  get_games_with_close_not_posted, mark_game_clv_posted,
   upsert_injury_status, get_unnotified_injuries, mark_injury_notified, get_todays_game_for_team
 
 ### Temporal pipeline (real, not stubs)
@@ -47,8 +48,10 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
   - /convert accepts: American (-110), decimal (1.91), cents (52), probability (0.52/52%)
 - `bot/cogs/odds.py` — /odds, /best-line, /line-move, /scores
   - /odds and /best-line: game autocomplete from DB, Kalshi + Polymarket live ML overlay
-  - /line-move: Kalshi (+ Polymarket later) ML open vs current delta in probability points
-    - Shows pp move with ↑/↓ arrow, snapshot count, "opened X ago"
+  - /line-move: Kalshi (+ Polymarket later) ML + DraftKings spread movement
+    - ML section (per prediction market source): open vs current with ↑/↓ delta
+    - Spread section (DraftKings): home/away spread open vs current
+    - Shows snapshot count, "opened X ago"
     - `PREDICTION_MARKET_SOURCES = ["kalshi", "polymarket"]` — add polymarket by adding to list
   - /scores: balldontlie live scores with ET time formatting
     - Finals: spread result + ✅/❌/➖ cover emoji (home_score - away_score + spread > 0 = covered)
@@ -57,15 +60,18 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
   - NBA day rollover at 11 AM UTC (7 AM ET) — fetches yesterday+today when post-midnight
   - `_preload_game_odds`: prefers Kalshi for ML (no vig), falls back to any book; spread from separate snap
 - `bot/cogs/bets.py` — /log, /record
+  - /log game param uses same `game_autocomplete` as /odds (game_id selected directly)
   - /log odds param accepts all formats (American, decimal, cents) — converts to American for storage
   - Books: DraftKings, FanDuel, BetMGM, Caesars, Bet365, PointsBet, Kalshi, Polymarket, Other
 - `bot/cogs/clv.py` — CLV auto-post background task
-  - `@tasks.loop(minutes=5)` — polls DB for games with close snapshot + open bets
+  - `@tasks.loop(minutes=5)` — polls DB for games where close snapshot exists + `clv_posted=0`
+  - **Always posts closing lines** (Kalshi ML + DK spread/total) regardless of whether bets exist
+  - If bets exist: computes CLV per bet, adds fields to embed, pings bettors via `content=`
   - Computes CLV in probability points (close_prob − bet_prob × 100)
-  - Posts embed to CLV_CHANNEL_ID (default: 1485475287054418151) with per-user mention
-  - Updates bets: clv=X, status='graded' (prevents re-posting)
+  - Updates bets: clv=X, status='graded'; sets games.clv_posted=1 (prevents re-posting)
   - Supports: moneyline (home+away), spread (home side), total (over/under)
   - **Kalshi close = source of truth for ML CLV; DraftKings fallback for spread/total**
+  - `clv_posted` column in games table (migration-safe ALTER TABLE in init_db())
 - `bot/cogs/injuries.py` — **Injury alert auto-post background task** (NEW)
   - `@tasks.loop(minutes=1)` — polls DB for `notified=0` injury rows
   - Looks up today's game for the team, fetches latest odds snapshots
@@ -94,6 +100,7 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
 - **Guild sync** (`tree.sync(guild=guild)`) not global sync — commands appear instantly.
 - **CLV + injury auto-post channel** = `1485475287054418151` (env var `CLV_CHANNEL_ID` to override).
 - **Bet status lifecycle**: `open` → `graded` (CLV computed at tip-off) → `won`/`lost`/`push`/`void` (manual).
+- **CLV post gating**: `games.clv_posted` column (0/1). Set to 1 after posting; never re-posts on bot restart.
 - **tzdata** added as dependency for `zoneinfo` ET timezone support on Windows.
 - **ESPN injuries**: record_id = ESPN athlete ID. Probable-only first inserts are silent (notified=1).
   Status changes and new Out/Doubtful/Questionable/Day-To-Day listings trigger Discord post.
