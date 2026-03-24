@@ -1,6 +1,7 @@
 """Bet tracking commands — /log and /record."""
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 import discord
@@ -35,10 +36,105 @@ MARKET_CHOICES = [
 ]
 
 
+# ── Autocomplete ───────────────────────────────────────────────────────────────
+
+async def pick_autocomplete(
+    interaction: discord.Interaction, _current: str
+) -> list[app_commands.Choice[str]]:
+    """Context-aware pick options: team names, spread sides with lines, over/under, yes/no."""
+    game_id = getattr(interaction.namespace, "game", None)
+    market = getattr(interaction.namespace, "market", None)
+    if not game_id or not market:
+        return []
+
+    game = await queries.get_game_by_id(game_id)
+    if game is None:
+        return []
+
+    if market == "moneyline":
+        return [
+            app_commands.Choice(name=f"{game.away_team} (Away)", value=game.away_team),
+            app_commands.Choice(name=f"{game.home_team} (Home)", value=game.home_team),
+        ]
+    if market == "kalshi":
+        return [
+            app_commands.Choice(name="Yes", value="yes"),
+            app_commands.Choice(name="No", value="no"),
+        ]
+
+    # spread or total — pull latest lines from DB (prefer DraftKings)
+    snaps = await queries.get_latest_snapshots_for_game(game_id)
+    payload: dict = {}
+    for snap in snaps:
+        if snap.source == "draftkings":
+            try:
+                payload = json.loads(snap.payload)
+                break
+            except Exception:
+                pass
+    if not payload and snaps:
+        try:
+            payload = json.loads(snaps[0].payload)
+        except Exception:
+            pass
+
+    if market == "spread":
+        spread = payload.get("spread")
+        spread_odds = payload.get("spread_odds")
+        if spread is not None:
+            away_spread = -spread
+            home_label = f"{game.home_team} {spread:+.1f}"
+            if spread_odds is not None:
+                home_label += f" ({spread_odds:+d})"
+            away_label = f"{game.away_team} {away_spread:+.1f}"
+            return [
+                app_commands.Choice(name=home_label, value=f"{game.home_team}:{spread}"),
+                app_commands.Choice(name=away_label, value=f"{game.away_team}:{away_spread}"),
+            ]
+        # No snapshot yet — show team names without lines
+        return [
+            app_commands.Choice(name=f"{game.home_team} (Home)", value=game.home_team),
+            app_commands.Choice(name=f"{game.away_team} (Away)", value=game.away_team),
+        ]
+
+    if market == "total":
+        total = payload.get("total")
+        over_odds = payload.get("total_over_odds")
+        under_odds = payload.get("total_under_odds")
+        if total is not None:
+            over_label = f"Over {total}"
+            if over_odds is not None:
+                over_label += f" ({over_odds:+d})"
+            under_label = f"Under {total}"
+            if under_odds is not None:
+                under_label += f" ({under_odds:+d})"
+            return [
+                app_commands.Choice(name=over_label, value=f"over:{total}"),
+                app_commands.Choice(name=under_label, value=f"under:{total}"),
+            ]
+        return [
+            app_commands.Choice(name="Over", value="over"),
+            app_commands.Choice(name="Under", value="under"),
+        ]
+
+    return []
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _fmt_american(odds: int) -> str:
     return f"+{odds}" if odds > 0 else str(odds)
+
+
+def _parse_pick(pick: str) -> tuple[str, float | None]:
+    """Parse autocomplete value 'side:line' or bare 'side' into (side, line | None)."""
+    if ":" in pick:
+        side, _, line_str = pick.partition(":")
+        try:
+            return side.strip(), float(line_str)
+        except ValueError:
+            return side.strip(), None
+    return pick.strip(), None
 
 
 def _record_embed(user: discord.Member | discord.User, bets: list[Bet]) -> discord.Embed:
@@ -112,15 +208,14 @@ class BetsCog(commands.Cog):
     # ── /log ──────────────────────────────────────────────────────────────────
 
     @app_commands.command(name="log", description="Log a bet to your record")
-    @app_commands.autocomplete(game=game_autocomplete)
+    @app_commands.autocomplete(game=game_autocomplete, pick=pick_autocomplete)
     @app_commands.describe(
         game="Select a game",
         book="Sportsbook",
         market="Market type",
-        side="Side (team name, 'over', 'under', 'yes', 'no')",
+        pick="Your pick — autocomplete shows live lines (team, spread side, over/under, yes/no)",
         odds="Odds in any format: American (-110, +150), decimal (1.91), or cents (52)",
         units="Units risked (e.g. 1.0)",
-        line="Spread or total number (leave blank for moneyline/kalshi)",
         notes="Optional notes",
     )
     @app_commands.choices(book=BOOK_CHOICES, market=MARKET_CHOICES)
@@ -130,10 +225,9 @@ class BetsCog(commands.Cog):
         game: str,
         book: str,
         market: str,
-        side: str,
+        pick: str,
         odds: str,
         units: float,
-        line: float | None = None,
         notes: str | None = None,
     ) -> None:
         await interaction.response.defer(ephemeral=True)
@@ -155,6 +249,8 @@ class BetsCog(commands.Cog):
             )
             return
 
+        side, line = _parse_pick(pick)
+
         now_iso = datetime.now(timezone.utc).isoformat()
         bet = Bet(
             game_id=target.game_id,
@@ -173,7 +269,6 @@ class BetsCog(commands.Cog):
         sign = "+" if american_odds > 0 else ""
         line_str = f" {line:+.1f}" if line is not None else ""
         implied = american_to_prob(american_odds)
-        # Show original input + American equivalent if format was converted
         if odds_fmt == "american":
             odds_display = f"`{sign}{american_odds}`"
         else:
@@ -183,7 +278,7 @@ class BetsCog(commands.Cog):
         embed.add_field(name="Game", value=f"{target.away_team} @ {target.home_team}", inline=False)
         embed.add_field(name="Book", value=book, inline=True)
         embed.add_field(name="Market", value=f"{market}{line_str}", inline=True)
-        embed.add_field(name="Side", value=side, inline=True)
+        embed.add_field(name="Pick", value=side, inline=True)
         embed.add_field(name="Odds", value=odds_display, inline=True)
         embed.add_field(name="Implied %", value=f"`{implied * 100:.1f}%`", inline=True)
         embed.add_field(name="Units", value=f"`{units}u`", inline=True)
