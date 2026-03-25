@@ -388,6 +388,20 @@ async def get_open_bets_for_game(game_id: str) -> list[Bet]:
     return [_row_to_bet(r) for r in rows]
 
 
+async def get_bet_by_id(bet_id: int) -> Bet | None:
+    """Return a single bet by its primary key."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM bets WHERE bet_id = ?",
+            (bet_id,),
+        )
+        row = await cursor.fetchone()
+    if row is None:
+        return None
+    return _row_to_bet(row)
+
+
 async def get_resolvable_bets_for_game(game_id: str) -> list[Bet]:
     """Return open/graded bets for a game that haven't received a final result yet."""
     async with aiosqlite.connect(DB_PATH) as db:

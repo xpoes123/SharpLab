@@ -399,6 +399,46 @@ class BetsCog(commands.Cog):
         embed.set_footer(text="EV gained = Σ (units × CLV / 100) — theoretical edge vs. closing line")
         await interaction.followup.send(embed=embed)
 
+    # ── /void ─────────────────────────────────────────────────────────────────
+
+    @app_commands.command(name="void", description="Void a bet you logged (cancelled game or entry error)")
+    @app_commands.describe(bet_id="Bet ID shown in the /log confirmation footer")
+    async def void_bet(self, interaction: discord.Interaction, bet_id: int) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        bet = await queries.get_bet_by_id(bet_id)
+        if bet is None:
+            await interaction.followup.send(f"Bet #{bet_id} not found.", ephemeral=True)
+            return
+
+        if bet.discord_user != str(interaction.user.id):
+            await interaction.followup.send("That bet doesn't belong to you.", ephemeral=True)
+            return
+
+        if bet.status in ("won", "lost", "push", "void"):
+            await interaction.followup.send(
+                f"Bet #{bet_id} is already **{bet.status}** and can't be voided.",
+                ephemeral=True,
+            )
+            return
+
+        await queries.update_bet_result(bet_id, "void")
+
+        game = await queries.get_game_by_id(bet.game_id)
+        game_str = (
+            f"{game.away_team} @ {game.home_team}" if game else bet.game_id[:8]
+        )
+        line_str = f" {bet.line:+.1f}" if bet.line is not None and bet.market in ("spread", "total") else ""
+
+        embed = discord.Embed(title="Bet voided", color=0xED4245)
+        embed.add_field(name="Game", value=game_str, inline=False)
+        embed.add_field(name="Market", value=f"{bet.market}{line_str}", inline=True)
+        embed.add_field(name="Pick", value=bet.side, inline=True)
+        embed.add_field(name="Odds", value=f"`{fmt_prob(bet.odds)}`", inline=True)
+        embed.add_field(name="Units", value=f"`{bet.units}u`", inline=True)
+        embed.set_footer(text=f"Bet ID: {bet_id} — was {bet.status}")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
     # ── /record ───────────────────────────────────────────────────────────────
 
     @app_commands.command(name="record", description="View bet record and ROI")
