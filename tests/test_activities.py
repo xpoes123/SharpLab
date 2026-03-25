@@ -192,22 +192,28 @@ def test_american_to_decimal():
 _ESPN_RESPONSE = {
     "injuries": [
         {
-            "team": {"displayName": "Atlanta Hawks"},
+            "displayName": "Atlanta Hawks",
             "injuries": [
                 {
-                    "athlete": {"id": "3136193", "displayName": "Trae Young"},
+                    "athlete": {
+                        "displayName": "Trae Young",
+                        "links": [{"href": "https://www.espn.com/nba/player/id/3136193/trae-young"}],
+                    },
                     "status": "Questionable",
                     "details": {"type": "Ankle", "side": "Left", "detail": "Sprain"},
                 },
                 {
-                    "athlete": {"id": "9999999", "displayName": "Bogdan Bogdanovic"},
+                    "athlete": {
+                        "displayName": "Bogdan Bogdanovic",
+                        "links": [{"href": "https://www.espn.com/nba/player/id/9999999/bogdan-bogdanovic"}],
+                    },
                     "status": "Out",
                     "details": {"type": "Knee"},
                 },
             ],
         },
         {
-            "team": {"displayName": "Boston Celtics"},
+            "displayName": "Boston Celtics",
             "injuries": [],
         },
     ]
@@ -232,14 +238,14 @@ def test_parse_espn_injuries_response_partial_detail():
 
 
 def test_parse_espn_injuries_response_empty_team():
-    data = {"injuries": [{"team": {"displayName": "Boston Celtics"}, "injuries": []}]}
+    data = {"injuries": [{"displayName": "Boston Celtics", "injuries": []}]}
     assert _parse_espn_injuries_response(data) == []
 
 
 def test_parse_espn_injuries_response_skips_missing_athlete_id():
     data = {
         "injuries": [{
-            "team": {"displayName": "Dallas Mavericks"},
+            "displayName": "Dallas Mavericks",
             "injuries": [{"athlete": {"displayName": "Luka Doncic"}, "status": "Out"}],
         }]
     }
