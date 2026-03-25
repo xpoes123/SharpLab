@@ -14,6 +14,7 @@ COGS = [
     "bot.cogs.utils",
     "bot.cogs.odds",
     "bot.cogs.bets",
+    "bot.cogs.markets",
     "bot.cogs.clv",
     "bot.cogs.injuries",
     "bot.cogs.history",

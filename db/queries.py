@@ -268,6 +268,30 @@ async def get_bets_for_user(discord_user: str) -> list[Bet]:
     return [_row_to_bet(r) for r in rows]
 
 
+async def get_graded_bets_for_user(discord_user: str) -> list[Bet]:
+    """Return all bets with CLV computed (graded/won/lost/push/void), newest first."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM bets WHERE discord_user = ? AND clv IS NOT NULL ORDER BY placed_at DESC",
+            (discord_user,),
+        )
+        rows = await cursor.fetchall()
+    return [_row_to_bet(r) for r in rows]
+
+
+async def get_open_bets_for_user(discord_user: str) -> list[Bet]:
+    """Return open and graded bets for a user, newest first."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM bets WHERE discord_user = ? AND status IN ('open', 'graded') ORDER BY placed_at DESC",
+            (discord_user,),
+        )
+        rows = await cursor.fetchall()
+    return [_row_to_bet(r) for r in rows]
+
+
 async def get_games_with_close_and_open_bets() -> list[str]:
     """Return game_ids that have a close snapshot and at least one open bet."""
     async with aiosqlite.connect(DB_PATH) as db:

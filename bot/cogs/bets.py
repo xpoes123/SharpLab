@@ -290,6 +290,115 @@ class BetsCog(commands.Cog):
         embed.set_footer(text=f"Bet ID: {bet_id}")
         await interaction.followup.send(embed=embed)
 
+    # ── /open ─────────────────────────────────────────────────────────────────
+
+    @app_commands.command(name="open", description="View your open and graded bets")
+    async def open_bets(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        bets = await queries.get_open_bets_for_user(str(interaction.user.id))
+
+        if not bets:
+            await interaction.followup.send("You have no open or graded bets.", ephemeral=True)
+            return
+
+        lines = []
+        for bet in bets:
+            game = await queries.get_game_by_id(bet.game_id)
+            if game is not None:
+                away_short = game.away_team.split()[-1]
+                home_short = game.home_team.split()[-1]
+                game_str = f"{away_short} @ {home_short}"
+            else:
+                game_str = bet.game_id[:8]
+
+            if bet.market == "spread" and bet.line is not None:
+                market_str = f"spread {bet.line:+.1f}"
+            elif bet.market == "total" and bet.line is not None:
+                direction = "O" if bet.side.lower() == "over" else "U"
+                market_str = f"total {direction}{bet.line:.1f}"
+            else:
+                market_str = bet.market
+
+            icon = "📊" if bet.status == "graded" else "⏳"
+            clv_str = f"  CLV: {bet.clv:+.1f}pp" if bet.status == "graded" and bet.clv is not None else ""
+
+            lines.append(
+                f"{icon}  {game_str:<12}  {market_str:<14}  {bet.side:<12}  {fmt_prob(bet.odds):<6}  {bet.units}u{clv_str}"
+            )
+
+        embed = discord.Embed(
+            title=f"Open bets — {interaction.user.display_name}",
+            description="```\n" + "\n".join(lines) + "\n```",
+            color=0x5865F2,
+        )
+        embed.set_footer(text=f"{len(bets)} bet{'s' if len(bets) != 1 else ''} pending")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    # ── /clv-summary ──────────────────────────────────────────────────────────
+
+    @app_commands.command(name="clv-summary", description="CLV breakdown and EV gained from beating the closing line")
+    @app_commands.describe(user="User to look up (defaults to you)")
+    async def clv_summary(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member | None = None,
+    ) -> None:
+        await interaction.response.defer()
+
+        target_user = user or interaction.user
+        bets = await queries.get_graded_bets_for_user(str(target_user.id))
+
+        if not bets:
+            await interaction.followup.send(
+                f"No CLV data yet for **{target_user.display_name}** — bets are graded at tip-off."
+            )
+            return
+
+        # EV gained = units × (clv_pp / 100)
+        def _ev(b: Bet) -> float:
+            return b.units * (b.clv / 100)  # type: ignore[operator]
+
+        total_ev = sum(_ev(b) for b in bets)
+        avg_clv = sum(b.clv for b in bets) / len(bets)  # type: ignore[arg-type]
+
+        # Breakdown helpers
+        def _breakdown(groups: dict[str, list[Bet]]) -> str:
+            rows = []
+            for key in sorted(groups):
+                group = groups[key]
+                g_avg = sum(b.clv for b in group) / len(group)  # type: ignore[arg-type]
+                g_ev = sum(_ev(b) for b in group)
+                rows.append(f"  {key:<14} {len(group):>3}  avg {g_avg:+.1f}pp  EV {g_ev:+.3f}u")
+            return "\n".join(rows)
+
+        by_market: dict[str, list[Bet]] = {}
+        by_book: dict[str, list[Bet]] = {}
+        for b in bets:
+            by_market.setdefault(b.market, []).append(b)
+            by_book.setdefault(b.book, []).append(b)
+
+        color = 0x57F287 if total_ev > 0 else (0xED4245 if total_ev < 0 else 0x5865F2)
+        embed = discord.Embed(
+            title=f"CLV Summary — {target_user.display_name}",
+            color=color,
+        )
+        embed.add_field(name="Bets graded", value=f"`{len(bets)}`", inline=True)
+        embed.add_field(name="Avg CLV", value=f"`{avg_clv:+.2f}pp`", inline=True)
+        embed.add_field(name="Total EV gained", value=f"`{total_ev:+.3f}u`", inline=True)
+        embed.add_field(
+            name="By market",
+            value="```\n" + _breakdown(by_market) + "\n```",
+            inline=False,
+        )
+        embed.add_field(
+            name="By book",
+            value="```\n" + _breakdown(by_book) + "\n```",
+            inline=False,
+        )
+        embed.set_footer(text="EV gained = Σ (units × CLV / 100) — theoretical edge vs. closing line")
+        await interaction.followup.send(embed=embed)
+
     # ── /record ───────────────────────────────────────────────────────────────
 
     @app_commands.command(name="record", description="View bet record and ROI")
