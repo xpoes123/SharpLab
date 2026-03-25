@@ -10,7 +10,7 @@ from discord.ext import commands
 
 from db import queries
 from shared.models import Bet
-from shared.odds_utils import american_to_decimal, american_to_prob, parse_odds_input
+from shared.odds_utils import american_to_decimal, fmt_prob, parse_odds_input
 from .odds import game_autocomplete
 
 
@@ -85,7 +85,7 @@ async def pick_autocomplete(
             away_spread = -spread
             home_label = f"{game.home_team} {spread:+.1f}"
             if spread_odds is not None:
-                home_label += f" ({spread_odds:+d})"
+                home_label += f" ({fmt_prob(spread_odds)})"
             away_label = f"{game.away_team} {away_spread:+.1f}"
             return [
                 app_commands.Choice(name=home_label, value=f"{game.home_team}:{spread}"),
@@ -104,10 +104,10 @@ async def pick_autocomplete(
         if total is not None:
             over_label = f"Over {total}"
             if over_odds is not None:
-                over_label += f" ({over_odds:+d})"
+                over_label += f" ({fmt_prob(over_odds)})"
             under_label = f"Under {total}"
             if under_odds is not None:
-                under_label += f" ({under_odds:+d})"
+                under_label += f" ({fmt_prob(under_odds)})"
             return [
                 app_commands.Choice(name=over_label, value=f"over:{total}"),
                 app_commands.Choice(name=under_label, value=f"under:{total}"),
@@ -123,7 +123,7 @@ async def pick_autocomplete(
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _fmt_american(odds: int) -> str:
-    return f"+{odds}" if odds > 0 else str(odds)
+    return fmt_prob(odds)
 
 
 def _parse_pick(pick: str) -> tuple[str, float | None]:
@@ -278,21 +278,14 @@ class BetsCog(commands.Cog):
         )
         bet_id = await queries.insert_bet(bet)
 
-        sign = "+" if american_odds > 0 else ""
         line_str = f" {final_line:+.1f}" if final_line is not None else ""
-        implied = american_to_prob(american_odds)
-        if odds_fmt == "american":
-            odds_display = f"`{sign}{american_odds}`"
-        else:
-            odds_display = f"`{odds}` ({odds_fmt}) → `{sign}{american_odds}`"
 
         embed = discord.Embed(title="Bet logged", color=0x57F287)
         embed.add_field(name="Game", value=f"{target.away_team} @ {target.home_team}", inline=False)
         embed.add_field(name="Book", value=book, inline=True)
         embed.add_field(name="Market", value=f"{market}{line_str}", inline=True)
         embed.add_field(name="Pick", value=side, inline=True)
-        embed.add_field(name="Odds", value=odds_display, inline=True)
-        embed.add_field(name="Implied %", value=f"`{implied * 100:.1f}%`", inline=True)
+        embed.add_field(name="Odds", value=f"`{fmt_prob(american_odds)}`", inline=True)
         embed.add_field(name="Units", value=f"`{units}u`", inline=True)
         embed.set_footer(text=f"Bet ID: {bet_id}")
         await interaction.followup.send(embed=embed)

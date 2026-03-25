@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 from db import queries
 from shared.models import Game, InjuryAlert, OddsSnapshot
+from shared.odds_utils import fmt_prob
 
 load_dotenv()
 
@@ -21,7 +22,7 @@ _TRACKED_BOOKS = {"draftkings", "fanduel", "betmgm", "caesars", "kalshi"}
 # ── Formatting ────────────────────────────────────────────────────────────────
 
 def _fmt_odds(odds: int) -> str:
-    return f"+{odds}" if odds > 0 else str(odds)
+    return fmt_prob(odds)
 
 
 def _fmt_game_time(utc_iso: str) -> str:

@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 from db import queries
 from shared.models import Bet, Game
-from shared.odds_utils import american_to_prob
+from shared.odds_utils import american_to_prob, fmt_prob
 
 load_dotenv()
 
@@ -49,7 +49,7 @@ def _close_odds_for_bet(bet: Bet, game: Game, payload: dict) -> int | None:
 # ── Formatting ────────────────────────────────────────────────────────────────
 
 def _fmt_odds(odds: int) -> str:
-    return f"+{odds}" if odds > 0 else str(odds)
+    return fmt_prob(odds)
 
 
 def _fmt_clv(clv: float) -> str:

@@ -586,12 +586,12 @@ class OddsCog(commands.Cog):
         def _fmt_ml(o: int | None) -> str:
             if o is None:
                 return "—"
-            return f"{o:+d} ({american_to_prob(o) * 100:.0f}%)"
+            return _fmt_prob(o)
 
         def _fmt_spread_cell(spread: float | None, odds: int | None) -> str:
             if spread is None:
                 return "—"
-            odds_str = f" ({odds:+d})" if odds is not None else ""
+            odds_str = f" ({_fmt_prob(odds)})" if odds is not None else ""
             return f"{spread:+.1f}{odds_str}"
 
         sections: list[str] = []

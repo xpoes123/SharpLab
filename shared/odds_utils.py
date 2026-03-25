@@ -38,6 +38,11 @@ def decimal_to_american(decimal: float) -> int:
         return round(-100 / (decimal - 1))
 
 
+def fmt_prob(odds: int) -> str:
+    """Format American odds as implied probability percentage (e.g. -110 → '52.4%')."""
+    return f"{american_to_prob(odds) * 100:.1f}%"
+
+
 def parse_odds_input(raw: str) -> tuple[int, str]:
     """
     Parse odds in any supported format and return (american_odds, format_label).

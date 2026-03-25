@@ -9,6 +9,7 @@ from discord.ext import commands
 
 from db import queries
 from shared.models import TEAM_ABBR
+from shared.odds_utils import fmt_prob
 
 PAGE_SIZE = 5
 
@@ -29,7 +30,7 @@ def _fmt_spread(home: str, away: str, spread: float | None, spread_odds: int | N
     else:
         side, val = _abbr(away), -spread
     val_str = f"{val:+g}"
-    odds_str = f" ({spread_odds:+d})" if spread_odds is not None else ""
+    odds_str = f" ({fmt_prob(spread_odds)})" if spread_odds is not None else ""
     return f"{side} {val_str}{odds_str}"
 
 
