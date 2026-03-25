@@ -1,6 +1,6 @@
 # SharpLab — Current Status
 
-Last updated: 2026-03-25 (session 8)
+Last updated: 2026-03-25 (session 9)
 
 ## Architecture Decided
 
@@ -74,7 +74,8 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
     - Blank line separator between finals / live / upcoming sections
   - NBA day rollover at 11 AM UTC (7 AM ET) — fetches yesterday+today when post-midnight
   - `_preload_game_odds`: prefers Kalshi for ML (no vig), falls back to any book; spread from separate snap
-- `bot/cogs/bets.py` — /log, /open, /clv-summary, /record
+- `bot/cogs/bets.py` — /log, /open, /clv-summary, /record, **/void**
+  - /void: ephemeral, `bet_id: int` param, guards ownership + status (open/graded only), calls `update_bet_result('void')`. `get_bet_by_id` added to `db/queries.py`.
   - /log game param uses same `game_autocomplete` as /odds (game_id selected directly)
   - /log odds param accepts all formats (American, decimal, cents) — converts to American for storage
   - Books: DraftKings, FanDuel, BetMGM, Caesars, Bet365, PointsBet, Kalshi, Polymarket, Other
@@ -137,8 +138,7 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
 
 ### Bot backlog (prioritized)
 
-1. **`/void [bet_id]`** — Manually void a bet (game cancelled, scratch before tip). Status exists in schema; just needs a command.
-2. **`/record` improvements** — Time-period filter (last 30 days / season / all time) + per-book ROI breakdown.
+1. **`/record` improvements** — Time-period filter (last 30 days / season / all time) + per-book ROI breakdown.
 3. **Sharp move flag in `/line-move`** — Detect reverse line movement (line moved against the public side) and flag it in the embed.
 4. **Line alerts** — `/alert` command: ping user when a line crosses a threshold. Needs an `alerts` table + check on each pipeline poll. Bigger lift.
 
@@ -152,5 +152,6 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
 
 ## Build Order (next steps)
 
-1. `/void` — simple, self-contained
-2. See bot backlog above for subsequent features
+1. `/record` improvements — time-period filter + per-book ROI breakdown
+2. Sharp move flag in `/line-move` — detect reverse line movement
+3. `/alert` — ping on line threshold crossing (bigger lift)
