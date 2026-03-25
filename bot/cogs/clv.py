@@ -35,7 +35,8 @@ def _close_odds_for_bet(bet: Bet, game: Game, payload: dict) -> int | None:
     elif market == "spread":
         if side in home or home.split()[-1] in side:
             return payload.get("spread_odds")
-        # Away spread odds not stored in current payload shape
+        if side in away or away.split()[-1] in side:
+            return payload.get("spread_odds")  # away_odds not stored separately; juice is typically identical
 
     elif market == "total":
         if side == "over":
@@ -136,7 +137,7 @@ class CLVCog(commands.Cog):
                 continue
 
             kalshi_close = await queries.get_close_snapshot(game_id, "kalshi")
-            dk_close = await queries.get_any_close_snapshot(game_id)
+            dk_close = await queries.get_close_snapshot(game_id, "draftkings")
 
             if kalshi_close is None and dk_close is None:
                 continue
