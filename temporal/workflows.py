@@ -12,6 +12,8 @@ with workflow.unsafe.imports_passed_through():
         fetch_close_odds_snapshot,
         fetch_kalshi_odds_batch,
         fetch_kalshi_close_snapshot,
+        fetch_polymarket_odds_batch,
+        fetch_polymarket_close_snapshot,
         fetch_final_scores,
         resolve_bets_for_game,
         FetchCloseSnapshotInput,
@@ -99,6 +101,23 @@ class OddsPollingWorkflow:
                     retry_policy=RetryPolicy(maximum_attempts=3),
                 )
 
+            # ── Step 7: fetch Polymarket ML for all today's games ─────────────
+            polymarket_batch = await workflow.execute_activity(
+                fetch_polymarket_odds_batch,
+                games,
+                start_to_close_timeout=timedelta(seconds=60),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+
+            # ── Step 8: persist Polymarket snapshots ──────────────────────────
+            for snapshot in polymarket_batch.snapshots:
+                await workflow.execute_activity(
+                    upsert_odds_snapshot,
+                    snapshot,
+                    start_to_close_timeout=timedelta(seconds=10),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                )
+
             await workflow.sleep(timedelta(minutes=interval_minutes))
 
 
@@ -154,6 +173,24 @@ class CloseCaptureWorkflow:
             await workflow.execute_activity(
                 upsert_odds_snapshot,
                 kalshi_results[0],
+                start_to_close_timeout=timedelta(seconds=10),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+
+        # Also capture Polymarket close (ML only) — secondary prediction market signal
+        polymarket_results = await workflow.execute_activity(
+            fetch_polymarket_close_snapshot,
+            FetchCloseSnapshotInput(
+                snapshot_id=f"close:polymarket:{game_id}",
+                game_id=game_id,
+            ),
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(maximum_attempts=3),
+        )
+        if polymarket_results:
+            await workflow.execute_activity(
+                upsert_odds_snapshot,
+                polymarket_results[0],
                 start_to_close_timeout=timedelta(seconds=10),
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )
@@ -239,6 +276,20 @@ class InjuryPollingWorkflow:
                         retry_policy=RetryPolicy(maximum_attempts=3),
                     )
                     for snapshot in kalshi_batch.snapshots:
+                        await workflow.execute_activity(
+                            upsert_odds_snapshot,
+                            snapshot,
+                            start_to_close_timeout=timedelta(seconds=10),
+                            retry_policy=RetryPolicy(maximum_attempts=3),
+                        )
+
+                    polymarket_batch = await workflow.execute_activity(
+                        fetch_polymarket_odds_batch,
+                        games,
+                        start_to_close_timeout=timedelta(seconds=60),
+                        retry_policy=RetryPolicy(maximum_attempts=3),
+                    )
+                    for snapshot in polymarket_batch.snapshots:
                         await workflow.execute_activity(
                             upsert_odds_snapshot,
                             snapshot,

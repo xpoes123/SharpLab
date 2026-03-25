@@ -1,6 +1,6 @@
 # SharpLab — Current Status
 
-Last updated: 2026-03-24 (session 6)
+Last updated: 2026-03-25 (session 8)
 
 ## Architecture Decided
 
@@ -28,20 +28,28 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
   upsert_injury_status, get_unnotified_injuries, mark_injury_notified, get_todays_game_for_team,
   get_past_game_count, get_history_page, get_first_poll_snapshot,
   get_recent_games, get_games_by_id_prefix, get_all_games_filtered,
-  get_resolvable_bets_for_game, get_game_by_team_suffixes, update_bet_result, update_game_status
+  get_resolvable_bets_for_game, get_game_by_team_suffixes, update_bet_result, update_game_status,
+  **get_graded_bets_for_user** (clv IS NOT NULL), **get_open_bets_for_user** (status IN open/graded)
 
 ### Temporal pipeline (real, not stubs)
 - `temporal/activities.py` — fetch_games_for_today, fetch_odds_batch, upsert_odds_snapshot,
   fetch_close_odds_snapshot, fetch_kalshi_odds_batch, fetch_kalshi_close_snapshot, fetch_injuries,
+  **fetch_polymarket_odds_batch**, **fetch_polymarket_close_snapshot**,
   **fetch_final_scores**, **resolve_bets_for_game**
   - Kalshi matching: KXNBAGAME series, team abbr from last 6 chars of event ticker
   - `TEAM_ABBR` dict in `shared/models.py` maps full team names → 3-char abbreviations
   - ESPN injuries: polls `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries`
+  - Polymarket: `_polymarket_ml_for_game(client, home, away)` helper → `fetch_polymarket_odds_batch(games)`
+    + `fetch_polymarket_close_snapshot(inp)`. Searches `gamma-api.polymarket.com/markets?q={home_short} {away_short}`.
+    No auth. Flexible response shape (list / {"markets":[...]} / {"data":[...]}). Tokens may be JSON-encoded string.
   - `fetch_final_scores(dates)` — hits balldontlie, returns `list[GameResult]` for final games only
   - `resolve_bets_for_game(GameResult)` — matches by team suffix, resolves open/graded bets, marks game 'final'
     - Resolution: moneyline/kalshi (team name or yes/no), spread (margin = side_score - opp + line), total (O/U)
     - Idempotent: `games.status = 'final'` gates re-processing
 - `temporal/workflows.py` — OddsPollingWorkflow + CloseCaptureWorkflow + InjuryPollingWorkflow + **BetResolutionWorkflow**
+  - OddsPollingWorkflow: steps 7+8 fetch+persist Polymarket after Kalshi every 30 min
+  - CloseCaptureWorkflow: captures Polymarket close (ML only) alongside DK + Kalshi at tip-off
+  - InjuryPollingWorkflow: re-fetches Polymarket on injury changes (same as Kalshi)
   - BetResolutionWorkflow: every 2 hours, fetches yesterday+today scores, resolves bets for each final game
 - `temporal/worker.py` — calls init_db() on startup, all 4 workflows + all activities registered
 - `temporal/start_injury_polling.py` — entry point for InjuryPollingWorkflow (`just injuries`)
@@ -53,12 +61,12 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
 - `bot/cogs/utils.py` — /convert, /ev, /kelly, /parlay, **/help** (pure math, no API/DB)
   - /convert accepts: American (-110), decimal (1.91), cents (52), probability (0.52/52%)
 - `bot/cogs/odds.py` — /odds, /best-line, /line-move, /scores
-  - /odds and /best-line: game autocomplete from DB, Kalshi + Polymarket live ML overlay
-  - /line-move: Kalshi (+ Polymarket later) ML + DraftKings spread movement
+  - /odds and /best-line: game autocomplete from DB, Kalshi + Polymarket prefer DB (live fallback only if pipeline hasn't run)
+  - /line-move: Kalshi + Polymarket ML + DraftKings spread movement
+    - `PREDICTION_MARKET_SOURCES = ["kalshi", "polymarket"]` — Polymarket now fully wired (pipeline writes to DB)
     - ML section (per prediction market source): open vs current with ↑/↓ delta
     - Spread section (DraftKings): home/away spread open vs current
     - Shows snapshot count, "opened X ago"
-    - `PREDICTION_MARKET_SOURCES = ["kalshi", "polymarket"]` — add polymarket by adding to list
     - Autocomplete: yesterday+today+upcoming only; ID-prefix search (from /db) resolves all games
   - /scores: balldontlie live scores with ET time formatting
     - Finals: spread result + ✅/❌/➖ cover emoji (home_score - away_score + spread > 0 = covered)
@@ -66,10 +74,18 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
     - Blank line separator between finals / live / upcoming sections
   - NBA day rollover at 11 AM UTC (7 AM ET) — fetches yesterday+today when post-midnight
   - `_preload_game_odds`: prefers Kalshi for ML (no vig), falls back to any book; spread from separate snap
-- `bot/cogs/bets.py` — /log, /record
+- `bot/cogs/bets.py` — /log, /open, /clv-summary, /record
   - /log game param uses same `game_autocomplete` as /odds (game_id selected directly)
   - /log odds param accepts all formats (American, decimal, cents) — converts to American for storage
   - Books: DraftKings, FanDuel, BetMGM, Caesars, Bet365, PointsBet, Kalshi, Polymarket, Other
+  - /open: ephemeral list of user's open (⏳) + graded (📊) bets with CLV where available
+  - /clv-summary: aggregate CLV analytics — avg CLV pp, total EV gained (Σ units × CLV/100),
+    breakdown by market and by book. Optional `user` param. Color-coded by EV sign.
+    EV formula: `units × (clv_pp / 100)` = theoretical edge captured vs. closing line
+- `bot/cogs/markets.py` — /kalshi
+  - Live fetch from Kalshi KXNBAGAME series — not cached in DB
+  - Shows bid/ask/mid (as implied prob + American) and volume for each side (away/home)
+  - Same game autocomplete as /odds. Matches by team abbr in event ticker.
 - `bot/cogs/clv.py` — CLV auto-post background task
   - `@tasks.loop(minutes=5)` — polls DB for games where close snapshot exists + `clv_posted=0`
   - **Always posts closing lines** (Kalshi ML + DK spread/total) regardless of whether bets exist
@@ -119,19 +135,12 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
 
 ## What Doesn't Exist Yet
 
-- `bot/cogs/markets.py` — `/kalshi` command
-- Polymarket pipeline activity
-- Polymarket in `/line-move` (slot reserved — just add "polymarket" to PREDICTION_MARKET_SOURCES)
-
 ### Bot backlog (prioritized)
 
-1. **`/kalshi [game]`** — Show full Kalshi contract: yes/no prices, bid/ask, volume. `bot/cogs/markets.py` is empty.
-2. **`/open`** — List your open + graded bets. Currently no way to see live exposure without scrolling `/record`.
-3. **`/clv-summary`** — Aggregate CLV across all graded bets: avg CLV by market type and by book. The core KPI — currently not surfaced anywhere.
-4. **`/void [bet_id]`** — Manually void a bet (game cancelled, scratch before tip). Status exists in schema; just needs a command.
-5. **`/record` improvements** — Time-period filter (last 30 days / season / all time) + per-book ROI breakdown.
-6. **Sharp move flag in `/line-move`** — Detect reverse line movement (line moved against the public side) and flag it in the embed.
-7. **Line alerts** — `/alert` command: ping user when a line crosses a threshold (e.g. "ping me if Lakers ML > +150"). Needs an `alerts` table + check on each pipeline poll.
+1. **`/void [bet_id]`** — Manually void a bet (game cancelled, scratch before tip). Status exists in schema; just needs a command.
+2. **`/record` improvements** — Time-period filter (last 30 days / season / all time) + per-book ROI breakdown.
+3. **Sharp move flag in `/line-move`** — Detect reverse line movement (line moved against the public side) and flag it in the embed.
+4. **Line alerts** — `/alert` command: ping user when a line crosses a threshold. Needs an `alerts` table + check on each pipeline poll. Bigger lift.
 
 ## API Keys in .env
 
@@ -143,6 +152,5 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
 
 ## Build Order (next steps)
 
-1. `/kalshi` — live Kalshi market explorer (bot/cogs/markets.py)
-2. Polymarket pipeline activity → then add to `/line-move` via PREDICTION_MARKET_SOURCES
-3. See bot backlog above for subsequent bot features
+1. `/void` — simple, self-contained
+2. See bot backlog above for subsequent features

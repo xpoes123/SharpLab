@@ -9,6 +9,7 @@ At 30-min intervals during a ~9-hour game window × 20 game days = ~360 calls/mo
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -33,6 +34,8 @@ KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 
 BALLDONTLIE_API_KEY = os.getenv("BALLDONTLIE_API_KEY", "")
 BALLDONTLIE_BASE = "https://api.balldontlie.io/v1"
+
+POLYMARKET_GAMMA = "https://gamma-api.polymarket.com"
 
 ESPN_INJURIES_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries"
 
@@ -504,6 +507,143 @@ async def fetch_kalshi_close_snapshot(inp: FetchCloseSnapshotInput) -> list[Odds
         game_id=inp.game_id,
         kind="close",
         source="kalshi",
+        captured_at_utc_iso=captured_at,
+        payload={"ml_home": ml_home, "ml_away": ml_away},
+    )]
+
+
+# ── Polymarket helpers ───────────────────────────────────────────────────────
+
+async def _polymarket_ml_for_game(
+    client: httpx.AsyncClient, home_team: str, away_team: str
+) -> tuple[int, int] | None:
+    """
+    Search Polymarket Gamma API for a game winner market and return
+    (ml_home_american, ml_away_american) or None if not found.
+    """
+    home_short = home_team.split()[-1].lower()
+    away_short = away_team.split()[-1].lower()
+
+    try:
+        resp = await client.get(
+            f"{POLYMARKET_GAMMA}/markets",
+            params={"q": f"{home_short} {away_short}", "active": "true", "closed": "false", "limit": 20},
+            timeout=10.0,
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+    except Exception:
+        return None
+
+    markets = data if isinstance(data, list) else data.get("markets", data.get("data", []))
+    target = next(
+        (
+            m for m in markets
+            if home_short in (m.get("question") or m.get("title") or "").lower()
+            and away_short in (m.get("question") or m.get("title") or "").lower()
+        ),
+        None,
+    )
+    if not target:
+        return None
+
+    tokens = target.get("tokens", [])
+    if isinstance(tokens, str):
+        try:
+            tokens = json.loads(tokens)
+        except Exception:
+            return None
+
+    home_prob: float | None = None
+    away_prob: float | None = None
+    for token in tokens:
+        outcome = (token.get("outcome") or "").lower()
+        price = token.get("price")
+        if price is None:
+            continue
+        price = float(price)
+        if not (0 < price < 1):
+            continue
+        if home_short in outcome:
+            home_prob = price
+        elif away_short in outcome:
+            away_prob = price
+
+    if home_prob is None or away_prob is None:
+        return None
+    try:
+        return prob_to_american(home_prob), prob_to_american(away_prob)
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+# ── Polymarket activities ────────────────────────────────────────────────────
+
+@activity.defn
+async def fetch_polymarket_odds_batch(games: list[Game]) -> OddsBatch:
+    """
+    Fetch Polymarket game winner market prices for today's games.
+    Searches open markets via the Gamma API (no auth required).
+    Returns one OddsSnapshot per matched game with {ml_home, ml_away}.
+    """
+    captured_at = datetime.now(timezone.utc).isoformat()
+    snapshots: list[OddsSnapshot] = []
+
+    async with httpx.AsyncClient() as client:
+        for game in games:
+            result = await _polymarket_ml_for_game(client, game.home_team, game.away_team)
+            if result is None:
+                continue
+            ml_home, ml_away = result
+            snapshots.append(OddsSnapshot(
+                snapshot_id=f"poll:{game.game_id}:polymarket:{captured_at}",
+                game_id=game.game_id,
+                kind="poll",
+                source="polymarket",
+                captured_at_utc_iso=captured_at,
+                payload={"ml_home": ml_home, "ml_away": ml_away},
+            ))
+
+    activity.logger.info(
+        f"[fetch_polymarket_odds_batch] matched {len(snapshots)}/{len(games)} games"
+    )
+    return OddsBatch(source="polymarket", captured_at_utc_iso=captured_at, snapshots=snapshots)
+
+
+@activity.defn
+async def fetch_polymarket_close_snapshot(inp: FetchCloseSnapshotInput) -> list[OddsSnapshot]:
+    """
+    Capture Polymarket ML close for a game at tip-off.
+    Looks up team names from DB then searches Gamma API.
+    Returns a one-item list on success, empty list on failure.
+    (Same list-as-Optional convention as fetch_close_odds_snapshot.)
+    """
+    captured_at = datetime.now(timezone.utc).isoformat()
+
+    game = await queries.get_game_by_id(inp.game_id)
+    if game is None:
+        activity.logger.warning(
+            f"[fetch_polymarket_close_snapshot] game {inp.game_id} not found in DB"
+        )
+        return []
+
+    async with httpx.AsyncClient() as client:
+        result = await _polymarket_ml_for_game(client, game.home_team, game.away_team)
+
+    if result is None:
+        activity.logger.warning(
+            f"[fetch_polymarket_close_snapshot] No open market for "
+            f"{game.away_team} @ {game.home_team}"
+        )
+        return []
+
+    ml_home, ml_away = result
+    return [OddsSnapshot(
+        snapshot_id=inp.snapshot_id,
+        game_id=inp.game_id,
+        kind="close",
+        source="polymarket",
         captured_at_utc_iso=captured_at,
         payload={"ml_home": ml_home, "ml_away": ml_away},
     )]

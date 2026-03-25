@@ -14,6 +14,8 @@ from .activities import (
     fetch_close_odds_snapshot,
     fetch_kalshi_odds_batch,
     fetch_kalshi_close_snapshot,
+    fetch_polymarket_odds_batch,
+    fetch_polymarket_close_snapshot,
     fetch_final_scores,
     resolve_bets_for_game,
 )
@@ -43,6 +45,8 @@ async def main() -> None:
             fetch_close_odds_snapshot,
             fetch_kalshi_odds_batch,
             fetch_kalshi_close_snapshot,
+            fetch_polymarket_odds_batch,
+            fetch_polymarket_close_snapshot,
             fetch_final_scores,
             resolve_bets_for_game,
         ],

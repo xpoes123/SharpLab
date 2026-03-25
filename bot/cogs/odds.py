@@ -25,8 +25,9 @@ POLYMARKET_GAMMA = "https://gamma-api.polymarket.com"
 BALLDONTLIE_API_KEY = os.getenv("BALLDONTLIE_API_KEY", "")
 BALLDONTLIE_BASE = "https://api.balldontlie.io/v1"
 
-# Sources fetched live on demand; exclude from DB staleness calculation.
-# Kalshi is now written to DB by the pipeline — only polymarket remains live-only.
+# Sources excluded from DB staleness calculation.
+# Both Kalshi and Polymarket are now written to DB by the pipeline but are
+# supplementary (ML-only, no spread/total) — use sportsbook timestamps for freshness.
 LIVE_SOURCES = {"polymarket"}
 
 # ── Display helpers ──────────────────────────────────────────────────────────
@@ -416,17 +417,19 @@ class OddsCog(commands.Cog):
                     captured_at_utc_iso=now_iso,
                     payload={"ml_home": home_ml, "ml_away": away_ml},
                 ))
-        polymarket = await _fetch_polymarket_ml(target.home_team, target.away_team)
-        if polymarket:
-            home_ml, away_ml = polymarket
-            snapshots.append(OddsSnapshot(
-                snapshot_id="polymarket-live",
-                game_id=game,
-                kind="poll",
-                source="polymarket",
-                captured_at_utc_iso=now_iso,
-                payload={"ml_home": home_ml, "ml_away": away_ml},
-            ))
+        has_polymarket = any(s.source == "polymarket" for s in snapshots)
+        if not has_polymarket:
+            polymarket = await _fetch_polymarket_ml(target.home_team, target.away_team)
+            if polymarket:
+                home_ml, away_ml = polymarket
+                snapshots.append(OddsSnapshot(
+                    snapshot_id="polymarket-live",
+                    game_id=game,
+                    kind="poll",
+                    source="polymarket",
+                    captured_at_utc_iso=now_iso,
+                    payload={"ml_home": home_ml, "ml_away": away_ml},
+                ))
 
         most_recent = max(
             (s for s in snapshots if s.source not in LIVE_SOURCES),
@@ -483,17 +486,19 @@ class OddsCog(commands.Cog):
                     captured_at_utc_iso=now_iso,
                     payload={"ml_home": home_ml, "ml_away": away_ml},
                 ))
-        polymarket = await _fetch_polymarket_ml(target.home_team, target.away_team)
-        if polymarket:
-            home_ml, away_ml = polymarket
-            snapshots.append(OddsSnapshot(
-                snapshot_id="polymarket-live",
-                game_id=game,
-                kind="poll",
-                source="polymarket",
-                captured_at_utc_iso=now_iso,
-                payload={"ml_home": home_ml, "ml_away": away_ml},
-            ))
+        has_polymarket = any(s.source == "polymarket" for s in snapshots)
+        if not has_polymarket:
+            polymarket = await _fetch_polymarket_ml(target.home_team, target.away_team)
+            if polymarket:
+                home_ml, away_ml = polymarket
+                snapshots.append(OddsSnapshot(
+                    snapshot_id="polymarket-live",
+                    game_id=game,
+                    kind="poll",
+                    source="polymarket",
+                    captured_at_utc_iso=now_iso,
+                    payload={"ml_home": home_ml, "ml_away": away_ml},
+                ))
 
         most_recent = max(
             (s for s in snapshots if s.source not in LIVE_SOURCES),
