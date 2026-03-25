@@ -10,6 +10,7 @@ At 30-min intervals during a ~9-hour game window × 20 game days = ~360 calls/mo
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -370,17 +371,26 @@ def _parse_espn_injuries_response(
     """
     Parse ESPN injury report API response.
     Returns list of (record_id, player_name, team, status, detail).
+    record_id = ESPN athlete ID, extracted from player link URLs.
     """
     results = []
     for team_entry in data.get("injuries", []):
-        team_name = team_entry.get("team", {}).get("displayName", "")
+        team_name = team_entry.get("displayName", "")
         if not team_name:
             continue
         for inj in team_entry.get("injuries", []):
             athlete = inj.get("athlete", {})
-            athlete_id = str(athlete.get("id", ""))
             player_name = athlete.get("displayName", "")
-            if not athlete_id or not player_name:
+            if not player_name:
+                continue
+            # Athlete ID is not a direct field — extract from player link URL
+            athlete_id = ""
+            for link in athlete.get("links", []):
+                m = re.search(r"/id/(\d+)/", link.get("href", ""))
+                if m:
+                    athlete_id = m.group(1)
+                    break
+            if not athlete_id:
                 continue
             status = inj.get("status", "")
             if not status:
