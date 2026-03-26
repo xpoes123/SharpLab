@@ -465,7 +465,8 @@ async def update_game_status(game_id: str, status: str) -> None:
 
 # ── Injuries ───────────────────────────────────────────────────────────────────
 
-_SIGNIFICANT_STATUSES = {"Out", "Doubtful", "Questionable", "Day-To-Day"}
+# Statuses that indicate a player is already compromised (known injury)
+_PREVIOUSLY_INJURED = {"Out", "Doubtful", "Questionable", "Day-To-Day"}
 
 
 async def upsert_injury_status(
@@ -478,8 +479,12 @@ async def upsert_injury_status(
 ) -> str | None:
     """
     Upsert a player's injury status.
-    Returns None if nothing changed, "" if this is a new significant entry,
-    or the previous status string if the status changed.
+    Returns None if no actionable change, "" if new Out listing,
+    or the previous status string if status changed to Out.
+
+    Notification rules:
+    - Only Discord-notify (notified=0) for Out status.
+    - Only notify if the player was previously healthy (not already in _PREVIOUSLY_INJURED).
     """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -490,7 +495,8 @@ async def upsert_injury_status(
         row = await cursor.fetchone()
 
         if row is None:
-            notified = 0 if status in _SIGNIFICANT_STATUSES else 1
+            # New player — notify only if Out (surprise listing)
+            notified = 0 if status == "Out" else 1
             await db.execute(
                 """
                 INSERT INTO injuries
@@ -500,23 +506,28 @@ async def upsert_injury_status(
                 (record_id, player_name, team, status, detail, now_iso, notified),
             )
             await db.commit()
-            return "" if status in _SIGNIFICANT_STATUSES else None
+            return "" if status == "Out" else None
 
         current_status = row["status"]
         if current_status == status:
             return None
 
-        # Status changed — reset notification flag
+        # Status changed — only act on transitions TO Out
+        going_out = status == "Out"
+        # Notify only if player was healthy before (not already on injury report)
+        was_healthy = current_status not in _PREVIOUSLY_INJURED
+        notified = 0 if (going_out and was_healthy) else 1
         await db.execute(
             """
             UPDATE injuries
-            SET player_name=?, team=?, status=?, prev_status=?, detail=?, updated_at=?, notified=0
+            SET player_name=?, team=?, status=?, prev_status=?, detail=?, updated_at=?, notified=?
             WHERE record_id=?
             """,
-            (player_name, team, status, current_status, detail, now_iso, record_id),
+            (player_name, team, status, current_status, detail, now_iso, notified, record_id),
         )
         await db.commit()
-        return current_status
+        # Only return non-None (triggering odds re-fetch) when going Out
+        return current_status if going_out else None
 
 
 async def get_unnotified_injuries() -> list[InjuryAlert]:

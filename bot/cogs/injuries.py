@@ -33,12 +33,9 @@ def _fmt_game_time(utc_iso: str) -> str:
 
 
 def _status_color(status: str) -> int:
-    s = status.lower()
-    if s in ("out", "doubtful"):
+    if status.lower() == "out":
         return 0xE74C3C   # red
-    if s in ("questionable", "day-to-day"):
-        return 0xF1C40F   # yellow
-    return 0x3498DB        # blue — probable / other
+    return 0x3498DB        # blue — fallback
 
 
 def _build_injury_embed(
