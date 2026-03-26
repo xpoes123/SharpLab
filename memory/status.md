@@ -1,6 +1,6 @@
 # SharpLab — Current Status
 
-Last updated: 2026-03-25 (session 9)
+Last updated: 2026-03-26 (session 10)
 
 ## Architecture Decided
 
@@ -131,8 +131,9 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
 - **Bet status lifecycle**: `open` → `graded` (CLV computed at tip-off) → `won`/`lost`/`push`/`void` (auto-resolved by BetResolutionWorkflow).
 - **CLV post gating**: `games.clv_posted` column (0/1). Set to 1 after posting; never re-posts on bot restart.
 - **tzdata** added as dependency for `zoneinfo` ET timezone support on Windows.
-- **ESPN injuries**: record_id = ESPN athlete ID. Probable-only first inserts are silent (notified=1).
-  Status changes and new Out/Doubtful/Questionable/Day-To-Day listings trigger Discord post.
+- **ESPN injuries**: record_id = ESPN athlete ID.
+  Notification rules (tightened): only Discord-post for `Out` status, and only when player was previously healthy (not already Questionable/Doubtful/D2D/Out).
+  Odds re-fetch only triggers on transitions to Out. All other status changes are stored silently.
 
 ## What Doesn't Exist Yet
 
