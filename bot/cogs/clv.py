@@ -158,7 +158,7 @@ class CLVCog(commands.Cog):
                 title=f"Closing Lines — {game.away_team} @ {game.home_team}",
                 description=(
                     f"Source: **{sources}** at {captured_str}\n"
-                    f"Positive CLV = you beat the close (lower implied prob than closing line)"
+                    f"Positive CLV = you got a better price than closing"
                 ),
                 color=0xF1C40F,
             )

@@ -557,7 +557,7 @@ class OddsCog(commands.Cog):
 
     # ── /line-move ──────────────────────────────────────────────────────────
 
-    @app_commands.command(name="line-move", description="How Kalshi odds have moved since open")
+    @app_commands.command(name="line-move", description="Line movement — prediction markets (Kalshi/Polymarket) and DK spread")
     @app_commands.describe(game="Select a game (type team name or paste ID from /db)")
     @app_commands.autocomplete(game=historical_game_autocomplete)
     async def line_move(self, interaction: discord.Interaction, game: str) -> None:

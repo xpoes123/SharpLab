@@ -1,6 +1,6 @@
 # SharpLab — Current Status
 
-Last updated: 2026-03-26 (session 11)
+Last updated: 2026-03-26 (session 12)
 
 ## Architecture Decided
 
@@ -75,13 +75,15 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
   - NBA day rollover at 11 AM UTC (7 AM ET) — fetches yesterday+today when post-midnight
   - `_preload_game_odds`: prefers Kalshi for ML (no vig), falls back to any book; spread from separate snap
 - `bot/cogs/bets.py` — /log, **/bets**, /clv-summary, /record, /void
-  - /bets (was /open): ephemeral list of user's open (⏳) + graded (📊) bets with CLV where available
-  - /void: ephemeral, `bet_id: int` param, guards ownership + status (open/graded only), calls `update_bet_result('void')`. `get_bet_by_id` added to `db/queries.py`.
+  - /bets (was /open): ephemeral list of user's open (⏳) + graded (📊) bets with CLV. Each row now shows `#ID` at end for easy void lookup.
+  - /void: ephemeral, `bet_id: str` with autocomplete (shows `#3 — Lakers@Celtics spread -4.5`). Guards ownership + status (open/graded only). Falls back to typed ID. `get_bet_by_id` in `db/queries.py`.
+  - /log confirmation embed now shows game date/time as sanity check.
+  - /record recent bets now show game label (e.g. `Lakers@Celtics`) for context.
   - /log game param uses same `game_autocomplete` as /odds (game_id selected directly)
   - /log odds param accepts all formats (American, decimal, cents) — converts to American for storage
   - Books: DraftKings, FanDuel, BetMGM, Caesars, Bet365, PointsBet, Kalshi, Polymarket, Other
   - /clv-summary: aggregate CLV analytics — avg CLV pp, total EV gained (Σ units × CLV/100),
-    breakdown by market and by book. Optional `user` param. Color-coded by EV sign.
+    breakdown by market and by book. Optional `user` param. Color-coded by EV sign. EV column uses 2dp.
     EV formula: `units × (clv_pp / 100)` = theoretical edge captured vs. closing line
 - `bot/cogs/markets.py` — /kalshi
   - Live fetch from Kalshi KXNBAGAME series — not cached in DB

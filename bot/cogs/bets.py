@@ -120,10 +120,39 @@ async def pick_autocomplete(
     return []
 
 
+async def void_autocomplete(
+    interaction: discord.Interaction, _current: str
+) -> list[app_commands.Choice[str]]:
+    """Show the user's open/graded bets for /void autocomplete."""
+    bets = await queries.get_open_bets_for_user(str(interaction.user.id))
+    choices = []
+    for bet in bets[:25]:
+        game = await queries.get_game_by_id(bet.game_id)
+        game_str = (
+            f"{game.away_team.split()[-1]}@{game.home_team.split()[-1]}"
+            if game else bet.game_id[:8]
+        )
+        market_str = bet.market
+        if bet.line is not None and bet.market in ("spread", "total"):
+            market_str += f" {bet.line:+.1f}"
+        label = f"#{bet.bet_id} — {game_str} {market_str} {bet.side}"
+        choices.append(app_commands.Choice(name=label[:100], value=str(bet.bet_id)))
+    return choices
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _fmt_american(odds: int) -> str:
     return fmt_prob(odds)
+
+
+def _fmt_gametime(iso: str) -> str:
+    dt = datetime.fromisoformat(iso)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    h = dt.hour % 12 or 12
+    ampm = "AM" if dt.hour < 12 else "PM"
+    return f"{dt.strftime('%a %b')} {dt.day}, {h}:{dt.strftime('%M')} {ampm} UTC"
 
 
 def _parse_pick(pick: str) -> tuple[str, float | None]:
@@ -137,7 +166,11 @@ def _parse_pick(pick: str) -> tuple[str, float | None]:
     return pick.strip(), None
 
 
-def _record_embed(user: discord.Member | discord.User, bets: list[Bet]) -> discord.Embed:
+def _record_embed(
+    user: discord.Member | discord.User,
+    bets: list[Bet],
+    game_labels: dict[str, str] | None = None,
+) -> discord.Embed:
     total = len(bets)
     if total == 0:
         embed = discord.Embed(
@@ -187,12 +220,14 @@ def _record_embed(user: discord.Member | discord.User, bets: list[Bet]) -> disco
 
     # Last 5 bets
     recent = bets[:5]
+    labels = game_labels or {}
     recent_lines = []
     for b in recent:
         status_icon = {"won": "✅", "lost": "❌", "push": "➖", "open": "⏳", "void": "🚫"}.get(b.status, "?")
         line_str = f" {b.line:+.1f}" if b.line is not None and b.market in ("spread", "total") else ""
+        game_prefix = f"{labels[b.game_id]} " if b.game_id in labels else ""
         recent_lines.append(
-            f"{status_icon} {b.market}{line_str} {_fmt_american(b.odds)} ({b.units}u) — {b.book}"
+            f"{status_icon} {game_prefix}{b.market}{line_str} {_fmt_american(b.odds)} ({b.units}u) — {b.book}"
         )
     embed.add_field(name="Recent bets", value="\n".join(recent_lines), inline=False)
 
@@ -281,7 +316,11 @@ class BetsCog(commands.Cog):
         line_str = f" {final_line:+.1f}" if final_line is not None else ""
 
         embed = discord.Embed(title="Bet logged", color=0x57F287)
-        embed.add_field(name="Game", value=f"{target.away_team} @ {target.home_team}", inline=False)
+        embed.add_field(
+            name="Game",
+            value=f"{target.away_team} @ {target.home_team}\n{_fmt_gametime(target.start_time_utc_iso)}",
+            inline=False,
+        )
         embed.add_field(name="Book", value=book, inline=True)
         embed.add_field(name="Market", value=f"{market}{line_str}", inline=True)
         embed.add_field(name="Pick", value=side, inline=True)
@@ -324,7 +363,7 @@ class BetsCog(commands.Cog):
             clv_str = f"  CLV: {bet.clv:+.1f}pp" if bet.status == "graded" and bet.clv is not None else ""
 
             lines.append(
-                f"{icon}  {game_str:<12}  {market_str:<14}  {bet.side:<12}  {fmt_prob(bet.odds):<6}  {bet.units}u{clv_str}"
+                f"{icon}  {game_str:<12}  {market_str:<14}  {bet.side:<12}  {fmt_prob(bet.odds):<6}  {bet.units}u{clv_str}  #{bet.bet_id}"
             )
 
         embed = discord.Embed(
@@ -369,7 +408,7 @@ class BetsCog(commands.Cog):
                 group = groups[key]
                 g_avg = sum(b.clv for b in group) / len(group)  # type: ignore[arg-type]
                 g_ev = sum(_ev(b) for b in group)
-                rows.append(f"  {key:<14} {len(group):>3}  avg {g_avg:+.1f}pp  EV {g_ev:+.3f}u")
+                rows.append(f"  {key:<14} {len(group):>3}  avg {g_avg:+.1f}pp  EV {g_ev:+.2f}u")
             return "\n".join(rows)
 
         by_market: dict[str, list[Bet]] = {}
@@ -402,13 +441,20 @@ class BetsCog(commands.Cog):
     # ── /void ─────────────────────────────────────────────────────────────────
 
     @app_commands.command(name="void", description="Void a bet you logged (cancelled game or entry error)")
-    @app_commands.describe(bet_id="Bet ID shown in the /log confirmation footer")
-    async def void_bet(self, interaction: discord.Interaction, bet_id: int) -> None:
+    @app_commands.describe(bet_id="Your open bet — select from autocomplete or type the ID")
+    @app_commands.autocomplete(bet_id=void_autocomplete)
+    async def void_bet(self, interaction: discord.Interaction, bet_id: str) -> None:
         await interaction.response.defer(ephemeral=True)
 
-        bet = await queries.get_bet_by_id(bet_id)
+        try:
+            bid = int(bet_id)
+        except ValueError:
+            await interaction.followup.send("Invalid bet ID.", ephemeral=True)
+            return
+
+        bet = await queries.get_bet_by_id(bid)
         if bet is None:
-            await interaction.followup.send(f"Bet #{bet_id} not found.", ephemeral=True)
+            await interaction.followup.send(f"Bet #{bid} not found.", ephemeral=True)
             return
 
         if bet.discord_user != str(interaction.user.id):
@@ -417,12 +463,12 @@ class BetsCog(commands.Cog):
 
         if bet.status in ("won", "lost", "push", "void"):
             await interaction.followup.send(
-                f"Bet #{bet_id} is already **{bet.status}** and can't be voided.",
+                f"Bet #{bid} is already **{bet.status}** and can't be voided.",
                 ephemeral=True,
             )
             return
 
-        await queries.update_bet_result(bet_id, "void")
+        await queries.update_bet_result(bid, "void")
 
         game = await queries.get_game_by_id(bet.game_id)
         game_str = (
@@ -436,7 +482,7 @@ class BetsCog(commands.Cog):
         embed.add_field(name="Pick", value=bet.side, inline=True)
         embed.add_field(name="Odds", value=f"`{fmt_prob(bet.odds)}`", inline=True)
         embed.add_field(name="Units", value=f"`{bet.units}u`", inline=True)
-        embed.set_footer(text=f"Bet ID: {bet_id} — was {bet.status}")
+        embed.set_footer(text=f"Bet ID: {bid} — was {bet.status}")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     # ── /record ───────────────────────────────────────────────────────────────
@@ -452,7 +498,18 @@ class BetsCog(commands.Cog):
 
         target_user = user or interaction.user
         bets = await queries.get_bets_for_user(str(target_user.id))
-        embed = _record_embed(target_user, bets)
+
+        # Pre-fetch game labels for the 5 most recent bets
+        game_labels: dict[str, str] = {}
+        for b in bets[:5]:
+            if b.game_id not in game_labels:
+                game = await queries.get_game_by_id(b.game_id)
+                if game:
+                    away = game.away_team.split()[-1]
+                    home = game.home_team.split()[-1]
+                    game_labels[b.game_id] = f"{away}@{home}"
+
+        embed = _record_embed(target_user, bets, game_labels)
         await interaction.followup.send(embed=embed)
 
 
