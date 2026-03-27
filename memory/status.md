@@ -1,6 +1,6 @@
 # SharpLab — Current Status
 
-Last updated: 2026-03-26 (session 10)
+Last updated: 2026-03-26 (session 11)
 
 ## Architecture Decided
 
@@ -74,12 +74,12 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
     - Blank line separator between finals / live / upcoming sections
   - NBA day rollover at 11 AM UTC (7 AM ET) — fetches yesterday+today when post-midnight
   - `_preload_game_odds`: prefers Kalshi for ML (no vig), falls back to any book; spread from separate snap
-- `bot/cogs/bets.py` — /log, /open, /clv-summary, /record, **/void**
+- `bot/cogs/bets.py` — /log, **/bets**, /clv-summary, /record, /void
+  - /bets (was /open): ephemeral list of user's open (⏳) + graded (📊) bets with CLV where available
   - /void: ephemeral, `bet_id: int` param, guards ownership + status (open/graded only), calls `update_bet_result('void')`. `get_bet_by_id` added to `db/queries.py`.
   - /log game param uses same `game_autocomplete` as /odds (game_id selected directly)
   - /log odds param accepts all formats (American, decimal, cents) — converts to American for storage
   - Books: DraftKings, FanDuel, BetMGM, Caesars, Bet365, PointsBet, Kalshi, Polymarket, Other
-  - /open: ephemeral list of user's open (⏳) + graded (📊) bets with CLV where available
   - /clv-summary: aggregate CLV analytics — avg CLV pp, total EV gained (Σ units × CLV/100),
     breakdown by market and by book. Optional `user` param. Color-coded by EV sign.
     EV formula: `units × (clv_pp / 100)` = theoretical edge captured vs. closing line
@@ -101,6 +101,12 @@ Shared DB (`data/sharplab.db` SQLite). All access through `db/queries.py`.
   - Paginated embed: 5 games/page, Prev/Next buttons (120s timeout)
   - Shows matchup, date, status, pregame spread (from close snapshot), 8-char short ID
   - Short ID can be pasted into `/line-move` autocomplete to look up any historical game
+- `bot/cogs/rosters.py` — **/rosters command** (NEW)
+  - `/rosters [team]` — shows ESPN injury report for any NBA team
+  - Team autocomplete from TEAM_ABBR (all 30 teams), filtered by input
+  - Players sorted by severity: Out → Doubtful → Questionable → Day-To-Day → Probable
+  - Status icons 🔴🟠🟡🟢, detail (e.g. "Ankle - Left - Sprain"), embed color = worst status
+  - Backed by `injuries` table (no extra API calls); `get_injuries_for_team` query in `db/queries.py`
 - `bot/cogs/injuries.py` — **Injury alert auto-post background task**
   - `@tasks.loop(minutes=1)` — polls DB for `notified=0` injury rows
   - Looks up today's game for the team, fetches latest odds snapshots

@@ -552,6 +552,42 @@ async def get_unnotified_injuries() -> list[InjuryAlert]:
     ]
 
 
+async def get_injuries_for_team(team: str) -> list[InjuryAlert]:
+    """Return all injury report entries for a team, ordered by status severity then name."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM injuries
+            WHERE team = ?
+            ORDER BY
+                CASE status
+                    WHEN 'Out'          THEN 0
+                    WHEN 'Doubtful'     THEN 1
+                    WHEN 'Questionable' THEN 2
+                    WHEN 'Day-To-Day'   THEN 3
+                    WHEN 'Probable'     THEN 4
+                    ELSE 5
+                END,
+                player_name ASC
+            """,
+            (team,),
+        )
+        rows = await cursor.fetchall()
+    return [
+        InjuryAlert(
+            record_id=row["record_id"],
+            player_name=row["player_name"],
+            team=row["team"],
+            status=row["status"],
+            prev_status=row["prev_status"],
+            detail=row["detail"],
+            updated_at_utc_iso=row["updated_at"],
+        )
+        for row in rows
+    ]
+
+
 async def mark_injury_notified(record_id: str) -> None:
     """Mark an injury alert as posted."""
     async with aiosqlite.connect(DB_PATH) as db:

@@ -292,7 +292,7 @@ class BetsCog(commands.Cog):
 
     # ── /open ─────────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="open", description="View your open and graded bets")
+    @app_commands.command(name="bets", description="View your open and graded bets")
     async def open_bets(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
 
