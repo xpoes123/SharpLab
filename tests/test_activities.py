@@ -11,8 +11,7 @@ from temporal.activities import (
     _parse_espn_injuries_response,
     _resolve_bet,
 )
-from shared.models import Bet
-from shared.models import TEAM_ABBR
+from shared.models import Bet, TEAM_ABBR_NBA, TEAM_ABBR_MLB, get_team_abbr
 from shared.odds_utils import prob_to_american, american_to_prob, american_to_decimal
 
 
@@ -144,22 +143,48 @@ def test_kalshi_ml_from_markets_returns_none_on_empty():
     assert _kalshi_ml_from_markets([], home_abbr="PHX", away_abbr="DEN") is None
 
 
-# ── TEAM_ABBR sanity ───────────────────────────────────────────────────────────
+# ── TEAM_ABBR sanity — NBA ────────────────────────────────────────────────────
 
-def test_team_abbr_has_all_30_teams():
-    assert len(TEAM_ABBR) == 30
-
-
-def test_team_abbr_known_entries():
-    assert TEAM_ABBR["Los Angeles Lakers"] == "LAL"
-    assert TEAM_ABBR["Los Angeles Clippers"] == "LAC"
-    assert TEAM_ABBR["Oklahoma City Thunder"] == "OKC"
-    assert TEAM_ABBR["Golden State Warriors"] == "GSW"
+def test_team_abbr_nba_has_30_teams():
+    assert len(TEAM_ABBR_NBA) == 30
 
 
-def test_team_abbr_all_values_are_3_chars():
-    bad = {k: v for k, v in TEAM_ABBR.items() if len(v) != 3}
+def test_team_abbr_nba_known_entries():
+    assert get_team_abbr("Los Angeles Lakers", "nba") == "LAL"
+    assert get_team_abbr("Los Angeles Clippers", "nba") == "LAC"
+    assert get_team_abbr("Oklahoma City Thunder", "nba") == "OKC"
+    assert get_team_abbr("Golden State Warriors", "nba") == "GSW"
+
+
+def test_team_abbr_nba_all_values_are_3_chars():
+    bad = {k: v for k, v in TEAM_ABBR_NBA.items() if len(v) != 3}
     assert bad == {}, f"Non-3-char abbreviations: {bad}"
+
+
+# ── TEAM_ABBR sanity — MLB ────────────────────────────────────────────────────
+
+def test_team_abbr_mlb_has_30_teams():
+    assert len(TEAM_ABBR_MLB) == 30
+
+
+def test_team_abbr_mlb_known_entries():
+    assert get_team_abbr("New York Yankees", "mlb") == "NYY"
+    assert get_team_abbr("Los Angeles Dodgers", "mlb") == "LAD"
+    assert get_team_abbr("Chicago Cubs", "mlb") == "CHC"
+    assert get_team_abbr("Chicago White Sox", "mlb") == "CWS"
+
+
+def test_team_abbr_mlb_all_values_are_3_chars():
+    bad = {k: v for k, v in TEAM_ABBR_MLB.items() if len(v) != 3}
+    assert bad == {}, f"Non-3-char abbreviations: {bad}"
+
+
+def test_team_abbr_cross_sport():
+    """NBA and MLB both have Atlanta teams with different abbrs."""
+    assert get_team_abbr("Atlanta Hawks", "nba") == "ATL"
+    assert get_team_abbr("Atlanta Braves", "mlb") == "ATL"
+    # NBA team not found in MLB
+    assert get_team_abbr("Atlanta Hawks", "mlb") is None
 
 
 # ── odds_utils ─────────────────────────────────────────────────────────────────
@@ -296,20 +321,15 @@ def test_resolve_ml_no_means_away():
 
 # Spread
 def test_resolve_spread_home_covers():
-    # Home -4.5, wins by 10 → margin = 10 + (-4.5) = 5.5 → won
     assert _resolve_bet(_bet(market="spread", side="celtics", line=-4.5), HOME, AWAY, 110, 100) == "won"
 
 def test_resolve_spread_home_fails_to_cover():
-    # Home -4.5, wins by 3 → margin = 3 + (-4.5) = -1.5 → lost
     assert _resolve_bet(_bet(market="spread", side="celtics", line=-4.5), HOME, AWAY, 103, 100) == "lost"
 
 def test_resolve_spread_push():
-    # Home -4.5, wins by exactly 4.5 (half-point spreads can't push, but test the logic)
-    # Home -3, wins by exactly 3 → push
     assert _resolve_bet(_bet(market="spread", side="celtics", line=-3.0), HOME, AWAY, 103, 100) == "push"
 
 def test_resolve_spread_away_covers():
-    # Away +4.5, home wins by 3 → margin = (100-103) + 4.5 = 1.5 → won
     assert _resolve_bet(_bet(market="spread", side="lakers", line=4.5), HOME, AWAY, 103, 100) == "won"
 
 def test_resolve_spread_no_line_voids():
@@ -334,3 +354,30 @@ def test_resolve_total_no_line_voids():
 # Unknown side → void
 def test_resolve_unknown_side_voids():
     assert _resolve_bet(_bet(market="moneyline", side="unknown_team"), HOME, AWAY, 110, 100) == "void"
+
+# ── MLB-flavored bet resolution ─────────────────────────────────────────────
+
+MLB_HOME = "New York Yankees"
+MLB_AWAY = "Boston Red Sox"
+
+def test_resolve_mlb_moneyline_home_win():
+    assert _resolve_bet(_bet(market="moneyline", side="yankees"), MLB_HOME, MLB_AWAY, 5, 3) == "won"
+
+def test_resolve_mlb_moneyline_away_win():
+    assert _resolve_bet(_bet(market="moneyline", side="red sox"), MLB_HOME, MLB_AWAY, 3, 5) == "won"
+
+def test_resolve_mlb_run_line_home_covers():
+    # Yankees -1.5, win by 3 → margin = (5-3) + (-1.5) = 0.5 → won
+    assert _resolve_bet(_bet(market="spread", side="yankees", line=-1.5), MLB_HOME, MLB_AWAY, 5, 2) == "won"
+
+def test_resolve_mlb_run_line_home_fails():
+    # Yankees -1.5, win by 1 → margin = (4-3) + (-1.5) = -0.5 → lost
+    assert _resolve_bet(_bet(market="spread", side="yankees", line=-1.5), MLB_HOME, MLB_AWAY, 4, 3) == "lost"
+
+def test_resolve_mlb_total_over():
+    # O/U 8.5, final 5-4 = 9 → over hits
+    assert _resolve_bet(_bet(market="total", side="over", line=8.5), MLB_HOME, MLB_AWAY, 5, 4) == "won"
+
+def test_resolve_mlb_total_under():
+    # O/U 8.5, final 3-2 = 5 → under hits
+    assert _resolve_bet(_bet(market="total", side="under", line=8.5), MLB_HOME, MLB_AWAY, 3, 2) == "won"

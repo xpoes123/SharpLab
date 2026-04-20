@@ -2,10 +2,12 @@
 from dataclasses import dataclass
 from typing import Any
 
-# NBA team full name (as returned by The Odds API) → 3-char Kalshi abbreviation.
-# Used to match Temporal pipeline game records to Kalshi KXNBAGAME event tickers,
-# and in the bot's live Kalshi fallback fetch.
-TEAM_ABBR: dict[str, str] = {
+# ── Team abbreviations by sport ──────────────────────────────────────────────
+# Full name (as returned by The Odds API) → 3-char abbreviation.
+# Used to match pipeline game records to Kalshi event tickers and in the bot's
+# live Kalshi fallback fetch.
+
+TEAM_ABBR_NBA: dict[str, str] = {
     "Atlanta Hawks": "ATL",
     "Boston Celtics": "BOS",
     "Brooklyn Nets": "BKN",
@@ -38,6 +40,51 @@ TEAM_ABBR: dict[str, str] = {
     "Washington Wizards": "WAS",
 }
 
+TEAM_ABBR_MLB: dict[str, str] = {
+    "Arizona Diamondbacks": "ARI",
+    "Atlanta Braves": "ATL",
+    "Baltimore Orioles": "BAL",
+    "Boston Red Sox": "BOS",
+    "Chicago Cubs": "CHC",
+    "Chicago White Sox": "CWS",
+    "Cincinnati Reds": "CIN",
+    "Cleveland Guardians": "CLE",
+    "Colorado Rockies": "COL",
+    "Detroit Tigers": "DET",
+    "Houston Astros": "HOU",
+    "Kansas City Royals": "KCR",
+    "Los Angeles Angels": "LAA",
+    "Los Angeles Dodgers": "LAD",
+    "Miami Marlins": "MIA",
+    "Milwaukee Brewers": "MIL",
+    "Minnesota Twins": "MIN",
+    "New York Mets": "NYM",
+    "New York Yankees": "NYY",
+    "Oakland Athletics": "OAK",
+    "Philadelphia Phillies": "PHI",
+    "Pittsburgh Pirates": "PIT",
+    "San Diego Padres": "SDP",
+    "San Francisco Giants": "SFG",
+    "Seattle Mariners": "SEA",
+    "St. Louis Cardinals": "STL",
+    "Tampa Bay Rays": "TBR",
+    "Texas Rangers": "TEX",
+    "Toronto Blue Jays": "TOR",
+    "Washington Nationals": "WSN",
+}
+
+TEAM_ABBR: dict[str, dict[str, str]] = {
+    "nba": TEAM_ABBR_NBA,
+    "mlb": TEAM_ABBR_MLB,
+}
+
+
+def get_team_abbr(team_name: str, sport: str = "nba") -> str | None:
+    """Look up 3-char abbreviation for a team name in the given sport."""
+    return TEAM_ABBR.get(sport, {}).get(team_name)
+
+
+# ── Dataclasses ──────────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
 class Game:
@@ -45,6 +92,7 @@ class Game:
     home_team: str
     away_team: str
     start_time_utc_iso: str  # UTC ISO 8601
+    sport: str = "nba"       # 'nba' | 'mlb'
 
 
 @dataclass(frozen=True)
@@ -83,7 +131,7 @@ class OddsBatch:
 
 @dataclass(frozen=True)
 class GameResult:
-    """Final score for a completed game (from balldontlie), keyed by last word of each team name."""
+    """Final score for a completed game, keyed by last word of each team name."""
     home_last: str   # last word of home team full_name, lowercased (e.g. "celtics")
     away_last: str   # last word of away team full_name, lowercased (e.g. "knicks")
     home_score: int

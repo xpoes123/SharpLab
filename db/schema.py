@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS games (
     home_team   TEXT NOT NULL,
     away_team   TEXT NOT NULL,
     start_time  TEXT NOT NULL,
+    sport       TEXT NOT NULL DEFAULT 'nba',
     season      TEXT,
     status      TEXT DEFAULT 'scheduled',
     clv_posted  INTEGER DEFAULT 0
@@ -61,6 +62,12 @@ async def init_db() -> None:
         # Migration: add clv_posted if DB predates this column
         try:
             await db.execute("ALTER TABLE games ADD COLUMN clv_posted INTEGER DEFAULT 0")
+            await db.commit()
+        except Exception:
+            pass  # column already exists
+        # Migration: add sport column
+        try:
+            await db.execute("ALTER TABLE games ADD COLUMN sport TEXT NOT NULL DEFAULT 'nba'")
             await db.commit()
         except Exception:
             pass  # column already exists

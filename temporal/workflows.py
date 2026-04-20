@@ -32,11 +32,12 @@ class OddsPollingWorkflow:
     """
 
     @workflow.run
-    async def run(self, interval_minutes: int = 30) -> None:
+    async def run(self, interval_minutes: int = 30, sport: str = "nba") -> None:
         while True:
             # ── Step 1: get today's schedule ──────────────────────────────────
             games = await workflow.execute_activity(
                 fetch_games_for_today,
+                sport,
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )
@@ -56,7 +57,7 @@ class OddsPollingWorkflow:
                 try:
                     await workflow.start_child_workflow(
                         "CloseCaptureWorkflow",
-                        (game.game_id, game.start_time_utc_iso),
+                        (game.game_id, game.start_time_utc_iso, sport),
                         id=close_wf_id,
                         task_queue=workflow.info().task_queue,
                         id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
@@ -70,7 +71,7 @@ class OddsPollingWorkflow:
             # ── Step 3: fetch odds for all today's games ──────────────────────
             batch = await workflow.execute_activity(
                 fetch_odds_batch,
-                game_ids,
+                args=[game_ids, sport],
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )
@@ -87,7 +88,7 @@ class OddsPollingWorkflow:
             # ── Step 5: fetch Kalshi ML for all today's games ─────────────────
             kalshi_batch = await workflow.execute_activity(
                 fetch_kalshi_odds_batch,
-                games,
+                args=[games, sport],
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )
@@ -128,8 +129,10 @@ class CloseCaptureWorkflow:
     """
 
     @workflow.run
-    async def run(self, args: tuple[str, str]) -> None:
-        game_id, start_time_utc_iso = args
+    async def run(self, args: tuple[str, str, str]) -> None:
+        game_id = args[0]
+        start_time_utc_iso = args[1]
+        sport = args[2] if len(args) > 2 else "nba"
 
         start_dt = datetime.fromisoformat(start_time_utc_iso)
         if start_dt.tzinfo is None:
@@ -144,6 +147,7 @@ class CloseCaptureWorkflow:
             FetchCloseSnapshotInput(
                 snapshot_id=f"close:{game_id}",
                 game_id=game_id,
+                sport=sport,
             ),
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=RetryPolicy(maximum_attempts=3),
@@ -165,6 +169,7 @@ class CloseCaptureWorkflow:
             FetchCloseSnapshotInput(
                 snapshot_id=f"close:kalshi:{game_id}",
                 game_id=game_id,
+                sport=sport,
             ),
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=RetryPolicy(maximum_attempts=3),
@@ -183,6 +188,7 @@ class CloseCaptureWorkflow:
             FetchCloseSnapshotInput(
                 snapshot_id=f"close:polymarket:{game_id}",
                 game_id=game_id,
+                sport=sport,
             ),
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=RetryPolicy(maximum_attempts=3),
@@ -204,7 +210,7 @@ class BetResolutionWorkflow:
     """
 
     @workflow.run
-    async def run(self, interval_hours: int = 2) -> None:
+    async def run(self, interval_hours: int = 2, sport: str = "nba") -> None:
         while True:
             now = workflow.now()
             yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -212,7 +218,7 @@ class BetResolutionWorkflow:
 
             results = await workflow.execute_activity(
                 fetch_final_scores,
-                [yesterday, today],
+                args=[[yesterday, today], sport],
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )
@@ -238,9 +244,11 @@ class InjuryPollingWorkflow:
 
     @workflow.run
     async def run(self, interval_minutes: int = 5) -> None:
+        sport = "nba"  # injuries are NBA-only for now
         while True:
             games = await workflow.execute_activity(
                 fetch_games_for_today,
+                sport,
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )
@@ -257,7 +265,7 @@ class InjuryPollingWorkflow:
                     game_ids = [g.game_id for g in games]
                     batch = await workflow.execute_activity(
                         fetch_odds_batch,
-                        game_ids,
+                        args=[game_ids, sport],
                         start_to_close_timeout=timedelta(seconds=30),
                         retry_policy=RetryPolicy(maximum_attempts=3),
                     )
@@ -271,7 +279,7 @@ class InjuryPollingWorkflow:
 
                     kalshi_batch = await workflow.execute_activity(
                         fetch_kalshi_odds_batch,
-                        games,
+                        args=[games, sport],
                         start_to_close_timeout=timedelta(seconds=30),
                         retry_policy=RetryPolicy(maximum_attempts=3),
                     )

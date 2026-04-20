@@ -7,18 +7,28 @@ from shared.models import Bet, Game, InjuryAlert, OddsSnapshot
 from db.schema import DB_PATH
 
 
+def _row_to_game(row: aiosqlite.Row) -> Game:
+    return Game(
+        game_id=row["game_id"],
+        home_team=row["home_team"],
+        away_team=row["away_team"],
+        start_time_utc_iso=row["start_time"],
+        sport=row["sport"] if "sport" in row.keys() else "nba",
+    )
+
+
 async def upsert_game(game: Game) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """
-            INSERT INTO games (game_id, home_team, away_team, start_time)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO games (game_id, home_team, away_team, start_time, sport)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(game_id) DO UPDATE SET
                 home_team  = excluded.home_team,
                 away_team  = excluded.away_team,
                 start_time = excluded.start_time
             """,
-            (game.game_id, game.home_team, game.away_team, game.start_time_utc_iso),
+            (game.game_id, game.home_team, game.away_team, game.start_time_utc_iso, game.sport),
         )
         await db.commit()
 
@@ -103,7 +113,7 @@ async def get_snapshots_for_game_since(game_id: str, since_utc_iso: str) -> list
     ]
 
 
-async def find_games_by_team(team_name: str) -> list[Game]:
+async def find_games_by_team(team_name: str, sport: str = "nba") -> list[Game]:
     """Find games where either team name contains the query (case-insensitive)."""
     pattern = f"%{team_name}%"
     async with aiosqlite.connect(DB_PATH) as db:
@@ -111,44 +121,33 @@ async def find_games_by_team(team_name: str) -> list[Game]:
         cursor = await db.execute(
             """
             SELECT * FROM games
-            WHERE home_team LIKE ? OR away_team LIKE ?
+            WHERE sport = ?
+              AND (home_team LIKE ? OR away_team LIKE ?)
             ORDER BY start_time ASC
             """,
-            (pattern, pattern),
+            (sport, pattern, pattern),
         )
         rows = await cursor.fetchall()
-    return [
-        Game(
-            game_id=row["game_id"],
-            home_team=row["home_team"],
-            away_team=row["away_team"],
-            start_time_utc_iso=row["start_time"],
-        )
-        for row in rows
-    ]
+    return [_row_to_game(row) for row in rows]
 
 
-async def get_games_in_window(start_utc_iso: str, end_utc_iso: str) -> list[Game]:
+async def get_games_in_window(start_utc_iso: str, end_utc_iso: str, sport: str = "nba") -> list[Game]:
     """Return all games with start_time in [start, end] (UTC ISO strings)."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT * FROM games WHERE start_time >= ? AND start_time <= ? ORDER BY start_time ASC",
-            (start_utc_iso, end_utc_iso),
+            """
+            SELECT * FROM games
+            WHERE sport = ? AND start_time >= ? AND start_time <= ?
+            ORDER BY start_time ASC
+            """,
+            (sport, start_utc_iso, end_utc_iso),
         )
         rows = await cursor.fetchall()
-    return [
-        Game(
-            game_id=row["game_id"],
-            home_team=row["home_team"],
-            away_team=row["away_team"],
-            start_time_utc_iso=row["start_time"],
-        )
-        for row in rows
-    ]
+    return [_row_to_game(row) for row in rows]
 
 
-async def get_upcoming_games(filter_str: str = "") -> list[Game]:
+async def get_upcoming_games(filter_str: str = "", sport: str = "nba") -> list[Game]:
     """Return upcoming games (start_time >= now), optionally filtered by team name."""
     now = datetime.now(timezone.utc).isoformat()
     pattern = f"%{filter_str}%"
@@ -157,23 +156,16 @@ async def get_upcoming_games(filter_str: str = "") -> list[Game]:
         cursor = await db.execute(
             """
             SELECT * FROM games
-            WHERE start_time >= ?
+            WHERE sport = ?
+              AND start_time >= ?
               AND (home_team LIKE ? OR away_team LIKE ?)
             ORDER BY start_time ASC
             LIMIT 25
             """,
-            (now, pattern, pattern),
+            (sport, now, pattern, pattern),
         )
         rows = await cursor.fetchall()
-    return [
-        Game(
-            game_id=row["game_id"],
-            home_team=row["home_team"],
-            away_team=row["away_team"],
-            start_time_utc_iso=row["start_time"],
-        )
-        for row in rows
-    ]
+    return [_row_to_game(row) for row in rows]
 
 
 async def get_game_by_id(game_id: str) -> Game | None:
@@ -187,12 +179,7 @@ async def get_game_by_id(game_id: str) -> Game | None:
         row = await cursor.fetchone()
     if row is None:
         return None
-    return Game(
-        game_id=row["game_id"],
-        home_team=row["home_team"],
-        away_team=row["away_team"],
-        start_time_utc_iso=row["start_time"],
-    )
+    return _row_to_game(row)
 
 
 async def get_close_snapshot(game_id: str, source: str) -> OddsSnapshot | None:
@@ -435,12 +422,7 @@ async def get_game_by_team_suffixes(
         row = await cursor.fetchone()
     if row is None:
         return None
-    return Game(
-        game_id=row["game_id"],
-        home_team=row["home_team"],
-        away_team=row["away_team"],
-        start_time_utc_iso=row["start_time"],
-    )
+    return _row_to_game(row)
 
 
 async def update_bet_result(bet_id: int, status: str) -> None:
@@ -598,18 +580,18 @@ async def mark_injury_notified(record_id: str) -> None:
         await db.commit()
 
 
-async def get_past_game_count() -> int:
+async def get_past_game_count(sport: str = "nba") -> int:
     """Count of games with start_time in the past."""
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "SELECT COUNT(*) FROM games WHERE start_time <= ?", (now,)
+            "SELECT COUNT(*) FROM games WHERE sport = ? AND start_time <= ?", (sport, now)
         )
         row = await cursor.fetchone()
     return row[0] if row else 0
 
 
-async def get_history_page(offset: int, limit: int) -> list[dict]:
+async def get_history_page(offset: int, limit: int, sport: str = "nba") -> list[dict]:
     """
     Returns past games ordered newest first with close snapshot spread if available.
     Each dict: game_id, home_team, away_team, start_time, status, spread, spread_odds.
@@ -630,11 +612,11 @@ async def get_history_page(offset: int, limit: int) -> list[dict]:
                     LIMIT 1
                 ) AS close_payload
             FROM games g
-            WHERE g.start_time <= ?
+            WHERE g.sport = ? AND g.start_time <= ?
             ORDER BY g.start_time DESC
             LIMIT ? OFFSET ?
             """,
-            (now, limit, offset),
+            (sport, now, limit, offset),
         )
         rows = await cursor.fetchall()
 
@@ -682,7 +664,7 @@ async def get_first_poll_snapshot(game_id: str, source: str) -> OddsSnapshot | N
     )
 
 
-async def get_recent_games(filter_str: str = "") -> list[Game]:
+async def get_recent_games(filter_str: str = "", sport: str = "nba") -> list[Game]:
     """Return games from yesterday through end of tomorrow (for /line-move autocomplete)."""
     from datetime import timedelta
     now = datetime.now(timezone.utc)
@@ -698,24 +680,17 @@ async def get_recent_games(filter_str: str = "") -> list[Game]:
         cursor = await db.execute(
             """
             SELECT * FROM games
-            WHERE start_time >= ?
+            WHERE sport = ?
+              AND start_time >= ?
               AND start_time < ?
               AND (home_team LIKE ? OR away_team LIKE ?)
             ORDER BY start_time DESC
             LIMIT 25
             """,
-            (cutoff, future_cutoff, pattern, pattern),
+            (sport, cutoff, future_cutoff, pattern, pattern),
         )
         rows = await cursor.fetchall()
-    return [
-        Game(
-            game_id=row["game_id"],
-            home_team=row["home_team"],
-            away_team=row["away_team"],
-            start_time_utc_iso=row["start_time"],
-        )
-        for row in rows
-    ]
+    return [_row_to_game(row) for row in rows]
 
 
 async def get_games_by_id_prefix(prefix: str, limit: int = 25) -> list[Game]:
@@ -732,18 +707,10 @@ async def get_games_by_id_prefix(prefix: str, limit: int = 25) -> list[Game]:
             (f"{prefix}%", limit),
         )
         rows = await cursor.fetchall()
-    return [
-        Game(
-            game_id=row["game_id"],
-            home_team=row["home_team"],
-            away_team=row["away_team"],
-            start_time_utc_iso=row["start_time"],
-        )
-        for row in rows
-    ]
+    return [_row_to_game(row) for row in rows]
 
 
-async def get_all_games_filtered(filter_str: str = "", limit: int = 25) -> list[Game]:
+async def get_all_games_filtered(filter_str: str = "", limit: int = 25, sport: str = "nba") -> list[Game]:
     """Search all games (past and future) by team name, newest first."""
     pattern = f"%{filter_str}%"
     async with aiosqlite.connect(DB_PATH) as db:
@@ -751,22 +718,15 @@ async def get_all_games_filtered(filter_str: str = "", limit: int = 25) -> list[
         cursor = await db.execute(
             """
             SELECT * FROM games
-            WHERE home_team LIKE ? OR away_team LIKE ?
+            WHERE sport = ?
+              AND (home_team LIKE ? OR away_team LIKE ?)
             ORDER BY start_time DESC
             LIMIT ?
             """,
-            (pattern, pattern, limit),
+            (sport, pattern, pattern, limit),
         )
         rows = await cursor.fetchall()
-    return [
-        Game(
-            game_id=row["game_id"],
-            home_team=row["home_team"],
-            away_team=row["away_team"],
-            start_time_utc_iso=row["start_time"],
-        )
-        for row in rows
-    ]
+    return [_row_to_game(row) for row in rows]
 
 
 async def get_todays_game_for_team(team: str) -> Game | None:
@@ -788,9 +748,4 @@ async def get_todays_game_for_team(team: str) -> Game | None:
         row = await cursor.fetchone()
     if row is None:
         return None
-    return Game(
-        game_id=row["game_id"],
-        home_team=row["home_team"],
-        away_team=row["away_team"],
-        start_time_utc_iso=row["start_time"],
-    )
+    return _row_to_game(row)

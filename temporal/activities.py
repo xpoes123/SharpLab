@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from temporalio import activity
 
 from db import queries, schema
-from shared.models import TEAM_ABBR, Bet, Game, GameResult, InjuryAlert, OddsBatch, OddsSnapshot
+from shared.models import Bet, Game, GameResult, InjuryAlert, OddsBatch, OddsSnapshot, get_team_abbr
 from shared.odds_utils import prob_to_american
 
 load_dotenv()
@@ -40,12 +40,23 @@ POLYMARKET_GAMMA = "https://gamma-api.polymarket.com"
 ESPN_INJURIES_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries"
 
 
+# ── Sport config maps ────────────────────────────────────────────────────────
+
+ODDS_API_SPORT_KEY = {"nba": "basketball_nba", "mlb": "baseball_mlb"}
+KALSHI_SERIES = {"nba": "KXNBAGAME", "mlb": "KXMLBGAME"}
+ESPN_SCORES_URL = {
+    "nba": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+    "mlb": "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard",
+}
+
+
 # ── Input types ────────────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
 class FetchCloseSnapshotInput:
     snapshot_id: str
     game_id: str  # The Odds API event ID
+    sport: str = "nba"
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -84,17 +95,18 @@ def _extract_payload(bookmaker: dict, home_team: str) -> dict[str, Any]:
 # ── Activities ─────────────────────────────────────────────────────────────────
 
 @activity.defn
-async def fetch_games_for_today() -> list[Game]:
+async def fetch_games_for_today(sport: str = "nba") -> list[Game]:
     """
-    Fetch today's NBA schedule from The Odds API /events endpoint.
+    Fetch today's schedule from The Odds API /events endpoint.
     Lightweight call — no odds data, minimal quota usage.
     Also upserts games to the DB so the rest of the pipeline can reference them.
     """
     await schema.init_db()
+    sport_key = ODDS_API_SPORT_KEY.get(sport, "basketball_nba")
 
     async with httpx.AsyncClient() as client:
         resp = await client.get(
-            f"{ODDS_API_BASE}/sports/basketball_nba/events",
+            f"{ODDS_API_BASE}/sports/{sport_key}/events",
             params={"apiKey": ODDS_API_KEY},
             timeout=15.0,
         )
@@ -104,7 +116,7 @@ async def fetch_games_for_today() -> list[Game]:
         used = resp.headers.get("x-requests-used", "?")
 
     activity.logger.info(
-        f"[fetch_games_for_today] {len(events)} events | quota used={used} remaining={remaining}"
+        f"[fetch_games_for_today] {sport} {len(events)} events | quota used={used} remaining={remaining}"
     )
 
     games: list[Game] = []
@@ -114,6 +126,7 @@ async def fetch_games_for_today() -> list[Game]:
             home_team=event["home_team"],
             away_team=event["away_team"],
             start_time_utc_iso=event["commence_time"],
+            sport=sport,
         )
         await queries.upsert_game(game)
         games.append(game)
@@ -122,12 +135,13 @@ async def fetch_games_for_today() -> list[Game]:
 
 
 @activity.defn
-async def fetch_odds_batch(game_ids: list[str]) -> OddsBatch:
+async def fetch_odds_batch(game_ids: list[str], sport: str = "nba") -> OddsBatch:
     """
     Fetch live odds for the given games from The Odds API.
     Returns one OddsSnapshot per (game, bookmaker) pair.
     """
     captured_at = datetime.now(timezone.utc).isoformat()
+    sport_key = ODDS_API_SPORT_KEY.get(sport, "basketball_nba")
 
     params: dict[str, Any] = {
         "apiKey": ODDS_API_KEY,
@@ -140,7 +154,7 @@ async def fetch_odds_batch(game_ids: list[str]) -> OddsBatch:
 
     async with httpx.AsyncClient() as client:
         resp = await client.get(
-            f"{ODDS_API_BASE}/sports/basketball_nba/odds",
+            f"{ODDS_API_BASE}/sports/{sport_key}/odds",
             params=params,
             timeout=15.0,
         )
@@ -150,7 +164,7 @@ async def fetch_odds_batch(game_ids: list[str]) -> OddsBatch:
         used = resp.headers.get("x-requests-used", "?")
 
     activity.logger.info(
-        f"[fetch_odds_batch] {len(events)} events | quota used={used} remaining={remaining}"
+        f"[fetch_odds_batch] {sport} {len(events)} events | quota used={used} remaining={remaining}"
     )
 
     snapshots: list[OddsSnapshot] = []
@@ -194,10 +208,11 @@ async def fetch_close_odds_snapshot(inp: FetchCloseSnapshotInput) -> list[OddsSn
     (Temporal can't handle Optional return types, so we use list as the container.)
     """
     captured_at = datetime.now(timezone.utc).isoformat()
+    sport_key = ODDS_API_SPORT_KEY.get(inp.sport, "basketball_nba")
 
     async with httpx.AsyncClient() as client:
         resp = await client.get(
-            f"{ODDS_API_BASE}/sports/basketball_nba/odds",
+            f"{ODDS_API_BASE}/sports/{sport_key}/odds",
             params={
                 "apiKey": ODDS_API_KEY,
                 "regions": "us",
@@ -259,7 +274,7 @@ def _kalshi_ml_from_markets(
     game_markets: list[dict], home_abbr: str, away_abbr: str
 ) -> tuple[int, int] | None:
     """
-    Extract (ml_home, ml_away) American odds from a pair of Kalshi KXNBAGAME markets.
+    Extract (ml_home, ml_away) American odds from a pair of Kalshi game markets.
     Returns None if prices are missing or not in (0, 1).
     """
     home_prob: float | None = None
@@ -287,9 +302,9 @@ def _kalshi_ml_from_markets(
 # ── Kalshi activities ────────────────────────────────────────────────────────────
 
 @activity.defn
-async def fetch_kalshi_odds_batch(games: list[Game]) -> OddsBatch:
+async def fetch_kalshi_odds_batch(games: list[Game], sport: str = "nba") -> OddsBatch:
     """
-    Fetch Kalshi KXNBAGAME winner market prices for today's games.
+    Fetch Kalshi winner market prices for today's games.
     Matches games to Kalshi events by 3-char team abbreviation embedded in the
     event ticker (last 6 chars = {away_abbr}{home_abbr}, e.g. DENPHX).
     Returns one OddsSnapshot per matched game with {ml_home, ml_away}.
@@ -297,14 +312,15 @@ async def fetch_kalshi_odds_batch(games: list[Game]) -> OddsBatch:
     captured_at = datetime.now(timezone.utc).isoformat()
     empty = OddsBatch(source="kalshi", captured_at_utc_iso=captured_at, snapshots=[])
 
-    if not KALSHI_API_KEY:
+    series_ticker = KALSHI_SERIES.get(sport)
+    if not KALSHI_API_KEY or not series_ticker:
         return empty
 
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{KALSHI_BASE}/markets",
             headers={"Authorization": f"Bearer {KALSHI_API_KEY}"},
-            params={"limit": 200, "status": "open", "series_ticker": "KXNBAGAME"},
+            params={"limit": 200, "status": "open", "series_ticker": series_ticker},
             timeout=10.0,
         )
         if resp.status_code != 200:
@@ -313,7 +329,6 @@ async def fetch_kalshi_odds_batch(games: list[Game]) -> OddsBatch:
         markets = resp.json().get("markets", [])
 
     # Group markets by event_ticker; build (away_abbr, home_abbr) → event_ticker lookup.
-    # Event ticker format: KXNBAGAME-{date}{away3}{home3}  e.g. KXNBAGAME-26MAR24DENPHX
     event_markets: dict[str, list[dict]] = {}
     abbr_pair_to_event: dict[tuple[str, str], str] = {}
     for m in markets:
@@ -326,8 +341,8 @@ async def fetch_kalshi_odds_batch(games: list[Game]) -> OddsBatch:
 
     snapshots: list[OddsSnapshot] = []
     for game in games:
-        h_abbr = TEAM_ABBR.get(game.home_team)
-        a_abbr = TEAM_ABBR.get(game.away_team)
+        h_abbr = get_team_abbr(game.home_team, sport)
+        a_abbr = get_team_abbr(game.away_team, sport)
         if not h_abbr or not a_abbr:
             activity.logger.debug(
                 f"[fetch_kalshi_odds_batch] No abbreviation for {game.home_team!r} or {game.away_team!r}"
@@ -353,7 +368,7 @@ async def fetch_kalshi_odds_batch(games: list[Game]) -> OddsBatch:
         ))
 
     activity.logger.info(
-        f"[fetch_kalshi_odds_batch] matched {len(snapshots)}/{len(games)} games"
+        f"[fetch_kalshi_odds_batch] {sport} matched {len(snapshots)}/{len(games)} games"
     )
     return OddsBatch(source="kalshi", captured_at_utc_iso=captured_at, snapshots=snapshots)
 
@@ -448,13 +463,14 @@ async def fetch_injuries() -> list[InjuryAlert]:
 async def fetch_kalshi_close_snapshot(inp: FetchCloseSnapshotInput) -> list[OddsSnapshot]:
     """
     Capture Kalshi ML close for a game at tip-off.
-    Looks up team names from DB then finds the matching KXNBAGAME event.
+    Looks up team names from DB then finds the matching Kalshi event.
     Returns a one-item list on success, empty list on failure.
     (Same list-as-Optional convention as fetch_close_odds_snapshot.)
     """
     captured_at = datetime.now(timezone.utc).isoformat()
 
-    if not KALSHI_API_KEY:
+    series_ticker = KALSHI_SERIES.get(inp.sport)
+    if not KALSHI_API_KEY or not series_ticker:
         return []
 
     game = await queries.get_game_by_id(inp.game_id)
@@ -464,8 +480,8 @@ async def fetch_kalshi_close_snapshot(inp: FetchCloseSnapshotInput) -> list[Odds
         )
         return []
 
-    h_abbr = TEAM_ABBR.get(game.home_team)
-    a_abbr = TEAM_ABBR.get(game.away_team)
+    h_abbr = get_team_abbr(game.home_team, inp.sport)
+    a_abbr = get_team_abbr(game.away_team, inp.sport)
     if not h_abbr or not a_abbr:
         activity.logger.warning(
             f"[fetch_kalshi_close_snapshot] No abbreviation for {game.home_team!r}/{game.away_team!r}"
@@ -476,7 +492,7 @@ async def fetch_kalshi_close_snapshot(inp: FetchCloseSnapshotInput) -> list[Odds
         resp = await client.get(
             f"{KALSHI_BASE}/markets",
             headers={"Authorization": f"Bearer {KALSHI_API_KEY}"},
-            params={"limit": 200, "status": "open", "series_ticker": "KXNBAGAME"},
+            params={"limit": 200, "status": "open", "series_ticker": series_ticker},
             timeout=10.0,
         )
         if resp.status_code != 200:
@@ -651,12 +667,8 @@ async def fetch_polymarket_close_snapshot(inp: FetchCloseSnapshotInput) -> list[
 
 # ── Bet resolution activities ─────────────────────────────────────────────────
 
-@activity.defn
-async def fetch_final_scores(dates: list[str]) -> list[GameResult]:
-    """
-    Fetch final scores from balldontlie for the given dates.
-    Returns only completed games (status starts with "Final").
-    """
+async def _fetch_nba_scores(dates: list[str]) -> list[GameResult]:
+    """Fetch final scores from balldontlie (NBA only)."""
     headers = {"Authorization": BALLDONTLIE_API_KEY} if BALLDONTLIE_API_KEY else {}
     params: list[tuple[str, str | int]] = [("per_page", 100)]
     for d in dates:
@@ -688,8 +700,67 @@ async def fetch_final_scores(dates: list[str]) -> list[GameResult]:
             home_score=home_score,
             away_score=away_score,
         ))
+    return results
 
-    activity.logger.info(f"[fetch_final_scores] {len(results)} final games on {dates}")
+
+async def _fetch_espn_scores(dates: list[str], sport: str) -> list[GameResult]:
+    """Fetch final scores from ESPN scoreboard API."""
+    url = ESPN_SCORES_URL.get(sport)
+    if not url:
+        return []
+
+    results: list[GameResult] = []
+    async with httpx.AsyncClient() as client:
+        for date_str in dates:
+            espn_date = date_str.replace("-", "")  # ESPN expects YYYYMMDD
+            try:
+                resp = await client.get(url, params={"dates": espn_date}, timeout=15.0)
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
+            except Exception:
+                continue
+
+            for event in data.get("events", []):
+                status_type = event.get("status", {}).get("type", {}).get("name", "")
+                if status_type != "STATUS_FINAL":
+                    continue
+                comp = event.get("competitions", [{}])[0]
+                competitors = comp.get("competitors", [])
+                home_name = away_name = ""
+                home_score = away_score = 0
+                for c in competitors:
+                    team_name = c.get("team", {}).get("displayName", "")
+                    score = int(c.get("score", "0"))
+                    if c.get("homeAway") == "home":
+                        home_name = team_name
+                        home_score = score
+                    else:
+                        away_name = team_name
+                        away_score = score
+                if home_name and away_name:
+                    results.append(GameResult(
+                        home_last=home_name.split()[-1].lower(),
+                        away_last=away_name.split()[-1].lower(),
+                        home_score=home_score,
+                        away_score=away_score,
+                    ))
+    return results
+
+
+@activity.defn
+async def fetch_final_scores(dates: list[str], sport: str = "nba") -> list[GameResult]:
+    """
+    Fetch final scores for the given dates.
+    Routes to balldontlie for NBA, ESPN for MLB.
+    Returns only completed games.
+    """
+    if sport == "nba":
+        results = await _fetch_nba_scores(dates)
+    else:
+        results = await _fetch_espn_scores(dates, sport)
+
+    activity.logger.info(f"[fetch_final_scores] {sport} {len(results)} final games on {dates}")
     return results
 
 

@@ -8,7 +8,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from db import queries
-from shared.models import TEAM_ABBR
+from shared.models import get_team_abbr
 from shared.odds_utils import fmt_prob
 
 PAGE_SIZE = 5
@@ -16,8 +16,8 @@ PAGE_SIZE = 5
 
 # ── Formatting helpers ────────────────────────────────────────────────────────
 
-def _abbr(team: str) -> str:
-    return TEAM_ABBR.get(team, team[:3].upper())
+def _abbr(team: str, sport: str = "nba") -> str:
+    return get_team_abbr(team, sport) or team[:3].upper()
 
 
 def _fmt_spread(home: str, away: str, spread: float | None, spread_odds: int | None) -> str:
@@ -49,9 +49,10 @@ def _fmt_status(status: str | None) -> str:
     )
 
 
-def _build_page_embed(rows: list[dict], page: int, total_pages: int) -> discord.Embed:
+def _build_page_embed(rows: list[dict], page: int, total_pages: int, sport: str = "nba") -> discord.Embed:
+    label = sport.upper()
     embed = discord.Embed(
-        title="Game History",
+        title=f"{label} Game History",
         color=discord.Color.blurple(),
     )
     lines = []
@@ -80,10 +81,11 @@ def _build_page_embed(rows: list[dict], page: int, total_pages: int) -> discord.
 # ── View ──────────────────────────────────────────────────────────────────────
 
 class HistoryView(discord.ui.View):
-    def __init__(self, page: int, total_pages: int) -> None:
+    def __init__(self, page: int, total_pages: int, sport: str = "nba") -> None:
         super().__init__(timeout=120)
         self.page = page
         self.total_pages = total_pages
+        self.sport = sport
         self._update_buttons()
 
     def _update_buttons(self) -> None:
@@ -92,22 +94,22 @@ class HistoryView(discord.ui.View):
 
     @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary)
     async def prev_btn(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await _paginate(interaction, self.page - 1)
+        await _paginate(interaction, self.page - 1, self.sport)
 
     @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.secondary)
     async def next_btn(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await _paginate(interaction, self.page + 1)
+        await _paginate(interaction, self.page + 1, self.sport)
 
 
-async def _paginate(interaction: discord.Interaction, page: int) -> None:
+async def _paginate(interaction: discord.Interaction, page: int, sport: str = "nba") -> None:
     await interaction.response.defer()
-    total = await queries.get_past_game_count()
+    total = await queries.get_past_game_count(sport=sport)
     total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
     page = max(1, min(page, total_pages))
     offset = (page - 1) * PAGE_SIZE
-    rows = await queries.get_history_page(offset, PAGE_SIZE)
-    embed = _build_page_embed(rows, page, total_pages)
-    view = HistoryView(page, total_pages)
+    rows = await queries.get_history_page(offset, PAGE_SIZE, sport=sport)
+    embed = _build_page_embed(rows, page, total_pages, sport=sport)
+    view = HistoryView(page, total_pages, sport=sport)
     await interaction.edit_original_response(embed=embed, view=view)
 
 
@@ -117,15 +119,22 @@ class HistoryCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
-    @app_commands.command(name="db", description="Browse historical game data — spreads, outcomes, IDs for /line-move")
-    async def db(self, interaction: discord.Interaction) -> None:
+    async def _db_impl(self, interaction: discord.Interaction, sport: str) -> None:
         await interaction.response.defer()
-        total = await queries.get_past_game_count()
+        total = await queries.get_past_game_count(sport=sport)
         total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
-        rows = await queries.get_history_page(0, PAGE_SIZE)
-        embed = _build_page_embed(rows, 1, total_pages)
-        view = HistoryView(1, total_pages)
+        rows = await queries.get_history_page(0, PAGE_SIZE, sport=sport)
+        embed = _build_page_embed(rows, 1, total_pages, sport=sport)
+        view = HistoryView(1, total_pages, sport=sport)
         await interaction.followup.send(embed=embed, view=view)
+
+    @app_commands.command(name="db", description="Browse NBA game history — spreads, outcomes, IDs for /line-move")
+    async def db(self, interaction: discord.Interaction) -> None:
+        await self._db_impl(interaction, "nba")
+
+    @app_commands.command(name="mlb-db", description="Browse MLB game history — spreads, outcomes, IDs for /mlb-line-move")
+    async def mlb_db(self, interaction: discord.Interaction) -> None:
+        await self._db_impl(interaction, "mlb")
 
 
 async def setup(bot: commands.Bot) -> None:

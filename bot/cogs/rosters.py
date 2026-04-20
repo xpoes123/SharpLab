@@ -8,7 +8,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from db import queries
-from shared.models import TEAM_ABBR
+from shared.models import TEAM_ABBR_NBA
 
 _STATUS_ICON = {
     "Out":          "🔴",
@@ -26,7 +26,7 @@ _STATUS_COLOR = {
     "Probable":     0x2ECC71,
 }
 
-_ALL_TEAMS = sorted(TEAM_ABBR.keys())
+_ALL_TEAMS = sorted(TEAM_ABBR_NBA.keys())
 
 
 async def team_autocomplete(

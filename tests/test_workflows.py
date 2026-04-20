@@ -9,6 +9,28 @@ from temporal.activities import FetchCloseSnapshotInput
 from shared.models import Game, OddsBatch, OddsSnapshot
 
 
+# ── Shared stubs ─────────────────────────────────────────────────────────────
+
+@activity.defn(name="fetch_kalshi_close_snapshot")
+async def stub_fetch_kalshi_close(_inp: FetchCloseSnapshotInput) -> list[OddsSnapshot]:
+    return []
+
+
+@activity.defn(name="fetch_polymarket_close_snapshot")
+async def stub_fetch_polymarket_close(_inp: FetchCloseSnapshotInput) -> list[OddsSnapshot]:
+    return []
+
+
+@activity.defn(name="fetch_kalshi_odds_batch")
+async def stub_fetch_kalshi_odds(_games: list[Game], _sport: str = "nba") -> OddsBatch:
+    return OddsBatch(source="kalshi", captured_at_utc_iso=datetime.now(timezone.utc).isoformat(), snapshots=[])
+
+
+@activity.defn(name="fetch_polymarket_odds_batch")
+async def stub_fetch_polymarket_odds(_games: list[Game]) -> OddsBatch:
+    return OddsBatch(source="polymarket", captured_at_utc_iso=datetime.now(timezone.utc).isoformat(), snapshots=[])
+
+
 # ── CloseCaptureWorkflow ───────────────────────────────────────────────────────
 
 close_upsert_calls: list[OddsSnapshot] = []
@@ -31,6 +53,12 @@ async def stub_upsert_close(snapshot: OddsSnapshot) -> None:
     close_upsert_calls.append(snapshot)
 
 
+_CLOSE_ACTIVITIES = [
+    stub_fetch_close, stub_upsert_close,
+    stub_fetch_kalshi_close, stub_fetch_polymarket_close,
+]
+
+
 async def test_close_capture_workflow():
     close_upsert_calls.clear()
     async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -38,12 +66,12 @@ async def test_close_capture_workflow():
             env.client,
             task_queue="test-queue",
             workflows=[CloseCaptureWorkflow],
-            activities=[stub_fetch_close, stub_upsert_close],
+            activities=_CLOSE_ACTIVITIES,
         ):
             future_start = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
             await env.client.execute_workflow(
                 CloseCaptureWorkflow.run,
-                args=[("GAME123", future_start)],
+                args=[("GAME123", future_start, "nba")],
                 id="test-close-wf",
                 task_queue="test-queue",
             )
@@ -66,12 +94,13 @@ async def test_close_capture_workflow_handles_none():
             env.client,
             task_queue="test-queue-none",
             workflows=[CloseCaptureWorkflow],
-            activities=[stub_fetch_close_none, stub_upsert_close],
+            activities=[stub_fetch_close_none, stub_upsert_close,
+                        stub_fetch_kalshi_close, stub_fetch_polymarket_close],
         ):
             future_start = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
             await env.client.execute_workflow(
                 CloseCaptureWorkflow.run,
-                args=[("GAME_CLOSED", future_start)],
+                args=[("GAME_CLOSED", future_start, "nba")],
                 id="test-close-wf-none",
                 task_queue="test-queue-none",
             )
@@ -86,7 +115,7 @@ _one_iteration = asyncio.Event()
 
 
 @activity.defn(name="fetch_games_for_today")
-async def stub_fetch_games() -> list[Game]:
+async def stub_fetch_games(_sport: str = "nba") -> list[Game]:
     # Past start time so no child workflow is spawned
     past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
     return [
@@ -100,7 +129,7 @@ async def stub_fetch_games() -> list[Game]:
 
 
 @activity.defn(name="fetch_odds_batch")
-async def stub_fetch_odds(_game_ids: list[str]) -> OddsBatch:
+async def stub_fetch_odds(_game_ids: list[str], _sport: str = "nba") -> OddsBatch:
     now = datetime.now(timezone.utc).isoformat()
     snapshots = [
         OddsSnapshot(
@@ -133,11 +162,12 @@ async def test_odds_polling_one_iteration():
             env.client,
             task_queue="test-queue",
             workflows=[OddsPollingWorkflow],
-            activities=[stub_fetch_games, stub_fetch_odds, stub_poll_upsert],
+            activities=[stub_fetch_games, stub_fetch_odds, stub_poll_upsert,
+                        stub_fetch_kalshi_odds, stub_fetch_polymarket_odds],
         ):
             handle = await env.client.start_workflow(
                 OddsPollingWorkflow.run,
-                args=[1],
+                args=[1, "nba"],
                 id="test-polling-wf",
                 task_queue="test-queue",
             )

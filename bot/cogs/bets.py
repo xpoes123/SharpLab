@@ -9,9 +9,9 @@ from discord import app_commands
 from discord.ext import commands
 
 from db import queries
-from shared.models import Bet
-from shared.odds_utils import american_to_decimal, fmt_prob, parse_odds_input
-from .odds import game_autocomplete
+from shared.models import Bet, Game, OddsSnapshot
+from shared.odds_utils import american_to_decimal, american_to_prob, fmt_prob, parse_odds_input
+from .odds import game_autocomplete, mlb_game_autocomplete
 
 
 # ── Choices ────────────────────────────────────────────────────────────────────
@@ -166,6 +166,48 @@ def _parse_pick(pick: str) -> tuple[str, float | None]:
     return pick.strip(), None
 
 
+def _get_current_odds_for_bet(
+    bet: Bet, game: Game, snapshots: list[OddsSnapshot],
+) -> int | None:
+    """Extract current market odds for a bet from the latest poll snapshots.
+
+    Source priority: Kalshi (no vig) for ML, DraftKings for spread/total.
+    """
+    market = bet.market.lower()
+    side = bet.side.lower()
+    home = game.home_team.lower()
+    away = game.away_team.lower()
+
+    snap_by_source = {s.source: s for s in snapshots}
+
+    if market in ("moneyline", "kalshi"):
+        snap = snap_by_source.get("kalshi") or snap_by_source.get("draftkings")
+    else:
+        snap = snap_by_source.get("draftkings") or snap_by_source.get("fanduel")
+
+    if snap is None:
+        return None
+
+    payload = snap.payload
+
+    if market in ("moneyline", "kalshi"):
+        if side in ("yes",) or side in home or home.split()[-1] in side:
+            return payload.get("ml_home")
+        if side in ("no",) or side in away or away.split()[-1] in side:
+            return payload.get("ml_away")
+
+    elif market == "spread":
+        return payload.get("spread_odds")
+
+    elif market == "total":
+        if side == "over":
+            return payload.get("total_over_odds")
+        if side == "under":
+            return payload.get("total_under_odds")
+
+    return None
+
+
 def _record_embed(
     user: discord.Member | discord.User,
     bets: list[Bet],
@@ -242,20 +284,7 @@ class BetsCog(commands.Cog):
 
     # ── /log ──────────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="log", description="Log a bet to your record")
-    @app_commands.autocomplete(game=game_autocomplete, pick=pick_autocomplete)
-    @app_commands.describe(
-        game="Select a game",
-        book="Sportsbook",
-        market="Market type",
-        pick="Your pick — autocomplete shows live lines (team, spread side, over/under, yes/no)",
-        odds="Odds in any format: American (-110, +150), decimal (1.91), or cents (52)",
-        units="Units risked (e.g. 1.0)",
-        line="Spread or total number if not auto-filled by autocomplete (e.g. -4.5, 224.5)",
-        notes="Optional notes",
-    )
-    @app_commands.choices(book=BOOK_CHOICES, market=MARKET_CHOICES)
-    async def log(
+    async def _log_impl(
         self,
         interaction: discord.Interaction,
         game: str,
@@ -329,6 +358,31 @@ class BetsCog(commands.Cog):
         embed.set_footer(text=f"Bet ID: {bet_id}")
         await interaction.followup.send(embed=embed)
 
+    _LOG_DESCRIBE = dict(
+        game="Select a game",
+        book="Sportsbook",
+        market="Market type",
+        pick="Your pick — autocomplete shows live lines (team, spread side, over/under, yes/no)",
+        odds="Odds in any format: American (-110, +150), decimal (1.91), or cents (52)",
+        units="Units risked (e.g. 1.0)",
+        line="Spread or total number if not auto-filled by autocomplete (e.g. -4.5, 224.5)",
+        notes="Optional notes",
+    )
+
+    @app_commands.command(name="log", description="Log an NBA bet to your record")
+    @app_commands.autocomplete(game=game_autocomplete, pick=pick_autocomplete)
+    @app_commands.describe(**_LOG_DESCRIBE)
+    @app_commands.choices(book=BOOK_CHOICES, market=MARKET_CHOICES)
+    async def log(self, interaction: discord.Interaction, game: str, book: str, market: str, pick: str, odds: str, units: float, line: float | None = None, notes: str | None = None) -> None:
+        await self._log_impl(interaction, game, book, market, pick, odds, units, line, notes)
+
+    @app_commands.command(name="mlb-log", description="Log an MLB bet to your record")
+    @app_commands.autocomplete(game=mlb_game_autocomplete, pick=pick_autocomplete)
+    @app_commands.describe(**_LOG_DESCRIBE)
+    @app_commands.choices(book=BOOK_CHOICES, market=MARKET_CHOICES)
+    async def mlb_log(self, interaction: discord.Interaction, game: str, book: str, market: str, pick: str, odds: str, units: float, line: float | None = None, notes: str | None = None) -> None:
+        await self._log_impl(interaction, game, book, market, pick, odds, units, line, notes)
+
     # ── /open ─────────────────────────────────────────────────────────────────
 
     @app_commands.command(name="bets", description="View your open and graded bets")
@@ -341,9 +395,18 @@ class BetsCog(commands.Cog):
             await interaction.followup.send("You have no open or graded bets.", ephemeral=True)
             return
 
+        # Pre-fetch games and latest snapshots per game (for live CLV)
+        game_cache: dict[str, Game | None] = {}
+        snap_cache: dict[str, list[OddsSnapshot]] = {}
+        for bet in bets:
+            if bet.game_id not in game_cache:
+                game_cache[bet.game_id] = await queries.get_game_by_id(bet.game_id)
+            if bet.game_id not in snap_cache:
+                snap_cache[bet.game_id] = await queries.get_latest_snapshots_for_game(bet.game_id)
+
         lines = []
         for bet in bets:
-            game = await queries.get_game_by_id(bet.game_id)
+            game = game_cache.get(bet.game_id)
             if game is not None:
                 away_short = game.away_team.split()[-1]
                 home_short = game.home_team.split()[-1]
@@ -360,10 +423,24 @@ class BetsCog(commands.Cog):
                 market_str = bet.market
 
             icon = "📊" if bet.status == "graded" else "⏳"
-            clv_str = f"  CLV: {bet.clv:+.1f}pp" if bet.status == "graded" and bet.clv is not None else ""
 
+            # CLV: graded bets use stored CLV, open bets get live CLV from latest snapshot
+            clv_str = ""
+            now_str = ""
+            if bet.status == "graded" and bet.clv is not None:
+                clv_str = f"  {bet.clv:+.1f}pp"
+            elif bet.status == "open" and game is not None:
+                current_odds = _get_current_odds_for_bet(bet, game, snap_cache.get(bet.game_id, []))
+                if current_odds is not None:
+                    bet_prob = american_to_prob(bet.odds)
+                    current_prob = american_to_prob(current_odds)
+                    live_clv = (current_prob - bet_prob) * 100
+                    now_str = f"→{fmt_prob(current_odds)}"
+                    clv_str = f"  {live_clv:+.1f}pp"
+
+            odds_str = f"{fmt_prob(bet.odds)}{now_str}"
             lines.append(
-                f"{icon}  {game_str:<12}  {market_str:<14}  {bet.side:<12}  {fmt_prob(bet.odds):<6}  {bet.units}u{clv_str}  #{bet.bet_id}"
+                f"{icon}  {game_str}  {market_str}  {bet.side}  {odds_str}  {bet.units}u{clv_str}  #{bet.bet_id}"
             )
 
         embed = discord.Embed(
@@ -371,7 +448,7 @@ class BetsCog(commands.Cog):
             description="```\n" + "\n".join(lines) + "\n```",
             color=0x5865F2,
         )
-        embed.set_footer(text=f"{len(bets)} bet{'s' if len(bets) != 1 else ''} pending")
+        embed.set_footer(text=f"{len(bets)} bet{'s' if len(bets) != 1 else ''} pending · CLV = placed vs current")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     # ── /clv-summary ──────────────────────────────────────────────────────────

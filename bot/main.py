@@ -19,11 +19,13 @@ COGS = [
     "bot.cogs.injuries",
     "bot.cogs.history",
     "bot.cogs.rosters",
+    "bot.cogs.prefix",
 ]
 
 GUILD_ID = int(os.environ["DISCORD_GUILD_ID"])
 
 intents = discord.Intents.default()
+intents.message_content = True  # required for prefix commands (privileged intent)
 
 
 class SharpBot(commands.Bot):

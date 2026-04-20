@@ -11,9 +11,9 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 from db import queries
-from shared.models import TEAM_ABBR
+from shared.models import get_team_abbr
 from shared.odds_utils import prob_to_american
-from .odds import game_autocomplete
+from .odds import KALSHI_SERIES, game_autocomplete, mlb_game_autocomplete
 
 load_dotenv()
 
@@ -54,10 +54,7 @@ class MarketsCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
-    @app_commands.command(name="kalshi", description="Kalshi market depth for a game — bid/ask/mid + volume")
-    @app_commands.describe(game="Select a game")
-    @app_commands.autocomplete(game=game_autocomplete)
-    async def kalshi(self, interaction: discord.Interaction, game: str) -> None:
+    async def _kalshi_impl(self, interaction: discord.Interaction, game: str, sport: str) -> None:
         await interaction.response.defer()
 
         target = await queries.get_game_by_id(game)
@@ -69,8 +66,8 @@ class MarketsCog(commands.Cog):
             await interaction.followup.send("Kalshi API key not configured.")
             return
 
-        h_abbr = TEAM_ABBR.get(target.home_team)
-        a_abbr = TEAM_ABBR.get(target.away_team)
+        h_abbr = get_team_abbr(target.home_team, sport)
+        a_abbr = get_team_abbr(target.away_team, sport)
         if not h_abbr or not a_abbr:
             await interaction.followup.send(
                 f"No Kalshi abbreviation for `{target.home_team}` or `{target.away_team}`."
@@ -82,7 +79,7 @@ class MarketsCog(commands.Cog):
                 resp = await client.get(
                     f"{KALSHI_BASE}/markets",
                     headers={"Authorization": f"Bearer {KALSHI_API_KEY}"},
-                    params={"limit": 200, "status": "open", "series_ticker": "KXNBAGAME"},
+                    params={"limit": 200, "status": "open", "series_ticker": KALSHI_SERIES.get(sport, "KXNBAGAME")},
                     timeout=10.0,
                 )
         except Exception as e:
@@ -150,6 +147,18 @@ class MarketsCog(commands.Cog):
             color=0x5865F2,
         )
         await interaction.followup.send(embed=embed)
+
+    @app_commands.command(name="kalshi", description="Kalshi market depth for an NBA game")
+    @app_commands.describe(game="Select a game")
+    @app_commands.autocomplete(game=game_autocomplete)
+    async def kalshi(self, interaction: discord.Interaction, game: str) -> None:
+        await self._kalshi_impl(interaction, game, "nba")
+
+    @app_commands.command(name="mlb-kalshi", description="Kalshi market depth for an MLB game")
+    @app_commands.describe(game="Select a game")
+    @app_commands.autocomplete(game=mlb_game_autocomplete)
+    async def mlb_kalshi(self, interaction: discord.Interaction, game: str) -> None:
+        await self._kalshi_impl(interaction, game, "mlb")
 
 
 async def setup(bot: commands.Bot) -> None:

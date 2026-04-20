@@ -42,16 +42,16 @@ worker:
     uv run python -m temporal.worker
 
 # Kick off the odds polling workflow (one-shot — Temporal keeps it running)
-poll:
-    uv run python -m temporal.start_odds_polling
+poll sport="nba":
+    uv run python -m temporal.start_odds_polling {{sport}}
 
 # Kick off the injury polling workflow (one-shot — Temporal keeps it running)
 injuries:
     uv run python -m temporal.start_injury_polling
 
 # Kick off the bet resolution workflow (one-shot — Temporal keeps it running)
-resolve:
-    uv run python -m temporal.start_bet_resolution
+resolve sport="nba":
+    uv run python -m temporal.start_bet_resolution {{sport}}
 
 # Start the Discord bot
 bot:
