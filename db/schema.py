@@ -73,7 +73,8 @@ CREATE TABLE IF NOT EXISTS paper_bets (
     potential_payout INTEGER NOT NULL,
     status          TEXT NOT NULL DEFAULT 'open',
     resolved_at     TEXT,
-    payout          INTEGER DEFAULT 0
+    payout          INTEGER DEFAULT 0,
+    clv             REAL
 );
 """
 
@@ -100,3 +101,9 @@ async def init_db() -> None:
                 await db.commit()
             except Exception:
                 pass  # column already exists
+        # Migration: add clv column to paper_bets
+        try:
+            await db.execute("ALTER TABLE paper_bets ADD COLUMN clv REAL")
+            await db.commit()
+        except Exception:
+            pass  # column already exists

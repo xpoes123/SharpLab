@@ -10,7 +10,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from db import queries
-from shared.odds_utils import american_to_decimal, american_to_prob, fmt_prob
+from shared.odds_utils import american_to_decimal, american_to_prob, compute_clv, fmt_prob, side_is_home
 from .odds import game_autocomplete, mlb_game_autocomplete
 
 log = logging.getLogger(__name__)
@@ -271,6 +271,65 @@ def _resolve_paper_bet(
     return "void"
 
 
+def _close_odds_for_paper_bet(pb: dict, home_team: str, away_team: str, payload: dict) -> int | None:
+    """Extract close odds for a paper bet from a close snapshot payload."""
+    market = pb["market"].lower()
+    side = pb["side"].lower()
+    home = home_team.lower()
+    away = away_team.lower()
+
+    if market == "moneyline":
+        if side in home or home.split()[-1] in side:
+            return payload.get("ml_home")
+        if side in away or away.split()[-1] in side:
+            return payload.get("ml_away")
+    elif market == "spread":
+        return payload.get("spread_odds")
+    elif market == "total":
+        if side == "over":
+            return payload.get("total_over_odds")
+        if side == "under":
+            return payload.get("total_under_odds")
+    return None
+
+
+async def _compute_paper_clv(pb: dict, game) -> float | None:
+    """Compute CLV for a paper bet using close snapshots.
+
+    Source: Kalshi for ML (no vig), DraftKings for spread/total.
+    """
+    market = pb["market"].lower()
+    if market == "moneyline":
+        close_snap = await queries.get_close_snapshot(pb["game_id"], "kalshi")
+        if close_snap is None:
+            close_snap = await queries.get_close_snapshot(pb["game_id"], "draftkings")
+    else:
+        close_snap = await queries.get_close_snapshot(pb["game_id"], "draftkings")
+        if close_snap is None:
+            close_snap = await queries.get_close_snapshot(pb["game_id"], "fanduel")
+
+    if close_snap is None:
+        return None
+
+    payload = close_snap.payload if isinstance(close_snap.payload, dict) else json.loads(close_snap.payload)
+    close_odds = _close_odds_for_paper_bet(pb, game.home_team, game.away_team, payload)
+    if close_odds is None:
+        return None
+
+    # Build compute_clv kwargs
+    kwargs: dict = {"market": market}
+    if market == "spread":
+        kwargs["bet_line"] = pb["line"]
+        kwargs["close_line"] = payload.get("spread")
+        kwargs["is_home"] = side_is_home(pb["side"], game.home_team, game.away_team)
+    elif market == "total":
+        kwargs["bet_line"] = pb["line"]
+        kwargs["close_line"] = payload.get("total")
+        kwargs["is_over"] = pb["side"].lower() == "over"
+
+    return compute_clv(pb["odds"], close_odds, **kwargs)
+
+
 # ── Cog ───────────────────────────────────────────────────────────────────────
 
 
@@ -310,13 +369,17 @@ class TradingCog(commands.Cog):
                 else:
                     payout = 0
 
-                await queries.resolve_paper_bet(pb["paper_bet_id"], outcome, payout)
+                # Compute CLV against closing odds
+                clv = await _compute_paper_clv(pb, game)
+
+                await queries.resolve_paper_bet(pb["paper_bet_id"], outcome, payout, clv)
                 if payout > 0:
                     await queries.update_balance(pb["discord_user"], payout)
 
                 log.info(
-                    "[paper_resolution] bet #%d → %s, payout=%d (%s @ %s %d-%d)",
+                    "[paper_resolution] bet #%d → %s, payout=%d, clv=%s (%s @ %s %d-%d)",
                     pb["paper_bet_id"], outcome, payout,
+                    f"{clv:+.1f}pp" if clv is not None else "n/a",
                     game.away_team, game.home_team, away_score, home_score,
                 )
 
@@ -569,6 +632,16 @@ class TradingCog(commands.Cog):
         embed.add_field(name="Balance", value=f"`{balance}` coins", inline=True)
         embed.add_field(name="Total Wagered", value=f"`{stats['total_wagered']}` coins", inline=True)
 
+        # CLV
+        if stats.get("avg_clv") is not None and stats.get("clv_count", 0) > 0:
+            avg_clv = stats["avg_clv"]
+            clv_emoji = "\u2705" if avg_clv > 0.5 else ("\u274c" if avg_clv < -0.5 else "\u2796")
+            embed.add_field(
+                name="Avg CLV",
+                value=f"`{avg_clv:+.1f} pp` {clv_emoji} ({stats['clv_count']} trades)",
+                inline=True,
+            )
+
         # Streak
         if streak_count > 1:
             streak_emoji = "\U0001f525" if streak_status == "won" else "\U0001f4a9"
@@ -610,9 +683,10 @@ class TradingCog(commands.Cog):
                 if pb["line"] is not None and pb["market"] in ("spread", "total"):
                     market_str += f" {pb['line']:+.1f}"
                 pnl = pb["payout"] - pb["wager"]
+                clv_bit = f" ({pb['clv']:+.1f}pp)" if pb.get("clv") is not None else ""
                 recent_lines.append(
                     f"{status_icon} {game_str} {market_str} {pb['side']} — "
-                    f"`{pnl:+d}`c"
+                    f"`{pnl:+d}`c{clv_bit}"
                 )
             embed.add_field(
                 name="Recent Trades",
@@ -652,10 +726,11 @@ class TradingCog(commands.Cog):
             nw = row["num_won"] or 0
             nl = row["num_lost"] or 0
             wr = (nw / (nw + nl) * 100) if (nw + nl) > 0 else 0
+            clv_str = f" | CLV `{row['avg_clv']:+.1f}pp`" if row.get("avg_clv") is not None else ""
             lines.append(
                 f"{medal} **{name}** — `{profit:+.0f}` coins "
                 f"| {nw}W-{nl}L ({wr:.0f}%) | "
-                f"{roi:+.1f}% ROI"
+                f"{roi:+.1f}% ROI{clv_str}"
             )
 
         embed.description = "\n".join(lines)

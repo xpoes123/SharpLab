@@ -929,17 +929,19 @@ async def get_games_with_open_paper_bets() -> list[str]:
     return [r[0] for r in rows]
 
 
-async def resolve_paper_bet(paper_bet_id: int, status: str, payout: int) -> None:
-    """Mark a paper bet as resolved with final status and payout amount."""
+async def resolve_paper_bet(
+    paper_bet_id: int, status: str, payout: int, clv: float | None = None,
+) -> None:
+    """Mark a paper bet as resolved with final status, payout, and optional CLV."""
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """
             UPDATE paper_bets
-            SET status = ?, payout = ?, resolved_at = ?
+            SET status = ?, payout = ?, resolved_at = ?, clv = ?
             WHERE paper_bet_id = ?
             """,
-            (status, payout, now, paper_bet_id),
+            (status, payout, now, clv, paper_bet_id),
         )
         await db.commit()
 
@@ -957,7 +959,9 @@ async def get_paper_bet_stats(discord_user: str) -> dict:
                 SUM(CASE WHEN status = 'won' THEN 1 ELSE 0 END) AS num_won,
                 SUM(CASE WHEN status = 'lost' THEN 1 ELSE 0 END) AS num_lost,
                 SUM(CASE WHEN status = 'push' THEN 1 ELSE 0 END) AS num_push,
-                COUNT(*) AS num_bets
+                COUNT(*) AS num_bets,
+                AVG(clv) AS avg_clv,
+                SUM(CASE WHEN clv IS NOT NULL THEN 1 ELSE 0 END) AS clv_count
             FROM paper_bets
             WHERE discord_user = ? AND status IN ('won', 'lost', 'push')
             """,
@@ -967,6 +971,7 @@ async def get_paper_bet_stats(discord_user: str) -> dict:
     return dict(row) if row else {
         "total_wagered": 0, "total_payout": 0, "net_profit": 0,
         "num_won": 0, "num_lost": 0, "num_push": 0, "num_bets": 0,
+        "avg_clv": None, "clv_count": 0,
     }
 
 
@@ -986,7 +991,8 @@ async def get_paper_leaderboard(limit: int = 10) -> list[dict]:
                 CASE WHEN SUM(wager) > 0
                     THEN (SUM(payout) - SUM(wager)) * 100.0 / SUM(wager)
                     ELSE 0
-                END AS roi
+                END AS roi,
+                AVG(clv) AS avg_clv
             FROM paper_bets
             WHERE status IN ('won', 'lost', 'push')
             GROUP BY discord_user
