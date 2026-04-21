@@ -107,3 +107,9 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass  # column already exists
+        # Migration: add notify_on_ready column for coin ping notifications
+        try:
+            await db.execute("ALTER TABLE wallets ADD COLUMN notify_on_ready INTEGER DEFAULT 0")
+            await db.commit()
+        except Exception:
+            pass  # column already exists

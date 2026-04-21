@@ -752,7 +752,7 @@ async def get_or_create_wallet(discord_user: str) -> tuple[int, bool]:
 
         if row is None:
             await db.execute(
-                "INSERT INTO wallets (discord_user, balance, last_daily) VALUES (?, ?, ?)",
+                "INSERT INTO wallets (discord_user, balance, last_daily, notify_on_ready) VALUES (?, ?, ?, 1)",
                 (discord_user, DAILY_AMOUNT, now_iso),
             )
             await db.commit()
@@ -771,7 +771,7 @@ async def get_or_create_wallet(discord_user: str) -> tuple[int, bool]:
         if eligible:
             balance += DAILY_AMOUNT
             await db.execute(
-                "UPDATE wallets SET balance = ?, last_daily = ? WHERE discord_user = ?",
+                "UPDATE wallets SET balance = ?, last_daily = ?, notify_on_ready = 1 WHERE discord_user = ?",
                 (balance, now_iso, discord_user),
             )
             await db.commit()
@@ -1039,6 +1039,33 @@ async def get_paper_stats_by_market(discord_user: str) -> list[dict]:
         )
         rows = await cursor.fetchall()
     return [dict(r) for r in rows]
+
+
+async def get_users_ready_for_coin_ping() -> list[str]:
+    """Return discord_user IDs where 8h have passed since last_daily and notify_on_ready=1."""
+    now = datetime.now(timezone.utc)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT discord_user, last_daily FROM wallets WHERE notify_on_ready = 1 AND last_daily IS NOT NULL"
+        )
+        rows = await cursor.fetchall()
+    ready = []
+    for row in rows:
+        last_dt = datetime.fromisoformat(row["last_daily"])
+        if (now - last_dt).total_seconds() >= _DAILY_SECONDS:
+            ready.append(row["discord_user"])
+    return ready
+
+
+async def clear_coin_ping(discord_user: str) -> None:
+    """Mark user as notified so they don't get pinged again until next claim."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE wallets SET notify_on_ready = 0 WHERE discord_user = ?",
+            (discord_user,),
+        )
+        await db.commit()
 
 
 async def get_recent_paper_bets(discord_user: str, limit: int = 10) -> list[dict]:
