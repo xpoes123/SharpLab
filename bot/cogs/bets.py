@@ -471,12 +471,23 @@ class BetsCog(commands.Cog):
             )
             return
 
+        # Only bets with CLV populated (CLV is filled by the close-capture flow,
+        # which may lag behind bet resolution).
+        clv_bets = [b for b in bets if b.clv is not None]
+
+        if not clv_bets:
+            await interaction.followup.send(
+                f"**{target_user.display_name}** has {len(bets)} graded bet{'s' if len(bets) != 1 else ''} "
+                "but CLV hasn't been captured yet — check back after the games close."
+            )
+            return
+
         # EV gained = units × (clv_pp / 100)
         def _ev(b: Bet) -> float:
             return b.units * (b.clv / 100)  # type: ignore[operator]
 
-        total_ev = sum(_ev(b) for b in bets)
-        avg_clv = sum(b.clv for b in bets) / len(bets)  # type: ignore[arg-type]
+        total_ev = sum(_ev(b) for b in clv_bets)
+        avg_clv = sum(b.clv for b in clv_bets) / len(clv_bets)  # type: ignore[arg-type]
 
         # Breakdown helpers
         def _breakdown(groups: dict[str, list[Bet]]) -> str:
@@ -490,7 +501,7 @@ class BetsCog(commands.Cog):
 
         by_market: dict[str, list[Bet]] = {}
         by_book: dict[str, list[Bet]] = {}
-        for b in bets:
+        for b in clv_bets:
             by_market.setdefault(b.market, []).append(b)
             by_book.setdefault(b.book, []).append(b)
 
@@ -499,7 +510,9 @@ class BetsCog(commands.Cog):
             title=f"CLV Summary — {target_user.display_name}",
             color=color,
         )
-        embed.add_field(name="Bets graded", value=f"`{len(bets)}`", inline=True)
+        pending = len(bets) - len(clv_bets)
+        graded_value = f"`{len(clv_bets)}`" if not pending else f"`{len(clv_bets)}` (+{pending} pending CLV)"
+        embed.add_field(name="Bets graded", value=graded_value, inline=True)
         embed.add_field(name="Avg CLV", value=f"`{avg_clv:+.2f}pp`", inline=True)
         embed.add_field(name="Total EV gained", value=f"`{total_ev:+.3f}u`", inline=True)
         embed.add_field(
