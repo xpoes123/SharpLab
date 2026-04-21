@@ -282,7 +282,7 @@ class CasinoCog(commands.Cog):
         if bet > balance:
             msg = f"You only have **{balance}** coins."
             if daily_credited:
-                msg = f"Daily **100 coins** credited! {msg}"
+                msg = f"**100 coins** credited (every 8h)! {msg}"
             await interaction.response.send_message(msg, ephemeral=True)
             return
 
@@ -326,7 +326,7 @@ class CasinoCog(commands.Cog):
         # Normal play
         daily_note = ""
         if daily_credited:
-            daily_note = "Daily **100 coins** credited! "
+            daily_note = "**100 coins** credited (every 8h)! "
 
         view = BlackjackView(game, self.active_games)
         embed = _game_embed(game)
@@ -348,7 +348,7 @@ class CasinoCog(commands.Cog):
             balance, daily_credited = await queries.get_or_create_wallet(str(target.id))
             msg = f"**{target.display_name}** has **{balance}** coins."
             if daily_credited:
-                msg = f"Daily **100 coins** credited! {msg}"
+                msg = f"**100 coins** credited (every 8h)! {msg}"
         else:
             bal = await queries.get_balance(str(target.id))
             if bal is None:

@@ -732,13 +732,13 @@ async def get_all_games_filtered(filter_str: str = "", limit: int = 25, sport: s
 # ── Wallets ────────────────────────────────────────────────────────────────────
 
 DAILY_AMOUNT = 100
-_DAILY_SECONDS = 86400  # 24 hours
+_DAILY_SECONDS = 28800  # 8 hours
 
 
 async def get_or_create_wallet(discord_user: str) -> tuple[int, bool]:
     """
     Return (balance, daily_credited).
-    Creates wallet with daily coins if new; credits daily if >24h since last.
+    Creates wallet with bonus coins if new; credits 100 coins if >8h since last.
     """
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
