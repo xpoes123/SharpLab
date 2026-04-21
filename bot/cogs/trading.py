@@ -1,0 +1,583 @@
+"""Paper trading cog — wager coins on real games at real odds."""
+from __future__ import annotations
+
+import json
+import logging
+from datetime import datetime, timezone
+
+import discord
+from discord import app_commands
+from discord.ext import commands, tasks
+
+from db import queries
+from shared.odds_utils import american_to_decimal, fmt_prob
+from .odds import game_autocomplete, mlb_game_autocomplete
+
+log = logging.getLogger(__name__)
+
+# ── Config ────────────────────────────────────────────────────────────────────
+
+MAX_BET = 500
+MIN_BET = 1
+
+MARKET_CHOICES = [
+    app_commands.Choice(name="Spread", value="spread"),
+    app_commands.Choice(name="Moneyline", value="moneyline"),
+    app_commands.Choice(name="Total", value="total"),
+]
+
+EMBED_COLOR = 0xF5A623  # gold/orange — visually distinct from /log green
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _parse_pick(pick: str) -> tuple[str, float | None]:
+    """Parse autocomplete value 'side:line' or bare 'side' into (side, line | None)."""
+    if ":" in pick:
+        side, _, line_str = pick.partition(":")
+        try:
+            return side.strip(), float(line_str)
+        except ValueError:
+            return side.strip(), None
+    return pick.strip(), None
+
+
+def _fmt_gametime(iso: str) -> str:
+    dt = datetime.fromisoformat(iso)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    h = dt.hour % 12 or 12
+    ampm = "AM" if dt.hour < 12 else "PM"
+    return f"{dt.strftime('%a %b')} {dt.day}, {h}:{dt.strftime('%M')} {ampm} UTC"
+
+
+def _compute_payout(wager: int, odds: int) -> int:
+    """Total return on a winning bet (wager + profit)."""
+    return round(american_to_decimal(odds) * wager)
+
+
+def _pick_odds_from_snapshots(
+    snapshots: list, market: str, side: str, home_team: str, away_team: str,
+) -> int | None:
+    """Extract the relevant American odds from the latest poll snapshots.
+
+    Priority: Kalshi for ML (no vig), DraftKings for spread/total.
+    """
+    snap_by_source: dict[str, object] = {}
+    for s in snapshots:
+        snap_by_source[s.source] = s
+
+    if market == "moneyline":
+        snap = snap_by_source.get("kalshi") or snap_by_source.get("draftkings")
+    else:
+        snap = snap_by_source.get("draftkings") or snap_by_source.get("fanduel")
+
+    if snap is None:
+        return None
+
+    payload = snap.payload if isinstance(snap.payload, dict) else json.loads(snap.payload)
+    side_l = side.lower()
+    home_l = home_team.lower()
+    away_l = away_team.lower()
+
+    if market == "moneyline":
+        if side_l in home_l or home_l.split()[-1] in side_l:
+            return payload.get("ml_home")
+        if side_l in away_l or away_l.split()[-1] in side_l:
+            return payload.get("ml_away")
+
+    elif market == "spread":
+        return payload.get("spread_odds")
+
+    elif market == "total":
+        if side_l == "over":
+            return payload.get("total_over_odds")
+        if side_l == "under":
+            return payload.get("total_under_odds")
+
+    return None
+
+
+# ── Pick autocomplete (reuses same pattern as bets.py) ───────────────────────
+
+
+async def trade_pick_autocomplete(
+    interaction: discord.Interaction, _current: str,
+) -> list[app_commands.Choice[str]]:
+    """Context-aware pick options for paper trades."""
+    game_id = getattr(interaction.namespace, "game", None)
+    market = getattr(interaction.namespace, "market", None)
+    if not game_id or not market:
+        return []
+
+    game = await queries.get_game_by_id(game_id)
+    if game is None:
+        return []
+
+    if market == "moneyline":
+        return [
+            app_commands.Choice(name=f"{game.away_team} (Away)", value=game.away_team),
+            app_commands.Choice(name=f"{game.home_team} (Home)", value=game.home_team),
+        ]
+
+    # spread or total — pull latest lines from DB (prefer DraftKings)
+    snaps = await queries.get_latest_snapshots_for_game(game_id)
+    payload: dict = {}
+    for snap in snaps:
+        if snap.source == "draftkings":
+            try:
+                payload = json.loads(snap.payload) if isinstance(snap.payload, str) else snap.payload
+                break
+            except Exception:
+                pass
+    if not payload and snaps:
+        try:
+            payload = json.loads(snaps[0].payload) if isinstance(snaps[0].payload, str) else snaps[0].payload
+        except Exception:
+            pass
+
+    if market == "spread":
+        spread = payload.get("spread")
+        spread_odds = payload.get("spread_odds")
+        if spread is not None:
+            away_spread = -spread
+            home_label = f"{game.home_team} {spread:+.1f}"
+            if spread_odds is not None:
+                home_label += f" ({fmt_prob(spread_odds)})"
+            away_label = f"{game.away_team} {away_spread:+.1f}"
+            return [
+                app_commands.Choice(name=home_label, value=f"{game.home_team}:{spread}"),
+                app_commands.Choice(name=away_label, value=f"{game.away_team}:{away_spread}"),
+            ]
+        return [
+            app_commands.Choice(name=f"{game.home_team} (Home)", value=game.home_team),
+            app_commands.Choice(name=f"{game.away_team} (Away)", value=game.away_team),
+        ]
+
+    if market == "total":
+        total = payload.get("total")
+        over_odds = payload.get("total_over_odds")
+        under_odds = payload.get("total_under_odds")
+        if total is not None:
+            over_label = f"Over {total}"
+            if over_odds is not None:
+                over_label += f" ({fmt_prob(over_odds)})"
+            under_label = f"Under {total}"
+            if under_odds is not None:
+                under_label += f" ({fmt_prob(under_odds)})"
+            return [
+                app_commands.Choice(name=over_label, value=f"over:{total}"),
+                app_commands.Choice(name=under_label, value=f"under:{total}"),
+            ]
+        return [
+            app_commands.Choice(name="Over", value="over"),
+            app_commands.Choice(name="Under", value="under"),
+        ]
+
+    return []
+
+
+# ── Void-trade autocomplete ──────────────────────────────────────────────────
+
+
+async def void_trade_autocomplete(
+    interaction: discord.Interaction, _current: str,
+) -> list[app_commands.Choice[str]]:
+    """Show the user's open paper bets."""
+    bets = await queries.get_open_paper_bets_for_user(str(interaction.user.id))
+    choices = []
+    for pb in bets[:25]:
+        game = await queries.get_game_by_id(pb["game_id"])
+        if game:
+            game_str = f"{game.away_team.split()[-1]}@{game.home_team.split()[-1]}"
+        else:
+            game_str = pb["game_id"][:8]
+        market_str = pb["market"]
+        if pb["line"] is not None and pb["market"] in ("spread", "total"):
+            market_str += f" {pb['line']:+.1f}"
+        label = f"#{pb['paper_bet_id']} — {game_str} {market_str} {pb['side']} ({pb['wager']}c)"
+        choices.append(app_commands.Choice(name=label[:100], value=str(pb["paper_bet_id"])))
+    return choices
+
+
+# ── Resolution logic ─────────────────────────────────────────────────────────
+
+
+def _resolve_paper_bet(
+    pb: dict, home_team: str, away_team: str, home_score: int, away_score: int,
+) -> str:
+    """Return won/lost/push/void for a paper bet given the final score.
+
+    Same logic as temporal.activities._resolve_bet, adapted for dict input.
+    """
+    side = pb["side"].lower()
+    market = pb["market"].lower()
+    home_l = home_team.lower()
+    away_l = away_team.lower()
+
+    def _is_home(s: str) -> bool:
+        return s in home_l or home_l.split()[-1] in s
+
+    def _is_away(s: str) -> bool:
+        return s in away_l or away_l.split()[-1] in s
+
+    if market == "moneyline":
+        if _is_home(side):
+            return "won" if home_score > away_score else "lost"
+        if _is_away(side):
+            return "won" if away_score > home_score else "lost"
+
+    elif market == "spread":
+        if pb["line"] is None:
+            return "void"
+        if _is_home(side):
+            side_score, opp_score = home_score, away_score
+        elif _is_away(side):
+            side_score, opp_score = away_score, home_score
+        else:
+            return "void"
+        margin = (side_score - opp_score) + pb["line"]
+        if abs(margin) < 0.01:
+            return "push"
+        return "won" if margin > 0 else "lost"
+
+    elif market == "total":
+        if pb["line"] is None:
+            return "void"
+        total = home_score + away_score
+        diff = total - pb["line"]
+        if abs(diff) < 0.01:
+            return "push"
+        if side == "over":
+            return "won" if diff > 0 else "lost"
+        if side == "under":
+            return "won" if diff < 0 else "lost"
+
+    return "void"
+
+
+# ── Cog ───────────────────────────────────────────────────────────────────────
+
+
+class TradingCog(commands.Cog):
+    def __init__(self, bot: commands.Bot) -> None:
+        self.bot = bot
+        self.paper_resolution.start()
+
+    def cog_unload(self) -> None:
+        self.paper_resolution.cancel()
+
+    # ── Resolution loop ───────────────────────────────────────────────────
+
+    @tasks.loop(minutes=5)
+    async def paper_resolution(self) -> None:
+        """Check for final games and auto-resolve paper bets."""
+        game_ids = await queries.get_games_with_open_paper_bets()
+        for game_id in game_ids:
+            scores = await queries.get_game_scores(game_id)
+            if scores is None:
+                continue
+            home_score, away_score = scores
+
+            game = await queries.get_game_by_id(game_id)
+            if game is None:
+                continue
+
+            paper_bets = await queries.get_open_paper_bets_for_game(game_id)
+            for pb in paper_bets:
+                outcome = _resolve_paper_bet(
+                    pb, game.home_team, game.away_team, home_score, away_score,
+                )
+                if outcome == "won":
+                    payout = pb["potential_payout"]
+                elif outcome == "push":
+                    payout = pb["wager"]
+                else:
+                    payout = 0
+
+                await queries.resolve_paper_bet(pb["paper_bet_id"], outcome, payout)
+                if payout > 0:
+                    await queries.update_balance(pb["discord_user"], payout)
+
+                log.info(
+                    "[paper_resolution] bet #%d → %s, payout=%d (%s @ %s %d-%d)",
+                    pb["paper_bet_id"], outcome, payout,
+                    game.away_team, game.home_team, away_score, home_score,
+                )
+
+    @paper_resolution.before_loop
+    async def _wait_ready(self) -> None:
+        await self.bot.wait_until_ready()
+
+    # ── /trade ────────────────────────────────────────────────────────────
+
+    async def _trade_impl(
+        self,
+        interaction: discord.Interaction,
+        game: str,
+        market: str,
+        pick: str,
+        wager: int,
+    ) -> None:
+        await interaction.response.defer()
+
+        # Validate wager
+        if wager < MIN_BET or wager > MAX_BET:
+            await interaction.followup.send(
+                f"Wager must be between {MIN_BET} and {MAX_BET} coins.",
+                ephemeral=True,
+            )
+            return
+
+        # Look up game
+        target = await queries.get_game_by_id(game)
+        if target is None:
+            await interaction.followup.send(
+                "Game not found. Select a game from the autocomplete dropdown.",
+                ephemeral=True,
+            )
+            return
+
+        # Reject live/final games
+        start = datetime.fromisoformat(target.start_time_utc_iso)
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        if start <= datetime.now(timezone.utc):
+            await interaction.followup.send(
+                "This game has already started. You can only trade on upcoming games.",
+                ephemeral=True,
+            )
+            return
+
+        # Parse pick
+        side, pick_line = _parse_pick(pick)
+
+        if market in ("spread", "total") and pick_line is None:
+            await interaction.followup.send(
+                "Spread and total trades require a line. "
+                "Select from autocomplete (if lines are available).",
+                ephemeral=True,
+            )
+            return
+
+        # Fetch odds from latest snapshots
+        snaps = await queries.get_latest_snapshots_for_game(target.game_id)
+        odds = _pick_odds_from_snapshots(
+            snaps, market, side, target.home_team, target.away_team,
+        )
+        if odds is None:
+            await interaction.followup.send(
+                "No odds available for this market yet. Try again after the pipeline polls.",
+                ephemeral=True,
+            )
+            return
+
+        potential_payout = _compute_payout(wager, odds)
+
+        # Deduct coins
+        user_id = str(interaction.user.id)
+        try:
+            # Ensure wallet exists (auto-credits daily)
+            await queries.get_or_create_wallet(user_id)
+            new_balance = await queries.update_balance(user_id, -wager)
+        except ValueError as e:
+            await interaction.followup.send(str(e), ephemeral=True)
+            return
+
+        # Insert paper bet
+        now_iso = datetime.now(timezone.utc).isoformat()
+        paper_bet_id = await queries.insert_paper_bet(
+            game_id=target.game_id,
+            discord_user=user_id,
+            placed_at=now_iso,
+            market=market,
+            side=side,
+            line=pick_line,
+            odds=odds,
+            wager=wager,
+            potential_payout=potential_payout,
+        )
+
+        # Confirmation embed
+        line_str = f" {pick_line:+.1f}" if pick_line is not None else ""
+        embed = discord.Embed(title="Paper Trade Placed", color=EMBED_COLOR)
+        embed.add_field(
+            name="Game",
+            value=f"{target.away_team} @ {target.home_team}\n{_fmt_gametime(target.start_time_utc_iso)}",
+            inline=False,
+        )
+        embed.add_field(name="Market", value=f"{market}{line_str}", inline=True)
+        embed.add_field(name="Pick", value=side, inline=True)
+        embed.add_field(name="Odds", value=f"`{fmt_prob(odds)}`", inline=True)
+        embed.add_field(name="Wager", value=f"`{wager}` coins", inline=True)
+        embed.add_field(name="To Win", value=f"`{potential_payout - wager}` coins", inline=True)
+        embed.add_field(name="Balance", value=f"`{new_balance}` coins", inline=True)
+        embed.set_footer(text=f"Trade #{paper_bet_id}")
+        await interaction.followup.send(embed=embed)
+
+    _TRADE_DESCRIBE = dict(
+        game="Select a game",
+        market="Market type",
+        pick="Your pick — autocomplete shows live lines",
+        wager=f"Coins to risk ({MIN_BET}–{MAX_BET})",
+    )
+
+    @app_commands.command(name="trade", description="Paper trade on an NBA game with coins")
+    @app_commands.autocomplete(game=game_autocomplete, pick=trade_pick_autocomplete)
+    @app_commands.describe(**_TRADE_DESCRIBE)
+    @app_commands.choices(market=MARKET_CHOICES)
+    async def trade(
+        self, interaction: discord.Interaction,
+        game: str, market: str, pick: str, wager: int,
+    ) -> None:
+        await self._trade_impl(interaction, game, market, pick, wager)
+
+    @app_commands.command(name="mlb-trade", description="Paper trade on an MLB game with coins")
+    @app_commands.autocomplete(game=mlb_game_autocomplete, pick=trade_pick_autocomplete)
+    @app_commands.describe(**_TRADE_DESCRIBE)
+    @app_commands.choices(market=MARKET_CHOICES)
+    async def mlb_trade(
+        self, interaction: discord.Interaction,
+        game: str, market: str, pick: str, wager: int,
+    ) -> None:
+        await self._trade_impl(interaction, game, market, pick, wager)
+
+    # ── /portfolio ────────────────────────────────────────────────────────
+
+    @app_commands.command(name="portfolio", description="View your open paper trades")
+    @app_commands.describe(user="Check another user's portfolio")
+    async def portfolio(
+        self, interaction: discord.Interaction,
+        user: discord.Member | None = None,
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
+        target = user or interaction.user
+        user_id = str(target.id)
+
+        open_bets = await queries.get_open_paper_bets_for_user(user_id)
+        stats = await queries.get_paper_bet_stats(user_id)
+        balance_val = await queries.get_balance(user_id)
+        balance = balance_val if balance_val is not None else 0
+
+        embed = discord.Embed(
+            title=f"{target.display_name}'s Portfolio",
+            color=EMBED_COLOR,
+        )
+
+        if not open_bets:
+            embed.description = "No open paper trades."
+        else:
+            lines = []
+            total_risk = 0
+            for pb in open_bets:
+                game = await queries.get_game_by_id(pb["game_id"])
+                if game:
+                    game_str = f"{game.away_team.split()[-1]}@{game.home_team.split()[-1]}"
+                else:
+                    game_str = pb["game_id"][:8]
+                market_str = pb["market"]
+                if pb["line"] is not None and pb["market"] in ("spread", "total"):
+                    market_str += f" {pb['line']:+.1f}"
+                lines.append(
+                    f"`#{pb['paper_bet_id']}` {game_str} — "
+                    f"{market_str} **{pb['side']}** "
+                    f"`{fmt_prob(pb['odds'])}` | "
+                    f"{pb['wager']}c \u2192 {pb['potential_payout']}c"
+                )
+                total_risk += pb["wager"]
+            embed.description = "\n".join(lines)
+            embed.add_field(name="At Risk", value=f"`{total_risk}` coins", inline=True)
+
+        embed.add_field(name="Balance", value=f"`{balance}` coins", inline=True)
+
+        if stats["num_bets"] > 0:
+            roi = (stats["net_profit"] / stats["total_wagered"] * 100) if stats["total_wagered"] else 0
+            embed.add_field(
+                name="Resolved",
+                value=(
+                    f"{stats['num_won']}W-{stats['num_lost']}L-{stats['num_push']}P | "
+                    f"Net: `{stats['net_profit']:+d}` coins | "
+                    f"ROI: `{roi:+.1f}%`"
+                ),
+                inline=False,
+            )
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    # ── /leaderboard ──────────────────────────────────────────────────────
+
+    @app_commands.command(name="leaderboard", description="Paper trading leaderboard")
+    async def leaderboard(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+
+        rows = await queries.get_paper_leaderboard(limit=10)
+        if not rows:
+            await interaction.followup.send("No resolved paper trades yet.")
+            return
+
+        embed = discord.Embed(title="Paper Trading Leaderboard", color=EMBED_COLOR)
+        lines = []
+        for i, row in enumerate(rows, 1):
+            try:
+                member = await self.bot.fetch_user(int(row["discord_user"]))
+                name = member.display_name
+            except Exception:
+                name = f"User {row['discord_user'][:8]}"
+
+            medal = {1: "\U0001f947", 2: "\U0001f948", 3: "\U0001f949"}.get(i, f"**{i}.**")
+            profit = row["net_profit"]
+            roi = row["roi"]
+            lines.append(
+                f"{medal} **{name}** — `{profit:+.0f}` coins "
+                f"({roi:+.1f}% ROI, {row['num_bets']} trades)"
+            )
+
+        embed.description = "\n".join(lines)
+        await interaction.followup.send(embed=embed)
+
+    # ── /void-trade ───────────────────────────────────────────────────────
+
+    @app_commands.command(name="void-trade", description="Cancel an open paper trade and get your coins back")
+    @app_commands.describe(trade_id="Select a trade to void")
+    @app_commands.autocomplete(trade_id=void_trade_autocomplete)
+    async def void_trade(self, interaction: discord.Interaction, trade_id: str) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            bet_id = int(trade_id.lstrip("#"))
+        except ValueError:
+            await interaction.followup.send("Invalid trade ID.", ephemeral=True)
+            return
+
+        pb = await queries.get_paper_bet_by_id(bet_id)
+        if pb is None:
+            await interaction.followup.send("Trade not found.", ephemeral=True)
+            return
+
+        if pb["discord_user"] != str(interaction.user.id):
+            await interaction.followup.send("You can only void your own trades.", ephemeral=True)
+            return
+
+        if pb["status"] != "open":
+            await interaction.followup.send(
+                f"This trade is already **{pb['status']}** and can't be voided.",
+                ephemeral=True,
+            )
+            return
+
+        # Refund coins
+        await queries.void_paper_bet(bet_id)
+        new_balance = await queries.update_balance(pb["discord_user"], pb["wager"])
+
+        embed = discord.Embed(title="Trade Voided", color=0xED4245)
+        embed.description = (
+            f"Trade **#{bet_id}** voided. "
+            f"Refunded **{pb['wager']}** coins.\n"
+            f"New balance: **{new_balance}** coins."
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+async def setup(bot: commands.Bot) -> None:
+    await bot.add_cog(TradingCog(bot))

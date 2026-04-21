@@ -59,6 +59,22 @@ CREATE TABLE IF NOT EXISTS wallets (
     balance       INTEGER NOT NULL DEFAULT 0,
     last_daily    TEXT
 );
+
+CREATE TABLE IF NOT EXISTS paper_bets (
+    paper_bet_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id         TEXT NOT NULL REFERENCES games(game_id),
+    discord_user    TEXT NOT NULL,
+    placed_at       TEXT NOT NULL,
+    market          TEXT NOT NULL,
+    side            TEXT NOT NULL,
+    line            REAL,
+    odds            INTEGER NOT NULL,
+    wager           INTEGER NOT NULL,
+    potential_payout INTEGER NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'open',
+    resolved_at     TEXT,
+    payout          INTEGER DEFAULT 0
+);
 """
 
 
@@ -77,3 +93,10 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass  # column already exists
+        # Migration: add score columns for paper trading resolution
+        for col in ("home_score INTEGER", "away_score INTEGER"):
+            try:
+                await db.execute(f"ALTER TABLE games ADD COLUMN {col}")
+                await db.commit()
+            except Exception:
+                pass  # column already exists

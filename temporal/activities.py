@@ -845,6 +845,7 @@ async def resolve_bets_for_game(result: GameResult) -> int:
         )
         resolved += 1
 
+    await queries.update_game_scores(game.game_id, result.home_score, result.away_score)
     await queries.update_game_status(game.game_id, "final")
     activity.logger.info(
         f"[resolve_bets_for_game] {game.away_team} @ {game.home_team}: "

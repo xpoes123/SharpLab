@@ -834,3 +834,191 @@ async def get_todays_game_for_team(team: str) -> Game | None:
     if row is None:
         return None
     return _row_to_game(row)
+
+
+# ── Game scores ───────────────────────────────────────────────────────────────
+
+
+async def update_game_scores(game_id: str, home_score: int, away_score: int) -> None:
+    """Write final scores to the games table."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE games SET home_score = ?, away_score = ? WHERE game_id = ?",
+            (home_score, away_score, game_id),
+        )
+        await db.commit()
+
+
+async def get_game_scores(game_id: str) -> tuple[int, int] | None:
+    """Return (home_score, away_score) if the game is final and scores are stored."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT home_score, away_score FROM games WHERE game_id = ? AND status = 'final'",
+            (game_id,),
+        )
+        row = await cursor.fetchone()
+    if row is None or row["home_score"] is None:
+        return None
+    return (row["home_score"], row["away_score"])
+
+
+# ── Paper bets ────────────────────────────────────────────────────────────────
+
+
+async def insert_paper_bet(
+    game_id: str,
+    discord_user: str,
+    placed_at: str,
+    market: str,
+    side: str,
+    line: float | None,
+    odds: int,
+    wager: int,
+    potential_payout: int,
+) -> int:
+    """Insert a paper bet and return the auto-generated paper_bet_id."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """
+            INSERT INTO paper_bets
+                (game_id, discord_user, placed_at, market, side, line, odds, wager, potential_payout)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (game_id, discord_user, placed_at, market, side, line, odds, wager, potential_payout),
+        )
+        await db.commit()
+        return cursor.lastrowid  # type: ignore[return-value]
+
+
+async def get_open_paper_bets_for_user(discord_user: str) -> list[dict]:
+    """All open paper bets for a user, newest first."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM paper_bets
+            WHERE discord_user = ? AND status = 'open'
+            ORDER BY placed_at DESC
+            """,
+            (discord_user,),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_open_paper_bets_for_game(game_id: str) -> list[dict]:
+    """All open paper bets on a specific game."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM paper_bets WHERE game_id = ? AND status = 'open'",
+            (game_id,),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_games_with_open_paper_bets() -> list[str]:
+    """Distinct game_ids that still have unresolved paper bets."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT DISTINCT game_id FROM paper_bets WHERE status = 'open'"
+        )
+        rows = await cursor.fetchall()
+    return [r[0] for r in rows]
+
+
+async def resolve_paper_bet(paper_bet_id: int, status: str, payout: int) -> None:
+    """Mark a paper bet as resolved with final status and payout amount."""
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            UPDATE paper_bets
+            SET status = ?, payout = ?, resolved_at = ?
+            WHERE paper_bet_id = ?
+            """,
+            (status, payout, now, paper_bet_id),
+        )
+        await db.commit()
+
+
+async def get_paper_bet_stats(discord_user: str) -> dict:
+    """Aggregate stats for a user's resolved paper bets."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT
+                COALESCE(SUM(wager), 0) AS total_wagered,
+                COALESCE(SUM(payout), 0) AS total_payout,
+                COALESCE(SUM(payout) - SUM(wager), 0) AS net_profit,
+                SUM(CASE WHEN status = 'won' THEN 1 ELSE 0 END) AS num_won,
+                SUM(CASE WHEN status = 'lost' THEN 1 ELSE 0 END) AS num_lost,
+                SUM(CASE WHEN status = 'push' THEN 1 ELSE 0 END) AS num_push,
+                COUNT(*) AS num_bets
+            FROM paper_bets
+            WHERE discord_user = ? AND status IN ('won', 'lost', 'push')
+            """,
+            (discord_user,),
+        )
+        row = await cursor.fetchone()
+    return dict(row) if row else {
+        "total_wagered": 0, "total_payout": 0, "net_profit": 0,
+        "num_won": 0, "num_lost": 0, "num_push": 0, "num_bets": 0,
+    }
+
+
+async def get_paper_leaderboard(limit: int = 10) -> list[dict]:
+    """Top users by net profit from resolved paper bets."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT
+                discord_user,
+                SUM(payout) - SUM(wager) AS net_profit,
+                SUM(wager) AS total_wagered,
+                COUNT(*) AS num_bets,
+                CASE WHEN SUM(wager) > 0
+                    THEN (SUM(payout) - SUM(wager)) * 100.0 / SUM(wager)
+                    ELSE 0
+                END AS roi
+            FROM paper_bets
+            WHERE status IN ('won', 'lost', 'push')
+            GROUP BY discord_user
+            ORDER BY net_profit DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_paper_bet_by_id(paper_bet_id: int) -> dict | None:
+    """Return a single paper bet row as a dict."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM paper_bets WHERE paper_bet_id = ?",
+            (paper_bet_id,),
+        )
+        row = await cursor.fetchone()
+    return dict(row) if row else None
+
+
+async def void_paper_bet(paper_bet_id: int) -> None:
+    """Void a paper bet and record resolution time."""
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            UPDATE paper_bets
+            SET status = 'void', payout = 0, resolved_at = ?
+            WHERE paper_bet_id = ?
+            """,
+            (now, paper_bet_id),
+        )
+        await db.commit()
