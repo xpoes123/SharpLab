@@ -476,12 +476,29 @@ class BetsCog(commands.Cog):
                 f"{icon}  {game_str}  {market_str}  {bet.side}  {odds_str}  {bet.units}u{clv_str}  #{bet.bet_id}"
             )
 
+        # Build description within Discord's 4096-char embed limit.
+        truncated = False
+        kept: list[str] = []
+        total = len("```\n") + len("\n```")
+        for line in lines:
+            addition = len(line) + 1  # +1 for the joining newline
+            if total + addition > 4000:
+                truncated = True
+                break
+            kept.append(line)
+            total += addition
+
+        description = "```\n" + "\n".join(kept) + "\n```"
+        footer_text = f"{len(bets)} bet{'s' if len(bets) != 1 else ''} pending · CLV = placed vs current"
+        if truncated:
+            footer_text += f" · showing {len(kept)}/{len(bets)} bets (list truncated)"
+
         embed = discord.Embed(
             title=f"Open bets — {interaction.user.display_name}",
-            description="```\n" + "\n".join(lines) + "\n```",
+            description=description,
             color=0x5865F2,
         )
-        embed.set_footer(text=f"{len(bets)} bet{'s' if len(bets) != 1 else ''} pending · CLV = placed vs current")
+        embed.set_footer(text=footer_text)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     # ── /clv-summary ──────────────────────────────────────────────────────────
