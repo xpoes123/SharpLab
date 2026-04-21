@@ -981,6 +981,8 @@ async def get_paper_leaderboard(limit: int = 10) -> list[dict]:
                 SUM(payout) - SUM(wager) AS net_profit,
                 SUM(wager) AS total_wagered,
                 COUNT(*) AS num_bets,
+                SUM(CASE WHEN status = 'won' THEN 1 ELSE 0 END) AS num_won,
+                SUM(CASE WHEN status = 'lost' THEN 1 ELSE 0 END) AS num_lost,
                 CASE WHEN SUM(wager) > 0
                     THEN (SUM(payout) - SUM(wager)) * 100.0 / SUM(wager)
                     ELSE 0
@@ -1007,6 +1009,72 @@ async def get_paper_bet_by_id(paper_bet_id: int) -> dict | None:
         )
         row = await cursor.fetchone()
     return dict(row) if row else None
+
+
+async def get_paper_stats_by_market(discord_user: str) -> list[dict]:
+    """Per-market breakdown (moneyline, spread, total) for resolved paper bets."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT
+                market,
+                COUNT(*) AS num_bets,
+                SUM(CASE WHEN status = 'won' THEN 1 ELSE 0 END) AS num_won,
+                SUM(CASE WHEN status = 'lost' THEN 1 ELSE 0 END) AS num_lost,
+                SUM(CASE WHEN status = 'push' THEN 1 ELSE 0 END) AS num_push,
+                COALESCE(SUM(payout) - SUM(wager), 0) AS net_profit
+            FROM paper_bets
+            WHERE discord_user = ? AND status IN ('won', 'lost', 'push')
+            GROUP BY market
+            ORDER BY num_bets DESC
+            """,
+            (discord_user,),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_recent_paper_bets(discord_user: str, limit: int = 10) -> list[dict]:
+    """Most recent resolved paper bets for a user."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM paper_bets
+            WHERE discord_user = ? AND status IN ('won', 'lost', 'push', 'void')
+            ORDER BY resolved_at DESC
+            LIMIT ?
+            """,
+            (discord_user, limit),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_paper_streak(discord_user: str) -> tuple[str, int]:
+    """Current win/loss streak. Returns ('won'|'lost'|'none', count)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT status FROM paper_bets
+            WHERE discord_user = ? AND status IN ('won', 'lost')
+            ORDER BY resolved_at DESC
+            """,
+            (discord_user,),
+        )
+        rows = await cursor.fetchall()
+    if not rows:
+        return ("none", 0)
+    streak_status = rows[0]["status"]
+    count = 0
+    for r in rows:
+        if r["status"] == streak_status:
+            count += 1
+        else:
+            break
+    return (streak_status, count)
 
 
 async def void_paper_bet(paper_bet_id: int) -> None:

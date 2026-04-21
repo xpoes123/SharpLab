@@ -519,6 +519,113 @@ class TradingCog(commands.Cog):
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    # ── /profile ──────────────────────────────────────────────────────────
+
+    @app_commands.command(name="profile", description="Paper trading stats and history")
+    @app_commands.describe(user="Check another user's profile")
+    async def profile(
+        self, interaction: discord.Interaction,
+        user: discord.Member | None = None,
+    ) -> None:
+        await interaction.response.defer()
+        target = user or interaction.user
+        user_id = str(target.id)
+
+        stats = await queries.get_paper_bet_stats(user_id)
+        market_stats = await queries.get_paper_stats_by_market(user_id)
+        streak_status, streak_count = await queries.get_paper_streak(user_id)
+        recent = await queries.get_recent_paper_bets(user_id, limit=5)
+        open_bets = await queries.get_open_paper_bets_for_user(user_id)
+        balance_val = await queries.get_balance(user_id)
+        balance = balance_val if balance_val is not None else 0
+
+        embed = discord.Embed(
+            title=f"{target.display_name}'s Trading Profile",
+            color=EMBED_COLOR,
+        )
+
+        # Overview
+        if stats["num_bets"] == 0:
+            embed.description = "No resolved trades yet."
+            embed.add_field(name="Balance", value=f"`{balance}` coins", inline=True)
+            embed.add_field(name="Open Trades", value=f"`{len(open_bets)}`", inline=True)
+            await interaction.followup.send(embed=embed)
+            return
+
+        total_w = stats["num_won"] or 0
+        total_l = stats["num_lost"] or 0
+        total_p = stats["num_push"] or 0
+        win_rate = (total_w / (total_w + total_l) * 100) if (total_w + total_l) > 0 else 0
+        roi = (stats["net_profit"] / stats["total_wagered"] * 100) if stats["total_wagered"] else 0
+
+        embed.add_field(
+            name="Record",
+            value=f"**{total_w}**W - **{total_l}**L - **{total_p}**P ({stats['num_bets']} total)",
+            inline=False,
+        )
+        embed.add_field(name="Win Rate", value=f"`{win_rate:.1f}%`", inline=True)
+        embed.add_field(name="Net Profit", value=f"`{stats['net_profit']:+d}` coins", inline=True)
+        embed.add_field(name="ROI", value=f"`{roi:+.1f}%`", inline=True)
+        embed.add_field(name="Balance", value=f"`{balance}` coins", inline=True)
+        embed.add_field(name="Total Wagered", value=f"`{stats['total_wagered']}` coins", inline=True)
+
+        # Streak
+        if streak_count > 1:
+            streak_emoji = "\U0001f525" if streak_status == "won" else "\U0001f4a9"
+            embed.add_field(
+                name="Streak",
+                value=f"{streak_emoji} {streak_count}{'W' if streak_status == 'won' else 'L'}",
+                inline=True,
+            )
+
+        # Per-market breakdown
+        if market_stats:
+            market_lines = []
+            for ms in market_stats:
+                mw = ms["num_won"] or 0
+                ml = ms["num_lost"] or 0
+                mp = ms["num_push"] or 0
+                mwr = (mw / (mw + ml) * 100) if (mw + ml) > 0 else 0
+                market_lines.append(
+                    f"**{ms['market'].title()}**: {mw}W-{ml}L-{mp}P "
+                    f"({mwr:.0f}%) | `{ms['net_profit']:+d}`c"
+                )
+            embed.add_field(
+                name="By Market",
+                value="\n".join(market_lines),
+                inline=False,
+            )
+
+        # Recent trades
+        if recent:
+            recent_lines = []
+            for pb in recent:
+                status_icon = {"won": "\u2705", "lost": "\u274c", "push": "\u2796", "void": "\u23ed\ufe0f"}.get(pb["status"], "?")
+                game = await queries.get_game_by_id(pb["game_id"])
+                if game:
+                    game_str = f"{game.away_team.split()[-1]}@{game.home_team.split()[-1]}"
+                else:
+                    game_str = pb["game_id"][:8]
+                market_str = pb["market"]
+                if pb["line"] is not None and pb["market"] in ("spread", "total"):
+                    market_str += f" {pb['line']:+.1f}"
+                pnl = pb["payout"] - pb["wager"]
+                recent_lines.append(
+                    f"{status_icon} {game_str} {market_str} {pb['side']} — "
+                    f"`{pnl:+d}`c"
+                )
+            embed.add_field(
+                name="Recent Trades",
+                value="\n".join(recent_lines),
+                inline=False,
+            )
+
+        if open_bets:
+            total_risk = sum(pb["wager"] for pb in open_bets)
+            embed.set_footer(text=f"{len(open_bets)} open trade(s), {total_risk}c at risk")
+
+        await interaction.followup.send(embed=embed)
+
     # ── /leaderboard ──────────────────────────────────────────────────────
 
     @app_commands.command(name="leaderboard", description="Paper trading leaderboard")
@@ -542,9 +649,13 @@ class TradingCog(commands.Cog):
             medal = {1: "\U0001f947", 2: "\U0001f948", 3: "\U0001f949"}.get(i, f"**{i}.**")
             profit = row["net_profit"]
             roi = row["roi"]
+            nw = row["num_won"] or 0
+            nl = row["num_lost"] or 0
+            wr = (nw / (nw + nl) * 100) if (nw + nl) > 0 else 0
             lines.append(
                 f"{medal} **{name}** — `{profit:+.0f}` coins "
-                f"({roi:+.1f}% ROI, {row['num_bets']} trades)"
+                f"| {nw}W-{nl}L ({wr:.0f}%) | "
+                f"{roi:+.1f}% ROI"
             )
 
         embed.description = "\n".join(lines)
