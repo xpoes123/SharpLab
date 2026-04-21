@@ -139,6 +139,27 @@ class GameResult:
 
 
 @dataclass(frozen=True)
+class LineMovement:
+    movement_id: int | None      # assigned by DB on insert
+    game_id: str
+    source: str                  # 'draftkings' | 'fanduel' | etc.
+    market: str                  # 'spread' | 'total' | 'moneyline'
+    prev_value: float            # previous line value
+    curr_value: float            # current line value
+    delta: float                 # curr - prev
+    detected_at_utc_iso: str     # UTC ISO 8601
+    notified: bool = False
+
+
+@dataclass(frozen=True)
+class LineAlertThresholds:
+    """Default thresholds for triggering line movement alerts."""
+    spread_points: float = 1.5   # spread movement in points
+    total_points: float = 3.0    # total movement in points
+    moneyline_cents: int = 20    # moneyline movement in cents (American odds units)
+
+
+@dataclass(frozen=True)
 class InjuryAlert:
     record_id: str           # ESPN athlete ID
     player_name: str

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 import aiosqlite
-from shared.models import Bet, Game, InjuryAlert, OddsSnapshot
+from shared.models import Bet, Game, InjuryAlert, LineMovement, OddsSnapshot
 from db.schema import DB_PATH
 
 
@@ -749,3 +749,59 @@ async def get_todays_game_for_team(team: str) -> Game | None:
     if row is None:
         return None
     return _row_to_game(row)
+
+
+# ── Line Movements ────────────────────────────────────────────────────────────
+
+def _row_to_line_movement(row: aiosqlite.Row) -> LineMovement:
+    return LineMovement(
+        movement_id=row["movement_id"],
+        game_id=row["game_id"],
+        source=row["source"],
+        market=row["market"],
+        prev_value=row["prev_value"],
+        curr_value=row["curr_value"],
+        delta=row["delta"],
+        detected_at_utc_iso=row["detected_at"],
+        notified=bool(row["notified"]),
+    )
+
+
+async def insert_line_movement(mov: LineMovement) -> int:
+    """Insert a detected line movement and return the assigned movement_id."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """
+            INSERT INTO line_movements
+                (game_id, source, market, prev_value, curr_value, delta, detected_at, notified)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                mov.game_id, mov.source, mov.market,
+                mov.prev_value, mov.curr_value, mov.delta,
+                mov.detected_at_utc_iso, int(mov.notified),
+            ),
+        )
+        await db.commit()
+        return cursor.lastrowid  # type: ignore[return-value]
+
+
+async def get_unnotified_line_movements() -> list[LineMovement]:
+    """Return line movements that haven't been posted to Discord yet."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM line_movements WHERE notified = 0 ORDER BY detected_at ASC"
+        )
+        rows = await cursor.fetchall()
+    return [_row_to_line_movement(row) for row in rows]
+
+
+async def mark_movement_notified(movement_id: int) -> None:
+    """Mark a line movement as posted to Discord."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE line_movements SET notified = 1 WHERE movement_id = ?",
+            (movement_id,),
+        )
+        await db.commit()

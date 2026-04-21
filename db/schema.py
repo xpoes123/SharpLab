@@ -53,6 +53,18 @@ CREATE TABLE IF NOT EXISTS injuries (
     updated_at   TEXT NOT NULL,
     notified     INTEGER DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS line_movements (
+    movement_id  INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id      TEXT NOT NULL REFERENCES games(game_id),
+    source       TEXT NOT NULL,
+    market       TEXT NOT NULL,
+    prev_value   REAL NOT NULL,
+    curr_value   REAL NOT NULL,
+    delta        REAL NOT NULL,
+    detected_at  TEXT NOT NULL,
+    notified     INTEGER DEFAULT 0
+);
 """
 
 
