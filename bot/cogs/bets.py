@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+_ET = ZoneInfo("America/New_York")
 
 import discord
 from discord import app_commands
@@ -150,9 +153,10 @@ def _fmt_gametime(iso: str) -> str:
     dt = datetime.fromisoformat(iso)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
+    dt = dt.astimezone(_ET)
     h = dt.hour % 12 or 12
     ampm = "AM" if dt.hour < 12 else "PM"
-    return f"{dt.strftime('%a %b')} {dt.day}, {h}:{dt.strftime('%M')} {ampm} UTC"
+    return f"{dt.strftime('%a %b')} {dt.day}, {h}:{dt.strftime('%M')} {ampm} {dt.strftime('%Z')}"
 
 
 def _parse_pick(pick: str) -> tuple[str, float | None]:

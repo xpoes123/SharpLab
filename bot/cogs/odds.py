@@ -7,6 +7,8 @@ import os
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+_ET = ZoneInfo("America/New_York")
+
 import discord
 import httpx
 from discord import app_commands
@@ -75,9 +77,10 @@ def _fmt_game_time(iso: str) -> str:
     dt = datetime.fromisoformat(iso)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
+    dt = dt.astimezone(_ET)
     h = dt.hour % 12 or 12
     ampm = "AM" if dt.hour < 12 else "PM"
-    return f"{dt.strftime('%a %b')} {dt.day}, {h}:{dt.strftime('%M')} {ampm} UTC"
+    return f"{dt.strftime('%a %b')} {dt.day}, {h}:{dt.strftime('%M')} {ampm} {dt.strftime('%Z')}"
 
 
 def _staleness(captured_at_iso: str) -> str:
@@ -218,9 +221,6 @@ async def _fetch_polymarket_ml(home_team: str, away_team: str) -> tuple[int, int
 
 
 # ── Scores fetch ───────────────────────────────────────────────────────────
-
-_ET = ZoneInfo("America/New_York")
-
 
 def _fmt_tipoff_et(status: str) -> str:
     try:

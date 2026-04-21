@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+_ET = ZoneInfo("America/New_York")
 
 import discord
 from discord.ext import commands, tasks
@@ -29,7 +32,10 @@ def _fmt_game_time(utc_iso: str) -> str:
     dt = datetime.fromisoformat(utc_iso)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    return dt.strftime("%H:%M UTC")
+    dt = dt.astimezone(_ET)
+    h = dt.hour % 12 or 12
+    ampm = "AM" if dt.hour < 12 else "PM"
+    return f"{h}:{dt.strftime('%M')} {ampm} {dt.strftime('%Z')}"
 
 
 def _status_color(status: str) -> int:
@@ -93,7 +99,10 @@ def _build_injury_embed(
     updated_dt = datetime.fromisoformat(alert.updated_at_utc_iso)
     if updated_dt.tzinfo is None:
         updated_dt = updated_dt.replace(tzinfo=timezone.utc)
-    embed.set_footer(text=f"ESPN • {updated_dt.strftime('%H:%M UTC')}")
+    updated_dt = updated_dt.astimezone(_ET)
+    uh = updated_dt.hour % 12 or 12
+    uampm = "AM" if updated_dt.hour < 12 else "PM"
+    embed.set_footer(text=f"ESPN • {uh}:{updated_dt.strftime('%M')} {uampm} {updated_dt.strftime('%Z')}")
 
     return embed
 

@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+_ET = ZoneInfo("America/New_York")
 
 import discord
 from discord.ext import commands, tasks
@@ -153,7 +156,10 @@ class CLVCog(commands.Cog):
             captured_dt = datetime.fromisoformat(ref_snap.captured_at_utc_iso)
             if captured_dt.tzinfo is None:
                 captured_dt = captured_dt.replace(tzinfo=timezone.utc)
-            captured_str = captured_dt.strftime("%H:%M UTC")
+            captured_dt = captured_dt.astimezone(_ET)
+            ch = captured_dt.hour % 12 or 12
+            campm = "AM" if captured_dt.hour < 12 else "PM"
+            captured_str = f"{ch}:{captured_dt.strftime('%M')} {campm} {captured_dt.strftime('%Z')}"
             sources = ", ".join(
                 s for s, snap in [("Kalshi", kalshi_close), ("DraftKings", dk_close)]
                 if snap is not None

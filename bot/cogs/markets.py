@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+_ET = ZoneInfo("America/New_York")
 
 import discord
 import httpx
@@ -109,7 +112,7 @@ class MarketsCog(commands.Cog):
             )
             return
 
-        fetched_at = datetime.now(timezone.utc)
+        fetched_at = datetime.now(timezone.utc).astimezone(_ET)
 
         # Build one row per side
         table_rows: list[tuple[str, str, str, str, str]] = []
@@ -136,7 +139,7 @@ class MarketsCog(commands.Cog):
 
         h = fetched_at.hour % 12 or 12
         ampm = "AM" if fetched_at.hour < 12 else "PM"
-        fetched_str = f"{fetched_at.strftime('%b')} {fetched_at.day}, {h}:{fetched_at.strftime('%M')} {ampm} UTC"
+        fetched_str = f"{fetched_at.strftime('%b')} {fetched_at.day}, {h}:{fetched_at.strftime('%M')} {ampm} {fetched_at.strftime('%Z')}"
 
         embed = discord.Embed(
             title=f"Kalshi — {target.away_team} @ {target.home_team}",
