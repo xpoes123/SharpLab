@@ -593,14 +593,22 @@ class TradingCog(commands.Cog):
         await interaction.response.defer()
         target = user or interaction.user
         user_id = str(target.id)
+        is_self = target.id == interaction.user.id
 
         stats = await queries.get_paper_bet_stats(user_id)
         market_stats = await queries.get_paper_stats_by_market(user_id)
         streak_status, streak_count = await queries.get_paper_streak(user_id)
         recent = await queries.get_recent_paper_bets(user_id, limit=5)
         open_bets = await queries.get_open_paper_bets_for_user(user_id)
-        balance_val = await queries.get_balance(user_id)
+
+        # Award daily coins to the invoker
+        if is_self:
+            balance_val, daily_credited = await queries.get_or_create_wallet(str(interaction.user.id))
+        else:
+            _, daily_credited = await queries.get_or_create_wallet(str(interaction.user.id))
+            balance_val = await queries.get_balance(user_id)
         balance = balance_val if balance_val is not None else 0
+        daily_note = "Daily **100 coins** credited! " if daily_credited else ""
 
         embed = discord.Embed(
             title=f"{target.display_name}'s Trading Profile",
@@ -612,7 +620,7 @@ class TradingCog(commands.Cog):
             embed.description = "No resolved trades yet."
             embed.add_field(name="Balance", value=f"`{balance}` coins", inline=True)
             embed.add_field(name="Open Trades", value=f"`{len(open_bets)}`", inline=True)
-            await interaction.followup.send(embed=embed)
+            await interaction.followup.send(content=daily_note or None, embed=embed)
             return
 
         total_w = stats["num_won"] or 0
@@ -698,7 +706,7 @@ class TradingCog(commands.Cog):
             total_risk = sum(pb["wager"] for pb in open_bets)
             embed.set_footer(text=f"{len(open_bets)} open trade(s), {total_risk}c at risk")
 
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(content=daily_note or None, embed=embed)
 
     # ── /leaderboard ──────────────────────────────────────────────────────
 
@@ -706,9 +714,14 @@ class TradingCog(commands.Cog):
     async def leaderboard(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer()
 
+        # Award daily coins to the invoker
+        _, daily_credited = await queries.get_or_create_wallet(str(interaction.user.id))
+        daily_note = "Daily **100 coins** credited! " if daily_credited else ""
+
         rows = await queries.get_paper_leaderboard(limit=10)
         if not rows:
-            await interaction.followup.send("No resolved paper trades yet.")
+            msg = f"{daily_note}No resolved paper trades yet." if daily_note else "No resolved paper trades yet."
+            await interaction.followup.send(msg)
             return
 
         embed = discord.Embed(title="Paper Trading Leaderboard", color=EMBED_COLOR)
@@ -734,7 +747,7 @@ class TradingCog(commands.Cog):
             )
 
         embed.description = "\n".join(lines)
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(content=daily_note or None, embed=embed)
 
     # ── /cashout ──────────────────────────────────────────────────────────
 
