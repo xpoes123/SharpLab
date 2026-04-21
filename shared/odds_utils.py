@@ -43,6 +43,71 @@ def fmt_prob(odds: int) -> str:
     return f"{american_to_prob(odds) * 100:.1f}%"
 
 
+# ── Number-adjusted CLV ──────────────────────────────────────────────────────
+# Approximate win-probability change per half-point of line movement.
+# Standard industry approximation for NBA.
+_PP_PER_HALF_POINT_SPREAD = 2.0
+_PP_PER_HALF_POINT_TOTAL = 1.0
+
+
+def side_is_home(side: str, home_team: str, away_team: str) -> bool | None:
+    """Determine if a bet side matches the home team, away team, or neither."""
+    s = side.lower()
+    home = home_team.lower()
+    away = away_team.lower()
+    if s in home or home.split()[-1] in s:
+        return True
+    if s in away or away.split()[-1] in s:
+        return False
+    return None
+
+
+def compute_clv(
+    bet_odds: int,
+    close_odds: int,
+    *,
+    market: str = "",
+    bet_line: float | None = None,
+    close_line: float | None = None,
+    is_home: bool | None = None,
+    is_over: bool | None = None,
+) -> float:
+    """Compute CLV in percentage points, accounting for line number movement.
+
+    For moneyline/kalshi: juice-based CLV only (close_prob - bet_prob).
+    For spread/total: adds a per-half-point adjustment when the number moved.
+
+    Parameters:
+        bet_odds:   American odds at which the bet was placed
+        close_odds: American odds at close (or current snapshot)
+        market:     'spread', 'total', 'moneyline', or 'kalshi'
+        bet_line:   Bettor's spread/total number (bettor's perspective for spreads)
+        close_line: Closing spread (HOME perspective) or total number
+        is_home:    True if bettor took the home side (spread only)
+        is_over:    True if bettor took the over (total only)
+    """
+    bet_prob = american_to_prob(bet_odds)
+    close_prob = american_to_prob(close_odds)
+    juice_clv = (close_prob - bet_prob) * 100
+
+    if bet_line is None or close_line is None:
+        return juice_clv
+
+    if market == "spread" and is_home is not None:
+        # close_line is home-perspective; convert to bettor's perspective
+        close_for_bettor = close_line if is_home else -close_line
+        diff = bet_line - close_for_bettor  # positive = bettor got better number
+        return juice_clv + (diff / 0.5) * _PP_PER_HALF_POINT_SPREAD
+
+    if market == "total" and is_over is not None:
+        # Over wants close to go up (easier to clear lower threshold);
+        # under wants close to go down (easier to stay under higher threshold).
+        diff = (close_line - bet_line) if is_over else (bet_line - close_line)
+        return juice_clv + (diff / 0.5) * _PP_PER_HALF_POINT_TOTAL
+
+    return juice_clv
+
+
 def parse_odds_input(raw: str) -> tuple[int, str]:
     """
     Parse odds in any supported format and return (american_odds, format_label).

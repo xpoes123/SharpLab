@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 from db import queries
 from shared.models import Bet, Game
-from shared.odds_utils import american_to_prob, fmt_prob
+from shared.odds_utils import compute_clv, fmt_prob, side_is_home
 
 load_dotenv()
 
@@ -66,7 +66,10 @@ def _clv_emoji(clv: float) -> str:
     return "➖"
 
 
-def _build_bet_line(bet: Bet, close_odds: int | None, clv: float | None) -> str:
+def _build_bet_line(
+    bet: Bet, close_odds: int | None, clv: float | None,
+    close_line_display: str | None = None,
+) -> str:
     market_str = bet.market.capitalize()
     line_str = f" {bet.line:+.1f}" if bet.line is not None else ""
     desc = f"{market_str}{line_str} {bet.side} @ **{_fmt_odds(bet.odds)}**"
@@ -76,6 +79,8 @@ def _build_bet_line(bet: Bet, close_odds: int | None, clv: float | None) -> str:
 
     clv_str = _fmt_clv(clv) if clv is not None else "n/a"
     emoji = _clv_emoji(clv) if clv is not None else "➖"
+    if close_line_display is not None:
+        return f"{desc}\n→ closed at **{close_line_display}** ({_fmt_odds(close_odds)}) | CLV **{clv_str}** {emoji}"
     return f"{desc}\n→ closed **{_fmt_odds(close_odds)}** | CLV **{clv_str}** {emoji}"
 
 
@@ -181,12 +186,31 @@ class CLVCog(commands.Cog):
                 ref = kalshi_close if (bet.market.lower() == "moneyline" and kalshi_close) else dk_close
                 close_odds = _close_odds_for_bet(bet, game, ref.payload) if ref else None
                 clv: float | None = None
+                close_line_display: str | None = None
                 if close_odds is not None:
-                    bet_prob = american_to_prob(bet.odds)
-                    close_prob = american_to_prob(close_odds)
-                    clv = (close_prob - bet_prob) * 100
+                    market = bet.market.lower()
+                    is_home = side_is_home(bet.side, game.home_team, game.away_team)
+                    close_spread = ref.payload.get("spread") if ref else None
+                    close_total = ref.payload.get("total") if ref else None
+
+                    clv = compute_clv(
+                        bet.odds, close_odds,
+                        market=market,
+                        bet_line=bet.line,
+                        close_line=close_spread if market == "spread" else close_total if market == "total" else None,
+                        is_home=is_home if market == "spread" else None,
+                        is_over=(bet.side.lower() == "over") if market == "total" else None,
+                    )
+
+                    # Show closing line number for spread/total
+                    if market == "spread" and close_spread is not None and is_home is not None:
+                        close_for_bettor = close_spread if is_home else -close_spread
+                        close_line_display = f"{close_for_bettor:+.1f}"
+                    elif market == "total" and close_total is not None:
+                        close_line_display = f"{close_total}"
+
                 await queries.update_bet_clv(bet.bet_id, clv)
-                bet_fields.append((f"<@{bet.discord_user}>", _build_bet_line(bet, close_odds, clv)))
+                bet_fields.append((f"<@{bet.discord_user}>", _build_bet_line(bet, close_odds, clv, close_line_display)))
                 mention_ids.add(bet.discord_user)
 
             # Fill the first embed (1 slot already used by "Close")

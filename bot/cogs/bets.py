@@ -10,7 +10,7 @@ from discord.ext import commands
 
 from db import queries
 from shared.models import Bet, Game, OddsSnapshot
-from shared.odds_utils import american_to_decimal, american_to_prob, fmt_prob, parse_odds_input
+from shared.odds_utils import american_to_decimal, compute_clv, fmt_prob, parse_odds_input, side_is_home
 from .odds import game_autocomplete, mlb_game_autocomplete
 
 
@@ -205,6 +205,27 @@ def _get_current_odds_for_bet(
         if side == "under":
             return payload.get("total_under_odds")
 
+    return None
+
+
+def _get_current_line_for_bet(
+    bet: Bet, snapshots: list[OddsSnapshot],
+) -> float | None:
+    """Extract current spread/total number for spread/total bets."""
+    market = bet.market.lower()
+    if market not in ("spread", "total"):
+        return None
+
+    snap_by_source = {s.source: s for s in snapshots}
+    snap = snap_by_source.get("draftkings") or snap_by_source.get("fanduel")
+    if snap is None:
+        return None
+
+    payload = snap.payload
+    if market == "spread":
+        return payload.get("spread")
+    if market == "total":
+        return payload.get("total")
     return None
 
 
@@ -430,11 +451,19 @@ class BetsCog(commands.Cog):
             if bet.status == "graded" and bet.clv is not None:
                 clv_str = f"  {bet.clv:+.1f}pp"
             elif bet.status == "open" and game is not None:
-                current_odds = _get_current_odds_for_bet(bet, game, snap_cache.get(bet.game_id, []))
+                snaps = snap_cache.get(bet.game_id, [])
+                current_odds = _get_current_odds_for_bet(bet, game, snaps)
                 if current_odds is not None:
-                    bet_prob = american_to_prob(bet.odds)
-                    current_prob = american_to_prob(current_odds)
-                    live_clv = (current_prob - bet_prob) * 100
+                    market = bet.market.lower()
+                    current_line = _get_current_line_for_bet(bet, snaps)
+                    live_clv = compute_clv(
+                        bet.odds, current_odds,
+                        market=market,
+                        bet_line=bet.line,
+                        close_line=current_line,
+                        is_home=side_is_home(bet.side, game.home_team, game.away_team) if market == "spread" else None,
+                        is_over=(bet.side.lower() == "over") if market == "total" else None,
+                    )
                     now_str = f"→{fmt_prob(current_odds)}"
                     clv_str = f"  {live_clv:+.1f}pp"
 
