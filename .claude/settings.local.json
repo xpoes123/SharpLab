@@ -10,7 +10,15 @@
       "Bash(winget install:*)",
       "WebFetch(domain:trading-api.readme.io)",
       "WebFetch(domain:docs.kalshi.com)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(sqlite3:*)",
+      "Bash(git restore:*)",
+      "Bash(python3:*)",
+      "Bash(iconv:*)",
+      "Bash(git stash:*)",
+      "Bash(grep:*)",
+      "Bash(ls:*)",
+      "Bash(git status:*)"
     ]
   },
   "outputStyle": "default"

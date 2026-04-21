@@ -729,6 +729,91 @@ async def get_all_games_filtered(filter_str: str = "", limit: int = 25, sport: s
     return [_row_to_game(row) for row in rows]
 
 
+# ── Wallets ────────────────────────────────────────────────────────────────────
+
+DAILY_AMOUNT = 100
+_DAILY_SECONDS = 86400  # 24 hours
+
+
+async def get_or_create_wallet(discord_user: str) -> tuple[int, bool]:
+    """
+    Return (balance, daily_credited).
+    Creates wallet with daily coins if new; credits daily if >24h since last.
+    """
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT balance, last_daily FROM wallets WHERE discord_user = ?",
+            (discord_user,),
+        )
+        row = await cursor.fetchone()
+
+        if row is None:
+            await db.execute(
+                "INSERT INTO wallets (discord_user, balance, last_daily) VALUES (?, ?, ?)",
+                (discord_user, DAILY_AMOUNT, now_iso),
+            )
+            await db.commit()
+            return (DAILY_AMOUNT, True)
+
+        balance = row["balance"]
+        last_daily = row["last_daily"]
+        credited = False
+
+        if last_daily is None:
+            eligible = True
+        else:
+            last_dt = datetime.fromisoformat(last_daily)
+            eligible = (now - last_dt).total_seconds() >= _DAILY_SECONDS
+
+        if eligible:
+            balance += DAILY_AMOUNT
+            await db.execute(
+                "UPDATE wallets SET balance = ?, last_daily = ? WHERE discord_user = ?",
+                (balance, now_iso, discord_user),
+            )
+            await db.commit()
+            credited = True
+
+        return (balance, credited)
+
+
+async def update_balance(discord_user: str, delta: int) -> int:
+    """Add/subtract coins. Returns new balance. Raises ValueError if insufficient."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT balance FROM wallets WHERE discord_user = ?",
+            (discord_user,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            raise ValueError("No wallet found")
+        new_balance = row["balance"] + delta
+        if new_balance < 0:
+            raise ValueError(f"Insufficient coins (have {row['balance']}, need {-delta})")
+        await db.execute(
+            "UPDATE wallets SET balance = ? WHERE discord_user = ?",
+            (new_balance, discord_user),
+        )
+        await db.commit()
+        return new_balance
+
+
+async def get_balance(discord_user: str) -> int | None:
+    """Return balance or None if no wallet exists."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT balance FROM wallets WHERE discord_user = ?",
+            (discord_user,),
+        )
+        row = await cursor.fetchone()
+    return row["balance"] if row else None
+
+
 async def get_todays_game_for_team(team: str) -> Game | None:
     """Return the next unfinished game today for a given team (exact name match)."""
     today_prefix = datetime.now(timezone.utc).strftime("%Y-%m-%d")

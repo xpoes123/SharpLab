@@ -53,6 +53,12 @@ CREATE TABLE IF NOT EXISTS injuries (
     updated_at   TEXT NOT NULL,
     notified     INTEGER DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS wallets (
+    discord_user  TEXT PRIMARY KEY,
+    balance       INTEGER NOT NULL DEFAULT 0,
+    last_daily    TEXT
+);
 """
 
 
