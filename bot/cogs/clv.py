@@ -189,10 +189,13 @@ class CLVCog(commands.Cog):
                 )
                 mention_ids.add(bet.discord_user)
 
+            # Mark posted before sending so a crash between these two lines
+            # results in a missed post (recoverable) rather than a duplicate
+            # ping on the next 5-minute tick (not recoverable without complaints).
+            await queries.mark_game_clv_posted(game_id)
             # Ping bettors in message content so Discord actually notifies them
             ping_str = " ".join(f"<@{uid}>" for uid in mention_ids) if mention_ids else None
             await channel.send(content=ping_str, embed=embed)
-            await queries.mark_game_clv_posted(game_id)
 
     @clv_check.before_loop
     async def before_clv_check(self) -> None:
