@@ -10,7 +10,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from db import queries
-from shared.odds_utils import american_to_decimal, fmt_prob
+from shared.odds_utils import american_to_decimal, american_to_prob, fmt_prob
 from .odds import game_autocomplete, mlb_game_autocomplete
 
 log = logging.getLogger(__name__)
@@ -55,6 +55,20 @@ def _fmt_gametime(iso: str) -> str:
 def _compute_payout(wager: int, odds: int) -> int:
     """Total return on a winning bet (wager + profit)."""
     return round(american_to_decimal(odds) * wager)
+
+
+def _compute_cashout(wager: int, locked_odds: int, current_odds: int) -> int:
+    """Fair cashout value based on how odds moved since placement.
+
+    cashout = wager * (current_prob / locked_prob)
+    If the line moved in your favor, you get back more than you wagered.
+    If it moved against you, you get back less.
+    """
+    locked_prob = american_to_prob(locked_odds)
+    current_prob = american_to_prob(current_odds)
+    if locked_prob <= 0:
+        return 0
+    return max(0, round(wager * current_prob / locked_prob))
 
 
 def _pick_odds_from_snapshots(
@@ -536,12 +550,12 @@ class TradingCog(commands.Cog):
         embed.description = "\n".join(lines)
         await interaction.followup.send(embed=embed)
 
-    # ── /void-trade ───────────────────────────────────────────────────────
+    # ── /cashout ──────────────────────────────────────────────────────────
 
-    @app_commands.command(name="void-trade", description="Cancel an open paper trade and get your coins back")
-    @app_commands.describe(trade_id="Select a trade to void")
+    @app_commands.command(name="cashout", description="Cash out an open paper trade at current odds")
+    @app_commands.describe(trade_id="Select a trade to cash out")
     @app_commands.autocomplete(trade_id=void_trade_autocomplete)
-    async def void_trade(self, interaction: discord.Interaction, trade_id: str) -> None:
+    async def cashout(self, interaction: discord.Interaction, trade_id: str) -> None:
         await interaction.response.defer(ephemeral=True)
 
         try:
@@ -556,26 +570,60 @@ class TradingCog(commands.Cog):
             return
 
         if pb["discord_user"] != str(interaction.user.id):
-            await interaction.followup.send("You can only void your own trades.", ephemeral=True)
+            await interaction.followup.send("You can only cash out your own trades.", ephemeral=True)
             return
 
         if pb["status"] != "open":
             await interaction.followup.send(
-                f"This trade is already **{pb['status']}** and can't be voided.",
+                f"This trade is already **{pb['status']}** and can't be cashed out.",
                 ephemeral=True,
             )
             return
 
-        # Refund coins
-        await queries.void_paper_bet(bet_id)
-        new_balance = await queries.update_balance(pb["discord_user"], pb["wager"])
+        # Fetch current odds to price the cashout
+        game = await queries.get_game_by_id(pb["game_id"])
+        if game is None:
+            await interaction.followup.send("Game not found.", ephemeral=True)
+            return
 
-        embed = discord.Embed(title="Trade Voided", color=0xED4245)
-        embed.description = (
-            f"Trade **#{bet_id}** voided. "
-            f"Refunded **{pb['wager']}** coins.\n"
-            f"New balance: **{new_balance}** coins."
+        snaps = await queries.get_latest_snapshots_for_game(pb["game_id"])
+        current_odds = _pick_odds_from_snapshots(
+            snaps, pb["market"], pb["side"], game.home_team, game.away_team,
         )
+        if current_odds is None:
+            await interaction.followup.send(
+                "No current odds available — can't price the cashout right now.",
+                ephemeral=True,
+            )
+            return
+
+        cashout_value = _compute_cashout(pb["wager"], pb["odds"], current_odds)
+
+        # Resolve as void with the cashout amount
+        await queries.resolve_paper_bet(pb["paper_bet_id"], "void", cashout_value)
+        if cashout_value > 0:
+            new_balance = await queries.update_balance(pb["discord_user"], cashout_value)
+        else:
+            bal = await queries.get_balance(pb["discord_user"])
+            new_balance = bal if bal is not None else 0
+
+        pnl = cashout_value - pb["wager"]
+        pnl_str = f"{pnl:+d}" if pnl != 0 else "0"
+
+        embed = discord.Embed(
+            title="Trade Cashed Out",
+            color=0x57F287 if pnl >= 0 else 0xED4245,
+        )
+        embed.add_field(name="Wager", value=f"`{pb['wager']}` coins", inline=True)
+        embed.add_field(name="Cashout", value=f"`{cashout_value}` coins", inline=True)
+        embed.add_field(name="P&L", value=f"`{pnl_str}` coins", inline=True)
+        embed.add_field(
+            name="Odds",
+            value=f"Locked `{fmt_prob(pb['odds'])}` \u2192 Current `{fmt_prob(current_odds)}`",
+            inline=False,
+        )
+        embed.add_field(name="Balance", value=f"`{new_balance}` coins", inline=True)
+        embed.set_footer(text=f"Trade #{bet_id}")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
 

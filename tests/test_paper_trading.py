@@ -1,7 +1,7 @@
 """Unit tests for paper trading — payout math and resolution logic."""
 import pytest
 from shared.odds_utils import american_to_decimal
-from bot.cogs.trading import _compute_payout, _resolve_paper_bet, _parse_pick
+from bot.cogs.trading import _compute_cashout, _compute_payout, _resolve_paper_bet, _parse_pick
 
 
 # ── Payout calculation ────────────────────────────────────────────────────────
@@ -169,6 +169,47 @@ class TestResolveTotal:
         pb = _make_pb("total", "over", line=None)
         result = _resolve_paper_bet(pb, "Boston Celtics", "New York Knicks", 115, 110)
         assert result == "void"
+
+
+# ── Cashout calculation ───────────────────────────────────────────────────────
+
+
+class TestComputeCashout:
+    def test_odds_unchanged(self):
+        # Same odds → get your wager back exactly
+        assert _compute_cashout(100, -110, -110) == 100
+
+    def test_odds_moved_in_favor(self):
+        # Locked -110 (52.4%), now -200 (66.7%) → position worth more
+        # cashout = 100 * (0.667 / 0.524) ≈ 127
+        result = _compute_cashout(100, -110, -200)
+        assert result > 100  # profitable cashout
+        assert result == 127
+
+    def test_odds_moved_against(self):
+        # Locked -110 (52.4%), now +150 (40%) → position lost value
+        # cashout = 100 * (0.40 / 0.524) ≈ 76
+        result = _compute_cashout(100, -110, +150)
+        assert result < 100  # lost value
+
+    def test_big_move_in_favor(self):
+        # Locked +200 (33.3%), now -150 (60%) → big swing
+        result = _compute_cashout(100, +200, -150)
+        assert result > 150  # big profit
+
+    def test_big_move_against(self):
+        # Locked -150 (60%), now +300 (25%) → big loss
+        result = _compute_cashout(100, -150, +300)
+        assert result < 50
+
+    def test_never_negative(self):
+        # Even with extreme odds movement, cashout floor is 0
+        result = _compute_cashout(100, -10000, +10000)
+        assert result >= 0
+
+    def test_small_wager(self):
+        # 10 coins at even odds, line doesn't move
+        assert _compute_cashout(10, +100, +100) == 10
 
 
 class TestResolveEdgeCases:
