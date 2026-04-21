@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+_ET = ZoneInfo("America/New_York")
 
 import discord
 from discord import app_commands
@@ -40,7 +43,10 @@ def _fmt_updated(utc_iso: str) -> str:
     dt = datetime.fromisoformat(utc_iso)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    return dt.strftime("%b %d %H:%M UTC")
+    dt = dt.astimezone(_ET)
+    h = dt.hour % 12 or 12
+    ampm = "AM" if dt.hour < 12 else "PM"
+    return f"{dt.strftime('%b %d')} {h}:{dt.strftime('%M')} {ampm} {dt.strftime('%Z')}"
 
 
 class RostersCog(commands.Cog):
