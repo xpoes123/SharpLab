@@ -170,9 +170,13 @@ class CLVCog(commands.Cog):
                 inline=False,
             )
 
-            # If anyone has bets, compute CLV and add their lines
+            # If anyone has bets, compute CLV and add their lines.
+            # Discord caps embeds at 25 fields. We use 1 for "Close", so the
+            # first embed holds up to 24 bet fields. Overflow goes into
+            # follow-up embeds (25 fields each) to avoid HTTP 400.
             bets = await queries.get_open_bets_for_game(game_id)
             mention_ids: set[str] = set()
+            bet_fields: list[tuple[str, str]] = []
             for bet in bets:
                 ref = kalshi_close if (bet.market.lower() == "moneyline" and kalshi_close) else dk_close
                 close_odds = _close_odds_for_bet(bet, game, ref.payload) if ref else None
@@ -182,12 +186,25 @@ class CLVCog(commands.Cog):
                     close_prob = american_to_prob(close_odds)
                     clv = (close_prob - bet_prob) * 100
                 await queries.update_bet_clv(bet.bet_id, clv)
-                embed.add_field(
-                    name=f"<@{bet.discord_user}>",
-                    value=_build_bet_line(bet, close_odds, clv),
-                    inline=False,
-                )
+                bet_fields.append((f"<@{bet.discord_user}>", _build_bet_line(bet, close_odds, clv)))
                 mention_ids.add(bet.discord_user)
+
+            # Fill the first embed (1 slot already used by "Close")
+            for name, value in bet_fields[:24]:
+                embed.add_field(name=name, value=value, inline=False)
+
+            # Build overflow embeds for any bets beyond the first 24
+            overflow_embeds: list[discord.Embed] = []
+            overflow = bet_fields[24:]
+            while overflow:
+                chunk, overflow = overflow[:25], overflow[25:]
+                ov_embed = discord.Embed(
+                    title=f"CLV (continued) — {game.away_team} @ {game.home_team}",
+                    color=0xF1C40F,
+                )
+                for name, value in chunk:
+                    ov_embed.add_field(name=name, value=value, inline=False)
+                overflow_embeds.append(ov_embed)
 
             # Mark posted before sending so a crash between these two lines
             # results in a missed post (recoverable) rather than a duplicate
@@ -196,6 +213,8 @@ class CLVCog(commands.Cog):
             # Ping bettors in message content so Discord actually notifies them
             ping_str = " ".join(f"<@{uid}>" for uid in mention_ids) if mention_ids else None
             await channel.send(content=ping_str, embed=embed)
+            for ov_embed in overflow_embeds:
+                await channel.send(embed=ov_embed)
 
     @clv_check.before_loop
     async def before_clv_check(self) -> None:
