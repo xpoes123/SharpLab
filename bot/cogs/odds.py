@@ -382,7 +382,8 @@ class OddsCog(commands.Cog):
             if polymarket:
                 home_ml, away_ml = polymarket
                 snapshots.append(OddsSnapshot(snapshot_id="polymarket-live", game_id=game, kind="poll", source="polymarket", captured_at_utc_iso=now_iso, payload={"ml_home": home_ml, "ml_away": away_ml}))
-        most_recent = max((s for s in snapshots if s.source not in LIVE_SOURCES), key=lambda s: s.captured_at_utc_iso)
+        _non_live = [s for s in snapshots if s.source not in LIVE_SOURCES]
+        most_recent = max(_non_live or snapshots, key=lambda s: s.captured_at_utc_iso)
         table = _build_odds_table(snapshots)
         embed = discord.Embed(
             title=f"{target.away_team} @ {target.home_team}",
@@ -412,7 +413,8 @@ class OddsCog(commands.Cog):
             if polymarket:
                 home_ml, away_ml = polymarket
                 snapshots.append(OddsSnapshot(snapshot_id="polymarket-live", game_id=game, kind="poll", source="polymarket", captured_at_utc_iso=now_iso, payload={"ml_home": home_ml, "ml_away": away_ml}))
-        most_recent = max((s for s in snapshots if s.source not in LIVE_SOURCES), key=lambda s: s.captured_at_utc_iso)
+        _non_live = [s for s in snapshots if s.source not in LIVE_SOURCES]
+        most_recent = max(_non_live or snapshots, key=lambda s: s.captured_at_utc_iso)
         def best(key: str, reverse: bool) -> tuple[str, float | int] | None:
             candidates = [(s.source, s.payload[key]) for s in snapshots if s.payload.get(key) is not None]
             return sorted(candidates, key=lambda x: x[1], reverse=reverse)[0] if candidates else None
