@@ -19,6 +19,9 @@ dev = [
     "pytest-asyncio",
 ]
 
+[tool.setuptools.packages.find]
+include = ["bot*", "db*", "shared*", "temporal*"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["."]
