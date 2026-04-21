@@ -608,7 +608,7 @@ class TradingCog(commands.Cog):
             _, daily_credited = await queries.get_or_create_wallet(str(interaction.user.id))
             balance_val = await queries.get_balance(user_id)
         balance = balance_val if balance_val is not None else 0
-        daily_note = "Daily **100 coins** credited! " if daily_credited else ""
+        daily_note = "**100 coins** credited (every 8h)! " if daily_credited else ""
 
         embed = discord.Embed(
             title=f"{target.display_name}'s Trading Profile",
@@ -716,7 +716,7 @@ class TradingCog(commands.Cog):
 
         # Award daily coins to the invoker
         _, daily_credited = await queries.get_or_create_wallet(str(interaction.user.id))
-        daily_note = "Daily **100 coins** credited! " if daily_credited else ""
+        daily_note = "**100 coins** credited (every 8h)! " if daily_credited else ""
 
         rows = await queries.get_paper_leaderboard(limit=10)
         if not rows:
