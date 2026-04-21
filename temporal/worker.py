@@ -18,6 +18,7 @@ from .activities import (
     fetch_polymarket_close_snapshot,
     fetch_final_scores,
     resolve_bets_for_game,
+    detect_line_movements,
 )
 
 logging.basicConfig(
@@ -49,6 +50,7 @@ async def main() -> None:
             fetch_polymarket_close_snapshot,
             fetch_final_scores,
             resolve_bets_for_game,
+            detect_line_movements,
         ],
     )
 

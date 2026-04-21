@@ -21,8 +21,8 @@ from dotenv import load_dotenv
 from temporalio import activity
 
 from db import queries, schema
-from shared.models import Bet, Game, GameResult, InjuryAlert, OddsBatch, OddsSnapshot, get_team_abbr
-from shared.odds_utils import prob_to_american
+from shared.models import Bet, Game, GameResult, InjuryAlert, LineAlertThresholds, LineMovement, OddsBatch, OddsSnapshot, get_team_abbr
+from shared.odds_utils import american_to_prob, prob_to_american
 
 load_dotenv()
 
@@ -851,3 +851,114 @@ async def resolve_bets_for_game(result: GameResult) -> int:
         f"{result.away_score}-{result.home_score}, {resolved} bets resolved"
     )
     return resolved
+
+
+# ── Line movement detection ──────────────────────────────────────────────────
+
+def _compare_snapshots(
+    prev: OddsSnapshot,
+    curr: OddsSnapshot,
+    thresholds: LineAlertThresholds,
+) -> list[LineMovement]:
+    """
+    Compare two consecutive snapshots for the same game+source and return
+    any movements that exceed the configured thresholds.
+    Pure function — no DB or I/O.
+    """
+    movements: list[LineMovement] = []
+    prev_p = prev.payload
+    curr_p = curr.payload
+
+    # Spread
+    if prev_p.get("spread") is not None and curr_p.get("spread") is not None:
+        delta = curr_p["spread"] - prev_p["spread"]
+        if abs(delta) >= thresholds.spread_points:
+            movements.append(LineMovement(
+                game_id=curr.game_id,
+                source=curr.source,
+                market="spread",
+                side=None,
+                prev_value=prev_p["spread"],
+                curr_value=curr_p["spread"],
+                delta=delta,
+                prev_snapshot_id=prev.snapshot_id,
+                curr_snapshot_id=curr.snapshot_id,
+                detected_at_utc_iso=curr.captured_at_utc_iso,
+            ))
+
+    # Total
+    if prev_p.get("total") is not None and curr_p.get("total") is not None:
+        delta = curr_p["total"] - prev_p["total"]
+        if abs(delta) >= thresholds.total_points:
+            movements.append(LineMovement(
+                game_id=curr.game_id,
+                source=curr.source,
+                market="total",
+                side=None,
+                prev_value=prev_p["total"],
+                curr_value=curr_p["total"],
+                delta=delta,
+                prev_snapshot_id=prev.snapshot_id,
+                curr_snapshot_id=curr.snapshot_id,
+                detected_at_utc_iso=curr.captured_at_utc_iso,
+            ))
+
+    # Moneyline — home and away
+    for side_key, side_label in [("ml_home", "home"), ("ml_away", "away")]:
+        prev_ml = prev_p.get(side_key)
+        curr_ml = curr_p.get(side_key)
+        if prev_ml is not None and curr_ml is not None:
+            delta = curr_ml - prev_ml
+            if abs(delta) >= thresholds.moneyline_cents:
+                movements.append(LineMovement(
+                    game_id=curr.game_id,
+                    source=curr.source,
+                    market="moneyline",
+                    side=side_label,
+                    prev_value=prev_ml,
+                    curr_value=curr_ml,
+                    delta=delta,
+                    prev_snapshot_id=prev.snapshot_id,
+                    curr_snapshot_id=curr.snapshot_id,
+                    detected_at_utc_iso=curr.captured_at_utc_iso,
+                ))
+
+    return movements
+
+
+@activity.defn
+async def detect_line_movements(snapshot_ids: list[str]) -> list[LineMovement]:
+    """
+    After each odds upsert cycle, compare newly upserted snapshots against their
+    predecessors and detect significant line movements.
+    """
+    thresholds = LineAlertThresholds()
+    all_movements: list[LineMovement] = []
+
+    for sid in snapshot_ids:
+        curr = await queries.get_snapshot_by_id(sid)
+        if curr is None:
+            activity.logger.warning(f"[detect_line_movements] snapshot {sid} not found")
+            continue
+
+        prev = await queries.get_previous_snapshot_for_source(
+            curr.game_id, curr.source, curr.captured_at_utc_iso
+        )
+        if prev is None:
+            continue  # first poll for this game+source — nothing to compare
+
+        movements = _compare_snapshots(prev, curr, thresholds)
+        for m in movements:
+            await queries.insert_line_movement(m)
+            activity.logger.info(
+                f"[detect_line_movements] {m.source} {m.market}"
+                f"{'(' + m.side + ')' if m.side else ''}: "
+                f"{m.prev_value} → {m.curr_value} (Δ{m.delta:+g})"
+            )
+        all_movements.extend(movements)
+
+    activity.logger.info(
+        f"[detect_line_movements] checked {len(snapshot_ids)} snapshots, "
+        f"found {len(all_movements)} movements"
+    )
+    return all_movements

@@ -147,3 +147,26 @@ class InjuryAlert:
     prev_status: str | None  # None = new listing; old value = status change
     detail: str | None       # e.g. "Ankle - Left - Sprain"
     updated_at_utc_iso: str
+
+
+@dataclass(frozen=True)
+class LineAlertThresholds:
+    """Thresholds that trigger a line movement alert."""
+    spread_points: float = 1.5     # spread moves >= 1.5 pts
+    total_points: float = 3.0      # total moves >= 3.0 pts
+    moneyline_cents: int = 20      # ML moves >= 20 in raw American odds
+
+
+@dataclass(frozen=True)
+class LineMovement:
+    """A detected significant line movement between two consecutive snapshots."""
+    game_id: str
+    source: str              # 'draftkings' | 'fanduel' | 'kalshi' | etc.
+    market: str              # 'spread' | 'total' | 'moneyline'
+    side: str | None         # 'home' | 'away' | None (for spread/total)
+    prev_value: float        # previous line value (spread pts, total pts, or American odds)
+    curr_value: float        # current line value
+    delta: float             # curr - prev (signed)
+    prev_snapshot_id: str
+    curr_snapshot_id: str
+    detected_at_utc_iso: str

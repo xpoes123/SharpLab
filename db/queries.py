@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 import aiosqlite
-from shared.models import Bet, Game, InjuryAlert, OddsSnapshot
+from shared.models import Bet, Game, InjuryAlert, LineMovement, OddsSnapshot
 from db.schema import DB_PATH
 
 
@@ -749,3 +749,78 @@ async def get_todays_game_for_team(team: str) -> Game | None:
     if row is None:
         return None
     return _row_to_game(row)
+
+
+# ── Line movements ────────────────────────────────────────────────────────────
+
+def _row_to_snapshot(row: aiosqlite.Row) -> OddsSnapshot:
+    return OddsSnapshot(
+        snapshot_id=row["snapshot_id"],
+        game_id=row["game_id"],
+        kind=row["kind"],
+        source=row["source"],
+        captured_at_utc_iso=row["captured_at"],
+        payload=json.loads(row["payload"]),
+    )
+
+
+async def get_snapshot_by_id(snapshot_id: str) -> OddsSnapshot | None:
+    """Return a single odds snapshot by its primary key."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM odds_snapshots WHERE snapshot_id = ?",
+            (snapshot_id,),
+        )
+        row = await cursor.fetchone()
+    if row is None:
+        return None
+    return _row_to_snapshot(row)
+
+
+async def get_previous_snapshot_for_source(
+    game_id: str, source: str, before_captured_at: str
+) -> OddsSnapshot | None:
+    """Return the most recent poll snapshot for a game+source before the given timestamp."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM odds_snapshots
+            WHERE game_id = ? AND source = ? AND kind = 'poll'
+              AND captured_at < ?
+            ORDER BY captured_at DESC
+            LIMIT 1
+            """,
+            (game_id, source, before_captured_at),
+        )
+        row = await cursor.fetchone()
+    if row is None:
+        return None
+    return _row_to_snapshot(row)
+
+
+async def insert_line_movement(movement: LineMovement) -> None:
+    """Insert a detected line movement into the DB."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO line_movements
+                (game_id, source, market, side, prev_value, curr_value, delta,
+                 prev_snapshot_id, curr_snapshot_id, detected_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                movement.game_id,
+                movement.source,
+                movement.market,
+                movement.side,
+                movement.prev_value,
+                movement.curr_value,
+                movement.delta,
+                movement.prev_snapshot_id,
+                movement.curr_snapshot_id,
+                movement.detected_at_utc_iso,
+            ),
+        )
+        await db.commit()

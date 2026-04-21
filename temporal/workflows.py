@@ -16,6 +16,7 @@ with workflow.unsafe.imports_passed_through():
         fetch_polymarket_close_snapshot,
         fetch_final_scores,
         resolve_bets_for_game,
+        detect_line_movements,
         FetchCloseSnapshotInput,
     )
 
@@ -77,6 +78,7 @@ class OddsPollingWorkflow:
             )
 
             # ── Step 4: persist each (game, bookmaker) snapshot ───────────────
+            all_snapshot_ids: list[str] = []
             for snapshot in batch.snapshots:
                 await workflow.execute_activity(
                     upsert_odds_snapshot,
@@ -84,6 +86,7 @@ class OddsPollingWorkflow:
                     start_to_close_timeout=timedelta(seconds=10),
                     retry_policy=RetryPolicy(maximum_attempts=3),
                 )
+                all_snapshot_ids.append(snapshot.snapshot_id)
 
             # ── Step 5: fetch Kalshi ML for all today's games ─────────────────
             kalshi_batch = await workflow.execute_activity(
@@ -101,6 +104,7 @@ class OddsPollingWorkflow:
                     start_to_close_timeout=timedelta(seconds=10),
                     retry_policy=RetryPolicy(maximum_attempts=3),
                 )
+                all_snapshot_ids.append(snapshot.snapshot_id)
 
             # ── Step 7: fetch Polymarket ML for all today's games ─────────────
             polymarket_batch = await workflow.execute_activity(
@@ -116,6 +120,16 @@ class OddsPollingWorkflow:
                     upsert_odds_snapshot,
                     snapshot,
                     start_to_close_timeout=timedelta(seconds=10),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                )
+                all_snapshot_ids.append(snapshot.snapshot_id)
+
+            # ── Step 9: detect significant line movements ─────────────────────
+            if all_snapshot_ids:
+                await workflow.execute_activity(
+                    detect_line_movements,
+                    args=[all_snapshot_ids],
+                    start_to_close_timeout=timedelta(seconds=30),
                     retry_policy=RetryPolicy(maximum_attempts=3),
                 )
 

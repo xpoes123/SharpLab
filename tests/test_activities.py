@@ -10,8 +10,12 @@ from temporal.activities import (
     _parse_espn_detail,
     _parse_espn_injuries_response,
     _resolve_bet,
+    _compare_snapshots,
 )
-from shared.models import Bet, TEAM_ABBR_NBA, TEAM_ABBR_MLB, get_team_abbr
+from shared.models import (
+    Bet, TEAM_ABBR_NBA, TEAM_ABBR_MLB, get_team_abbr,
+    LineAlertThresholds, LineMovement, OddsSnapshot,
+)
 from shared.odds_utils import prob_to_american, american_to_prob, american_to_decimal
 
 
@@ -381,3 +385,123 @@ def test_resolve_mlb_total_over():
 def test_resolve_mlb_total_under():
     # O/U 8.5, final 3-2 = 5 → under hits
     assert _resolve_bet(_bet(market="total", side="under", line=8.5), MLB_HOME, MLB_AWAY, 3, 2) == "won"
+
+
+# ── _compare_snapshots (line movement detection) ─────────────────────────────
+
+def _snap(snapshot_id: str = "snap1", game_id: str = "g1", source: str = "draftkings",
+          captured_at: str = "2026-04-21T20:00:00", payload: dict | None = None) -> OddsSnapshot:
+    """Helper to build an OddsSnapshot for testing."""
+    return OddsSnapshot(
+        snapshot_id=snapshot_id,
+        game_id=game_id,
+        kind="poll",
+        source=source,
+        captured_at_utc_iso=captured_at,
+        payload=payload or {},
+    )
+
+
+_DEFAULT_THRESHOLDS = LineAlertThresholds()  # spread=1.5, total=3.0, ml_cents=20
+
+
+def test_spread_movement_above_threshold():
+    """Spread moves 2 points (>= 1.5 threshold) → detected."""
+    prev = _snap(snapshot_id="prev", payload={"spread": -4.5, "spread_odds": -110})
+    curr = _snap(snapshot_id="curr", captured_at="2026-04-21T20:15:00",
+                 payload={"spread": -6.5, "spread_odds": -110})
+    movements = _compare_snapshots(prev, curr, _DEFAULT_THRESHOLDS)
+    assert len(movements) == 1
+    m = movements[0]
+    assert m.market == "spread"
+    assert m.prev_value == -4.5
+    assert m.curr_value == -6.5
+    assert m.delta == pytest.approx(-2.0)
+    assert m.side is None
+
+
+def test_spread_movement_below_threshold():
+    """Spread moves 1 point (< 1.5 threshold) → NOT detected."""
+    prev = _snap(snapshot_id="prev", payload={"spread": -4.5})
+    curr = _snap(snapshot_id="curr", captured_at="2026-04-21T20:15:00",
+                 payload={"spread": -5.5})
+    movements = _compare_snapshots(prev, curr, _DEFAULT_THRESHOLDS)
+    assert len(movements) == 0
+
+
+def test_ml_movement_above_threshold():
+    """ML home shifts 25 points in American odds (>= 20 threshold) → detected."""
+    prev = _snap(snapshot_id="prev", payload={"ml_home": -150, "ml_away": 130})
+    curr = _snap(snapshot_id="curr", captured_at="2026-04-21T20:15:00",
+                 payload={"ml_home": -175, "ml_away": 155})
+    movements = _compare_snapshots(prev, curr, _DEFAULT_THRESHOLDS)
+    # Both home (delta=-25) and away (delta=+25) should trigger
+    assert len(movements) == 2
+    home_m = next(m for m in movements if m.side == "home")
+    assert home_m.market == "moneyline"
+    assert home_m.prev_value == -150
+    assert home_m.curr_value == -175
+    assert home_m.delta == -25
+    away_m = next(m for m in movements if m.side == "away")
+    assert away_m.delta == 25
+
+
+def test_total_movement_above_threshold():
+    """Total moves 3.5 points (>= 3.0 threshold) → detected."""
+    prev = _snap(snapshot_id="prev", payload={"total": 224.5})
+    curr = _snap(snapshot_id="curr", captured_at="2026-04-21T20:15:00",
+                 payload={"total": 228.0})
+    movements = _compare_snapshots(prev, curr, _DEFAULT_THRESHOLDS)
+    assert len(movements) == 1
+    m = movements[0]
+    assert m.market == "total"
+    assert m.prev_value == 224.5
+    assert m.curr_value == 228.0
+    assert m.delta == pytest.approx(3.5)
+
+
+def test_no_previous_spread_skips():
+    """If previous snapshot has no spread key, no movement for spread."""
+    prev = _snap(snapshot_id="prev", payload={"ml_home": -150, "ml_away": 130})
+    curr = _snap(snapshot_id="curr", captured_at="2026-04-21T20:15:00",
+                 payload={"spread": -6.5, "ml_home": -155, "ml_away": 135})
+    movements = _compare_snapshots(prev, curr, _DEFAULT_THRESHOLDS)
+    # Only ML checks fire; spread skipped because prev has no spread
+    assert all(m.market == "moneyline" for m in movements) or len(movements) == 0
+
+
+def test_ml_movement_below_threshold():
+    """ML home shifts 10 points (< 20 threshold) → NOT detected."""
+    prev = _snap(snapshot_id="prev", payload={"ml_home": -150, "ml_away": 130})
+    curr = _snap(snapshot_id="curr", captured_at="2026-04-21T20:15:00",
+                 payload={"ml_home": -160, "ml_away": 140})
+    movements = _compare_snapshots(prev, curr, _DEFAULT_THRESHOLDS)
+    assert len(movements) == 0
+
+
+def test_multiple_markets_move_simultaneously():
+    """Spread + total + ML all move above thresholds in one cycle."""
+    prev = _snap(snapshot_id="prev", payload={
+        "spread": -3.0, "total": 220.0, "ml_home": -150, "ml_away": 130,
+    })
+    curr = _snap(snapshot_id="curr", captured_at="2026-04-21T20:15:00", payload={
+        "spread": -5.0, "total": 224.0, "ml_home": -180, "ml_away": 160,
+    })
+    movements = _compare_snapshots(prev, curr, _DEFAULT_THRESHOLDS)
+    markets = {m.market for m in movements}
+    assert "spread" in markets
+    assert "total" in markets
+    assert "moneyline" in markets
+    assert len(movements) == 4  # spread + total + ml_home + ml_away
+
+
+def test_custom_thresholds():
+    """Custom thresholds change what gets detected."""
+    tight = LineAlertThresholds(spread_points=0.5, total_points=1.0, moneyline_cents=5)
+    prev = _snap(snapshot_id="prev", payload={"spread": -3.0, "total": 220.0})
+    curr = _snap(snapshot_id="curr", captured_at="2026-04-21T20:15:00",
+                 payload={"spread": -3.5, "total": 221.0})
+    # Under default thresholds these wouldn't trigger, but with tight thresholds they do
+    movements = _compare_snapshots(prev, curr, tight)
+    assert len(movements) == 2
+    assert {m.market for m in movements} == {"spread", "total"}
