@@ -181,11 +181,16 @@ class CLVCog(commands.Cog):
                 inline=False,
             )
 
+            # Only post CLV if someone has an active bet on this game.
+            bets = await queries.get_open_bets_for_game(game_id)
+            if not bets:
+                await queries.mark_game_clv_posted(game_id)
+                continue
+
             # If anyone has bets, compute CLV and add their lines.
             # Discord caps embeds at 25 fields. We use 1 for "Close", so the
             # first embed holds up to 24 bet fields. Overflow goes into
             # follow-up embeds (25 fields each) to avoid HTTP 400.
-            bets = await queries.get_open_bets_for_game(game_id)
             mention_ids: set[str] = set()
             bet_fields: list[tuple[str, str]] = []
             for bet in bets:
