@@ -20,12 +20,16 @@ dev:
     echo "▶ Starting Temporal worker..."
     uv run python -m temporal.worker &
     sleep 2
-    echo "▶ Starting odds polling workflow..."
-    uv run python -m temporal.start_odds_polling
+    echo "▶ Starting NBA odds polling workflow..."
+    uv run python -m temporal.start_odds_polling nba
+    echo "▶ Starting MLB odds polling workflow..."
+    uv run python -m temporal.start_odds_polling mlb
     echo "▶ Starting injury polling workflow..."
     uv run python -m temporal.start_injury_polling
-    echo "▶ Starting bet resolution workflow..."
-    uv run python -m temporal.start_bet_resolution
+    echo "▶ Starting NBA bet resolution workflow..."
+    uv run python -m temporal.start_bet_resolution nba
+    echo "▶ Starting MLB bet resolution workflow..."
+    uv run python -m temporal.start_bet_resolution mlb
     echo "▶ Starting Discord bot..."
     uv run python -m bot.main &
     echo "✓ All services running. Ctrl+C to stop."
