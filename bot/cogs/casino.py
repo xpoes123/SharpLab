@@ -231,7 +231,7 @@ class BlackjackTable:
     running_count: int = 0
     total_cards: int = 0  # total cards when shoe was created
     round_num: int = 1
-    last_bets: dict[int, tuple[str, int]] = field(default_factory=dict)
+    last_bets: dict[int, tuple[str, int, int, int]] = field(default_factory=dict)
     reshuffled: bool = False
 
     def draw(self) -> str:
@@ -684,20 +684,22 @@ class BlackjackTableView(ui.View):
                 "No previous bet — use Join instead.", ephemeral=True,
             )
             return
-        name, amt = last
+        name, amt, pp, t3 = last
+        total_cost = amt + pp + t3
         if len(self.table.players) >= MAX_PLAYERS:
             await interaction.response.send_message("Table is full!", ephemeral=True)
             return
         try:
-            await queries.update_casino_balance(str(uid), -amt)
+            await queries.update_casino_balance(str(uid), -total_cost)
         except ValueError:
             bal = await queries.get_or_create_casino_wallet(str(uid))
             await interaction.response.send_message(
-                f"Not enough coins for {amt}c re-bet! (have {bal})", ephemeral=True,
+                f"Not enough coins for {total_cost}c re-bet! (have {bal})", ephemeral=True,
             )
             return
         self.table.players[uid] = PlayerHand(
             user_id=uid, display_name=name, bet=amt, original_bet=amt,
+            pairs_wager=pp, twentyone3_wager=t3,
         )
         self._update_buttons()
         await interaction.response.edit_message(
@@ -905,23 +907,6 @@ class BlackjackTableView(ui.View):
             embed=_table_embed(self.table), view=self,
         )
 
-    @ui.button(label="Count", style=discord.ButtonStyle.secondary, emoji="🔢", row=2)
-    async def count_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        table = self.table
-        cards_dealt = table.total_cards - len(table.shoe)
-        dr = table.decks_remaining()
-        tc = table.true_count()
-
-        pct = cards_dealt * 100 // table.total_cards if table.total_cards else 0
-        msg = (
-            f"**📊 Card Count**\n"
-            f"Running Count: **{table.running_count:+d}**\n"
-            f"True Count: **{tc:+.1f}**\n"
-            f"Cards Dealt: {cards_dealt}/{table.total_cards} ({pct}%)\n"
-            f"Decks Remaining: ~{dr:.1f}"
-        )
-        await interaction.response.send_message(msg, ephemeral=True)
-
     @ui.button(label="Close Table", style=discord.ButtonStyle.danger, emoji="✖️", row=2)
     async def close_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
         if interaction.user.id != self.table.dealer_id:
@@ -1100,7 +1085,9 @@ class BlackjackTableView(ui.View):
 
         # Save original bets for re-bet next round
         for p in table.players.values():
-            table.last_bets[p.user_id] = (p.display_name, p.original_bet)
+            table.last_bets[p.user_id] = (
+                p.display_name, p.original_bet, p.pairs_wager, p.twentyone3_wager,
+            )
 
         for p in table.players.values():
             # Credit main hand payout
