@@ -34,6 +34,7 @@ GAME_LABELS: dict[str, str] = {
     "bingo": "Bingo",
     "horserace": "Horse Race",
     "stockmarket": "Stock Market",
+    "stockguess": "Stock Guess",
     "math24": "Math 24",
     "countdown": "Countdown",
     "mastermind": "Mastermind",
@@ -1837,6 +1838,7 @@ CASINO_GAMES: list[tuple[str, str, str, str]] = [
     ("nba-trivia", "NBA Roster Trivia \u2014 name the team first", "Brain Games", "party"),
     ("nfl-trivia", "NFL Roster Trivia \u2014 name the team first", "Brain Games", "party"),
     ("sudoku", "Sudoku Sprint \u2014 fill the 4\u00d74 grid fastest", "Brain Games", "party"),
+    ("stockguess", "Guess a stock's YTD % change \u2014 closest wins!", "Brain Games", "party"),
     # ── Sports Sim
     ("nbasim", "Simulated NBA game betting", "Sports Sim", "solo"),
     ("nflsim", "Simulated NFL game betting", "Sports Sim", "solo"),
