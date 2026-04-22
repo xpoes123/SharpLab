@@ -135,12 +135,21 @@ class PlayerHand:
     user_id: int
     display_name: str
     bet: int
+    original_bet: int = 0  # pre-double/split amount for re-bet
     hand: list[str] = field(default_factory=list)
     stood: bool = False
     busted: bool = False
     doubled: bool = False
     blackjack: bool = False
     payout: int = 0
+    # Split
+    has_split: bool = False
+    split_hand: list[str] = field(default_factory=list)
+    split_stood: bool = False
+    split_busted: bool = False
+    split_bet: int = 0
+    split_payout: int = 0
+    active_hand: int = 0  # 0 = main, 1 = split
     # Side bets
     pairs_wager: int = 0
     twentyone3_wager: int = 0
@@ -151,11 +160,62 @@ class PlayerHand:
 
     @property
     def done(self) -> bool:
-        return self.stood or self.busted or self.blackjack
+        if self.blackjack:
+            return True
+        main_done = self.stood or self.busted
+        if not self.has_split:
+            return main_done
+        split_done = self.split_stood or self.split_busted
+        return main_done and split_done
 
     @property
     def side_wager(self) -> int:
         return self.pairs_wager + self.twentyone3_wager
+
+    @property
+    def can_split(self) -> bool:
+        if self.has_split or len(self.hand) != 2:
+            return False
+        return _card_rank(self.hand[0]) == _card_rank(self.hand[1])
+
+    @property
+    def active_cards(self) -> list[str]:
+        if self.has_split and self.active_hand == 1:
+            return self.split_hand
+        return self.hand
+
+    def hit_active(self, card: str) -> None:
+        """Add a card to the active hand and check bust/21."""
+        if self.has_split and self.active_hand == 1:
+            self.split_hand.append(card)
+            val = _hand_value(self.split_hand)
+            if val > 21:
+                self.split_busted = True
+            elif val == 21:
+                self.split_stood = True
+        else:
+            self.hand.append(card)
+            val = _hand_value(self.hand)
+            if val > 21:
+                self.busted = True
+            elif val == 21:
+                self.stood = True
+        self._advance()
+
+    def stand_active(self) -> None:
+        """Stand on the active hand."""
+        if self.has_split and self.active_hand == 1:
+            self.split_stood = True
+        else:
+            self.stood = True
+        self._advance()
+
+    def _advance(self) -> None:
+        """If main hand is done and split exists, move to split hand."""
+        if not self.has_split or self.active_hand == 1:
+            return
+        if self.stood or self.busted:
+            self.active_hand = 1
 
 
 @dataclass
@@ -201,6 +261,25 @@ class BlackjackTable:
             self.reshuffled = True
 
 
+# ── Embed helpers ─────────────────────────────────────────────────────────────
+
+
+def _hand_status(stood: bool, busted: bool, val: int) -> str:
+    if busted:
+        return "Bust!"
+    if stood:
+        return f"stands ({val})"
+    return f"({val})"
+
+
+def _hand_outcome(payout: int, bet: int) -> str:
+    if payout == 0:
+        return "Dealer wins"
+    if payout == bet:
+        return "Push"
+    return "Win!"
+
+
 # ── Embeds ────────────────────────────────────────────────────────────────────
 
 
@@ -221,7 +300,11 @@ def _table_embed(
 
     embed = discord.Embed(title=title, colour=colour)
 
-    footer = f"Dealer: {table.dealer_name} | Shoe: {len(table.shoe)}/{table.total_cards} cards"
+    tc = table.true_count()
+    footer = (
+        f"Dealer: {table.dealer_name} | Shoe: {len(table.shoe)}/{table.total_cards}"
+        f" | RC {table.running_count:+d} · TC {tc:+.1f}"
+    )
     embed.set_footer(text=footer)
 
     # Reshuffle notice
@@ -235,7 +318,7 @@ def _table_embed(
 
     # Dealer hand
     if phase == "betting":
-        pass  # no dealer hand yet
+        pass
     elif phase == "playing":
         embed.add_field(
             name="Dealer",
@@ -262,8 +345,8 @@ def _table_embed(
     else:
         lines: list[str] = []
         for p in table.players.values():
-            # Side bet label for betting phase
-            side_parts = []
+            # Side bet label
+            side_parts: list[str] = []
             if p.pairs_wager > 0:
                 side_parts.append(f"PP {p.pairs_wager}c")
             if p.twentyone3_wager > 0:
@@ -272,84 +355,126 @@ def _table_embed(
 
             if phase == "betting":
                 lines.append(f"🃏 **{p.display_name}** — {p.bet}c{side_str}")
+
             elif phase == "playing":
-                val = _hand_value(p.hand)
-                cards = _fmt_hand(p.hand)
-                if p.blackjack:
-                    status = "Blackjack! ✨"
-                    emoji = "✅"
-                elif p.busted:
-                    status = "Bust!"
-                    emoji = "💥"
-                elif p.stood:
-                    status = f"stands ({val})"
-                    emoji = "✋"
-                else:
-                    status = f"({val})"
-                    emoji = "🟦"
-                # Show side bet results inline during play
-                side_results = []
-                if p.pairs_wager > 0:
-                    if p.pairs_payout > 0:
-                        side_results.append(f"PP: {p.pairs_label} ✔")
-                    else:
-                        side_results.append("PP ✘")
-                if p.twentyone3_wager > 0:
-                    if p.twentyone3_payout > 0:
-                        side_results.append(f"21+3: {p.twentyone3_label} ✔")
-                    else:
-                        side_results.append("21+3 ✘")
-                side_line = f" | {' · '.join(side_results)}" if side_results else ""
-                lines.append(
-                    f"{emoji} **{p.display_name}** ({p.bet}c): {cards} — {status}{side_line}"
-                )
+                _append_playing_line(lines, p)
+
             else:  # finished
-                val = _hand_value(p.hand)
-                cards = _fmt_hand(p.hand)
-                if p.blackjack:
-                    outcome = "Blackjack!"
-                elif p.busted:
-                    outcome = "Bust!"
-                elif p.payout == 0:
-                    outcome = "Dealer wins"
-                elif p.payout == p.bet:
-                    outcome = "Push"
-                else:
-                    outcome = "Win!"
-                # Net includes side bet P&L
-                total_payout = p.payout + p.pairs_payout + p.twentyone3_payout
-                total_cost = p.bet + p.pairs_wager + p.twentyone3_wager
-                net = total_payout - total_cost
-                sign = "+" if net > 0 else ""
-                bal = balances.get(p.user_id, 0) if balances else 0
-                # Side bet result line
-                side_results = []
-                if p.pairs_wager > 0:
-                    if p.pairs_payout > 0:
-                        side_results.append(
-                            f"PP: {p.pairs_label} +{p.pairs_payout - p.pairs_wager}c"
-                        )
-                    else:
-                        side_results.append(f"PP ✘")
-                if p.twentyone3_wager > 0:
-                    if p.twentyone3_payout > 0:
-                        side_results.append(
-                            f"21+3: {p.twentyone3_label} +{p.twentyone3_payout - p.twentyone3_wager}c"
-                        )
-                    else:
-                        side_results.append(f"21+3 ✘")
-                side_line = f"\n  {' · '.join(side_results)}" if side_results else ""
-                lines.append(
-                    f"**{p.display_name}** ({p.bet}c): {cards} ({val}) — {outcome}"
-                    f"{side_line}\n  → **{sign}{net}c** (bal: {bal}c)"
-                )
+                _append_finished_line(lines, p, balances)
+
         if lines:
             embed.add_field(name="Players", value="\n".join(lines), inline=False)
 
     return embed
 
 
-# ── Modal ─────────────────────────────────────────────────────────────────────
+def _side_bet_inline(p: PlayerHand) -> str:
+    """Side bet results for inline display."""
+    parts: list[str] = []
+    if p.pairs_wager > 0:
+        parts.append(f"PP: {p.pairs_label} ✔" if p.pairs_payout > 0 else "PP ✘")
+    if p.twentyone3_wager > 0:
+        parts.append(f"21+3: {p.twentyone3_label} ✔" if p.twentyone3_payout > 0 else "21+3 ✘")
+    return f" | {' · '.join(parts)}" if parts else ""
+
+
+def _append_playing_line(lines: list[str], p: PlayerHand) -> None:
+    side_line = _side_bet_inline(p)
+
+    if not p.has_split:
+        val = _hand_value(p.hand)
+        cards = _fmt_hand(p.hand)
+        if p.blackjack:
+            emoji, status = "✅", "Blackjack! ✨"
+        elif p.busted:
+            emoji, status = "💥", "Bust!"
+        elif p.stood:
+            emoji, status = "✋", f"stands ({val})"
+        else:
+            emoji, status = "🟦", f"({val})"
+        lines.append(f"{emoji} **{p.display_name}** ({p.bet}c): {cards} — {status}{side_line}")
+        return
+
+    # Split hands — multi-line
+    bet_label = f"{p.bet}c + {p.split_bet}c"
+    val1 = _hand_value(p.hand)
+    val2 = _hand_value(p.split_hand)
+    cards1 = _fmt_hand(p.hand)
+    cards2 = _fmt_hand(p.split_hand)
+
+    active1 = p.active_hand == 0 and not p.stood and not p.busted
+    active2 = p.active_hand == 1 and not p.split_stood and not p.split_busted
+
+    arrow1 = "▶ " if active1 else "  "
+    arrow2 = "▶ " if active2 else "  "
+    s1 = _hand_status(p.stood, p.busted, val1)
+    s2 = _hand_status(p.split_stood, p.split_busted, val2)
+
+    emoji = "🟦" if (active1 or active2) else "✋"
+    if p.busted and p.split_busted:
+        emoji = "💥"
+
+    lines.append(
+        f"{emoji} **{p.display_name}** ({bet_label}):{side_line}\n"
+        f"{arrow1}Hand 1: {cards1} — {s1}\n"
+        f"{arrow2}Hand 2: {cards2} — {s2}"
+    )
+
+
+def _append_finished_line(
+    lines: list[str], p: PlayerHand, balances: dict[int, int] | None,
+) -> None:
+    # Side bet result lines
+    side_results: list[str] = []
+    if p.pairs_wager > 0:
+        if p.pairs_payout > 0:
+            side_results.append(f"PP: {p.pairs_label} +{p.pairs_payout - p.pairs_wager}c")
+        else:
+            side_results.append("PP ✘")
+    if p.twentyone3_wager > 0:
+        if p.twentyone3_payout > 0:
+            side_results.append(f"21+3: {p.twentyone3_label} +{p.twentyone3_payout - p.twentyone3_wager}c")
+        else:
+            side_results.append("21+3 ✘")
+    side_line = f"\n  {' · '.join(side_results)}" if side_results else ""
+
+    # Total P&L
+    total_payout = p.payout + p.split_payout + p.pairs_payout + p.twentyone3_payout
+    total_cost = p.bet + p.split_bet + p.pairs_wager + p.twentyone3_wager
+    net = total_payout - total_cost
+    sign = "+" if net > 0 else ""
+    bal = balances.get(p.user_id, 0) if balances else 0
+
+    if not p.has_split:
+        val = _hand_value(p.hand)
+        cards = _fmt_hand(p.hand)
+        if p.blackjack:
+            outcome = "Blackjack!"
+        else:
+            outcome = _hand_outcome(p.payout, p.bet)
+        lines.append(
+            f"**{p.display_name}** ({p.bet}c): {cards} ({val}) — {outcome}"
+            f"{side_line}\n  → **{sign}{net}c** (bal: {bal}c)"
+        )
+        return
+
+    # Split — show both hands
+    val1 = _hand_value(p.hand)
+    val2 = _hand_value(p.split_hand)
+    cards1 = _fmt_hand(p.hand)
+    cards2 = _fmt_hand(p.split_hand)
+    o1 = _hand_outcome(p.payout, p.bet)
+    o2 = _hand_outcome(p.split_payout, p.split_bet)
+
+    lines.append(
+        f"**{p.display_name}** ({p.bet}c + {p.split_bet}c):"
+        f"\n  Hand 1: {cards1} ({val1}) — {o1}"
+        f"\n  Hand 2: {cards2} ({val2}) — {o2}"
+        f"{side_line}\n  → **{sign}{net}c** (bal: {bal}c)"
+    )
+
+
+# ── Modals ────────────────────────────────────────────────────────────────────
 
 
 class JoinBlackjackModal(ui.Modal):
@@ -385,7 +510,8 @@ class JoinBlackjackModal(ui.Modal):
             )
             return
         self.table.players[uid] = PlayerHand(
-            user_id=uid, display_name=interaction.user.display_name, bet=amt,
+            user_id=uid, display_name=interaction.user.display_name,
+            bet=amt, original_bet=amt,
         )
         self.table_view._update_buttons()
         await interaction.response.edit_message(
@@ -412,26 +538,18 @@ class BJSideBetModal(ui.Modal):
         try:
             amt = int(self.amount.value)
         except ValueError:
-            await interaction.response.send_message(
-                "Enter a whole number.", ephemeral=True,
-            )
+            await interaction.response.send_message("Enter a whole number.", ephemeral=True)
             return
         if amt < 1:
-            await interaction.response.send_message(
-                "Must be at least 1 coin.", ephemeral=True,
-            )
+            await interaction.response.send_message("Must be at least 1 coin.", ephemeral=True)
             return
         uid = interaction.user.id
         player = self.table.players.get(uid)
         if player is None:
-            await interaction.response.send_message(
-                "Join the table first!", ephemeral=True,
-            )
+            await interaction.response.send_message("Join the table first!", ephemeral=True)
             return
         if self.table.phase != "betting":
-            await interaction.response.send_message(
-                "Cards already dealt!", ephemeral=True,
-            )
+            await interaction.response.send_message("Cards already dealt!", ephemeral=True)
             return
         if self.side == "pairs" and player.pairs_wager > 0:
             await interaction.response.send_message(
@@ -487,10 +605,11 @@ class BlackjackTableView(ui.View):
         self.rebet_btn.disabled = not betting or not self.table.last_bets
         self.leave_btn.disabled = finished
 
-        # Row 1: Hit, Stand, Double Down
+        # Row 1: Hit, Stand, Double Down, Split
         self.hit_btn.disabled = not playing
         self.stand_btn.disabled = not playing
         self.double_btn.disabled = not playing
+        self.split_btn.disabled = not playing
 
         # Row 2: New Round, Count, Close Table
         self.new_round_btn.disabled = not finished
@@ -551,9 +670,7 @@ class BlackjackTableView(ui.View):
     @ui.button(label="Re-bet", style=discord.ButtonStyle.primary, emoji="🔄", row=0)
     async def rebet_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
         if self.table.phase != "betting":
-            await interaction.response.send_message(
-                "Cards already dealt!", ephemeral=True,
-            )
+            await interaction.response.send_message("Cards already dealt!", ephemeral=True)
             return
         uid = interaction.user.id
         if uid in self.table.players:
@@ -580,7 +697,7 @@ class BlackjackTableView(ui.View):
             )
             return
         self.table.players[uid] = PlayerHand(
-            user_id=uid, display_name=name, bet=amt,
+            user_id=uid, display_name=name, bet=amt, original_bet=amt,
         )
         self._update_buttons()
         await interaction.response.edit_message(
@@ -625,7 +742,7 @@ class BlackjackTableView(ui.View):
             "You'll see results when the round ends.", ephemeral=True,
         )
 
-    # ── Row 1: Hit / Stand / Double Down ─────────────────────────
+    # ── Row 1: Hit / Stand / Double Down / Split ─────────────────
 
     @ui.button(label="Hit", style=discord.ButtonStyle.primary, emoji="👊", row=1)
     async def hit_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
@@ -635,12 +752,7 @@ class BlackjackTableView(ui.View):
                 "You're not playing or already done!", ephemeral=True,
             )
             return
-        player.hand.append(self.table.draw())
-        val = _hand_value(player.hand)
-        if val > 21:
-            player.busted = True
-        elif val == 21:
-            player.stood = True
+        player.hit_active(self.table.draw())
 
         if self.table.all_done():
             await self._dealer_play_and_finish(interaction)
@@ -657,7 +769,7 @@ class BlackjackTableView(ui.View):
                 "You're not playing or already done!", ephemeral=True,
             )
             return
-        player.stood = True
+        player.stand_active()
 
         if self.table.all_done():
             await self._dealer_play_and_finish(interaction)
@@ -674,30 +786,97 @@ class BlackjackTableView(ui.View):
                 "You're not playing or already done!", ephemeral=True,
             )
             return
-        if len(player.hand) != 2:
+        if len(player.active_cards) != 2:
             await interaction.response.send_message(
                 "Can only double down on first two cards!", ephemeral=True,
             )
             return
 
-        # Deduct extra bet
+        # Determine which bet to double
+        if player.has_split and player.active_hand == 1:
+            cost = player.split_bet
+        else:
+            cost = player.bet
+
         try:
-            await queries.update_casino_balance(str(player.user_id), -player.bet)
+            await queries.update_casino_balance(str(player.user_id), -cost)
         except ValueError:
             await interaction.response.send_message(
                 "Not enough coins to double down!", ephemeral=True,
             )
             return
-        player.bet *= 2
+
+        if player.has_split and player.active_hand == 1:
+            player.split_bet *= 2
+        else:
+            player.bet *= 2
         player.doubled = True
 
-        # Draw one card, auto-stand
-        player.hand.append(self.table.draw())
-        val = _hand_value(player.hand)
-        if val > 21:
-            player.busted = True
+        # Draw one card, auto-stand (or bust)
+        player.hit_active(self.table.draw())
+        # hit_active handles bust/21/advance, but if not busted we force stand
+        if player.has_split and player.active_hand == 1:
+            if not player.split_busted and not player.split_stood:
+                player.stand_active()
+        elif player.active_hand == 0 or not player.has_split:
+            if not player.busted and not player.stood:
+                player.stand_active()
+
+        if self.table.all_done():
+            await self._dealer_play_and_finish(interaction)
         else:
+            await interaction.response.edit_message(
+                embed=_table_embed(self.table), view=self,
+            )
+
+    @ui.button(label="Split", style=discord.ButtonStyle.primary, emoji="✂️", row=1)
+    async def split_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        player = self._get_active_player(interaction)
+        if player is None:
+            await interaction.response.send_message(
+                "You're not playing or already done!", ephemeral=True,
+            )
+            return
+        if not player.can_split:
+            await interaction.response.send_message(
+                "Can't split — need two cards of the same rank!", ephemeral=True,
+            )
+            return
+
+        # Deduct split bet (equal to original bet)
+        split_cost = player.original_bet
+        try:
+            await queries.update_casino_balance(str(player.user_id), -split_cost)
+        except ValueError:
+            await interaction.response.send_message(
+                "Not enough coins to split!", ephemeral=True,
+            )
+            return
+
+        # Split the hand
+        player.has_split = True
+        player.split_bet = split_cost
+        player.split_hand = [player.hand.pop()]  # move second card to split
+        # Deal one card to each hand
+        player.hand.append(self.table.draw())
+        player.split_hand.append(self.table.draw())
+
+        # Split aces: one card each, auto-stand both
+        if _card_rank(player.hand[0]) == "A":
             player.stood = True
+            player.split_stood = True
+            # Check for busts (impossible with 2 cards but be safe)
+            if _hand_value(player.hand) > 21:
+                player.busted = True
+            if _hand_value(player.split_hand) > 21:
+                player.split_busted = True
+        else:
+            # Auto-stand if either hand hits 21
+            if _hand_value(player.hand) == 21:
+                player.stood = True
+                player._advance()
+            if _hand_value(player.split_hand) == 21:
+                player.split_stood = True
 
         if self.table.all_done():
             await self._dealer_play_and_finish(interaction)
@@ -733,12 +912,12 @@ class BlackjackTableView(ui.View):
         dr = table.decks_remaining()
         tc = table.true_count()
 
+        pct = cards_dealt * 100 // table.total_cards if table.total_cards else 0
         msg = (
             f"**📊 Card Count**\n"
             f"Running Count: **{table.running_count:+d}**\n"
             f"True Count: **{tc:+.1f}**\n"
-            f"Cards Dealt: {cards_dealt}/{table.total_cards} "
-            f"({cards_dealt * 100 // table.total_cards}%)\n"
+            f"Cards Dealt: {cards_dealt}/{table.total_cards} ({pct}%)\n"
             f"Decks Remaining: ~{dr:.1f}"
         )
         await interaction.response.send_message(msg, ephemeral=True)
@@ -755,14 +934,12 @@ class BlackjackTableView(ui.View):
                 "Can't close mid-round!", ephemeral=True,
             )
             return
-        # Refund any bets if in betting phase
         if self.table.phase == "betting":
             await self._abort(interaction, "Table closed by dealer. All bets refunded.")
         else:
-            # Finished phase — just close
             await self._close(interaction)
 
-    # ── Row 3: Side Bets ─────────────────────────────────────────────
+    # ── Row 3: Side Bets ─────────────────────────────────────────
 
     @ui.button(
         label="Perfect Pairs", style=discord.ButtonStyle.success,
@@ -778,21 +955,17 @@ class BlackjackTableView(ui.View):
     async def twentyone3_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
         await self._handle_side_bet(interaction, "twentyone3")
 
-    # ── Deal logic ─────────────────────────────────────────────────
+    # ── Side bet handler ─────────────────────────────────────────
 
     async def _handle_side_bet(
         self, interaction: discord.Interaction, side: str,
     ) -> None:
         uid = interaction.user.id
         if self.table.phase != "betting":
-            await interaction.response.send_message(
-                "Cards already dealt!", ephemeral=True,
-            )
+            await interaction.response.send_message("Cards already dealt!", ephemeral=True)
             return
         if uid not in self.table.players:
-            await interaction.response.send_message(
-                "Join the table first!", ephemeral=True,
-            )
+            await interaction.response.send_message("Join the table first!", ephemeral=True)
             return
         player = self.table.players[uid]
         if side == "pairs" and player.pairs_wager > 0:
@@ -805,9 +978,9 @@ class BlackjackTableView(ui.View):
                 "You already have a 21+3 bet!", ephemeral=True,
             )
             return
-        await interaction.response.send_modal(
-            BJSideBetModal(self.table, side, self),
-        )
+        await interaction.response.send_modal(BJSideBetModal(self.table, side, self))
+
+    # ── Deal logic ───────────────────────────────────────────────
 
     async def _deal(self, interaction: discord.Interaction) -> None:
         table = self.table
@@ -828,21 +1001,13 @@ class BlackjackTableView(ui.View):
                 if mult > 0:
                     p.pairs_label = label
                     p.pairs_payout = p.pairs_wager + mult * p.pairs_wager
-                    await queries.update_casino_balance(
-                        str(p.user_id), p.pairs_payout,
-                    )
+                    await queries.update_casino_balance(str(p.user_id), p.pairs_payout)
             if p.twentyone3_wager > 0:
-                label, mult = _eval_21_plus_3(
-                    p.hand[0], p.hand[1], dealer_upcard,
-                )
+                label, mult = _eval_21_plus_3(p.hand[0], p.hand[1], dealer_upcard)
                 if mult > 0:
                     p.twentyone3_label = label
-                    p.twentyone3_payout = (
-                        p.twentyone3_wager + mult * p.twentyone3_wager
-                    )
-                    await queries.update_casino_balance(
-                        str(p.user_id), p.twentyone3_payout,
-                    )
+                    p.twentyone3_payout = p.twentyone3_wager + mult * p.twentyone3_wager
+                    await queries.update_casino_balance(str(p.user_id), p.twentyone3_payout)
 
         # Check player naturals
         for p in table.players.values():
@@ -858,13 +1023,12 @@ class BlackjackTableView(ui.View):
         if dealer_bj:
             for p in table.players.values():
                 if not p.blackjack:
-                    p.busted = True  # mark as done (lost)
+                    p.busted = True
                     p.payout = 0
                 else:
                     # Push — refund bet
                     await queries.update_casino_balance(str(p.user_id), p.payout)
 
-        # If all players done (all naturals or dealer BJ), finish immediately
         if table.all_done():
             await self._finish_round(interaction)
             return
@@ -874,35 +1038,58 @@ class BlackjackTableView(ui.View):
             embed=_table_embed(table), view=self,
         )
 
-    # ── Dealer play + finish ───────────────────────────────────────
+    # ── Dealer play + finish ─────────────────────────────────────
 
     async def _dealer_play_and_finish(self, interaction: discord.Interaction) -> None:
         table = self.table
 
-        # Dealer only plays if at least one player hasn't busted
-        any_standing = any(p.stood and not p.busted for p in table.players.values())
+        # Dealer only plays if at least one hand is standing (not busted)
+        any_standing = False
+        for p in table.players.values():
+            if p.stood and not p.busted:
+                any_standing = True
+            if p.has_split and p.split_stood and not p.split_busted:
+                any_standing = True
+
         if any_standing:
             while _hand_value(table.dealer_hand) < 17:
                 table.dealer_hand.append(table.draw())
 
         dval = _hand_value(table.dealer_hand)
 
-        # Resolve each player
+        # Resolve each player's hand(s)
         for p in table.players.values():
             if p.blackjack:
                 continue  # already paid at deal time
+
+            # Main hand
             if p.busted:
                 p.payout = 0
-                continue
-            pval = _hand_value(p.hand)
-            if dval > 21:
-                p.payout = p.bet * 2
-            elif pval > dval:
-                p.payout = p.bet * 2
-            elif pval == dval:
-                p.payout = p.bet  # push
             else:
-                p.payout = 0
+                pval = _hand_value(p.hand)
+                if dval > 21:
+                    p.payout = p.bet * 2
+                elif pval > dval:
+                    p.payout = p.bet * 2
+                elif pval == dval:
+                    p.payout = p.bet
+                else:
+                    p.payout = 0
+
+            # Split hand
+            if p.has_split:
+                if p.split_busted:
+                    p.split_payout = 0
+                else:
+                    sval = _hand_value(p.split_hand)
+                    if dval > 21:
+                        p.split_payout = p.split_bet * 2
+                    elif sval > dval:
+                        p.split_payout = p.split_bet * 2
+                    elif sval == dval:
+                        p.split_payout = p.split_bet
+                    else:
+                        p.split_payout = 0
 
         await self._finish_round(interaction)
 
@@ -911,23 +1098,25 @@ class BlackjackTableView(ui.View):
         table.phase = "finished"
         balances: dict[int, int] = {}
 
-        # Save bets for re-bet next round
+        # Save original bets for re-bet next round
         for p in table.players.values():
-            table.last_bets[p.user_id] = (p.display_name, p.bet)
+            table.last_bets[p.user_id] = (p.display_name, p.original_bet)
 
         for p in table.players.values():
+            # Credit main hand payout
             if p.blackjack:
-                balances[p.user_id] = (
-                    await queries.get_casino_balance(str(p.user_id))
-                ) or 0
+                # BJ payouts already credited at deal time
+                pass
             elif p.payout > 0:
-                balances[p.user_id] = await queries.update_casino_balance(
-                    str(p.user_id), p.payout,
-                )
-            else:
-                balances[p.user_id] = (
-                    await queries.get_casino_balance(str(p.user_id))
-                ) or 0
+                await queries.update_casino_balance(str(p.user_id), p.payout)
+
+            # Credit split hand payout
+            if p.has_split and p.split_payout > 0:
+                await queries.update_casino_balance(str(p.user_id), p.split_payout)
+
+            balances[p.user_id] = (
+                await queries.get_casino_balance(str(p.user_id))
+            ) or 0
 
         embed = _table_embed(table, balances=balances)
         self._update_buttons()
@@ -942,14 +1131,13 @@ class BlackjackTableView(ui.View):
         table.round_num += 1
         table.check_reshuffle()
 
-    # ── Abort / close / timeout ────────────────────────────────────
+    # ── Abort / close / timeout ──────────────────────────────────
 
     async def _abort(self, interaction: discord.Interaction, reason: str) -> None:
         for p in self.table.players.values():
             try:
-                await queries.update_casino_balance(
-                    str(p.user_id), p.bet + p.side_wager,
-                )
+                refund = p.bet + p.split_bet + p.side_wager
+                await queries.update_casino_balance(str(p.user_id), refund)
             except Exception:
                 pass
         embed = discord.Embed(
@@ -980,7 +1168,6 @@ class BlackjackTableView(ui.View):
     async def on_timeout(self) -> None:
         table = self.table
         if table.phase == "finished":
-            # Just close gracefully
             self.active_tables.pop(table.channel_id, None)
             if table.message:
                 try:
@@ -993,10 +1180,13 @@ class BlackjackTableView(ui.View):
                 except Exception:
                     pass
             return
-        # Betting: refund main + side bets. Playing: side bets already resolved.
+        # Betting: refund main + split + side. Playing: side already resolved.
         for p in table.players.values():
             try:
-                refund = p.bet + p.side_wager if table.phase == "betting" else p.bet
+                if table.phase == "betting":
+                    refund = p.bet + p.side_wager
+                else:
+                    refund = p.bet + p.split_bet  # split bet not yet resolved
                 await queries.update_casino_balance(str(p.user_id), refund)
             except Exception:
                 pass
