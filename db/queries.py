@@ -1877,10 +1877,18 @@ async def place_market_order(
     quantity: int,
 ) -> int:
     """Place an order. Deducts escrow (price*quantity) from casino wallet. Returns order_id."""
+    if side not in ("buy", "sell"):
+        raise ValueError(f"side must be 'buy' or 'sell', got {side!r}")
     if price < 1 or price > 99:
         raise ValueError(f"Price must be 1-99, got {price}")
     if quantity < 1:
         raise ValueError("Quantity must be at least 1")
+    # Binary markets use buy-vs-buy matching on opposite outcomes; sell orders can never fill
+    market = await get_prediction_market(market_id)
+    if market is None:
+        raise ValueError(f"Market {market_id} not found")
+    if len(market["outcomes"]) == 2 and side == "sell":
+        raise ValueError("Binary markets only support 'buy' orders")
     escrow = price * quantity
     await update_casino_balance(discord_user, -escrow)
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -2140,13 +2148,14 @@ async def resolve_market(
     if market["status"] != "open":
         raise ValueError(f"Market is already '{market['status']}'")
 
+    valid_outcome_ids = {o["outcome_id"] for o in market["outcomes"]}
+    if winning_outcome_id not in valid_outcome_ids:
+        raise ValueError(f"outcome_id {winning_outcome_id} does not belong to market {market_id}")
+
     now_iso = datetime.now(timezone.utc).isoformat()
 
     # Cancel all remaining open orders first (refunds unfilled escrow)
-    refunds = await cancel_all_open_orders(market_id)
-    for user_id, refund_amount in refunds:
-        if refund_amount > 0:
-            await update_casino_balance(user_id, refund_amount)
+    await cancel_all_open_orders(market_id)
 
     # Mark the market as resolved
     async with aiosqlite.connect(DB_PATH) as db:
@@ -2178,23 +2187,17 @@ async def resolve_market(
     return payouts
 
 
-async def cancel_all_open_orders(market_id: int) -> list[tuple[str, int]]:
-    """Cancel all open/partial orders on a market. Returns list of (user_id, refund_amount)."""
+async def cancel_all_open_orders(market_id: int) -> None:
+    """Cancel all open/partial orders on a market and credit unfilled escrow back to each user."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT order_id, discord_user, price, quantity, filled_qty "
+            "SELECT discord_user, price, quantity, filled_qty "
             "FROM market_orders "
             "WHERE market_id = ? AND status IN ('open', 'partial')",
             (market_id,),
         )
         rows = await cursor.fetchall()
-
-        refunds: list[tuple[str, int]] = []
-        for row in rows:
-            unfilled = row["quantity"] - row["filled_qty"]
-            refund = row["price"] * unfilled
-            refunds.append((row["discord_user"], refund))
 
         await db.execute(
             "UPDATE market_orders SET status = 'cancelled' "
@@ -2202,7 +2205,13 @@ async def cancel_all_open_orders(market_id: int) -> list[tuple[str, int]]:
             (market_id,),
         )
         await db.commit()
-    return refunds
+
+    # Credit refunds after the DB write, consistent with cancel_market_order
+    for row in rows:
+        unfilled = row["quantity"] - row["filled_qty"]
+        refund = row["price"] * unfilled
+        if refund > 0:
+            await update_casino_balance(row["discord_user"], refund)
 
 
 async def get_market_positions(market_id: int) -> list[dict]:

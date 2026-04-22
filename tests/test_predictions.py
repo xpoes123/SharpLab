@@ -143,6 +143,23 @@ class TestOrderPlacement:
         orders = await queries.get_market_orders_for_user(mid, "alice")
         assert len(orders) == 2
 
+    @pytest.mark.asyncio
+    async def test_sell_rejected_on_binary_market(self):
+        """Binary markets only match buy-vs-buy; sell orders must be rejected to prevent locked escrow."""
+        await _fund_user("alice", 5000)
+        mid, yes_oid, _ = await _create_binary_market()
+        with pytest.raises(ValueError, match="Binary markets only support 'buy' orders"):
+            await queries.place_market_order(mid, yes_oid, "alice", "sell", 60, 5)
+        # Escrow must NOT have been deducted
+        assert await queries.get_casino_balance("alice") == 5000
+
+    @pytest.mark.asyncio
+    async def test_invalid_side_rejected(self):
+        await _fund_user("alice", 5000)
+        mid, yes_oid, _ = await _create_binary_market()
+        with pytest.raises(ValueError, match="side must be"):
+            await queries.place_market_order(mid, yes_oid, "alice", "long", 60, 5)
+
 
 # ── Order matching — binary markets ─────────────────────────────────────────
 
@@ -368,6 +385,24 @@ class TestResolution:
         assert payouts.get("alice", 0) == 500  # 5 * 100
         assert payouts.get("carol", 0) == 300  # 3 * 100
 
+    @pytest.mark.asyncio
+    async def test_resolve_rejects_foreign_outcome_id(self):
+        """resolve_market must reject a winning_outcome_id that belongs to a different market."""
+        mid1, yes_oid1, _ = await _create_binary_market("creator1")
+        mid2, yes_oid2, _ = await _create_binary_market("creator2")
+        with pytest.raises(ValueError, match="does not belong to market"):
+            await queries.resolve_market(mid1, yes_oid2, "admin")
+        # Market must still be open after the failed resolve
+        market = await queries.get_prediction_market(mid1)
+        assert market["status"] == "open"
+
+    @pytest.mark.asyncio
+    async def test_resolve_rejects_nonexistent_outcome_id(self):
+        """resolve_market must reject a winning_outcome_id that doesn't exist at all."""
+        mid, _, _ = await _create_binary_market()
+        with pytest.raises(ValueError, match="does not belong to market"):
+            await queries.resolve_market(mid, 999999, "admin")
+
 
 # ── Positions ───────────────────────────────────────────────────────────────
 
@@ -457,16 +492,17 @@ class TestMultiOutcome:
 
 class TestCancelAll:
     @pytest.mark.asyncio
-    async def test_cancel_all_returns_refunds(self):
+    async def test_cancel_all_credits_wallets(self):
+        """cancel_all_open_orders must credit unfilled escrow back to each user's wallet."""
         await _fund_user("alice", 5000)
         await _fund_user("bob", 5000)
         mid, yes_oid, no_oid = await _create_binary_market()
 
-        await queries.place_market_order(mid, yes_oid, "alice", "buy", 60, 5)
-        await queries.place_market_order(mid, no_oid, "bob", "buy", 30, 3)
+        await queries.place_market_order(mid, yes_oid, "alice", "buy", 60, 5)  # escrow 300
+        await queries.place_market_order(mid, no_oid, "bob", "buy", 30, 3)    # escrow 90
 
-        refunds = await queries.cancel_all_open_orders(mid)
-        assert len(refunds) == 2
-        refund_map = {user: amt for user, amt in refunds}
-        assert refund_map["alice"] == 300  # 60 * 5
-        assert refund_map["bob"] == 90  # 30 * 3
+        await queries.cancel_all_open_orders(mid)
+
+        # Wallets should be fully restored
+        assert await queries.get_casino_balance("alice") == 5000
+        assert await queries.get_casino_balance("bob") == 5000
