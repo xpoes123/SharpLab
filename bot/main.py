@@ -27,6 +27,7 @@ COGS = [
     "bot.cogs.paigow",
     "bot.cogs.uth",
     "bot.cogs.crash",
+    "bot.cogs.roulette",
 ]
 
 GUILD_ID = int(os.environ["DISCORD_GUILD_ID"])
