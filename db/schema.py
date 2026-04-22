@@ -166,6 +166,37 @@ CREATE TABLE IF NOT EXISTS paper_bets (
     payout          INTEGER DEFAULT 0,
     clv             REAL
 );
+
+CREATE TABLE IF NOT EXISTS prediction_markets (
+    market_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    creator_id         TEXT NOT NULL,
+    question           TEXT NOT NULL,
+    status             TEXT NOT NULL DEFAULT 'open',
+    winning_outcome_id INTEGER,
+    created_at         TEXT NOT NULL,
+    resolved_at        TEXT
+);
+
+CREATE TABLE IF NOT EXISTS market_outcomes (
+    outcome_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    market_id      INTEGER NOT NULL REFERENCES prediction_markets(market_id),
+    label          TEXT NOT NULL,
+    UNIQUE(market_id, label)
+);
+
+CREATE TABLE IF NOT EXISTS market_orders (
+    order_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    market_id      INTEGER NOT NULL REFERENCES prediction_markets(market_id),
+    outcome_id     INTEGER NOT NULL REFERENCES market_outcomes(outcome_id),
+    discord_user   TEXT NOT NULL,
+    side           TEXT NOT NULL,
+    price          INTEGER NOT NULL,
+    quantity       INTEGER NOT NULL,
+    filled_qty     INTEGER NOT NULL DEFAULT 0,
+    status         TEXT NOT NULL DEFAULT 'open',
+    placed_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_market_orders_market ON market_orders(market_id, outcome_id, status);
 """
 
 

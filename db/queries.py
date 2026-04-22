@@ -1800,3 +1800,421 @@ async def get_max_single_profit(discord_user: str) -> int:
         )
         row = await cursor.fetchone()
     return row[0] if row and row[0] else 0
+
+
+# ── Prediction Markets ──────────────────────────────────────────────────────
+
+
+async def create_prediction_market(
+    creator_id: str, question: str, outcomes: list[str],
+) -> int:
+    """Create a prediction market with outcomes. Returns market_id."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "INSERT INTO prediction_markets (creator_id, question, status, created_at) "
+            "VALUES (?, ?, 'open', ?)",
+            (creator_id, question, now_iso),
+        )
+        market_id = cursor.lastrowid
+        for label in outcomes:
+            await db.execute(
+                "INSERT INTO market_outcomes (market_id, label) VALUES (?, ?)",
+                (market_id, label),
+            )
+        await db.commit()
+        return market_id  # type: ignore[return-value]
+
+
+async def get_prediction_market(market_id: int) -> dict | None:
+    """Return market with its outcomes joined."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM prediction_markets WHERE market_id = ?",
+            (market_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        market = dict(row)
+        cursor = await db.execute(
+            "SELECT outcome_id, label FROM market_outcomes WHERE market_id = ? ORDER BY outcome_id",
+            (market_id,),
+        )
+        outcomes = await cursor.fetchall()
+        market["outcomes"] = [dict(o) for o in outcomes]
+    return market
+
+
+async def list_open_markets() -> list[dict]:
+    """All markets with status='open', newest first."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM prediction_markets WHERE status = 'open' ORDER BY created_at DESC"
+        )
+        rows = await cursor.fetchall()
+        markets = []
+        for row in rows:
+            m = dict(row)
+            cur2 = await db.execute(
+                "SELECT outcome_id, label FROM market_outcomes WHERE market_id = ? ORDER BY outcome_id",
+                (m["market_id"],),
+            )
+            outcomes = await cur2.fetchall()
+            m["outcomes"] = [dict(o) for o in outcomes]
+            markets.append(m)
+    return markets
+
+
+async def place_market_order(
+    market_id: int,
+    outcome_id: int,
+    discord_user: str,
+    side: str,
+    price: int,
+    quantity: int,
+) -> int:
+    """Place an order. Deducts escrow (price*quantity) from casino wallet. Returns order_id."""
+    if price < 1 or price > 99:
+        raise ValueError(f"Price must be 1-99, got {price}")
+    if quantity < 1:
+        raise ValueError("Quantity must be at least 1")
+    escrow = price * quantity
+    await update_casino_balance(discord_user, -escrow)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "INSERT INTO market_orders "
+            "(market_id, outcome_id, discord_user, side, price, quantity, filled_qty, status, placed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, 0, 'open', ?)",
+            (market_id, outcome_id, discord_user, side, price, quantity, now_iso),
+        )
+        await db.commit()
+        return cursor.lastrowid  # type: ignore[return-value]
+
+
+async def get_order_book(market_id: int, outcome_id: int) -> dict:
+    """Return {'buys': [...], 'sells': [...]} for an outcome. Buys desc by price, sells asc."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM market_orders "
+            "WHERE market_id = ? AND outcome_id = ? AND side = 'buy' AND status IN ('open', 'partial') "
+            "ORDER BY price DESC, placed_at ASC",
+            (market_id, outcome_id),
+        )
+        buys = [dict(r) for r in await cursor.fetchall()]
+        cursor = await db.execute(
+            "SELECT * FROM market_orders "
+            "WHERE market_id = ? AND outcome_id = ? AND side = 'sell' AND status IN ('open', 'partial') "
+            "ORDER BY price ASC, placed_at ASC",
+            (market_id, outcome_id),
+        )
+        sells = [dict(r) for r in await cursor.fetchall()]
+    return {"buys": buys, "sells": sells}
+
+
+async def get_market_orders_for_user(market_id: int, discord_user: str) -> list[dict]:
+    """User's open/partial orders in a market."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM market_orders "
+            "WHERE market_id = ? AND discord_user = ? AND status IN ('open', 'partial') "
+            "ORDER BY placed_at DESC",
+            (market_id, discord_user),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def match_orders(market_id: int) -> list[tuple[int, int, int, int]]:
+    """
+    Core matching engine for a prediction market.
+
+    For 2-outcome markets: buy orders on opposite outcomes match when
+    price_A + price_B >= 100 (the two buyers together fund a complete contract).
+
+    For 3+ outcome markets: direct matching within the same outcome (buy vs sell).
+
+    Returns list of (order_a_id, order_b_id, fill_qty, fill_price).
+    """
+    fills: list[tuple[int, int, int, int]] = []
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        # Get outcome count
+        cursor = await db.execute(
+            "SELECT outcome_id, label FROM market_outcomes WHERE market_id = ? ORDER BY outcome_id",
+            (market_id,),
+        )
+        outcomes = await cursor.fetchall()
+        outcome_ids = [o["outcome_id"] for o in outcomes]
+
+        if len(outcome_ids) == 2:
+            # Binary market: match buy orders on opposite outcomes
+            oid_a, oid_b = outcome_ids[0], outcome_ids[1]
+            fills += await _match_binary_pair(db, market_id, oid_a, oid_b)
+            fills += await _match_binary_pair(db, market_id, oid_b, oid_a)
+        else:
+            # Multi-outcome: direct buy vs sell within each outcome
+            for oid in outcome_ids:
+                fills += await _match_direct(db, market_id, oid)
+
+        await db.commit()
+    return fills
+
+
+async def _match_binary_pair(
+    db: aiosqlite.Connection,
+    market_id: int,
+    oid_a: int,
+    oid_b: int,
+) -> list[tuple[int, int, int, int]]:
+    """Match buy orders on oid_a against buy orders on oid_b where prices sum >= 100."""
+    fills: list[tuple[int, int, int, int]] = []
+    cursor_a = await db.execute(
+        "SELECT * FROM market_orders "
+        "WHERE market_id = ? AND outcome_id = ? AND side = 'buy' AND status IN ('open', 'partial') "
+        "ORDER BY price DESC, placed_at ASC",
+        (market_id, oid_a),
+    )
+    orders_a = [dict(r) for r in await cursor_a.fetchall()]
+
+    cursor_b = await db.execute(
+        "SELECT * FROM market_orders "
+        "WHERE market_id = ? AND outcome_id = ? AND side = 'buy' AND status IN ('open', 'partial') "
+        "ORDER BY price DESC, placed_at ASC",
+        (market_id, oid_b),
+    )
+    orders_b = [dict(r) for r in await cursor_b.fetchall()]
+
+    i, j = 0, 0
+    while i < len(orders_a) and j < len(orders_b):
+        a = orders_a[i]
+        b = orders_b[j]
+        if a["price"] + b["price"] < 100:
+            break  # no more matches possible (sorted desc by price)
+
+        remaining_a = a["quantity"] - a["filled_qty"]
+        remaining_b = b["quantity"] - b["filled_qty"]
+        fill_qty = min(remaining_a, remaining_b)
+        fill_price = a["price"]  # buyer A pays their price; buyer B pays their price
+
+        # Update order A
+        new_filled_a = a["filled_qty"] + fill_qty
+        status_a = "filled" if new_filled_a >= a["quantity"] else "partial"
+        await db.execute(
+            "UPDATE market_orders SET filled_qty = ?, status = ? WHERE order_id = ?",
+            (new_filled_a, status_a, a["order_id"]),
+        )
+        a["filled_qty"] = new_filled_a
+
+        # Update order B
+        new_filled_b = b["filled_qty"] + fill_qty
+        status_b = "filled" if new_filled_b >= b["quantity"] else "partial"
+        await db.execute(
+            "UPDATE market_orders SET filled_qty = ?, status = ? WHERE order_id = ?",
+            (new_filled_b, status_b, b["order_id"]),
+        )
+        b["filled_qty"] = new_filled_b
+
+        fills.append((a["order_id"], b["order_id"], fill_qty, fill_price))
+
+        if status_a == "filled":
+            i += 1
+        if status_b == "filled":
+            j += 1
+
+    return fills
+
+
+async def _match_direct(
+    db: aiosqlite.Connection,
+    market_id: int,
+    outcome_id: int,
+) -> list[tuple[int, int, int, int]]:
+    """Match buy vs sell orders within the same outcome (for 3+ outcome markets)."""
+    fills: list[tuple[int, int, int, int]] = []
+    cursor_buy = await db.execute(
+        "SELECT * FROM market_orders "
+        "WHERE market_id = ? AND outcome_id = ? AND side = 'buy' AND status IN ('open', 'partial') "
+        "ORDER BY price DESC, placed_at ASC",
+        (market_id, outcome_id),
+    )
+    buys = [dict(r) for r in await cursor_buy.fetchall()]
+
+    cursor_sell = await db.execute(
+        "SELECT * FROM market_orders "
+        "WHERE market_id = ? AND outcome_id = ? AND side = 'sell' AND status IN ('open', 'partial') "
+        "ORDER BY price ASC, placed_at ASC",
+        (market_id, outcome_id),
+    )
+    sells = [dict(r) for r in await cursor_sell.fetchall()]
+
+    i, j = 0, 0
+    while i < len(buys) and j < len(sells):
+        buy = buys[i]
+        sell = sells[j]
+        if buy["price"] < sell["price"]:
+            break  # no more matches
+
+        remaining_buy = buy["quantity"] - buy["filled_qty"]
+        remaining_sell = sell["quantity"] - sell["filled_qty"]
+        fill_qty = min(remaining_buy, remaining_sell)
+        fill_price = sell["price"]  # execute at resting (sell) price
+
+        new_filled_buy = buy["filled_qty"] + fill_qty
+        status_buy = "filled" if new_filled_buy >= buy["quantity"] else "partial"
+        await db.execute(
+            "UPDATE market_orders SET filled_qty = ?, status = ? WHERE order_id = ?",
+            (new_filled_buy, status_buy, buy["order_id"]),
+        )
+        buy["filled_qty"] = new_filled_buy
+
+        new_filled_sell = sell["filled_qty"] + fill_qty
+        status_sell = "filled" if new_filled_sell >= sell["quantity"] else "partial"
+        await db.execute(
+            "UPDATE market_orders SET filled_qty = ?, status = ? WHERE order_id = ?",
+            (new_filled_sell, status_sell, sell["order_id"]),
+        )
+        sell["filled_qty"] = new_filled_sell
+
+        fills.append((buy["order_id"], sell["order_id"], fill_qty, fill_price))
+
+        if status_buy == "filled":
+            i += 1
+        if status_sell == "filled":
+            j += 1
+
+    return fills
+
+
+async def cancel_market_order(order_id: int, discord_user: str) -> int:
+    """Cancel an open order. Returns refund amount. Validates ownership."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM market_orders WHERE order_id = ?",
+            (order_id,),
+        )
+        order = await cursor.fetchone()
+        if order is None:
+            raise ValueError("Order not found")
+        if order["discord_user"] != discord_user:
+            raise ValueError("Not your order")
+        if order["status"] not in ("open", "partial"):
+            raise ValueError(f"Cannot cancel order with status '{order['status']}'")
+
+        unfilled = order["quantity"] - order["filled_qty"]
+        refund = order["price"] * unfilled
+        new_status = "cancelled"
+        await db.execute(
+            "UPDATE market_orders SET status = ? WHERE order_id = ?",
+            (new_status, order_id),
+        )
+        await db.commit()
+
+    # Refund escrow to casino wallet
+    if refund > 0:
+        await update_casino_balance(discord_user, refund)
+    return refund
+
+
+async def resolve_market(
+    market_id: int, winning_outcome_id: int, resolver_id: str,
+) -> dict:
+    """
+    Resolve a market. Sets winning outcome, cancels open orders (with refunds),
+    and pays out winners (100 coins per filled share on winning outcome).
+    Returns {discord_user: payout_amount}.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # Cancel all remaining open orders first (refunds unfilled escrow)
+    refunds = await cancel_all_open_orders(market_id)
+    for user_id, refund_amount in refunds:
+        if refund_amount > 0:
+            await update_casino_balance(user_id, refund_amount)
+
+    # Mark the market as resolved
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE prediction_markets SET status = 'resolved', winning_outcome_id = ?, resolved_at = ? "
+            "WHERE market_id = ?",
+            (winning_outcome_id, now_iso, market_id),
+        )
+
+        # Find all filled orders on the winning outcome
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT discord_user, SUM(filled_qty) AS total_shares "
+            "FROM market_orders "
+            "WHERE market_id = ? AND outcome_id = ? AND filled_qty > 0 "
+            "GROUP BY discord_user",
+            (market_id, winning_outcome_id),
+        )
+        winner_rows = await cursor.fetchall()
+        await db.commit()
+
+    payouts: dict[str, int] = {}
+    for row in winner_rows:
+        user = row["discord_user"]
+        payout = row["total_shares"] * 100
+        payouts[user] = payout
+        await update_casino_balance(user, payout)
+
+    return payouts
+
+
+async def cancel_all_open_orders(market_id: int) -> list[tuple[str, int]]:
+    """Cancel all open/partial orders on a market. Returns list of (user_id, refund_amount)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT order_id, discord_user, price, quantity, filled_qty "
+            "FROM market_orders "
+            "WHERE market_id = ? AND status IN ('open', 'partial')",
+            (market_id,),
+        )
+        rows = await cursor.fetchall()
+
+        refunds: list[tuple[str, int]] = []
+        for row in rows:
+            unfilled = row["quantity"] - row["filled_qty"]
+            refund = row["price"] * unfilled
+            refunds.append((row["discord_user"], refund))
+
+        await db.execute(
+            "UPDATE market_orders SET status = 'cancelled' "
+            "WHERE market_id = ? AND status IN ('open', 'partial')",
+            (market_id,),
+        )
+        await db.commit()
+    return refunds
+
+
+async def get_market_positions(market_id: int) -> list[dict]:
+    """Aggregate filled orders by user+outcome to show current positions."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT
+                mo.discord_user,
+                mo.outcome_id,
+                oc.label,
+                SUM(mo.filled_qty) AS shares,
+                CAST(ROUND(SUM(mo.filled_qty * mo.price) * 1.0 / SUM(mo.filled_qty)) AS INTEGER) AS avg_price
+            FROM market_orders mo
+            JOIN market_outcomes oc ON mo.outcome_id = oc.outcome_id
+            WHERE mo.market_id = ? AND mo.filled_qty > 0 AND mo.side = 'buy'
+            GROUP BY mo.discord_user, mo.outcome_id
+            HAVING shares > 0
+            ORDER BY shares DESC
+            """,
+            (market_id,),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
