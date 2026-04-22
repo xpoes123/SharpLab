@@ -1,11 +1,13 @@
 """Tests for Stock Guess game logic."""
 
 import math
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from bot.cogs.stockguess import (
+    CURATED_TICKERS,
+    DEFAULT_ROUNDS,
     StockGuessPlayer,
     StockGuessTable,
     compute_payouts,
@@ -13,6 +15,7 @@ from bot.cogs.stockguess import (
     fetch_ytd_change,
     parse_guess,
     PAYTABLE,
+    _pick_next_stock,
 )
 
 
@@ -200,3 +203,118 @@ class TestFetchYtdChange:
         with patch("yfinance.Ticker", return_value=mock_ticker):
             with pytest.raises((ValueError, Exception)):
                 await fetch_ytd_change("INVALID")
+
+
+# ── Multi-round: StockGuessTable fields ─────────────────────────────────────
+
+
+class TestStockGuessTable:
+    def test_default_rounds(self):
+        table = StockGuessTable(channel_id=1, host_id=1, host_name="host")
+        assert table.total_rounds == DEFAULT_ROUNDS
+
+    def test_custom_rounds(self):
+        table = StockGuessTable(channel_id=1, host_id=1, host_name="host", total_rounds=3)
+        assert table.total_rounds == 3
+
+    def test_initial_round_num_is_zero(self):
+        table = StockGuessTable(channel_id=1, host_id=1, host_name="host")
+        assert table.round_num == 0
+
+    def test_round_scores_starts_empty(self):
+        table = StockGuessTable(channel_id=1, host_id=1, host_name="host")
+        assert table.round_scores == {}
+
+    def test_used_tickers_starts_empty(self):
+        table = StockGuessTable(channel_id=1, host_id=1, host_name="host")
+        assert table.used_tickers == set()
+
+    def test_ticker_fields_have_defaults(self):
+        table = StockGuessTable(channel_id=1, host_id=1, host_name="host")
+        assert table.ticker == ""
+        assert table.company == ""
+        assert table.ytd_pct == 0.0
+
+
+# ── _pick_next_stock ─────────────────────────────────────────────────────────
+
+
+class TestPickNextStock:
+    @pytest.mark.asyncio
+    async def test_returns_ticker_from_curated_list(self):
+        table = StockGuessTable(channel_id=1, host_id=1, host_name="host")
+        with patch("bot.cogs.stockguess.fetch_ytd_change", new_callable=AsyncMock, return_value=5.0):
+            ticker, company, ytd_pct = await _pick_next_stock(table)
+        assert ticker in CURATED_TICKERS
+        assert company == CURATED_TICKERS[ticker]
+        assert ytd_pct == 5.0
+
+    @pytest.mark.asyncio
+    async def test_adds_ticker_to_used(self):
+        table = StockGuessTable(channel_id=1, host_id=1, host_name="host")
+        with patch("bot.cogs.stockguess.fetch_ytd_change", new_callable=AsyncMock, return_value=5.0):
+            ticker, _, _ = await _pick_next_stock(table)
+        assert ticker in table.used_tickers
+
+    @pytest.mark.asyncio
+    async def test_avoids_used_tickers(self):
+        table = StockGuessTable(channel_id=1, host_id=1, host_name="host")
+        # Mark all tickers as used except AAPL
+        table.used_tickers = set(CURATED_TICKERS.keys()) - {"AAPL"}
+        with patch("bot.cogs.stockguess.fetch_ytd_change", new_callable=AsyncMock, return_value=12.5):
+            ticker, company, ytd_pct = await _pick_next_stock(table)
+        assert ticker == "AAPL"
+        assert company == "Apple"
+
+    @pytest.mark.asyncio
+    async def test_resets_when_all_used(self):
+        table = StockGuessTable(channel_id=1, host_id=1, host_name="host")
+        # Mark every ticker as used
+        table.used_tickers = set(CURATED_TICKERS.keys())
+        with patch("bot.cogs.stockguess.fetch_ytd_change", new_callable=AsyncMock, return_value=5.0):
+            ticker, _, _ = await _pick_next_stock(table)
+        # Should have reset and picked one, so used_tickers has exactly 1 entry
+        assert len(table.used_tickers) == 1
+        assert ticker in CURATED_TICKERS
+
+    @pytest.mark.asyncio
+    async def test_no_repeat_across_calls(self):
+        """Two sequential picks on a fresh table should return different tickers."""
+        table = StockGuessTable(channel_id=1, host_id=1, host_name="host")
+        with patch("bot.cogs.stockguess.fetch_ytd_change", new_callable=AsyncMock, return_value=5.0):
+            ticker1, _, _ = await _pick_next_stock(table)
+            ticker2, _, _ = await _pick_next_stock(table)
+        assert ticker1 != ticker2
+
+
+# ── Round score accumulation ─────────────────────────────────────────────────
+
+
+class TestRoundScoreAccumulation:
+    def test_round_scores_accumulate(self):
+        """Simulate two rounds of payouts accumulating in round_scores."""
+        table = StockGuessTable(channel_id=1, host_id=1, host_name="host", total_rounds=2)
+        table.players = _make_players(1, 2)
+
+        # Round 1: player 1 wins 15c
+        table.round_scores[1] = table.round_scores.get(1, 0) + 15
+        table.round_scores[2] = table.round_scores.get(2, 0) + 5
+
+        # Round 2: player 2 wins 18c
+        table.round_scores[1] = table.round_scores.get(1, 0) + 2
+        table.round_scores[2] = table.round_scores.get(2, 0) + 18
+
+        assert table.round_scores[1] == 17
+        assert table.round_scores[2] == 23
+
+    def test_net_calculation(self):
+        """Net = total won - (bet_per_round * total_rounds)."""
+        table = StockGuessTable(channel_id=1, host_id=1, host_name="host", total_rounds=5)
+        table.players = _make_players(1)
+        table.players[1].bet = 10  # 10c/round, 5 rounds = 50c total paid
+
+        table.round_scores[1] = 60  # won 60c across 5 rounds
+
+        total_paid = table.players[1].bet * table.total_rounds  # 50c
+        net = table.round_scores[1] - total_paid  # +10c
+        assert net == 10
