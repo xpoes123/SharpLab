@@ -39,6 +39,7 @@ COGS = [
     "bot.cogs.math24",
     "bot.cogs.countdown",
     "bot.cogs.mastermind",
+    "bot.cogs.nbasim",
 ]
 
 GUILD_ID = int(os.environ["DISCORD_GUILD_ID"])
