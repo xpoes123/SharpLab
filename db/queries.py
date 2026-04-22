@@ -1884,15 +1884,19 @@ async def place_market_order(
     escrow = price * quantity
     await update_casino_balance(discord_user, -escrow)
     now_iso = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            "INSERT INTO market_orders "
-            "(market_id, outcome_id, discord_user, side, price, quantity, filled_qty, status, placed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, 0, 'open', ?)",
-            (market_id, outcome_id, discord_user, side, price, quantity, now_iso),
-        )
-        await db.commit()
-        return cursor.lastrowid  # type: ignore[return-value]
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cursor = await db.execute(
+                "INSERT INTO market_orders "
+                "(market_id, outcome_id, discord_user, side, price, quantity, filled_qty, status, placed_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, 0, 'open', ?)",
+                (market_id, outcome_id, discord_user, side, price, quantity, now_iso),
+            )
+            await db.commit()
+            return cursor.lastrowid  # type: ignore[return-value]
+    except Exception:
+        await update_casino_balance(discord_user, escrow)
+        raise
 
 
 async def get_order_book(market_id: int, outcome_id: int) -> dict:
@@ -2130,6 +2134,12 @@ async def resolve_market(
     and pays out winners (100 coins per filled share on winning outcome).
     Returns {discord_user: payout_amount}.
     """
+    market = await get_prediction_market(market_id)
+    if market is None:
+        raise ValueError("Market not found")
+    if market["status"] != "open":
+        raise ValueError(f"Market is already '{market['status']}'")
+
     now_iso = datetime.now(timezone.utc).isoformat()
 
     # Cancel all remaining open orders first (refunds unfilled escrow)
