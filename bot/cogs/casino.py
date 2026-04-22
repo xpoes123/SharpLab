@@ -1246,6 +1246,13 @@ class BlackjackTableView(ui.View):
 
 # ── Cog ───────────────────────────────────────────────────────────────────────
 
+RANDOM_GAME_CHOICES = [
+    app_commands.Choice(name="Solo \u2014 play against the house", value="solo"),
+    app_commands.Choice(name="Duo \u2014 grab a friend", value="duo"),
+    app_commands.Choice(name="Party \u2014 the more the merrier", value="party"),
+]
+
+
 
 class CasinoCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
@@ -1588,11 +1595,6 @@ class GamesView(discord.ui.View):
         )
 
 
-RANDOM_GAME_CHOICES = [
-    app_commands.Choice(name="Solo \u2014 play against the house", value="solo"),
-    app_commands.Choice(name="Duo \u2014 grab a friend", value="duo"),
-    app_commands.Choice(name="Party \u2014 the more the merrier", value="party"),
-]
 
 
 async def setup(bot: commands.Bot) -> None:
