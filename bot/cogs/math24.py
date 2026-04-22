@@ -24,6 +24,8 @@ MIN_PLAYERS = 2
 HOUSE_EDGE = 0.05
 ROUND_TIME = 45  # seconds per round
 ROUND_DELAY = 4  # seconds between rounds
+WINS_TO_WIN = 4  # first to N wins
+MAX_ROUNDS = 30  # safety cap — game ends after this many rounds regardless
 TARGET = 24
 NUM_COUNT = 4
 NUM_MIN = 1
@@ -346,15 +348,6 @@ def generate_solvable_numbers() -> tuple[list[int], str]:
 # ── Race helpers ─────────────────────────────────────────────────────────────
 
 
-def _total_rounds(n_players: int) -> int:
-    """Number of rounds for a race based on player count."""
-    if n_players <= 3:
-        return 5
-    if n_players <= 5:
-        return 7
-    return 9
-
-
 def _compute_payouts(
     players: dict[int, "Math24Player"], prize_pool: int, n_players: int,
 ) -> dict[int, int]:
@@ -425,7 +418,6 @@ class Math24Table:
     players: dict[int, Math24Player] = field(default_factory=dict)
     message: discord.Message | None = None
     round_num: int = 0
-    total_rounds: int = 5
     numbers: list[int] = field(default_factory=list)
     solution: str = ""
     round_start_time: float = 0.0
@@ -454,19 +446,21 @@ def _scoreboard(table: Math24Table) -> str:
     lines: list[str] = []
     for i, p in enumerate(sorted_players):
         prefix = MEDALS[i] if i < len(MEDALS) and p.rounds_won > 0 else "\u25aa\ufe0f"
-        lines.append(f"{prefix} **{p.display_name}** \u2014 {p.rounds_won}W")
+        line = f"{prefix} **{p.display_name}** \u2014 {p.rounds_won}/{WINS_TO_WIN}"
+        if p.rounds_won == WINS_TO_WIN - 1:
+            line += " *(match point!)*"
+        lines.append(line)
     return "\n".join(lines) if lines else "No scores yet"
 
 
 def _betting_embed(table: Math24Table) -> discord.Embed:
     pot = sum(p.bet for p in table.players.values())
     n = len(table.players)
-    rounds = _total_rounds(n) if n >= MIN_PLAYERS else _total_rounds(MIN_PLAYERS)
 
     embed = discord.Embed(
         title="Math 24 \u2014 Race",
         description=(
-            "Race to solve Math 24 puzzles!\n"
+            f"Race to solve Math 24 puzzles! **First to {WINS_TO_WIN} wins** takes the pot.\n"
             "Use all 4 numbers with `+ - * / ( )` to make **24**.\n"
             "Type answers directly in chat \u2014 fastest correct answer wins each round!"
         ),
@@ -475,7 +469,7 @@ def _betting_embed(table: Math24Table) -> discord.Embed:
 
     if pot:
         embed.add_field(name="Pot", value=f"{pot}c (5% rake)", inline=True)
-    embed.add_field(name="Rounds", value=str(rounds), inline=True)
+    embed.add_field(name="Goal", value=f"First to {WINS_TO_WIN}", inline=True)
 
     # Paytable preview
     if n >= MIN_PLAYERS:
@@ -511,7 +505,7 @@ def _betting_embed(table: Math24Table) -> discord.Embed:
 
 def _playing_embed(table: Math24Table, remaining: int | None = None) -> discord.Embed:
     embed = discord.Embed(
-        title=f"Math 24 \u2014 Round {table.round_num} of {table.total_rounds}",
+        title=f"Math 24 \u2014 Round {table.round_num} (First to {WINS_TO_WIN})",
         colour=discord.Colour.gold(),
     )
 
@@ -536,7 +530,7 @@ def _playing_embed(table: Math24Table, remaining: int | None = None) -> discord.
 def _round_result_embed(table: Math24Table) -> discord.Embed:
     winner = table.players[table.round_winner]
     solve_time = winner.answer_time - table.round_start_time
-    is_last = table.round_num >= table.total_rounds
+    is_last = winner.rounds_won >= WINS_TO_WIN or table.round_num >= MAX_ROUNDS
 
     embed = discord.Embed(
         title=f"Math 24 \u2014 Round {table.round_num} \u2705",
@@ -556,7 +550,8 @@ def _round_result_embed(table: Math24Table) -> discord.Embed:
 
 
 def _timeout_embed(table: Math24Table) -> discord.Embed:
-    is_last = table.round_num >= table.total_rounds
+    max_wins = max((p.rounds_won for p in table.players.values()), default=0)
+    is_last = max_wins >= WINS_TO_WIN or table.round_num >= MAX_ROUNDS
 
     embed = discord.Embed(
         title=f"Math 24 \u2014 Round {table.round_num} (Time's Up!)",
@@ -705,6 +700,67 @@ class JoinMath24Modal(ui.Modal):
         )
 
 
+class AnswerModal(ui.Modal):
+    expression = ui.TextInput(
+        label="Your expression (e.g. (8-2)*(5-1))",
+        placeholder="Use all 4 numbers with + - * / ( )",
+        required=True,
+        max_length=100,
+        style=discord.TextStyle.short,
+    )
+
+    def __init__(self, table: Math24Table, view: "Math24TableView") -> None:
+        super().__init__(title="Math 24 \u2014 Answer")
+        self.table = table
+        self.table_view = view
+        nums_str = ", ".join(str(n) for n in table.numbers)
+        self.expression.placeholder = f"Numbers: {nums_str}"
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        uid = interaction.user.id
+
+        if uid not in self.table.players:
+            await interaction.response.send_message(
+                "You're not in this game!", ephemeral=True,
+            )
+            return
+        if self.table.phase != "playing":
+            await interaction.response.send_message(
+                "Round is not active!", ephemeral=True,
+            )
+            return
+        if self.table.round_winner is not None:
+            await interaction.response.send_message(
+                "Someone already solved this round!", ephemeral=True,
+            )
+            return
+
+        expr = self.expression.value.strip()
+        ok, message, _result = validate_expression(expr, self.table.numbers)
+
+        if not ok:
+            await interaction.response.send_message(
+                f"Incorrect: {message}", ephemeral=True,
+            )
+            return
+
+        # Winner!
+        now = time.monotonic()
+        player = self.table.players[uid]
+        player.answer = expr
+        player.answer_time = now
+        player.rounds_won += 1
+
+        self.table.round_winner = uid
+
+        # Signal the race loop
+        self.table.round_solved.set()
+
+        await interaction.response.send_message(
+            "\u2705 Correct!", ephemeral=True,
+        )
+
+
 # ── View ─────────────────────────────────────────────────────────────────────
 
 
@@ -732,6 +788,7 @@ class Math24TableView(ui.View):
         self.leave_btn.disabled = not betting
 
         # Row 1: race controls
+        self.answer_btn.disabled = not playing
         self.hint_btn.disabled = not playing
         self.close_btn.disabled = racing
 
@@ -865,6 +922,33 @@ class Math24TableView(ui.View):
     # ── Row 1: Race controls ──────────────────────────────────────────────
 
     @ui.button(
+        label="Answer", style=discord.ButtonStyle.success,
+        emoji="\u270d\ufe0f", row=1,
+    )
+    async def answer_btn(
+        self, interaction: discord.Interaction, button: ui.Button,
+    ) -> None:
+        if self.table.phase != "playing":
+            await interaction.response.send_message(
+                "No round in progress!", ephemeral=True,
+            )
+            return
+        uid = interaction.user.id
+        if uid not in self.table.players:
+            await interaction.response.send_message(
+                "You're not in this game!", ephemeral=True,
+            )
+            return
+        if self.table.round_winner is not None:
+            await interaction.response.send_message(
+                "Someone already solved this round!", ephemeral=True,
+            )
+            return
+        await interaction.response.send_modal(
+            AnswerModal(self.table, self),
+        )
+
+    @ui.button(
         label="Hint", style=discord.ButtonStyle.secondary,
         emoji="\U0001f4a1", row=1,
     )
@@ -915,7 +999,6 @@ class Math24TableView(ui.View):
     async def _start_race(self, interaction: discord.Interaction) -> None:
         """Start the race: set up round 1, show it, then launch the race loop."""
         table = self.table
-        table.total_rounds = _total_rounds(len(table.players))
 
         # Save last bets for re-bet
         for uid, p in table.players.items():
@@ -981,7 +1064,10 @@ class Math24TableView(ui.View):
         """Main race loop. Round 1 is already dealt by _start_race."""
         table = self.table
         try:
-            for rnd in range(1, table.total_rounds + 1):
+            rnd = 0
+            while True:
+                rnd += 1
+
                 # Round 1 was set up by _start_race; rounds 2+ dealt here
                 if rnd > 1:
                     nums, solution = generate_solvable_numbers()
@@ -1027,12 +1113,17 @@ class Math24TableView(ui.View):
                         except discord.HTTPException:
                             pass
 
-                # Delay before next round (unless last)
-                if rnd < table.total_rounds:
-                    table.phase = "between_rounds"
-                    await asyncio.sleep(ROUND_DELAY)
+                # Check if someone hit the win target or safety cap
+                if any(p.rounds_won >= WINS_TO_WIN for p in table.players.values()):
+                    break
+                if rnd >= MAX_ROUNDS:
+                    break
 
-            # All rounds complete — pay out
+                # Delay before next round
+                table.phase = "between_rounds"
+                await asyncio.sleep(ROUND_DELAY)
+
+            # Race complete — pay out
             await self._end_game()
 
         except asyncio.CancelledError:
@@ -1062,9 +1153,7 @@ class Math24TableView(ui.View):
                 except Exception:
                     pass
         else:
-            house_take = max(1, int(pot * HOUSE_EDGE))
-            prize_pool = pot - house_take
-            payouts = _compute_payouts(table.players, prize_pool, n_players)
+            payouts = _compute_payouts(table.players, pot, n_players)
             for uid, payout in payouts.items():
                 if payout > 0:
                     try:
@@ -1201,61 +1290,6 @@ class Math24Cog(commands.Cog):
         await interaction.response.send_message(embed=embed, view=view)
         table.message = await interaction.original_response()
 
-    @commands.Cog.listener("on_message")
-    async def on_message(self, message: discord.Message) -> None:
-        """Listen for chat answers during active Math 24 rounds."""
-        if message.author.bot:
-            return
-
-        # Quick filter: must have at least one digit
-        if not any(c.isdigit() for c in message.content):
-            return
-
-        table = self.active_tables.get(message.channel.id)
-        if table is None or table.phase != "playing":
-            return
-
-        uid = message.author.id
-        if uid not in table.players:
-            return
-
-        if table.round_winner is not None:
-            return
-
-        expr = message.content.strip()
-        if len(expr) > 100:
-            return
-
-        # Try to tokenize — if it has invalid chars, it's not a math expression
-        try:
-            _tokenize(expr)
-        except ExprError:
-            return
-
-        # Looks like a math expression — validate fully
-        ok, _msg, _result = validate_expression(expr, table.numbers)
-
-        if not ok:
-            try:
-                await message.add_reaction("\u274c")
-            except discord.HTTPException:
-                pass
-            return
-
-        # Winner!
-        now = time.monotonic()
-        player = table.players[uid]
-        player.answer = expr
-        player.answer_time = now
-        player.rounds_won += 1
-        table.round_winner = uid
-
-        try:
-            await message.add_reaction("\u2705")
-        except discord.HTTPException:
-            pass
-
-        table.round_solved.set()
 
 
 async def setup(bot: commands.Bot) -> None:
