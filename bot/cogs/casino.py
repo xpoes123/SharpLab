@@ -1269,7 +1269,11 @@ class CasinoCog(commands.Cog):
 
     @app_commands.command(name="games", description="List all available casino games")
     async def games(self, interaction: discord.Interaction) -> None:
-        lines = [f"` /{name} ` — {desc}" for name, desc in CASINO_GAMES]
+        mp_tag = " `MP`"
+        lines = [
+            f"` /{name} ` — {desc}{mp_tag if mp else ''}"
+            for name, desc, mp in CASINO_GAMES
+        ]
         embed = discord.Embed(
             title="Casino Games",
             description="\n".join(lines),
@@ -1280,7 +1284,7 @@ class CasinoCog(commands.Cog):
 
     @app_commands.command(name="random-game", description="Pick a random casino game to play")
     async def random_game(self, interaction: discord.Interaction) -> None:
-        name, desc = random.choice(CASINO_GAMES)
+        name, desc, _mp = random.choice(CASINO_GAMES)
         await interaction.response.send_message(
             f"You should play **/{name}** — {desc}"
         )
@@ -1340,6 +1344,13 @@ class CasinoCog(commands.Cog):
                 "baccarat": "Baccarat",
                 "paigow": "Pai Gow",
                 "bingo": "Bingo",
+                "horserace": "Horse Race",
+                "stockmarket": "Stock Market",
+                "math24": "Math 24",
+                "countdown": "Countdown",
+                "mastermind": "Mastermind",
+                "liarsdice": "Liar's Dice",
+                "slots": "Slots",
             }
             lines = []
             for row in by_game:
@@ -1358,19 +1369,26 @@ class CasinoCog(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
 
-CASINO_GAMES: list[tuple[str, str]] = [
-    ("blackjack", "Multiplayer blackjack table"),
-    ("roulette", "American roulette"),
-    ("craps", "Craps with full side bets"),
-    ("baccarat", "Baccarat card game"),
-    ("paigow", "Pai Gow Poker"),
-    ("uth", "Ultimate Texas Hold'em"),
-    ("videopoker", "Video Poker (Jacks or Better)"),
-    ("crash", "Crash rocket game"),
-    ("plinko", "Plinko ball-drop game"),
-    ("hilo", "Hi-Lo card guessing game"),
-    ("bingo", "Multiplayer bingo game"),
-    ("slots", "Fortune Reels — slots with free spins & bonus rounds"),
+CASINO_GAMES: list[tuple[str, str, bool]] = [
+    # (command_name, description, is_multiplayer)
+    ("blackjack", "Blackjack table", True),
+    ("roulette", "American roulette", False),
+    ("craps", "Craps with full side bets", False),
+    ("baccarat", "Baccarat card game", False),
+    ("paigow", "Pai Gow Poker", True),
+    ("uth", "Ultimate Texas Hold'em", False),
+    ("videopoker", "Video Poker (Jacks or Better)", False),
+    ("crash", "Crash rocket game", False),
+    ("plinko", "Plinko ball-drop game", False),
+    ("hilo", "Hi-Lo card guessing game", False),
+    ("bingo", "Bingo", True),
+    ("slots", "Fortune Reels — slots with free spins & bonus rounds", False),
+    ("horserace", "Horse racing with betting", True),
+    ("stockmarket", "Stock market investment game", True),
+    ("math24", "Make 24 from four numbers", True),
+    ("countdown", "Countdown numbers math game", True),
+    ("mastermind", "Code-breaking deduction game", True),
+    ("liarsdice", "Liar's Dice bluffing game", True),
 ]
 
 
