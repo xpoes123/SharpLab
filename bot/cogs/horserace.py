@@ -13,7 +13,7 @@ from db import queries
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 10
-MIN_PLAYERS = 2
+MIN_PLAYERS = 1
 TICK_INTERVAL = 1.5  # seconds between race ticks
 TRACK_LENGTH = 20  # positions to finish line
 

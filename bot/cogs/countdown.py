@@ -15,7 +15,7 @@ from bot.cogs._pool import compute_side_pot_payouts
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 8
-MIN_PLAYERS = 2
+MIN_PLAYERS = 1
 ROUND_TIME = 30  # seconds
 
 LARGE_NUMBERS = [25, 50, 75, 100]

@@ -16,8 +16,8 @@ from bot.cogs._pool import compute_side_pot_payouts
 MAX_PLAYERS = 10
 CARD_PRICE = 500
 MAX_CARDS = 5
-MIN_PLAYERS = 2
-CALL_INTERVAL = 4.0  # seconds between number calls
+MIN_PLAYERS = 1
+CALL_INTERVAL = 2.5  # seconds between number calls
 
 BINGO_RANGES: list[tuple[str, range]] = [
     ("B", range(1, 16)),
@@ -513,6 +513,41 @@ class JoinBingoModal(ui.Modal):
 # ── View ─────────────────────────────────────────────────────────────────────
 
 
+class PatternSelect(ui.Select["BingoTableView"]):
+    def __init__(self, table: BingoTable) -> None:
+        self.table = table
+        options = [
+            discord.SelectOption(
+                label=p.name,
+                value=str(i),
+                emoji=p.emoji,
+                description=p.description,
+                default=(i == table.last_pattern_idx),
+            )
+            for i, p in enumerate(BINGO_PATTERNS)
+        ]
+        super().__init__(
+            placeholder="Pattern", options=options, row=2,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self.table.host_id:
+            await interaction.response.send_message(
+                "Only the host can pick the pattern!", ephemeral=True,
+            )
+            return
+        idx = int(self.values[0])
+        self.table.pattern = BINGO_PATTERNS[idx]
+        self.table.last_pattern_idx = idx
+        # Update default selection
+        for opt in self.options:
+            opt.default = (opt.value == self.values[0])
+        view: BingoTableView = self.view  # type: ignore[assignment]
+        await interaction.response.edit_message(
+            embed=_betting_embed(self.table), view=view,
+        )
+
+
 class BingoTableView(ui.View):
     def __init__(
         self, table: BingoTable, active_tables: dict[int, BingoTable],
@@ -520,6 +555,8 @@ class BingoTableView(ui.View):
         super().__init__(timeout=300)
         self.table = table
         self.active_tables = active_tables
+        self.pattern_select = PatternSelect(table)
+        self.add_item(self.pattern_select)
         self._update_buttons()
 
     def _update_buttons(self) -> None:
@@ -540,6 +577,9 @@ class BingoTableView(ui.View):
         self.my_card_btn.disabled = not calling
         self.new_round_btn.disabled = not finished
         self.close_btn.disabled = calling
+
+        # Row 2 — pattern selector
+        self.pattern_select.disabled = not betting
 
     # ── Row 0 ────────────────────────────────────────────────────────────────
 

@@ -20,13 +20,14 @@ from db import queries
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 8
-MIN_PLAYERS = 2
+MIN_PLAYERS = 1
 ROUND_TIME = 15  # seconds per round (team names are short)
 ROUND_DELAY = 4  # seconds between rounds
 WINS_TO_WIN = 3  # first to N wins
 MAX_ROUNDS = 15  # safety cap
 
 PAYTABLE: dict[int, list[float]] = {
+    1: [1.0],
     2: [1.0],
     3: [0.70, 0.30],
     4: [0.55, 0.30, 0.15],

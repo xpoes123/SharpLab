@@ -14,7 +14,7 @@ from bot.cogs._pool import compute_side_pot_payouts
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 8
-MIN_PLAYERS = 2
+MIN_PLAYERS = 1
 NUM_ROUNDS = 5
 STARTING_CASH = 1000
 TRADE_WINDOW = 30  # seconds

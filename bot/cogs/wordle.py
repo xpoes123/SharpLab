@@ -19,7 +19,7 @@ from db import queries
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 8
-MIN_PLAYERS = 2
+MIN_PLAYERS = 1
 ROUND_TIME = 300  # 5 minutes safety cap per round
 ROUND_DELAY = 5  # seconds between rounds
 WINS_TO_WIN = 3  # first to N wins
@@ -28,6 +28,7 @@ MAX_GUESSES = 6  # guesses per player per round
 
 # Paytable: fraction of prize pool by finishing position, keyed by player count
 PAYTABLE: dict[int, list[float]] = {
+    1: [1.0],
     2: [1.0],
     3: [0.70, 0.30],
     4: [0.55, 0.30, 0.15],
