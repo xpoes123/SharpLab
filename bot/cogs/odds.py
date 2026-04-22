@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -17,13 +16,12 @@ from dotenv import load_dotenv
 
 from db import queries
 from shared.models import OddsSnapshot, get_team_abbr
-from shared.odds_utils import american_to_prob, prob_to_american
+from shared.odds_utils import american_to_prob, fetch_polymarket_ml, prob_to_american
 
 load_dotenv()
 
 KALSHI_API_KEY = os.getenv("KALSHI_API_KEY", "")
 KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
-POLYMARKET_GAMMA = "https://gamma-api.polymarket.com"
 BALLDONTLIE_API_KEY = os.getenv("BALLDONTLIE_API_KEY", "")
 BALLDONTLIE_BASE = "https://api.balldontlie.io/v1"
 
@@ -167,57 +165,8 @@ async def _fetch_kalshi_ml(home_team: str, away_team: str, sport: str = "nba") -
 # ── Polymarket live fetch ────────────────────────────────────────────────────
 
 async def _fetch_polymarket_ml(home_team: str, away_team: str) -> tuple[int, int] | None:
-    home_short = home_team.split()[-1].lower()
-    away_short = away_team.split()[-1].lower()
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"{POLYMARKET_GAMMA}/markets",
-                params={"q": f"{home_short} {away_short}", "active": "true", "closed": "false", "limit": 20},
-                timeout=10.0,
-            )
-            if resp.status_code != 200:
-                return None
-            data = resp.json()
-    except Exception:
-        return None
-    markets = data if isinstance(data, list) else data.get("markets", data.get("data", []))
-    target = None
-    for m in markets:
-        title = (m.get("question") or m.get("title") or "").lower()
-        if home_short in title and away_short in title:
-            target = m
-            break
-    if not target:
-        return None
-    tokens = target.get("tokens", [])
-    if isinstance(tokens, str):
-        try:
-            tokens = json.loads(tokens)
-        except Exception:
-            return None
-    if not tokens:
-        return None
-    home_prob: float | None = None
-    away_prob: float | None = None
-    for token in tokens:
-        outcome = (token.get("outcome") or "").lower()
-        price = token.get("price")
-        if price is None:
-            continue
-        price = float(price)
-        if not (0 < price < 1):
-            continue
-        if home_short in outcome:
-            home_prob = price
-        elif away_short in outcome:
-            away_prob = price
-    if home_prob is None or away_prob is None:
-        return None
-    try:
-        return prob_to_american(home_prob), prob_to_american(away_prob)
-    except ValueError:
-        return None
+    async with httpx.AsyncClient() as client:
+        return await fetch_polymarket_ml(client, home_team, away_team)
 
 
 # ── Scores fetch ───────────────────────────────────────────────────────────
