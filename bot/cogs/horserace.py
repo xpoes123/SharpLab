@@ -75,27 +75,24 @@ def _render_track(
     return "```\n" + "\n".join(lines) + "\n```"
 
 
-def _compute_pool_odds(players: dict[int, "HorseRacePlayer"]) -> dict[int, str]:
-    """Compute implied odds for each horse based on bet distribution.
+def _pool_multipliers(players: dict[int, "HorseRacePlayer"]) -> dict[int, float | None]:
+    """Compute current pari-mutuel payout multiplier for each horse.
 
-    Returns a dict of horse_index -> odds string (e.g. '2.5x' or '---').
+    Returns horse_index -> float multiplier, or None if no bets on that horse.
+    Multiplier = total_pool / bets_on_horse.
     """
     total = sum(p.bet for p in players.values())
     if total == 0:
-        return {i: "---" for i in range(NUM_HORSES)}
+        return {i: None for i in range(NUM_HORSES)}
 
     per_horse: dict[int, int] = {i: 0 for i in range(NUM_HORSES)}
     for p in players.values():
         per_horse[p.horse_index] += p.bet
 
-    odds: dict[int, str] = {}
-    for i in range(NUM_HORSES):
-        if per_horse[i] == 0:
-            odds[i] = "---"
-        else:
-            multiplier = total / per_horse[i]
-            odds[i] = f"{multiplier:.1f}x"
-    return odds
+    return {
+        i: (total / per_horse[i] if per_horse[i] > 0 else None)
+        for i in range(NUM_HORSES)
+    }
 
 
 # ── Dataclasses ──────────────────────────────────────────────────────────────
@@ -132,42 +129,62 @@ class HorseRaceTable:
 # ── Embeds ───────────────────────────────────────────────────────────────────
 
 
-def _payout_multiplier(prob: float) -> float:
-    """Return the payout multiplier for a horse with the given win probability.
+def _fair_multiplier(prob: float) -> float:
+    """Return the probability-based fair-odds multiplier (1/prob).
 
-    Payout = bet * multiplier.  Fair odds (no rake).
+    This is what a solo bettor would get. In pari-mutuel play, the actual
+    payout depends on how many others bet the same horse.
     """
     return 1 / prob
 
 
 def _betting_embed(table: HorseRaceTable) -> discord.Embed:
     total_wagered = sum(p.bet for p in table.players.values())
+    pool_mults = _pool_multipliers(table.players)
+
     embed = discord.Embed(
         title=f"\U0001f3c7 Horse Race \u2014 Place Your Bets (Round {table.round_num})",
         description=(
-            "Pick a horse and place your bet! "
-            "Longshots pay more \u2014 picks are hidden until the race starts."
+            "**Pari-mutuel pools** \u2014 winners split the entire pot based on how much "
+            "they bet. The more players who pick the same horse, the smaller each winner's "
+            "cut. Backing a crowded favourite can pay less than its odds suggest; a "
+            "contrarian longshot that lands pays out the whole pool. "
+            "Picks are hidden until the race starts."
         ),
         colour=discord.Colour.blurple(),
     )
-    if total_wagered:
-        embed.add_field(
-            name="Total Wagered",
-            value=f"{total_wagered}c",
-            inline=True,
-        )
 
-    # Horse list with win probabilities and payout multipliers
+    if total_wagered:
+        embed.add_field(name="Pool", value=f"{total_wagered}c", inline=True)
+
+    # Horse list: win%, fair solo multiplier, live pool multiplier + value signal
     horse_lines: list[str] = []
     for i in range(NUM_HORSES):
         name, emoji = HORSES[i]
         pct = table.horse_probs[i] * 100
-        mult = _payout_multiplier(table.horse_probs[i])
+        fair = _fair_multiplier(table.horse_probs[i])
+        pool_m = pool_mults[i]
+
+        if pool_m is None:
+            pool_str = "---"
+            signal = ""
+        elif pool_m >= fair * 1.1:
+            pool_str = f"**{pool_m:.1f}x**"
+            signal = " \u2705"   # underbet — value
+        elif pool_m <= fair * 0.9:
+            pool_str = f"**{pool_m:.1f}x**"
+            signal = " \u26a0\ufe0f"  # overbet — crowded
+        else:
+            pool_str = f"**{pool_m:.1f}x**"
+            signal = ""
+
         horse_lines.append(
-            f"{emoji} **#{i + 1} {name}** \u2014 {pct:.0f}% chance \u2014 **{mult:.1f}x** payout"
+            f"{emoji} **#{i + 1} {name}** \u2014 {pct:.0f}% win "
+            f"\u00b7 Solo: {fair:.1f}x \u00b7 Pool now: {pool_str}{signal}"
         )
+
     embed.add_field(
-        name="Horses",
+        name="Horses (Win% \u00b7 Solo odds \u00b7 Live pool payout)",
         value="\n".join(horse_lines),
         inline=False,
     )
@@ -185,6 +202,18 @@ def _betting_embed(table: HorseRaceTable) -> discord.Embed:
             value="*No players yet \u2014 click Join!*",
             inline=False,
         )
+
+    embed.add_field(
+        name="\u2139\ufe0f How payouts work",
+        value=(
+            "\u2022 \u2705 = underbet relative to win chance (pool odds > fair odds)\n"
+            "\u2022 \u26a0\ufe0f = overbet / crowded (pool odds < fair odds)\n"
+            "\u2022 Pool now updates live as players join\n"
+            "\u2022 Actual payout locks in when the race starts"
+        ),
+        inline=False,
+    )
+
     embed.set_footer(
         text=f"Host: {table.host_name} \u2502 Min {MIN_PLAYERS} players \u2502 Horse 1-6 in modal",
     )
@@ -246,9 +275,10 @@ def _finished_embed(
         sign = "+" if net >= 0 else ""
         horse = _horse_label(p.horse_index)
         if p.won:
+            actual_mult = p.payout / p.bet if p.bet > 0 else 1.0
             lines.append(
                 f"\U0001f3c6 **{p.display_name}** ({horse}) \u2014 "
-                f"{p.bet}c \u2192 {p.payout}c (**{sign}{net}c**) \u2014 bal: {bal}c"
+                f"{p.bet}c \u2192 {p.payout}c (**{sign}{net}c**, {actual_mult:.2f}x) \u2014 bal: {bal}c"
             )
         else:
             lines.append(
@@ -617,11 +647,18 @@ class HorseRaceTableView(ui.View):
         table = self.table
         table.phase = "finished"
 
-        # Fixed-odds payout: bet × (1/prob)
+        # Pari-mutuel payout: winners split the total pool proportional to their bet.
+        # payout_i = bet_i × (total_pool / total_bet_on_winning_horse)
+        total_pool = sum(p.bet for p in table.players.values())
+        horse_pool: dict[int, int] = {i: 0 for i in range(NUM_HORSES)}
+        for p in table.players.values():
+            horse_pool[p.horse_index] += p.bet
+
         for p in table.players.values():
             if p.horse_index in table.winners:
                 p.won = True
-                p.payout = int(p.bet * _payout_multiplier(table.horse_probs[p.horse_index]))
+                hp = horse_pool[p.horse_index]
+                p.payout = int(p.bet * total_pool / hp) if hp > 0 else p.bet
 
         # Credit winners and log results
         balances: dict[int, int] = {}
