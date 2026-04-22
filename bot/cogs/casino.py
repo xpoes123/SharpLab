@@ -152,11 +152,11 @@ class BlackjackView(ui.View):
         """Resolve the game, pay out, clean up."""
         new_balance = 0
         if payout != 0:
-            new_balance = await queries.update_balance(
+            new_balance = await queries.update_casino_balance(
                 str(self.game.user_id), payout
             )
         else:
-            bal = await queries.get_balance(str(self.game.user_id))
+            bal = await queries.get_casino_balance(str(self.game.user_id))
             new_balance = bal or 0
 
         embed = _game_embed(
@@ -208,7 +208,7 @@ class BlackjackView(ui.View):
             return
         # Try to deduct the extra bet
         try:
-            await queries.update_balance(str(self.game.user_id), -self.game.bet)
+            await queries.update_casino_balance(str(self.game.user_id), -self.game.bet)
         except ValueError:
             await interaction.response.send_message(
                 "Not enough coins to double down!", ephemeral=True
@@ -276,18 +276,16 @@ class CasinoCog(commands.Cog):
             )
             return
 
-        # Ensure wallet exists + credit daily
-        balance, daily_credited = await queries.get_or_create_wallet(str(user_id))
+        balance = await queries.get_or_create_casino_wallet(str(user_id))
 
         if bet > balance:
-            msg = f"You only have **{balance}** coins."
-            if daily_credited:
-                msg = f"**100 coins** credited (every 8h)! {msg}"
-            await interaction.response.send_message(msg, ephemeral=True)
+            await interaction.response.send_message(
+                f"You only have **{balance}** casino coins.", ephemeral=True,
+            )
             return
 
         # Deduct bet
-        await queries.update_balance(str(user_id), -bet)
+        await queries.update_casino_balance(str(user_id), -bet)
 
         # Deal
         shoe = self._draw_shoe()
@@ -300,12 +298,12 @@ class CasinoCog(commands.Cog):
             payout = bet + (bet * 3 // 2)  # 3:2
             if _is_blackjack(game.dealer_hand):
                 # Both blackjack — push
-                new_balance = await queries.update_balance(str(user_id), bet)
+                new_balance = await queries.update_casino_balance(str(user_id), bet)
                 embed = _game_embed(
                     game, reveal=True, outcome="Push", payout=bet, new_balance=new_balance
                 )
             else:
-                new_balance = await queries.update_balance(str(user_id), payout)
+                new_balance = await queries.update_casino_balance(str(user_id), payout)
                 embed = _game_embed(
                     game, reveal=True, outcome="Blackjack!", payout=payout, new_balance=new_balance
                 )
@@ -317,24 +315,16 @@ class CasinoCog(commands.Cog):
         if _is_blackjack(game.dealer_hand):
             embed = _game_embed(
                 game, reveal=True, outcome="Dealer wins", payout=0,
-                new_balance=(await queries.get_balance(str(user_id))) or 0,
+                new_balance=(await queries.get_casino_balance(str(user_id))) or 0,
             )
             self.active_games.pop(user_id, None)
             await interaction.response.send_message(embed=embed)
             return
 
         # Normal play
-        daily_note = ""
-        if daily_credited:
-            daily_note = "**100 coins** credited (every 8h)! "
-
         view = BlackjackView(game, self.active_games)
         embed = _game_embed(game)
-        await interaction.response.send_message(
-            content=daily_note if daily_note else None,
-            embed=embed,
-            view=view,
-        )
+        await interaction.response.send_message(embed=embed, view=view)
 
     @app_commands.command(name="balance", description="Check your coin balance")
     @app_commands.describe(user="Check another user's balance (optional)")
@@ -345,18 +335,33 @@ class CasinoCog(commands.Cog):
         is_self = target.id == interaction.user.id
 
         if is_self:
-            balance, daily_credited = await queries.get_or_create_wallet(str(target.id))
-            msg = f"**{target.display_name}** has **{balance}** coins."
-            if daily_credited:
-                msg = f"**100 coins** credited (every 8h)! {msg}"
+            bal = await queries.get_or_create_casino_wallet(str(target.id))
+            msg = f"**{target.display_name}** has **{bal}** casino coins."
         else:
-            bal = await queries.get_balance(str(target.id))
+            bal = await queries.get_casino_balance(str(target.id))
             if bal is None:
                 msg = f"**{target.display_name}** hasn't played yet."
             else:
-                msg = f"**{target.display_name}** has **{bal}** coins."
+                msg = f"**{target.display_name}** has **{bal}** casino coins."
 
         await interaction.response.send_message(msg)
+
+    @app_commands.command(name="give-coins", description="Give casino coins to a user (admin)")
+    @app_commands.describe(user="User to give coins to", amount="Number of coins to give")
+    async def give_coins(
+        self, interaction: discord.Interaction, user: discord.User, amount: int,
+    ) -> None:
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Admin only.", ephemeral=True)
+            return
+        if amount < 1:
+            await interaction.response.send_message("Amount must be at least 1.", ephemeral=True)
+            return
+        new_balance = await queries.give_casino_coins(str(user.id), amount)
+        await interaction.response.send_message(
+            f"Gave **{amount}** casino coins to **{user.display_name}**. "
+            f"Their balance: **{new_balance}** coins."
+        )
 
 
 async def setup(bot: commands.Bot) -> None:

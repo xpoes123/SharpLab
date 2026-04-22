@@ -824,6 +824,89 @@ async def get_balance(discord_user: str) -> int | None:
     return row["balance"] if row else None
 
 
+# ── Casino Wallets (separate from paper-trading wallets) ──────────────────────
+
+CASINO_STARTING_COINS = 100
+
+
+async def get_or_create_casino_wallet(discord_user: str) -> int:
+    """Return casino balance. Creates wallet with starting coins if new."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT balance FROM casino_wallets WHERE discord_user = ?",
+            (discord_user,),
+        )
+        row = await cursor.fetchone()
+        if row is not None:
+            return row["balance"]
+        await db.execute(
+            "INSERT INTO casino_wallets (discord_user, balance) VALUES (?, ?)",
+            (discord_user, CASINO_STARTING_COINS),
+        )
+        await db.commit()
+        return CASINO_STARTING_COINS
+
+
+async def update_casino_balance(discord_user: str, delta: int) -> int:
+    """Add/subtract casino coins. Returns new balance. Raises ValueError if insufficient."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT balance FROM casino_wallets WHERE discord_user = ?",
+            (discord_user,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            raise ValueError("No casino wallet found")
+        new_balance = row["balance"] + delta
+        if new_balance < 0:
+            raise ValueError(f"Insufficient casino coins (have {row['balance']}, need {-delta})")
+        await db.execute(
+            "UPDATE casino_wallets SET balance = ? WHERE discord_user = ?",
+            (new_balance, discord_user),
+        )
+        await db.commit()
+        return new_balance
+
+
+async def get_casino_balance(discord_user: str) -> int | None:
+    """Return casino balance or None if no wallet."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT balance FROM casino_wallets WHERE discord_user = ?",
+            (discord_user,),
+        )
+        row = await cursor.fetchone()
+    return row["balance"] if row else None
+
+
+async def give_casino_coins(discord_user: str, amount: int) -> int:
+    """Give casino coins to a user (admin). Creates wallet if needed. Returns new balance."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT balance FROM casino_wallets WHERE discord_user = ?",
+            (discord_user,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            new_balance = amount
+            await db.execute(
+                "INSERT INTO casino_wallets (discord_user, balance) VALUES (?, ?)",
+                (discord_user, new_balance),
+            )
+        else:
+            new_balance = row["balance"] + amount
+            await db.execute(
+                "UPDATE casino_wallets SET balance = ? WHERE discord_user = ?",
+                (new_balance, discord_user),
+            )
+        await db.commit()
+        return new_balance
+
+
 async def get_todays_game_for_team(team: str) -> Game | None:
     """Return the next unfinished game today for a given team (exact name match)."""
     today_prefix = datetime.now(timezone.utc).strftime("%Y-%m-%d")

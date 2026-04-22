@@ -227,18 +227,16 @@ class BaccaratCog(commands.Cog):
             )
             return
 
-        # Ensure wallet exists + credit daily
-        balance, daily_credited = await queries.get_or_create_wallet(str(user_id))
+        balance = await queries.get_or_create_casino_wallet(str(user_id))
 
         if wager > balance:
-            msg = f"You only have **{balance}** coins."
-            if daily_credited:
-                msg = f"Daily **100 coins** credited! {msg}"
-            await interaction.response.send_message(msg, ephemeral=True)
+            await interaction.response.send_message(
+                f"You only have **{balance}** casino coins.", ephemeral=True,
+            )
             return
 
         # Deduct wager
-        await queries.update_balance(str(user_id), -wager)
+        await queries.update_casino_balance(str(user_id), -wager)
 
         # Deal
         shoe = self._ensure_shoe()
@@ -287,9 +285,9 @@ class BaccaratCog(commands.Cog):
 
         # Credit payout
         if payout > 0:
-            new_balance = await queries.update_balance(str(user_id), payout)
+            new_balance = await queries.update_casino_balance(str(user_id), payout)
         else:
-            new_balance = (await queries.get_balance(str(user_id))) or 0
+            new_balance = (await queries.get_casino_balance(str(user_id))) or 0
 
         embed = _result_embed(
             player_hand=player_hand,
@@ -301,14 +299,7 @@ class BaccaratCog(commands.Cog):
             new_balance=new_balance,
         )
 
-        daily_note = ""
-        if daily_credited:
-            daily_note = "Daily **100 coins** credited! "
-
-        await interaction.response.send_message(
-            content=daily_note if daily_note else None,
-            embed=embed,
-        )
+        await interaction.response.send_message(embed=embed)
 
 
 async def setup(bot: commands.Bot) -> None:

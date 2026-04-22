@@ -60,6 +60,11 @@ CREATE TABLE IF NOT EXISTS wallets (
     last_daily    TEXT
 );
 
+CREATE TABLE IF NOT EXISTS casino_wallets (
+    discord_user  TEXT PRIMARY KEY,
+    balance       INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS paper_bets (
     paper_bet_id    INTEGER PRIMARY KEY AUTOINCREMENT,
     game_id         TEXT NOT NULL REFERENCES games(game_id),
