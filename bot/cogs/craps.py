@@ -37,7 +37,6 @@ PLACE_PAYOUTS: dict[int, tuple[int, int]] = {
 HARDWAY_PAYOUTS: dict[int, int] = {4: 7, 6: 9, 8: 9, 10: 7}
 
 MAX_ODDS_MULTIPLIER = 5
-MAX_SIDE_BETS = 5
 MAX_PLAYERS = 8
 
 # ── Game state ──────────────────────────────────────────────────────────────
@@ -311,10 +310,21 @@ def _table_embed(
             else:
                 emoji = "\U0001f3b0"
                 main = "side bets"
-            sides = ", ".join(
-                f"{SIDE_BET_LABELS[sb.kind]}{f' ({sb.come_point})' if sb.kind in ('come','dont_come') and sb.come_point else ''} {sb.amount}c"
-                for sb in p.side_bets
-            )
+            # Stack duplicate side bets (e.g. 3x Hard 6 15c → Hard 6 15c x3)
+            from collections import Counter
+            sb_counts: Counter[str] = Counter()
+            sb_amts: dict[str, int] = {}
+            for sb in p.side_bets:
+                lbl = SIDE_BET_LABELS[sb.kind]
+                if sb.kind in ("come", "dont_come") and sb.come_point:
+                    lbl += f" ({sb.come_point})"
+                key = f"{lbl} {sb.amount}c"
+                sb_counts[key] += 1
+                sb_amts[key] = sb.amount
+            side_parts = []
+            for key, count in sb_counts.items():
+                side_parts.append(f"{key} x{count}" if count > 1 else key)
+            sides = ", ".join(side_parts)
             line = f"{emoji} **{p.display_name}** \u2014 {main}"
             if sides:
                 line += f" | {sides}"
@@ -481,14 +491,6 @@ class SideBetSelect(ui.Select):
             )
             return
         uid = interaction.user.id
-        player = self.table.players.get(uid)
-        if player:
-            active_multi = sum(1 for sb in player.side_bets if sb.kind in POINT_PHASE_ONLY)
-            if kind in POINT_PHASE_ONLY and active_multi >= MAX_SIDE_BETS:
-                await interaction.response.send_message(
-                    f"Max {MAX_SIDE_BETS} active multi-roll side bets.", ephemeral=True,
-                )
-                return
         if len(self.table.players) >= MAX_PLAYERS and uid not in self.table.players:
             await interaction.response.send_message("Table is full!", ephemeral=True)
             return
