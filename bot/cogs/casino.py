@@ -1354,6 +1354,8 @@ class CasinoCog(commands.Cog):
                 "nbasim": "NBA Sim",
                 "nflsim": "NFL Sim",
                 "penalties": "Penalties",
+                "geography": "Geography",
+                "wordle": "Wordle",
             }
             lines = []
             for row in by_game:
@@ -1395,6 +1397,8 @@ CASINO_GAMES: list[tuple[str, str, bool]] = [
     ("nbasim", "Simulated NBA game betting", False),
     ("nflsim", "Simulated NFL game betting", False),
     ("penalties", "1v1 Penalty Shootout duel", True),
+    ("geography", "Speed Geography \u2014 name the capital first", True),
+    ("wordle", "Wordle Race \u2014 guess the word first", True),
 ]
 
 

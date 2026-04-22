@@ -42,6 +42,8 @@ COGS = [
     "bot.cogs.nbasim",
     "bot.cogs.nflsim",
     "bot.cogs.penalties",
+    "bot.cogs.geography",
+    "bot.cogs.wordle",
 ]
 
 GUILD_ID = int(os.environ["DISCORD_GUILD_ID"])
