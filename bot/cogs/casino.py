@@ -44,6 +44,7 @@ GAME_LABELS: dict[str, str] = {
     "nflsim": "NFL Sim",
     "mlbsim": "MLB Sim",
     "tennissim": "Tennis Sim",
+    "soccersim": "Soccer Sim",
     "penalties": "Penalties",
     "tictactoe": "Tic Tac Toe",
     "rps": "Rock Paper Scissors",
@@ -1804,6 +1805,16 @@ GAME_RULES: dict[str, str] = {
         "**Markets:** Run Line | Moneyline | Over/Under\n"
         "**Payouts:** Standard sportsbook odds. Pushes refunded."
     ),
+    "soccersim": (
+        "**Soccer Sim**\n"
+        "Bet on a simulated soccer match.\n\n"
+        "**How to play:** A matchup is generated between two teams with attack, midfield, "
+        "defense, and goalkeeper ratings. Pick home or away and bet coins. The match simulates "
+        "half by half with goals, cards, and subs. Draws are possible (nobody wins).\n\n"
+        "**Tournament mode:** `/soccersim-tournament` runs an 8-team mini cup with group stage "
+        "and knockout rounds. Bet on which team wins the whole thing.\n\n"
+        "**Payouts:** Based on pre-game win probability. Tournament payouts based on team strength."
+    ),
 }
 
 CASINO_GAMES: list[tuple[str, str, str, str]] = [
@@ -1844,6 +1855,7 @@ CASINO_GAMES: list[tuple[str, str, str, str]] = [
     ("nflsim", "Simulated NFL game betting", "Sports Sim", "solo"),
     ("mlbsim", "Simulated MLB game betting", "Sports Sim", "solo"),
     ("tennissim", "Simulated tennis match betting", "Sports Sim", "solo"),
+    ("soccersim", "Simulated soccer match betting", "Sports Sim", "solo"),
 ]
 
 

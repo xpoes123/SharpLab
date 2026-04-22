@@ -44,6 +44,7 @@ COGS = [
     "bot.cogs.nflsim",
     "bot.cogs.mlbsim",
     "bot.cogs.tennissim",
+    "bot.cogs.soccersim",
     "bot.cogs.penalties",
     "bot.cogs.geography",
     "bot.cogs.wordle",
