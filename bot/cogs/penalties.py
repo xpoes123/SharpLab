@@ -13,8 +13,6 @@ from db import queries
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-MAX_BET = 500
-HOUSE_EDGE = 0.05
 SHOT_CLOCK = 30  # seconds per pick
 KICKS_PER_PLAYER = 5
 RESULT_PAUSE = 3  # seconds to show kick result before advancing
@@ -131,7 +129,7 @@ def _pending_embed(duel: PKDuel) -> discord.Embed:
         description=(
             f"**{duel.challenger_name}** challenges **{duel.opponent_name}** "
             f"to a Penalty Shootout for **{duel.bet}c**!\n\n"
-            f"Pot: **{duel.bet * 2}c** (5% house rake)\n"
+            f"Pot: **{duel.bet * 2}c**\n"
             f"5 rounds of alternating kicks. Tied? Sudden death."
         ),
         colour=discord.Colour.green(),
@@ -645,8 +643,7 @@ class PKDuelView(ui.View):
 
         # Payout
         total_pot = duel.bet * 2
-        house_take = max(1, int(total_pot * HOUSE_EDGE))
-        payout = total_pot - house_take
+        payout = total_pot
         loser_id = duel.opponent_id if winner_id == duel.challenger_id else duel.challenger_id
 
         balances: dict[int, int] = {}
@@ -761,12 +758,6 @@ class PenaltiesCog(commands.Cog):
         if bet < 1:
             await interaction.response.send_message("Bet must be at least 1c.", ephemeral=True)
             return
-        if bet > MAX_BET:
-            await interaction.response.send_message(
-                f"Max bet is {MAX_BET}c.", ephemeral=True,
-            )
-            return
-
         # Deduct challenger's coins
         await queries.get_or_create_casino_wallet(str(uid))
         try:

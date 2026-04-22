@@ -19,9 +19,7 @@ from shared.models import TEAM_ABBR_NBA
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 10
-MAX_BET = 500
 MIN_PLAYERS = 1
-HOUSE_EDGE = 0.05
 QUARTER_DELAY = 2.0  # seconds between quarter updates
 NUM_QUARTERS = 4
 OT_DELAY = 1.5
@@ -49,7 +47,7 @@ def _generate_win_prob() -> float:
 
 def _payout_multiplier(prob: float) -> float:
     """Return payout multiplier for a bet on a side with given win probability."""
-    return (1 / prob) * (1 - HOUSE_EDGE)
+    return 1 / prob
 
 
 def _prob_to_american(prob: float) -> str:
@@ -345,12 +343,6 @@ class JoinNbaSimModal(ui.Modal):
                 "Must be at least 1 coin.", ephemeral=True,
             )
             return
-        if amt > MAX_BET:
-            await interaction.response.send_message(
-                f"Max bet is {MAX_BET}c.", ephemeral=True,
-            )
-            return
-
         # Validate side
         raw = self.side_input.value.strip().lower()
         _, home_abbr = self.table.home_team

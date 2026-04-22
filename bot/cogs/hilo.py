@@ -15,8 +15,6 @@ SUITS = ("♠", "♥", "♦", "♣")
 RANKS = ("2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A")
 RANK_VALUE = {r: i for i, r in enumerate(RANKS, 2)}  # 2→2 … A→14
 MAX_PLAYERS = 8
-MAX_BET = 5000
-HOUSE_EDGE = 0.95  # 5% edge
 MIN_DECK = 5  # auto cash-out when deck gets this small
 
 
@@ -53,7 +51,7 @@ def _deck_counts(deck: list[str], current: str) -> tuple[int, int, int]:
 
 
 def _calc_mult(deck: list[str], current: str, guess: str) -> float:
-    """Multiplier (with house edge) for a correct guess.
+    """Multiplier for a correct guess (fair odds, no house edge).
 
     Returns 0.0 when the guess is impossible (no cards in that direction).
     """
@@ -64,7 +62,7 @@ def _calc_mult(deck: list[str], current: str, guess: str) -> float:
     favorable = higher if guess == "higher" else lower
     if favorable == 0:
         return 0.0
-    return round((remaining / favorable) * HOUSE_EDGE, 2)
+    return round(remaining / favorable, 2)
 
 
 # ── Dataclasses ──────────────────────────────────────────────────────────────
@@ -254,12 +252,6 @@ class JoinHiLoModal(ui.Modal):
                 "Must be at least 1 coin.", ephemeral=True,
             )
             return
-        if amt > MAX_BET:
-            await interaction.response.send_message(
-                f"Max bet is {MAX_BET}c.", ephemeral=True,
-            )
-            return
-
         uid = interaction.user.id
         if uid in self.table.players:
             await interaction.response.send_message(

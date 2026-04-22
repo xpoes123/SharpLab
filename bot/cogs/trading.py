@@ -20,7 +20,6 @@ log = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-MAX_BET = 500
 MIN_BET = 1
 
 MARKET_CHOICES = [
@@ -404,9 +403,9 @@ class TradingCog(commands.Cog):
         await interaction.response.defer()
 
         # Validate wager
-        if wager < MIN_BET or wager > MAX_BET:
+        if wager < MIN_BET:
             await interaction.followup.send(
-                f"Wager must be between {MIN_BET} and {MAX_BET} coins.",
+                f"Wager must be at least {MIN_BET} coin.",
                 ephemeral=True,
             )
             return
@@ -501,7 +500,7 @@ class TradingCog(commands.Cog):
         game="Select a game",
         market="Market type",
         pick="Your pick — autocomplete shows live lines",
-        wager=f"Coins to risk ({MIN_BET}–{MAX_BET})",
+        wager=f"Coins to risk (min {MIN_BET})",
     )
 
     @app_commands.command(name="trade", description="Paper trade on an NBA game with coins")

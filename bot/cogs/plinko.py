@@ -15,13 +15,12 @@ from db import queries
 
 ROWS = 8  # 9 buckets
 MAX_PLAYERS = 10
-MAX_BET = 5000
 
-# Multiplier tables per risk level (symmetric, ~1% house edge each).
+# Multiplier tables per risk level (symmetric, fair EV = 1.0).
 MULTIPLIERS: dict[str, list[float]] = {
-    "low": [5.6, 2.1, 1.1, 1.0, 0.5, 1.0, 1.1, 2.1, 5.6],
-    "medium": [13, 3, 1.3, 0.7, 0.4, 0.7, 1.3, 3, 13],
-    "high": [29, 4, 1.5, 0.3, 0.2, 0.3, 1.5, 4, 29],
+    "low": [5.6, 2.1, 1.1, 1.0, 0.54, 1.0, 1.1, 2.1, 5.6],
+    "medium": [13, 3, 1.3, 0.7, 0.44, 0.7, 1.3, 3, 13],
+    "high": [29, 4, 1.5, 0.3, 0.24, 0.3, 1.5, 4, 29],
 }
 
 RISK_EMOJI: dict[str, str] = {"low": "🟢", "medium": "🟡", "high": "🔴"}
@@ -214,11 +213,6 @@ class JoinPlinkoModal(ui.Modal):
         if amt < 1:
             await interaction.response.send_message(
                 "Must be at least 1 coin.", ephemeral=True,
-            )
-            return
-        if amt > MAX_BET:
-            await interaction.response.send_message(
-                f"Max bet is {MAX_BET}c.", ephemeral=True,
             )
             return
 

@@ -122,7 +122,6 @@ GAMBLE_CARDS = [
 
 # ── Bet config ───────────────────────────────────────────────────────────────
 
-MAX_BET = 500
 MIN_BET = 10
 BET_STEP = 10
 DEFAULT_BET = 20
@@ -551,7 +550,7 @@ def _paytable_embed() -> discord.Embed:
         inline=False,
     )
 
-    embed.set_footer(text=f"{NUM_LINES} paylines  \u2022  Min bet: {MIN_BET}c  \u2022  Max bet: {MAX_BET}c")
+    embed.set_footer(text=f"{NUM_LINES} paylines  \u2022  Min bet: {MIN_BET}c")
     return embed
 
 
@@ -580,8 +579,8 @@ class SlotsMainView(ui.View):
         self.spin_btn.disabled = not can_spin
         self.auto_btn.disabled = not can_spin or in_free
         self.bet_down_btn.disabled = not can_spin or s.bet <= MIN_BET or in_free
-        self.bet_up_btn.disabled = not can_spin or s.bet >= MAX_BET or in_free
-        self.max_bet_btn.disabled = not can_spin or s.bet >= MAX_BET or in_free
+        self.bet_up_btn.disabled = not can_spin or in_free
+        self.max_bet_btn.disabled = not can_spin or in_free
         self.gamble_btn.disabled = not has_win or s.gamble_count >= MAX_GAMBLE or in_free
         self.paytable_btn.disabled = False
         self.quit_btn.disabled = False
@@ -640,7 +639,7 @@ class SlotsMainView(ui.View):
         if interaction.user.id != self.session.user_id:
             await interaction.response.send_message("Not your machine!", ephemeral=True)
             return
-        self.session.bet = min(MAX_BET, self.session.bet + BET_STEP)
+        self.session.bet = self.session.bet + BET_STEP
         bal = await queries.get_casino_balance(str(self.session.user_id)) or 0
         self._update_buttons()
         await interaction.response.edit_message(
@@ -654,8 +653,8 @@ class SlotsMainView(ui.View):
         if interaction.user.id != self.session.user_id:
             await interaction.response.send_message("Not your machine!", ephemeral=True)
             return
-        self.session.bet = MAX_BET
         bal = await queries.get_casino_balance(str(self.session.user_id)) or 0
+        self.session.bet = max(MIN_BET, bal)
         self._update_buttons()
         await interaction.response.edit_message(
             embed=_idle_embed(self.session, bal), view=self,

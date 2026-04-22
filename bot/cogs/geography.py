@@ -20,9 +20,7 @@ from db import queries
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 8
-MAX_BET = 500
 MIN_PLAYERS = 2
-HOUSE_EDGE = 0.05
 ROUND_TIME = 30  # seconds per round
 ROUND_DELAY = 4  # seconds between rounds
 WINS_TO_WIN = 3  # first to N wins
@@ -336,7 +334,7 @@ def _betting_embed(table: GeoTable) -> discord.Embed:
     )
 
     if pot:
-        embed.add_field(name="Pot", value=f"{pot}c (5% rake)", inline=True)
+        embed.add_field(name="Pot", value=f"{pot}c", inline=True)
     embed.add_field(name="Goal", value=f"First to {WINS_TO_WIN}", inline=True)
 
     if n >= MIN_PLAYERS:
@@ -363,7 +361,6 @@ def _betting_embed(table: GeoTable) -> discord.Embed:
     embed.set_footer(
         text=(
             f"Host: {table.host_name} \u2502 "
-            f"Max bet {MAX_BET}c \u2502 "
             f"Min {MIN_PLAYERS} players"
         ),
     )
@@ -531,12 +528,6 @@ class JoinGeoModal(ui.Modal):
                 "Must be at least 1 coin.", ephemeral=True,
             )
             return
-        if amt > MAX_BET:
-            await interaction.response.send_message(
-                f"Max bet is {MAX_BET}c.", ephemeral=True,
-            )
-            return
-
         uid = interaction.user.id
         if uid in self.table.players:
             await interaction.response.send_message(
@@ -905,9 +896,7 @@ class GeoTableView(ui.View):
                 except Exception:
                     pass
         else:
-            house_take = max(1, int(pot * HOUSE_EDGE))
-            prize_pool = pot - house_take
-            payouts = _compute_payouts(table.players, prize_pool, n_players)
+            payouts = _compute_payouts(table.players, pot, n_players)
             for uid, payout in payouts.items():
                 if payout > 0:
                     try:

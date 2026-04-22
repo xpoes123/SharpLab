@@ -9,7 +9,7 @@ higher bettors is refunded when no winner can cover it.
 def compute_side_pot_payouts(
     bets: dict[int, int],
     winner_uids: list[int] | set[int],
-    house_edge: float = 0.05,
+    house_edge: float = 0.0,
 ) -> dict[int, int]:
     """Return ``{uid: payout}`` using poker-style side pots.
 
@@ -20,7 +20,7 @@ def compute_side_pot_payouts(
     winner_uids:
         The user(s) who won the game.
     house_edge:
-        Fraction taken as rake (0.05 = 5%).  Set to 0 for no rake.
+        Fraction taken as rake.  Default 0 (no rake).
         Only applied to pots that are actually won (not refunded).
 
     Returns

@@ -15,9 +15,7 @@ from bot.cogs._pool import compute_side_pot_payouts
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 8
-MAX_BET = 500
 MIN_PLAYERS = 2
-HOUSE_EDGE = 0.05
 STARTING_DICE = 5
 SHOT_CLOCK = 60  # seconds per turn
 
@@ -115,7 +113,7 @@ def _betting_embed(table: LiarTable) -> discord.Embed:
         colour=discord.Colour.dark_orange(),
     )
     if pot:
-        embed.add_field(name="Pot", value=f"{pot}c (5% house rake)", inline=True)
+        embed.add_field(name="Pot", value=f"{pot}c", inline=True)
     if table.players:
         lines = [
             f"\U0001f3b2 **{p.display_name}** \u2014 {p.bet}c"
@@ -351,11 +349,6 @@ class JoinLiarModal(ui.Modal):
         if amt < 1:
             await interaction.response.send_message(
                 "Must be at least 1 coin.", ephemeral=True,
-            )
-            return
-        if amt > MAX_BET:
-            await interaction.response.send_message(
-                f"Max bet is {MAX_BET}c.", ephemeral=True,
             )
             return
 
@@ -965,7 +958,7 @@ class LiarTableView(ui.View):
 
         # Side-pot payouts — winner only wins up to their bet from each opponent
         bets = {uid: p.bet for uid, p in table.players.items()}
-        payouts = compute_side_pot_payouts(bets, [winner_uid], HOUSE_EDGE)
+        payouts = compute_side_pot_payouts(bets, [winner_uid])
         for uid, payout in payouts.items():
             table.players[uid].payout = payout
 

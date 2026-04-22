@@ -14,9 +14,7 @@ from bot.cogs._pool import compute_side_pot_payouts
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 8
-MAX_BET = 500
 MIN_PLAYERS = 2
-HOUSE_EDGE = 0.05
 NUM_ROUNDS = 5
 STARTING_CASH = 1000
 TRADE_WINDOW = 30  # seconds
@@ -289,7 +287,7 @@ def _betting_embed(table: StockTable) -> discord.Embed:
         colour=discord.Colour.blurple(),
     )
     if pot:
-        embed.add_field(name="Pot", value=f"{pot}c (5% house rake)", inline=True)
+        embed.add_field(name="Pot", value=f"{pot}c", inline=True)
     if table.players:
         lines = [
             f"\U0001f4b5 **{p.display_name}** \u2014 {p.bet}c"
@@ -305,8 +303,7 @@ def _betting_embed(table: StockTable) -> discord.Embed:
     embed.set_footer(
         text=(
             f"Host: {table.host_name} \u2502 "
-            f"Min {MIN_PLAYERS} players \u2502 "
-            f"Max bet {MAX_BET}c"
+            f"Min {MIN_PLAYERS} players"
         ),
     )
     return embed
@@ -500,7 +497,7 @@ class JoinStockModal(ui.Modal):
         super().__init__(title="Join Stock Market")
         self.table = table
         self.table_view = view
-        self.amount.placeholder = f"e.g. 100 (bal: {balance}c, max {MAX_BET}c)"
+        self.amount.placeholder = f"e.g. 100 (bal: {balance}c)"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
@@ -513,11 +510,6 @@ class JoinStockModal(ui.Modal):
         if amt < 1:
             await interaction.response.send_message(
                 "Must be at least 1 coin.", ephemeral=True,
-            )
-            return
-        if amt > MAX_BET:
-            await interaction.response.send_message(
-                f"Max bet is {MAX_BET}c.", ephemeral=True,
             )
             return
 
@@ -1138,7 +1130,7 @@ class StockTableView(ui.View):
 
         # Side-pot payouts
         bets = {uid: p.bet for uid, p in table.players.items()}
-        payouts = compute_side_pot_payouts(bets, table.winners, HOUSE_EDGE)
+        payouts = compute_side_pot_payouts(bets, table.winners)
         for uid, player in table.players.items():
             player.payout = payouts.get(uid, 0)
 

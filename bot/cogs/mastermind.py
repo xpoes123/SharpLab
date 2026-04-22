@@ -14,9 +14,7 @@ from bot.cogs._pool import compute_side_pot_payouts
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 8
-MAX_BET = 500
 MIN_PLAYERS = 2
-HOUSE_EDGE = 0.05
 MAX_GUESSES = 10
 ROUND_TIMEOUT = 300  # 5 minutes
 
@@ -155,7 +153,7 @@ def _betting_embed(table: MastermindTable) -> discord.Embed:
         colour=discord.Colour.purple(),
     )
     if pot:
-        embed.add_field(name="Pot", value=f"{pot}c (5% house rake)", inline=True)
+        embed.add_field(name="Pot", value=f"{pot}c", inline=True)
     if table.players:
         lines = [
             f"\U0001f9e0 **{p.display_name}** \u2014 {p.bet}c"
@@ -247,7 +245,7 @@ def _solved_embed(
     # Compute payouts if not provided (e.g. from _timeout_embed)
     if payouts is None:
         bets = {uid: p.bet for uid, p in table.players.items()}
-        payouts = compute_side_pot_payouts(bets, table.winners, HOUSE_EDGE)
+        payouts = compute_side_pot_payouts(bets, table.winners)
 
     # Results per player
     winner_set = set(table.winners)
@@ -357,11 +355,6 @@ class JoinMastermindModal(ui.Modal):
         if amt < 1:
             await interaction.response.send_message(
                 "Must be at least 1 coin.", ephemeral=True,
-            )
-            return
-        if amt > MAX_BET:
-            await interaction.response.send_message(
-                f"Max bet is {MAX_BET}c.", ephemeral=True,
             )
             return
 
@@ -562,7 +555,7 @@ class MastermindTableView(ui.View):
 
         # Side-pot payouts
         bets = {uid: p.bet for uid, p in table.players.items()}
-        payouts = compute_side_pot_payouts(bets, winner_uids, HOUSE_EDGE)
+        payouts = compute_side_pot_payouts(bets, winner_uids)
 
         # Credit payouts and log results
         balances: dict[int, int] = {}

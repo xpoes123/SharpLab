@@ -13,9 +13,7 @@ from db import queries
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 10
-MAX_BET = 500
 MIN_PLAYERS = 2
-HOUSE_EDGE = 0.05  # 5% rake
 TICK_INTERVAL = 1.5  # seconds between race ticks
 TRACK_LENGTH = 20  # positions to finish line
 
@@ -95,7 +93,7 @@ def _compute_pool_odds(players: dict[int, "HorseRacePlayer"]) -> dict[int, str]:
         if per_horse[i] == 0:
             odds[i] = "---"
         else:
-            multiplier = (total * (1 - HOUSE_EDGE)) / per_horse[i]
+            multiplier = total / per_horse[i]
             odds[i] = f"{multiplier:.1f}x"
     return odds
 
@@ -137,9 +135,9 @@ class HorseRaceTable:
 def _payout_multiplier(prob: float) -> float:
     """Return the payout multiplier for a horse with the given win probability.
 
-    Payout = bet * multiplier.  Includes house edge (5% rake).
+    Payout = bet * multiplier.  Fair odds (no rake).
     """
-    return (1 / prob) * (1 - HOUSE_EDGE)
+    return 1 / prob
 
 
 def _betting_embed(table: HorseRaceTable) -> discord.Embed:
@@ -303,12 +301,6 @@ class JoinRaceModal(ui.Modal):
                 "Must be at least 1 coin.", ephemeral=True,
             )
             return
-        if amt > MAX_BET:
-            await interaction.response.send_message(
-                f"Max bet is {MAX_BET}c.", ephemeral=True,
-            )
-            return
-
         # Validate horse selection
         try:
             horse_idx = int(self.horse_num.value) - 1
@@ -625,7 +617,7 @@ class HorseRaceTableView(ui.View):
         table = self.table
         table.phase = "finished"
 
-        # Fixed-odds payout: bet × (1/prob) × (1 - house_edge)
+        # Fixed-odds payout: bet × (1/prob)
         for p in table.players.values():
             if p.horse_index in table.winners:
                 p.won = True

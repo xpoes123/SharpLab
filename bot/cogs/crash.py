@@ -14,10 +14,8 @@ from db import queries
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 10
-MAX_BET = 5000
 TICK_INTERVAL = 1.5  # seconds between multiplier updates
 GROWTH_RATE = 0.08  # e^(rate * tick)
-HOUSE_EDGE_FACTOR = 0.99  # 1% house edge
 AUTO_CASHOUT_MAX = 100.0
 
 
@@ -25,14 +23,14 @@ AUTO_CASHOUT_MAX = 100.0
 
 
 def _generate_crash_point() -> float:
-    """Random crash multiplier with ~1% house edge.
+    """Random crash multiplier (fair, no house edge).
 
-    Distribution:  ~1% instant crash (1.00x), median ~1.98x.
+    Distribution:  ~1% instant crash (1.00x), median ~2x.
     """
     r = random.random()
     if r == 0:
         r = 1e-10
-    return max(1.00, math.floor(100 * HOUSE_EDGE_FACTOR / r) / 100)
+    return max(1.00, math.floor(100 / r) / 100)
 
 
 def _multiplier_at_tick(tick: int) -> float:
@@ -189,12 +187,6 @@ class JoinCrashModal(ui.Modal):
                 "Must be at least 1 coin.", ephemeral=True,
             )
             return
-        if amt > MAX_BET:
-            await interaction.response.send_message(
-                f"Max bet is {MAX_BET}c.", ephemeral=True,
-            )
-            return
-
         # Parse auto-cashout
         auto_co = 0.0
         raw = (self.auto.value or "").strip()
