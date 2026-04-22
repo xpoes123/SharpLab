@@ -44,6 +44,7 @@ GAME_LABELS: dict[str, str] = {
     "mlbsim": "MLB Sim",
     "tennissim": "Tennis Sim",
     "penalties": "Penalties",
+    "tictactoe": "Tic Tac Toe",
     "geography": "Geography",
     "wordle": "Wordle",
     "nba-trivia": "NBA Trivia",
@@ -1824,6 +1825,7 @@ CASINO_GAMES: list[tuple[str, str, str, str]] = [
     ("stockmarket", "Stock market investment game", "Party Games", "party"),
     ("liarsdice", "Liar's Dice bluffing game", "Party Games", "duo"),
     ("penalties", "1v1 Penalty Shootout duel", "Party Games", "duo"),
+    ("tictactoe", "1v1 Tic Tac Toe with coin wagers", "Party Games", "duo"),
     # ── Brain Games
     ("math24", "Make 24 from four numbers", "Brain Games", "party"),
     ("countdown", "Countdown numbers math game", "Brain Games", "party"),
