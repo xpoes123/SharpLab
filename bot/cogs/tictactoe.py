@@ -326,11 +326,16 @@ class TTTView(ui.View):
             await interaction.response.send_message("You weren't in this game!", ephemeral=True)
             return
 
-        # Swap roles: previous opponent becomes challenger (X), previous challenger becomes opponent (O)
-        new_challenger_id = game.opponent_id
-        new_opponent_id = game.challenger_id
-        new_challenger_name = game.opponent_name
-        new_opponent_name = game.challenger_name
+        # Clicker becomes the new challenger; the other player becomes opponent.
+        # This ensures the accept_btn (gated on opponent_id) always works correctly.
+        other = game.opponent_id if clicker == game.challenger_id else game.challenger_id
+        other_name = game.opponent_name if clicker == game.challenger_id else game.challenger_name
+        clicker_name = game.challenger_name if clicker == game.challenger_id else game.opponent_name
+
+        new_challenger_id = clicker
+        new_opponent_id = other
+        new_challenger_name = clicker_name
+        new_opponent_name = other_name
 
         # Deduct clicker's coins
         try:
@@ -348,7 +353,6 @@ class TTTView(ui.View):
         self.stop()
 
         # Create new game
-        other = new_opponent_id if clicker == new_challenger_id else new_challenger_id
         new_game = TTTGame(
             channel_id=game.channel_id,
             challenger_id=new_challenger_id,
@@ -484,6 +488,9 @@ class TicTacToeCog(commands.Cog):
             return
         if bet < 1:
             await interaction.response.send_message("Bet must be at least 1c.", ephemeral=True)
+            return
+        if bet > 500:
+            await interaction.response.send_message("Bet cannot exceed 500c.", ephemeral=True)
             return
 
         # Deduct challenger's coins
