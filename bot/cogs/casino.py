@@ -42,6 +42,7 @@ GAME_LABELS: dict[str, str] = {
     "nbasim": "NBA Sim",
     "nflsim": "NFL Sim",
     "mlbsim": "MLB Sim",
+    "tennissim": "Tennis Sim",
     "penalties": "Penalties",
     "geography": "Geography",
     "wordle": "Wordle",
@@ -1834,6 +1835,7 @@ CASINO_GAMES: list[tuple[str, str, str, str]] = [
     ("nbasim", "Simulated NBA game betting", "Sports Sim", "solo"),
     ("nflsim", "Simulated NFL game betting", "Sports Sim", "solo"),
     ("mlbsim", "Simulated MLB game betting", "Sports Sim", "solo"),
+    ("tennissim", "Simulated tennis match betting", "Sports Sim", "solo"),
 ]
 
 
