@@ -46,6 +46,7 @@ GAME_LABELS: dict[str, str] = {
     "wordle": "Wordle",
     "nba-trivia": "NBA Trivia",
     "nfl-trivia": "NFL Trivia",
+    "sudoku": "Sudoku Sprint",
 }
 
 GAME_CATEGORIES: list[tuple[str, str]] = [
@@ -1522,6 +1523,7 @@ CASINO_GAMES: list[tuple[str, str, str, str]] = [
     ("wordle", "Wordle Race \u2014 guess the word first", "Brain Games", "party"),
     ("nba-trivia", "NBA Roster Trivia \u2014 name the team first", "Brain Games", "party"),
     ("nfl-trivia", "NFL Roster Trivia \u2014 name the team first", "Brain Games", "party"),
+    ("sudoku", "Sudoku Sprint \u2014 fill the 4\u00d74 grid fastest", "Brain Games", "party"),
     # ── Sports Sim
     ("nbasim", "Simulated NBA game betting", "Sports Sim", "solo"),
     ("nflsim", "Simulated NFL game betting", "Sports Sim", "solo"),

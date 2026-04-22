@@ -45,6 +45,7 @@ COGS = [
     "bot.cogs.geography",
     "bot.cogs.wordle",
     "bot.cogs.roster",
+    "bot.cogs.sudoku",
 ]
 
 GUILD_ID = int(os.environ["DISCORD_GUILD_ID"])
