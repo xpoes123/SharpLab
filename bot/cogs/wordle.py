@@ -1,6 +1,6 @@
 """Casino cog — multiplayer /wordle race game.
 
-Everyone gets the same secret word. First to guess it wins the round.
+Everyone gets the same secret word. Fewest guesses wins the round.
 First to WINS_TO_WIN round wins takes the pot. Guesses via button modal (private).
 """
 
@@ -20,7 +20,7 @@ from db import queries
 
 MAX_PLAYERS = 8
 MIN_PLAYERS = 2
-ROUND_TIME = 180  # 3 minutes per round
+ROUND_TIME = 300  # 5 minutes safety cap per round
 ROUND_DELAY = 5  # seconds between rounds
 WINS_TO_WIN = 3  # first to N wins
 MAX_ROUNDS = 15  # safety cap
@@ -229,6 +229,7 @@ class WordlePlayer:
     guesses: list[str] = field(default_factory=list)
     solved: bool = False
     eliminated: bool = False
+    solve_time: float = 0.0  # monotonic timestamp when solved (for tie-break)
 
 
 @dataclass
@@ -288,9 +289,9 @@ def _betting_embed(table: WordleTable) -> discord.Embed:
     embed = discord.Embed(
         title="\U0001f1fc Wordle Race",
         description=(
-            f"Race to guess the 5-letter word! **First to {WINS_TO_WIN} wins** takes the pot.\n"
-            "Click **Guess** to submit your guess privately \u2014 "
-            "first to solve the word wins the round!"
+            f"Guess the 5-letter word! **First to {WINS_TO_WIN} wins** takes the pot.\n"
+            "Click **Guess** to submit privately \u2014 "
+            "**fewest guesses** wins each round!"
         ),
         colour=discord.Colour.blue(),
     )
@@ -338,7 +339,7 @@ def _playing_embed(table: WordleTable, remaining: int | None = None) -> discord.
     embed.description = (
         "# \u2753 \u2753 \u2753 \u2753 \u2753\n\n"
         "**Click the Guess button to submit your guess!**\n"
-        f"You get **{MAX_GUESSES} guesses** per round."
+        f"You get **{MAX_GUESSES} guesses** \u2014 fewest guesses wins the round."
     )
 
     secs = remaining if remaining is not None else ROUND_TIME
@@ -355,7 +356,6 @@ def _playing_embed(table: WordleTable, remaining: int | None = None) -> discord.
 
 def _round_result_embed(table: WordleTable) -> discord.Embed:
     winner = table.players[table.round_winner]
-    solve_time = winner.guesses  # use guess count instead of time
     is_last = winner.rounds_won >= WINS_TO_WIN or table.round_num >= MAX_ROUNDS
 
     embed = discord.Embed(
@@ -363,13 +363,23 @@ def _round_result_embed(table: WordleTable) -> discord.Embed:
         colour=discord.Colour.green(),
     )
 
+    # Show winner's grid
     grid = format_grid(winner.guesses, table.secret_word)
-    embed.description = (
-        f"\U0001f3c6 **{winner.display_name}** guessed it in "
-        f"**{len(winner.guesses)}** tries!\n\n"
-        f"The word was: **{table.secret_word}**\n\n"
-        f"{grid}"
+
+    # Who else solved it?
+    also_solved: list[str] = []
+    for p in table.players.values():
+        if p.solved and p.user_id != table.round_winner:
+            also_solved.append(f"{p.display_name} ({len(p.guesses)} tries)")
+
+    desc = (
+        f"\U0001f3c6 **{winner.display_name}** wins with "
+        f"**{len(winner.guesses)}** {'guess' if len(winner.guesses) == 1 else 'guesses'}!\n"
     )
+    if also_solved:
+        desc += f"Also solved: {', '.join(also_solved)}\n"
+    desc += f"\nThe word was: **{table.secret_word}**\n\n{grid}"
+    embed.description = desc
     embed.add_field(name="Scoreboard", value=_scoreboard(table), inline=False)
     if not is_last:
         embed.set_footer(text="Next round in a few seconds\u2026")
@@ -550,11 +560,6 @@ class GuessModal(ui.Modal):
                 "Round is not active!", ephemeral=True,
             )
             return
-        if self.table.round_winner is not None:
-            await interaction.response.send_message(
-                "Someone already solved this round!", ephemeral=True,
-            )
-            return
 
         player = self.table.players[uid]
         if player.solved or player.eliminated:
@@ -581,38 +586,26 @@ class GuessModal(ui.Modal):
         # Check if correct
         if guess == self.table.secret_word:
             player.solved = True
-            player.rounds_won += 1
-            self.table.round_winner = uid
-            self.table.round_solved.set()
+            player.solve_time = time.monotonic()
 
             grid = format_grid(player.guesses, self.table.secret_word)
             await interaction.response.send_message(
-                f"\u2705 **Correct!** The word was **{self.table.secret_word}**!\n\n{grid}",
+                f"\u2705 **Correct!** Wait for others to finish.\n\n{grid}",
                 ephemeral=True,
             )
-
-            # Update main embed to show guess status
-            if self.table.message:
-                try:
-                    await self.table.message.edit(
-                        embed=_playing_embed(self.table), view=self.table_view,
-                    )
-                except discord.HTTPException:
-                    pass
-            return
-
-        # Wrong guess
-        if len(player.guesses) >= MAX_GUESSES:
-            player.eliminated = True
-
-        grid = format_grid(player.guesses, self.table.secret_word)
-        remaining = MAX_GUESSES - len(player.guesses)
-        if player.eliminated:
-            msg = f"\u274c Out of guesses!\n\n{grid}"
         else:
-            msg = f"\u274c Not quite! **{remaining}** guesses left.\n\n{grid}"
+            # Wrong guess
+            if len(player.guesses) >= MAX_GUESSES:
+                player.eliminated = True
 
-        await interaction.response.send_message(msg, ephemeral=True)
+            grid = format_grid(player.guesses, self.table.secret_word)
+            remaining = MAX_GUESSES - len(player.guesses)
+            if player.eliminated:
+                msg = f"\u274c Out of guesses!\n\n{grid}"
+            else:
+                msg = f"\u274c Not quite! **{remaining}** guesses left.\n\n{grid}"
+
+            await interaction.response.send_message(msg, ephemeral=True)
 
         # Update main embed to show guess count
         if self.table.message:
@@ -623,7 +616,7 @@ class GuessModal(ui.Modal):
             except discord.HTTPException:
                 pass
 
-        # If all players eliminated, end round
+        # If all players are done (solved or eliminated), end the round
         if all(p.solved or p.eliminated for p in self.table.players.values()):
             self.table.round_solved.set()
 
@@ -808,11 +801,6 @@ class WordleTableView(ui.View):
                 "You're done for this round!", ephemeral=True,
             )
             return
-        if self.table.round_winner is not None:
-            await interaction.response.send_message(
-                "Someone already solved this round!", ephemeral=True,
-            )
-            return
         await interaction.response.send_modal(
             GuessModal(self.table, self),
         )
@@ -867,6 +855,7 @@ class WordleTableView(ui.View):
             p.guesses = []
             p.solved = False
             p.eliminated = False
+            p.solve_time = 0.0
 
         self._update_buttons()
         await interaction.response.edit_message(
@@ -875,7 +864,21 @@ class WordleTableView(ui.View):
 
         table.race_task = asyncio.create_task(self._race_loop())
 
-    async def _wait_for_solve_or_timeout(self) -> bool:
+    def _resolve_round_winner(self) -> None:
+        """Determine the round winner: fewest guesses, tie-break by solve time."""
+        table = self.table
+        solvers = [p for p in table.players.values() if p.solved]
+        if not solvers:
+            table.round_winner = None
+            return
+        # Sort by fewest guesses, then earliest solve time
+        solvers.sort(key=lambda p: (len(p.guesses), p.solve_time))
+        winner = solvers[0]
+        winner.rounds_won += 1
+        table.round_winner = winner.user_id
+
+    async def _wait_for_round_end(self) -> None:
+        """Wait for all players to finish or for timeout."""
         table = self.table
         deadline = table.round_start_time + ROUND_TIME
 
@@ -883,20 +886,18 @@ class WordleTableView(ui.View):
             now = time.monotonic()
             remaining = deadline - now
             if remaining <= 0:
-                return table.round_winner is not None
+                return
 
             wait = min(15.0, remaining)
             try:
                 await asyncio.wait_for(table.round_solved.wait(), timeout=wait)
-                return True
+                return  # all players done
             except asyncio.TimeoutError:
-                if table.round_winner is not None:
-                    return True
-                # Check if all eliminated
+                # Check if all done already
                 if all(
                     p.solved or p.eliminated for p in table.players.values()
                 ):
-                    return table.round_winner is not None
+                    return
                 now = time.monotonic()
                 secs_left = max(0, int(deadline - now))
                 if secs_left > 0 and table.message:
@@ -928,6 +929,7 @@ class WordleTableView(ui.View):
                         p.guesses = []
                         p.solved = False
                         p.eliminated = False
+                        p.solve_time = 0.0
 
                     self._update_buttons()
                     if table.message:
@@ -938,10 +940,11 @@ class WordleTableView(ui.View):
                         except discord.HTTPException:
                             pass
 
-                solved = await self._wait_for_solve_or_timeout()
+                await self._wait_for_round_end()
+                self._resolve_round_winner()
                 table.total_rounds_played += 1
 
-                if solved and table.round_winner is not None:
+                if table.round_winner is not None:
                     if table.message:
                         try:
                             await table.message.edit(
