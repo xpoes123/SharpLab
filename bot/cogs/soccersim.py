@@ -566,8 +566,11 @@ def _finished_embed(
     elif h_total > a_total:
         winner_abbr = home.abbr
         score_text = f"{away.abbr} {a_total} \u2014 {h_total} {home.abbr}"
-    else:
+    elif a_total > h_total:
         winner_abbr = away.abbr
+        score_text = f"{away.abbr} {a_total} \u2014 {h_total} {home.abbr}"
+    else:
+        winner_abbr = None  # draw
         score_text = f"{away.abbr} {a_total} \u2014 {h_total} {home.abbr}"
 
     extra = ""
@@ -576,10 +579,17 @@ def _finished_embed(
     if pen:
         extra = " (Pens)"
 
+    if winner_abbr is not None:
+        result_line = f"\U0001f3c6 **{winner_abbr}** wins! {score_text}"
+        colour = discord.Colour.green()
+    else:
+        result_line = f"\U0001f91d Draw! {score_text}"
+        colour = discord.Colour.gold()
+
     embed = discord.Embed(
         title=f"\u26bd Soccer Sim \u2014 Full Time{extra} (Round {table.round_num})",
-        description=f"\U0001f3c6 **{winner_abbr}** wins! {score_text}",
-        colour=discord.Colour.green(),
+        description=result_line,
+        colour=colour,
     )
 
     if table.events:
