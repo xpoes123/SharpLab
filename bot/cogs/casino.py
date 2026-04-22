@@ -1262,6 +1262,38 @@ class CasinoCog(commands.Cog):
             f"Their balance: **{new_balance}** coins."
         )
 
+    @app_commands.command(name="games", description="List all available casino games")
+    async def games(self, interaction: discord.Interaction) -> None:
+        lines = [f"` /{name} ` — {desc}" for name, desc in CASINO_GAMES]
+        embed = discord.Embed(
+            title="Casino Games",
+            description="\n".join(lines),
+            color=0xF1C40F,
+        )
+        embed.set_footer(text=f"{len(CASINO_GAMES)} games available  ·  /random-game to pick one")
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="random-game", description="Pick a random casino game to play")
+    async def random_game(self, interaction: discord.Interaction) -> None:
+        name, desc = random.choice(CASINO_GAMES)
+        await interaction.response.send_message(
+            f"You should play **/{name}** — {desc}"
+        )
+
+
+CASINO_GAMES: list[tuple[str, str]] = [
+    ("blackjack", "Multiplayer blackjack table"),
+    ("roulette", "American roulette"),
+    ("craps", "Craps with full side bets"),
+    ("baccarat", "Baccarat card game"),
+    ("paigow", "Pai Gow Poker"),
+    ("uth", "Ultimate Texas Hold'em"),
+    ("videopoker", "Video Poker (Jacks or Better)"),
+    ("crash", "Crash rocket game"),
+    ("plinko", "Plinko ball-drop game"),
+    ("hilo", "Hi-Lo card guessing game"),
+]
+
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(CasinoCog(bot))
