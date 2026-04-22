@@ -20,8 +20,9 @@ from db import queries
 
 MAX_PLAYERS = 10
 MIN_PLAYERS = 1
-SET_DELAY = 2.5  # seconds between set updates
-SETS_TO_WIN = 2  # best-of-3
+GAME_DELAY = 1.2  # seconds between individual game updates
+SET_PAUSE = 1.5   # extra pause between sets
+SETS_TO_WIN = 2   # best-of-3
 
 # Top ATP + WTA players for random matchup draws
 TENNIS_PLAYERS: list[tuple[str, str]] = [
@@ -136,47 +137,6 @@ def _simulate_tiebreak(p1_prob: float) -> tuple[int, int]:
             serving_p1 = not serving_p1
 
 
-def _simulate_set(p1_prob: float) -> tuple[int, int]:
-    """Simulate one set. Returns (p1_games, p2_games).
-
-    Alternates serve. If 6-6 → tiebreak.
-    """
-    p1_games = 0
-    p2_games = 0
-    p1_serving = random.random() < 0.5  # random first server
-
-    while True:
-        if p1_serving:
-            held = _simulate_game(p1_prob)
-            if held:
-                p1_games += 1
-            else:
-                p2_games += 1
-        else:
-            p2_prob = 1 - p1_prob
-            held = _simulate_game(p2_prob)
-            if held:
-                p2_games += 1
-            else:
-                p1_games += 1
-
-        p1_serving = not p1_serving
-
-        # Check for set win: first to 6 with 2-game lead
-        if p1_games >= 6 and p1_games - p2_games >= 2:
-            return p1_games, p2_games
-        if p2_games >= 6 and p2_games - p1_games >= 2:
-            return p1_games, p2_games
-
-        # Tiebreak at 6-6
-        if p1_games == 6 and p2_games == 6:
-            tb_p1, tb_p2 = _simulate_tiebreak(p1_prob)
-            if tb_p1 > tb_p2:
-                return 7, 6
-            else:
-                return 6, 7
-
-
 # ── Dataclasses ──────────────────────────────────────────────────────────────
 
 
@@ -210,6 +170,10 @@ class TennisSimTable:
     p1_sets: int = 0
     p2_sets: int = 0
     set_scores: list[tuple[int, int]] = field(default_factory=list)  # (p1_games, p2_games)
+    # In-progress set tracking (for live game-by-game updates)
+    cur_p1_games: int = 0
+    cur_p2_games: int = 0
+    in_tiebreak: bool = False
     sim_task: asyncio.Task | None = field(default=None, repr=False)
 
 
@@ -275,24 +239,30 @@ def _betting_embed(table: TennisSimTable) -> discord.Embed:
 
 
 def _scoreboard_text(table: TennisSimTable) -> str:
-    """Render an ASCII tennis scoreboard."""
+    """Render an ASCII tennis scoreboard with live set progress."""
     _, p1_short = table.p1
     _, p2_short = table.p2
 
     max_name = max(len(p1_short), len(p2_short))
 
+    completed = len(table.set_scores)
+    playing = table.phase == "playing" and table.current_set > completed
+
     # Header
     header = " " * (max_name + 1)
-    for s in range(1, len(table.set_scores) + 1):
+    total_cols = completed + (1 if playing else 0)
+    for s in range(1, total_cols + 1):
         header += f"  S{s}"
-    remaining = max(0, SETS_TO_WIN * 2 - 1 - len(table.set_scores))
-    for s in range(len(table.set_scores) + 1, len(table.set_scores) + remaining + 1):
+    remaining = max(0, SETS_TO_WIN * 2 - 1 - total_cols)
+    for s in range(total_cols + 1, total_cols + remaining + 1):
         header += f"  S{s}"
 
     # Player 1 line
     p1_line = f"{p1_short:>{max_name}s}"
     for p1g, _p2g in table.set_scores:
         p1_line += f"  {p1g:>2d}"
+    if playing:
+        p1_line += f"  {table.cur_p1_games:>2d}"
     p1_line += "   -" * remaining
     p1_line += f"   [{table.p1_sets}]"
 
@@ -300,6 +270,8 @@ def _scoreboard_text(table: TennisSimTable) -> str:
     p2_line = f"{p2_short:>{max_name}s}"
     for _p1g, p2g in table.set_scores:
         p2_line += f"  {p2g:>2d}"
+    if playing:
+        p2_line += f"  {table.cur_p2_games:>2d}"
     p2_line += "   -" * remaining
     p2_line += f"   [{table.p2_sets}]"
 
@@ -310,11 +282,13 @@ def _playing_embed(table: TennisSimTable) -> discord.Embed:
     _, p1_short = table.p1
     _, p2_short = table.p2
 
+    if table.in_tiebreak:
+        period = f"Set {table.current_set} \u2014 Tiebreak"
+    else:
+        period = f"Set {table.current_set}"
+
     embed = discord.Embed(
-        title=(
-            f"\U0001f3be Tennis Sim \u2014 {p1_short} vs {p2_short} "
-            f"(Set {table.current_set})"
-        ),
+        title=f"\U0001f3be Tennis Sim \u2014 {p1_short} vs {p2_short} ({period})",
         colour=discord.Colour.gold(),
     )
     embed.description = _scoreboard_text(table)
@@ -676,6 +650,9 @@ class TennisSimTableView(ui.View):
         table.p1_sets = 0
         table.p2_sets = 0
         table.set_scores = []
+        table.cur_p1_games = 0
+        table.cur_p2_games = 0
+        table.in_tiebreak = False
 
         self._update_buttons()
         await interaction.response.edit_message(
@@ -683,28 +660,80 @@ class TennisSimTableView(ui.View):
         )
         table.sim_task = asyncio.create_task(self._sim_loop())
 
+    async def _update_msg(self) -> None:
+        """Edit the message with current playing embed, swallowing errors."""
+        if self.table.message:
+            try:
+                await self.table.message.edit(
+                    embed=_playing_embed(self.table), view=self,
+                )
+            except discord.HTTPException:
+                pass
+
     async def _sim_loop(self) -> None:
         table = self.table
         try:
             while table.p1_sets < SETS_TO_WIN and table.p2_sets < SETS_TO_WIN:
-                await asyncio.sleep(SET_DELAY)
-                p1_games, p2_games = _simulate_set(table.p1_prob)
-                table.set_scores.append((p1_games, p2_games))
+                # Reset for new set
+                table.cur_p1_games = 0
+                table.cur_p2_games = 0
+                table.in_tiebreak = False
+                p1_serving = random.random() < 0.5
 
-                if p1_games > p2_games:
+                # Play games one at a time
+                while True:
+                    await asyncio.sleep(GAME_DELAY)
+
+                    if p1_serving:
+                        held = _simulate_game(table.p1_prob)
+                        if held:
+                            table.cur_p1_games += 1
+                        else:
+                            table.cur_p2_games += 1
+                    else:
+                        p2_prob = 1 - table.p1_prob
+                        held = _simulate_game(p2_prob)
+                        if held:
+                            table.cur_p2_games += 1
+                        else:
+                            table.cur_p1_games += 1
+
+                    p1_serving = not p1_serving
+                    await self._update_msg()
+
+                    # Check set win: first to 6 with 2-game lead
+                    p1g, p2g = table.cur_p1_games, table.cur_p2_games
+                    if p1g >= 6 and p1g - p2g >= 2:
+                        break
+                    if p2g >= 6 and p2g - p1g >= 2:
+                        break
+
+                    # Tiebreak at 6-6
+                    if p1g == 6 and p2g == 6:
+                        table.in_tiebreak = True
+                        await asyncio.sleep(GAME_DELAY)
+                        tb_p1, tb_p2 = _simulate_tiebreak(table.p1_prob)
+                        if tb_p1 > tb_p2:
+                            table.cur_p1_games = 7
+                        else:
+                            table.cur_p2_games = 7
+                        await self._update_msg()
+                        break
+
+                # Set finished — record it
+                p1g, p2g = table.cur_p1_games, table.cur_p2_games
+                table.set_scores.append((p1g, p2g))
+                if p1g > p2g:
                     table.p1_sets += 1
                 else:
                     table.p2_sets += 1
 
-                table.current_set = len(table.set_scores)
+                table.current_set = len(table.set_scores) + 1
+                table.in_tiebreak = False
 
-                if table.message:
-                    try:
-                        await table.message.edit(
-                            embed=_playing_embed(table), view=self,
-                        )
-                    except discord.HTTPException:
-                        pass
+                # Brief pause between sets
+                if table.p1_sets < SETS_TO_WIN and table.p2_sets < SETS_TO_WIN:
+                    await asyncio.sleep(SET_PAUSE)
 
             await asyncio.sleep(1.0)
             await self._resolve()
@@ -770,6 +799,9 @@ class TennisSimTableView(ui.View):
         table.p1_sets = 0
         table.p2_sets = 0
         table.set_scores.clear()
+        table.cur_p1_games = 0
+        table.cur_p2_games = 0
+        table.in_tiebreak = False
         table.sim_task = None
 
     async def _refund_all(self) -> None:
