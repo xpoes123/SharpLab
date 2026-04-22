@@ -882,6 +882,9 @@ class CrapsTableView(ui.View):
                 balances[player.user_id] = (
                     await queries.get_casino_balance(str(player.user_id))
                 ) or 0
+            await queries.log_casino_result(
+                str(player.user_id), "craps", player.coins_in, player.coins_out,
+            )
 
         embed = _table_embed(table, balances=balances)
         for child in self.children:

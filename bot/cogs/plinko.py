@@ -492,6 +492,7 @@ class PlinkoTableView(ui.View):
         for p in table.players.values():
             if p.payout > 0:
                 await queries.update_casino_balance(str(p.user_id), p.payout)
+            await queries.log_casino_result(str(p.user_id), "plinko", p.bet, p.payout)
 
         # Save last bets for re-bet
         for p in table.players.values():

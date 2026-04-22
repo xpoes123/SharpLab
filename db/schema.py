@@ -65,6 +65,16 @@ CREATE TABLE IF NOT EXISTS casino_wallets (
     balance       INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS casino_history (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    discord_user  TEXT NOT NULL,
+    game          TEXT NOT NULL,
+    wagered       INTEGER NOT NULL,
+    payout        INTEGER NOT NULL,
+    played_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_casino_history_user ON casino_history(discord_user);
+
 CREATE TABLE IF NOT EXISTS paper_bets (
     paper_bet_id    INTEGER PRIMARY KEY AUTOINCREMENT,
     game_id         TEXT NOT NULL REFERENCES games(game_id),

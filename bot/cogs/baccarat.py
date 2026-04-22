@@ -804,6 +804,9 @@ class BaccaratTableView(ui.View):
                 balances[seat.user_id] = (
                     await queries.get_casino_balance(str(seat.user_id))
                 ) or 0
+            await queries.log_casino_result(
+                str(seat.user_id), "baccarat", seat.total_wager, total_payout,
+            )
 
         embed = _table_embed(table, balances=balances)
         self._update_buttons()

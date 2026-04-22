@@ -825,6 +825,9 @@ class UTHTableView(ui.View):
                 balances[p.user_id] = (
                     await queries.get_casino_balance(str(p.user_id))
                 ) or 0
+            await queries.log_casino_result(
+                str(p.user_id), "uth", p.total_wagered, p.payout,
+            )
 
         # Save last bets for re-bet
         for p in table.players.values():

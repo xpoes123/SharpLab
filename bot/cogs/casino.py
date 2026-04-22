@@ -1101,6 +1101,11 @@ class BlackjackTableView(ui.View):
             if p.has_split and p.split_payout > 0:
                 await queries.update_casino_balance(str(p.user_id), p.split_payout)
 
+            # Log casino history
+            total_w = p.bet + p.split_bet + p.pairs_wager + p.twentyone3_wager
+            total_p = p.payout + p.split_payout + p.pairs_payout + p.twentyone3_payout
+            await queries.log_casino_result(str(p.user_id), "blackjack", total_w, total_p)
+
             balances[p.user_id] = (
                 await queries.get_casino_balance(str(p.user_id))
             ) or 0

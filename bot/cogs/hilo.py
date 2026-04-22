@@ -694,6 +694,10 @@ class HiLoTableView(ui.View):
         for p in table.players.values():
             table.last_bets[p.user_id] = (p.display_name, p.bet)
 
+        # Log casino history
+        for p in table.players.values():
+            await queries.log_casino_result(str(p.user_id), "hilo", p.bet, p.payout)
+
         # Gather balances
         balances: dict[int, int] = {}
         for p in table.players.values():

@@ -918,6 +918,69 @@ async def give_casino_coins(discord_user: str, amount: int) -> int:
         return new_balance
 
 
+# ── Casino History ────────────────────────────────────────────────────────────
+
+
+async def log_casino_result(
+    discord_user: str, game: str, wagered: int, payout: int,
+) -> None:
+    """Record a completed casino round for PnL tracking."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO casino_history (discord_user, game, wagered, payout, played_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (discord_user, game, wagered, payout, now_iso),
+        )
+        await db.commit()
+
+
+async def get_casino_stats(discord_user: str) -> dict:
+    """Overall casino stats for a user."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT
+                COALESCE(SUM(wagered), 0) AS total_wagered,
+                COALESCE(SUM(payout), 0)  AS total_payout,
+                COALESCE(SUM(payout) - SUM(wagered), 0) AS net_profit,
+                COUNT(*) AS rounds,
+                CASE WHEN SUM(wagered) > 0
+                    THEN (SUM(payout) - SUM(wagered)) * 100.0 / SUM(wagered)
+                    ELSE 0
+                END AS roi
+            FROM casino_history WHERE discord_user = ?
+            """,
+            (discord_user,),
+        )
+        row = await cursor.fetchone()
+    if row:
+        return dict(row)
+    return {"total_wagered": 0, "total_payout": 0, "net_profit": 0, "rounds": 0, "roi": 0.0}
+
+
+async def get_casino_stats_by_game(discord_user: str) -> list[dict]:
+    """Per-game casino breakdown, sorted by rounds played descending."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT
+                game,
+                COALESCE(SUM(wagered), 0) AS total_wagered,
+                COALESCE(SUM(payout), 0)  AS total_payout,
+                COALESCE(SUM(payout) - SUM(wagered), 0) AS net_profit,
+                COUNT(*) AS rounds
+            FROM casino_history WHERE discord_user = ?
+            GROUP BY game ORDER BY rounds DESC
+            """,
+            (discord_user,),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
 async def get_todays_game_for_team(team: str) -> Game | None:
     """Return the next unfinished game today for a given team (exact name match)."""
     today_prefix = datetime.now(timezone.utc).strftime("%Y-%m-%d")

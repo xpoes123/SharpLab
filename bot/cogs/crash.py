@@ -558,6 +558,10 @@ class CrashTableView(ui.View):
                 p.display_name, p.bet, p.auto_cashout,
             )
 
+        # Log casino history
+        for p in table.players.values():
+            await queries.log_casino_result(str(p.user_id), "crash", p.bet, p.payout)
+
         # Gather balances
         balances: dict[int, int] = {}
         for p in table.players.values():
@@ -606,6 +610,19 @@ class CrashTableView(ui.View):
         self.stop()
         self.active_tables.pop(self.table.channel_id, None)
         await interaction.response.edit_message(embed=embed, view=self)
+
+    async def on_error(
+        self, interaction: discord.Interaction, error: Exception, item: ui.Item,
+    ) -> None:
+        import traceback
+        traceback.print_exception(type(error), error, error.__traceback__)
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"Something went wrong: {error}", ephemeral=True,
+                )
+        except Exception:
+            pass
 
     async def on_timeout(self) -> None:
         table = self.table

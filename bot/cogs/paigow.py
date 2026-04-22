@@ -603,6 +603,9 @@ class PaiGowView(ui.View):
             new_balance = await queries.update_casino_balance(str(game.user_id), credit)
         else:
             new_balance = (await queries.get_casino_balance(str(game.user_id))) or 0
+        await queries.log_casino_result(
+            str(game.user_id), "paigow", game.wager + game.fortune_bet, credit,
+        )
 
         # Sort hands for display (high cards first)
         player_high = _sort_for_display(player_high)

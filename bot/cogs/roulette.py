@@ -815,6 +815,7 @@ class RouletteView(ui.View):
         balances: dict[int, int] = {}
         for player in table.players.values():
             total_payout = sum(_resolve_bet(b, table.result) for b in player.bets)
+            total_wagered = sum(b.wager for b in player.bets)
             if total_payout > 0:
                 balances[player.user_id] = await queries.update_casino_balance(
                     str(player.user_id), total_payout,
@@ -823,6 +824,9 @@ class RouletteView(ui.View):
                 balances[player.user_id] = (
                     await queries.get_casino_balance(str(player.user_id))
                 ) or 0
+            await queries.log_casino_result(
+                str(player.user_id), "roulette", total_wagered, total_payout,
+            )
 
         self._update_buttons()
         await interaction.edit_original_response(
