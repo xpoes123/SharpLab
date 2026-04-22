@@ -413,7 +413,11 @@ def _result_embed(
     if hi_win and lo_win:
         summary = "Win both hands!"
     elif not hi_win and not lo_win:
-        summary = "Dealer wins both hands."
+        # Check if dealer ace-high push
+        if outcome == "push" and d_hi[0] == 0 and d_hi[1] == 14:
+            summary = "Dealer ace-high \u2014 push!"
+        else:
+            summary = "Dealer wins both hands."
     else:
         summary = "Split \u2014 one hand each."
     embed.add_field(name="Result", value=summary, inline=True)
@@ -421,9 +425,6 @@ def _result_embed(
     # Payout
     sign = "+" if net_payout > 0 else ""
     payout_text = f"{sign}{net_payout} coins"
-    if outcome == "win":
-        commission = game.wager * 5 // 100
-        payout_text += f" ({game.wager} - {commission} commission)"
     embed.add_field(name="Payout", value=payout_text, inline=True)
 
     # Fortune bonus
@@ -570,11 +571,15 @@ class PaiGowView(ui.View):
 
         if hi_win and lo_win:
             outcome = "win"
-            commission = game.wager * 5 // 100
-            net_payout = game.wager - commission
+            net_payout = game.wager
         elif not hi_win and not lo_win:
-            outcome = "lose"
-            net_payout = -game.wager
+            # No-commission rule: dealer ace-high (no pair) = push
+            if d_hi[0] == 0 and d_hi[1] == 14:
+                outcome = "push"
+                net_payout = 0
+            else:
+                outcome = "lose"
+                net_payout = -game.wager
         else:
             outcome = "push"
             net_payout = 0
@@ -588,7 +593,7 @@ class PaiGowView(ui.View):
         # Credit winnings
         credit = 0
         if outcome == "win":
-            credit = game.wager + net_payout  # original bet + net win
+            credit = game.wager * 2  # original bet + 1:1 win
         elif outcome == "push":
             credit = game.wager  # return bet
         # loss = 0 credit (already deducted)
