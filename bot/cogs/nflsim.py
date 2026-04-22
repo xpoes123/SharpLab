@@ -1,12 +1,12 @@
 """Casino cog — /nflsim fake NFL game simulator.
 
-Two random NFL teams are drawn. Each gets a win probability.
-Players pick a side and bet coins. A quarter-by-quarter simulation runs
-with football-style scoring (TDs, FGs, safeties), and winners are paid
-fixed odds based on the pre-game probability.
+Two random NFL teams are drawn. Each gets offense, defense, and coaching ratings.
+Players pick a market (ML/Spread/O-U) and side, and bet coins. A quarter-by-quarter
+simulation runs with football-style scoring, and winners are paid based on market.
 """
 
 import asyncio
+import math
 import random
 from dataclasses import dataclass, field
 
@@ -62,11 +62,11 @@ NFL_TEAMS: list[tuple[str, str]] = [
 
 # Scoring plays and their point values
 SCORING_PLAYS = [
-    (7, "TD + XP"),      # touchdown + extra point
-    (3, "FG"),           # field goal
-    (6, "TD (missed XP)"),  # TD + missed extra point
-    (8, "TD + 2pt"),     # TD + 2-point conversion
-    (2, "Safety"),       # safety (rare)
+    (7, "TD + XP"),
+    (3, "FG"),
+    (6, "TD (missed XP)"),
+    (8, "TD + 2pt"),
+    (2, "Safety"),
 ]
 
 
@@ -74,23 +74,58 @@ SCORING_PLAYS = [
 
 
 def _pick_matchup() -> tuple[tuple[str, str], tuple[str, str]]:
-    """Pick two random NFL teams. Returns ((name, abbr), (name, abbr))."""
     pair = random.sample(NFL_TEAMS, 2)
     return (pair[0], pair[1])
 
 
-def _generate_win_prob() -> float:
-    """Generate a win probability for the home team (0.20–0.80 range)."""
-    return max(0.20, min(0.80, random.betavariate(3, 3)))
+def _generate_ratings() -> tuple[float, float, float]:
+    """Return (offense, defense, coaching) each in [45, 95]."""
+    return (
+        round(random.uniform(45.0, 95.0), 1),
+        round(random.uniform(45.0, 95.0), 1),
+        round(random.uniform(45.0, 95.0), 1),
+    )
+
+
+def _sigmoid(x: float) -> float:
+    return 1.0 / (1.0 + math.exp(-x))
+
+
+def _compute_home_prob(
+    home_off: float, home_def: float, home_coa: float,
+    away_off: float, away_def: float, away_coa: float,
+) -> float:
+    home_net = (home_off * 0.5 + home_coa * 0.3) - (away_def * 0.5 + away_coa * 0.2)
+    away_net = (away_off * 0.5 + away_coa * 0.3) - (home_def * 0.5 + home_coa * 0.2)
+    raw = _sigmoid((home_net - away_net) / 15)
+    return max(0.20, min(0.80, raw))
+
+
+def _compute_spread(home_prob: float) -> float:
+    raw = (home_prob - 0.5) * 56
+    rounded = round(raw)
+    if rounded >= 0:
+        return rounded + 0.5
+    else:
+        return rounded - 0.5
+
+
+def _compute_total(
+    home_off: float, home_def: float, away_off: float, away_def: float,
+) -> float:
+    raw = 46 + (home_off + away_off - 130) / 10 - (home_def + away_def - 130) / 15
+    return round(raw * 2) / 2
 
 
 def _payout_multiplier(prob: float) -> float:
-    """Return payout multiplier for a bet on a side with given win probability."""
     return 1 / prob
 
 
+def _juice_payout(bet: int) -> int:
+    return bet + int(bet * 100 / 110)
+
+
 def _prob_to_american(prob: float) -> str:
-    """Convert a probability to American odds string."""
     if prob >= 0.5:
         odds = -round(prob / (1 - prob) * 100)
         return str(odds)
@@ -99,28 +134,32 @@ def _prob_to_american(prob: float) -> str:
         return f"+{odds}"
 
 
-def _simulate_quarter(home_prob: float) -> tuple[int, int]:
-    """Simulate one quarter of football. Returns (home_pts, away_pts).
-
-    Each team gets 2-4 possessions per quarter. Scoring probability is
-    weighted by win probability. Most scores are TD+XP (7) or FG (3).
-    """
+def _simulate_quarter(
+    home_off: float, home_def: float, home_coa: float,
+    away_off: float, away_def: float, away_coa: float,
+) -> tuple[int, int]:
     home_pts = 0
     away_pts = 0
 
-    # Each team gets ~3 possessions per quarter
-    for _ in range(random.randint(2, 4)):
-        # Home team scoring chance weighted by win prob
-        if random.random() < (home_prob * 0.55):
+    home_score_chance = 0.35 + (home_off - 65) / 200 - (away_def - 65) / 250
+    home_score_chance = max(0.15, min(0.55, home_score_chance))
+
+    away_score_chance = 0.35 + (away_off - 65) / 200 - (home_def - 65) / 250
+    away_score_chance = max(0.15, min(0.55, away_score_chance))
+
+    home_drives = random.randint(2, 4) + (1 if home_coa > 75 else 0)
+    away_drives = random.randint(2, 4) + (1 if away_coa > 75 else 0)
+
+    for _ in range(home_drives):
+        if random.random() < home_score_chance:
             pts, _label = random.choices(
                 SCORING_PLAYS,
                 weights=[60, 25, 5, 8, 2],
             )[0]
             home_pts += pts
 
-    for _ in range(random.randint(2, 4)):
-        away_prob = 1 - home_prob
-        if random.random() < (away_prob * 0.55):
+    for _ in range(away_drives):
+        if random.random() < away_score_chance:
             pts, _label = random.choices(
                 SCORING_PLAYS,
                 weights=[60, 25, 5, 8, 2],
@@ -131,23 +170,18 @@ def _simulate_quarter(home_prob: float) -> tuple[int, int]:
 
 
 def _simulate_ot(home_prob: float) -> tuple[int, int]:
-    """Simulate an OT period. First score wins (simplified NFL OT)."""
-    # Give each team one drive; if both score or neither, keep going
     home_pts = 0
     away_pts = 0
 
-    # Away gets first possession (coin flip — simplified)
     if random.random() < (1 - home_prob) * 0.45:
         pts, _ = random.choices(
-            SCORING_PLAYS[:2],  # TD or FG only
+            SCORING_PLAYS[:2],
             weights=[55, 45],
         )[0]
         away_pts += pts
         if pts == 7:
-            # TD wins immediately
             return home_pts, away_pts
 
-    # Home responds
     if random.random() < home_prob * 0.45:
         pts, _ = random.choices(
             SCORING_PLAYS[:2],
@@ -155,10 +189,9 @@ def _simulate_ot(home_prob: float) -> tuple[int, int]:
         )[0]
         home_pts += pts
 
-    # Guarantee no tie in OT
     if home_pts == away_pts:
         if random.random() < home_prob:
-            home_pts += 3  # walkoff FG
+            home_pts += 3
         else:
             away_pts += 3
     return home_pts, away_pts
@@ -172,7 +205,8 @@ class NflSimPlayer:
     user_id: int
     display_name: str
     bet: int
-    side: str  # "home" or "away"
+    side: str  # "home" or "away" for ml/spread; "over" or "under" for ou
+    market: str = "ml"  # "ml" | "spread" | "ou"
     payout: int = 0
     won: bool = False
 
@@ -187,11 +221,21 @@ class NflSimTable:
     home_team: tuple[str, str] = ("", "")  # (full_name, abbr)
     away_team: tuple[str, str] = ("", "")
     home_prob: float = 0.5
+    # Ratings
+    home_offense: float = 65.0
+    home_defense: float = 65.0
+    home_coaching: float = 65.0
+    away_offense: float = 65.0
+    away_defense: float = 65.0
+    away_coaching: float = 65.0
+    # Lines
+    spread: float = 0.0
+    total: float = 46.0
     # Players
     players: dict[int, NflSimPlayer] = field(default_factory=dict)
     message: discord.Message | None = None
     round_num: int = 1
-    last_bets: dict[int, tuple[str, int, str]] = field(default_factory=dict)
+    last_bets: dict[int, tuple[str, int, str, str]] = field(default_factory=dict)
     # Sim state
     quarter: int = 0
     home_score: int = 0
@@ -209,29 +253,38 @@ def _betting_embed(table: NflSimTable) -> discord.Embed:
 
     home_name, home_abbr = table.home_team
     away_name, away_abbr = table.away_team
-    away_prob = 1 - table.home_prob
-
-    home_odds = _prob_to_american(table.home_prob)
-    away_odds = _prob_to_american(away_prob)
-    home_mult = _payout_multiplier(table.home_prob)
-    away_mult = _payout_multiplier(away_prob)
 
     embed = discord.Embed(
         title=f"\U0001f3c8 NFL Sim \u2014 Place Your Bets (Round {table.round_num})",
         description=(
-            "Pick a side and bet coins on the outcome!\n"
-            "Odds are based on each team's simulated win probability."
+            "Pick a market and side and bet coins on the outcome!\n"
+            "Odds reveal when game starts!"
         ),
         colour=discord.Colour.dark_green(),
     )
 
+    home_ratings = (
+        f"OFF {table.home_offense:.0f} | DEF {table.home_defense:.0f} | COA {table.home_coaching:.0f}"
+    )
+    away_ratings = (
+        f"OFF {table.away_offense:.0f} | DEF {table.away_defense:.0f} | COA {table.away_coaching:.0f}"
+    )
+
     matchup_text = (
         f"**{away_abbr}** {away_name}\n"
-        f"\u2003Win: {away_prob * 100:.0f}% ({away_odds}) \u2014 **{away_mult:.1f}x** payout\n\n"
+        f"\u2003{away_ratings}\n"
+        f"\u2003Odds: ???\n\n"
         f"**{home_abbr}** {home_name}\n"
-        f"\u2003Win: {table.home_prob * 100:.0f}% ({home_odds}) \u2014 **{home_mult:.1f}x** payout"
+        f"\u2003{home_ratings}\n"
+        f"\u2003Odds: ???"
     )
     embed.add_field(name=f"{away_abbr} @ {home_abbr}", value=matchup_text, inline=False)
+
+    embed.add_field(
+        name="Markets",
+        value="ML / Spread / Over-Under | All odds hidden until start",
+        inline=False,
+    )
 
     if total_wagered:
         embed.add_field(name="Total Wagered", value=f"{total_wagered}c", inline=True)
@@ -239,8 +292,15 @@ def _betting_embed(table: NflSimTable) -> discord.Embed:
     if table.players:
         player_lines = []
         for p in table.players.values():
-            side_abbr = home_abbr if p.side == "home" else away_abbr
-            player_lines.append(f"\U0001f3b0 **{p.display_name}** \u2014 {p.bet}c on **{side_abbr}**")
+            if p.market == "ml":
+                side_label = f"ML {home_abbr if p.side == 'home' else away_abbr}"
+            elif p.market == "spread":
+                side_label = f"Spread {home_abbr if p.side == 'home' else away_abbr}"
+            else:
+                side_label = f"{'Over' if p.side == 'over' else 'Under'}"
+            player_lines.append(
+                f"\U0001f3b0 **{p.display_name}** \u2014 {p.bet}c on {side_label}"
+            )
         embed.add_field(name="Players", value="\n".join(player_lines), inline=False)
     else:
         embed.add_field(
@@ -250,17 +310,15 @@ def _betting_embed(table: NflSimTable) -> discord.Embed:
         )
 
     embed.set_footer(
-        text=f"Host: {table.host_name} \u2502 Min {MIN_PLAYERS} player(s) \u2502 Pick home or away in modal",
+        text=f"Host: {table.host_name} \u2502 Min {MIN_PLAYERS} player(s) \u2502 Markets: ml / spread / ou",
     )
     return embed
 
 
 def _scoreboard_text(table: NflSimTable) -> str:
-    """Render an ASCII scoreboard."""
     _, home_abbr = table.home_team
     _, away_abbr = table.away_team
 
-    # Header
     header = f"{'':>5s}"
     for q in range(1, len(table.quarter_scores) + 1):
         if q <= NUM_QUARTERS:
@@ -269,7 +327,6 @@ def _scoreboard_text(table: NflSimTable) -> str:
             header += f"  OT"
     header += "   T"
 
-    # Away line
     away_line = f"{away_abbr:>5s}"
     for aq, _hq in table.quarter_scores:
         away_line += f"  {aq:>2d}"
@@ -277,7 +334,6 @@ def _scoreboard_text(table: NflSimTable) -> str:
     away_line += "   -" * remaining
     away_line += f"  {table.away_score:>3d}"
 
-    # Home line
     home_line = f"{home_abbr:>5s}"
     for _aq, hq in table.quarter_scores:
         home_line += f"  {hq:>2d}"
@@ -285,6 +341,28 @@ def _scoreboard_text(table: NflSimTable) -> str:
     home_line += f"  {table.home_score:>3d}"
 
     return f"```\n{header}\n{away_line}\n{home_line}\n```"
+
+
+def _lines_text(table: NflSimTable) -> str:
+    _, home_abbr = table.home_team
+    _, away_abbr = table.away_team
+
+    home_ml = _prob_to_american(table.home_prob)
+    away_ml = _prob_to_american(1 - table.home_prob)
+
+    spread = table.spread
+    if spread >= 0:
+        home_spread_str = f"-{spread}"
+        away_spread_str = f"+{spread}"
+    else:
+        home_spread_str = f"+{abs(spread)}"
+        away_spread_str = f"-{abs(spread)}"
+
+    ml_line = f"ML: {home_abbr} {home_ml} / {away_abbr} {away_ml}"
+    spread_line = f"Spread: {home_abbr} {home_spread_str} / {away_abbr} {away_spread_str} (-110)"
+    total_line = f"O/U {table.total} (-110)"
+
+    return f"{ml_line}\n{spread_line}\n{total_line}"
 
 
 def _playing_embed(table: NflSimTable) -> discord.Embed:
@@ -302,11 +380,17 @@ def _playing_embed(table: NflSimTable) -> discord.Embed:
     )
     embed.description = _scoreboard_text(table)
 
-    # Show bets
+    embed.add_field(name="Lines", value=_lines_text(table), inline=False)
+
     bet_lines: list[str] = []
     for p in table.players.values():
-        side_abbr = home_abbr if p.side == "home" else away_abbr
-        bet_lines.append(f"**{p.display_name}** \u2014 {p.bet}c on {side_abbr}")
+        if p.market == "ml":
+            side_label = f"ML {home_abbr if p.side == 'home' else away_abbr}"
+        elif p.market == "spread":
+            side_label = f"Spread {home_abbr if p.side == 'home' else away_abbr}"
+        else:
+            side_label = f"{'Over' if p.side == 'over' else 'Under'}"
+        bet_lines.append(f"**{p.display_name}** \u2014 {p.bet}c on {side_label}")
     if bet_lines:
         embed.add_field(name="Bets", value="\n".join(bet_lines), inline=False)
 
@@ -344,21 +428,27 @@ def _finished_embed(
         inline=False,
     )
 
-    # Results per player
+    embed.add_field(name="Lines", value=_lines_text(table), inline=False)
+
     lines: list[str] = []
     for p in table.players.values():
         bal = balances.get(p.user_id, 0) if balances else 0
-        side_abbr = home_abbr if p.side == "home" else away_abbr
+        if p.market == "ml":
+            side_label = f"ML {home_abbr if p.side == 'home' else away_abbr}"
+        elif p.market == "spread":
+            side_label = f"Spread {home_abbr if p.side == 'home' else away_abbr}"
+        else:
+            side_label = f"{'Over' if p.side == 'over' else 'Under'}"
         net = p.payout - p.bet
         sign = "+" if net >= 0 else ""
         if p.won:
             lines.append(
-                f"\U0001f3c6 **{p.display_name}** ({side_abbr}) \u2014 "
+                f"\U0001f3c6 **{p.display_name}** ({side_label}) \u2014 "
                 f"{p.bet}c \u2192 {p.payout}c (**{sign}{net}c**) \u2014 bal: {bal}c"
             )
         else:
             lines.append(
-                f"\u274c **{p.display_name}** ({side_abbr}) \u2014 "
+                f"\u274c **{p.display_name}** ({side_label}) \u2014 "
                 f"{p.bet}c \u2192 0c (**-{p.bet}c**) \u2014 bal: {bal}c"
             )
     if lines:
@@ -378,11 +468,17 @@ class JoinNflSimModal(ui.Modal):
         required=True,
         max_length=10,
     )
-    side_input = ui.TextInput(
-        label="Side (home or away)",
-        placeholder="home / away",
+    market_input = ui.TextInput(
+        label="Market (ml / spread / ou)",
+        placeholder="ml / spread / ou",
         required=True,
-        max_length=4,
+        max_length=6,
+    )
+    side_input = ui.TextInput(
+        label="Side (home/away for ml+spread; over/under for ou)",
+        placeholder="home / away / over / under",
+        required=True,
+        max_length=5,
     )
 
     def __init__(
@@ -394,10 +490,9 @@ class JoinNflSimModal(ui.Modal):
         self.table = table
         self.table_view = view
         self.amount.placeholder = f"e.g. 100 (bal: {balance}c)"
-        self.side_input.placeholder = f"home ({home_abbr}) / away ({away_abbr})"
+        self.side_input.placeholder = f"home ({home_abbr}) / away ({away_abbr}) / over / under"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        # Validate bet
         try:
             amt = int(self.amount.value)
         except ValueError:
@@ -410,20 +505,45 @@ class JoinNflSimModal(ui.Modal):
                 "Must be at least 1 coin.", ephemeral=True,
             )
             return
-        # Validate side
-        raw = self.side_input.value.strip().lower()
-        _, home_abbr = self.table.home_team
-        _, away_abbr = self.table.away_team
-        if raw in ("home", "h", home_abbr.lower()):
-            side = "home"
-        elif raw in ("away", "a", away_abbr.lower()):
-            side = "away"
+
+        raw_market = self.market_input.value.strip().lower()
+        if raw_market in ("ml", "moneyline"):
+            market = "ml"
+        elif raw_market in ("spread", "sp"):
+            market = "spread"
+        elif raw_market in ("ou", "o/u", "over-under", "total"):
+            market = "ou"
         else:
             await interaction.response.send_message(
-                f"Enter **home** ({home_abbr}) or **away** ({away_abbr}).",
-                ephemeral=True,
+                "Market must be **ml**, **spread**, or **ou**.", ephemeral=True,
             )
             return
+
+        _, home_abbr = self.table.home_team
+        _, away_abbr = self.table.away_team
+        raw_side = self.side_input.value.strip().lower()
+
+        if market in ("ml", "spread"):
+            if raw_side in ("home", "h", home_abbr.lower()):
+                side = "home"
+            elif raw_side in ("away", "a", away_abbr.lower()):
+                side = "away"
+            else:
+                await interaction.response.send_message(
+                    f"For {market}, enter **home** ({home_abbr}) or **away** ({away_abbr}).",
+                    ephemeral=True,
+                )
+                return
+        else:
+            if raw_side in ("over", "o"):
+                side = "over"
+            elif raw_side in ("under", "u"):
+                side = "under"
+            else:
+                await interaction.response.send_message(
+                    "For ou, enter **over** or **under**.", ephemeral=True,
+                )
+                return
 
         uid = interaction.user.id
         if uid in self.table.players:
@@ -432,7 +552,6 @@ class JoinNflSimModal(ui.Modal):
             )
             return
 
-        # Deduct coins
         try:
             await queries.update_casino_balance(str(uid), -amt)
         except ValueError:
@@ -447,6 +566,7 @@ class JoinNflSimModal(ui.Modal):
             display_name=interaction.user.display_name,
             bet=amt,
             side=side,
+            market=market,
         )
 
         self.table_view._update_buttons()
@@ -563,7 +683,7 @@ class NflSimTableView(ui.View):
                 "Table is full!", ephemeral=True,
             )
             return
-        name, amt, side = last
+        name, amt, market, side = last
         try:
             await queries.update_casino_balance(str(uid), -amt)
         except ValueError:
@@ -574,7 +694,7 @@ class NflSimTableView(ui.View):
             )
             return
         self.table.players[uid] = NflSimPlayer(
-            user_id=uid, display_name=name, bet=amt, side=side,
+            user_id=uid, display_name=name, bet=amt, side=side, market=market,
         )
         self._update_buttons()
         await interaction.response.edit_message(
@@ -681,11 +801,13 @@ class NflSimTableView(ui.View):
     async def _sim_loop(self) -> None:
         table = self.table
         try:
-            # Regulation quarters
             for q in range(1, NUM_QUARTERS + 1):
                 await asyncio.sleep(QUARTER_DELAY)
                 table.quarter = q
-                h_pts, a_pts = _simulate_quarter(table.home_prob)
+                h_pts, a_pts = _simulate_quarter(
+                    table.home_offense, table.home_defense, table.home_coaching,
+                    table.away_offense, table.away_defense, table.away_coaching,
+                )
                 table.home_score += h_pts
                 table.away_score += a_pts
                 table.quarter_scores.append((a_pts, h_pts))
@@ -698,7 +820,6 @@ class NflSimTableView(ui.View):
                     except discord.HTTPException:
                         pass
 
-            # Overtime if tied
             while table.home_score == table.away_score:
                 table.ot_count += 1
                 table.quarter += 1
@@ -716,7 +837,7 @@ class NflSimTableView(ui.View):
                     except discord.HTTPException:
                         pass
 
-            await asyncio.sleep(1.0)  # brief pause before results
+            await asyncio.sleep(1.0)
             await self._resolve()
 
         except asyncio.CancelledError:
@@ -731,14 +852,30 @@ class NflSimTableView(ui.View):
         table.phase = "finished"
 
         home_won = table.home_score > table.away_score
+        score_diff = table.home_score - table.away_score
+        total_score = table.home_score + table.away_score
 
         for p in table.players.values():
-            if (p.side == "home" and home_won) or (p.side == "away" and not home_won):
-                p.won = True
-                prob = table.home_prob if p.side == "home" else (1 - table.home_prob)
-                p.payout = int(p.bet * _payout_multiplier(prob))
+            if p.market == "ml":
+                if (p.side == "home" and home_won) or (p.side == "away" and not home_won):
+                    p.won = True
+                    prob = table.home_prob if p.side == "home" else (1 - table.home_prob)
+                    p.payout = int(p.bet * _payout_multiplier(prob))
+            elif p.market == "spread":
+                if p.side == "home" and score_diff > table.spread:
+                    p.won = True
+                    p.payout = _juice_payout(p.bet)
+                elif p.side == "away" and score_diff < table.spread:
+                    p.won = True
+                    p.payout = _juice_payout(p.bet)
+            else:  # ou
+                if p.side == "over" and total_score > table.total:
+                    p.won = True
+                    p.payout = _juice_payout(p.bet)
+                elif p.side == "under" and total_score < table.total:
+                    p.won = True
+                    p.payout = _juice_payout(p.bet)
 
-        # Credit winners and log
         balances: dict[int, int] = {}
         for uid, player in table.players.items():
             if player.won and player.payout > 0:
@@ -752,10 +889,9 @@ class NflSimTableView(ui.View):
                 str(uid), "nflsim", player.bet, player.payout,
             )
 
-        # Save last bets
         for uid, player in table.players.items():
             table.last_bets[uid] = (
-                player.display_name, player.bet, player.side,
+                player.display_name, player.bet, player.market, player.side,
             )
 
         self._update_buttons()
@@ -777,7 +913,19 @@ class NflSimTableView(ui.View):
         home, away = _pick_matchup()
         table.home_team = home
         table.away_team = away
-        table.home_prob = _generate_win_prob()
+
+        h_off, h_def, h_coa = _generate_ratings()
+        a_off, a_def, a_coa = _generate_ratings()
+        table.home_offense = h_off
+        table.home_defense = h_def
+        table.home_coaching = h_coa
+        table.away_offense = a_off
+        table.away_defense = a_def
+        table.away_coaching = a_coa
+        table.home_prob = _compute_home_prob(h_off, h_def, h_coa, a_off, a_def, a_coa)
+        table.spread = _compute_spread(table.home_prob)
+        table.total = _compute_total(h_off, h_def, a_off, a_def)
+
         table.quarter = 0
         table.home_score = 0
         table.away_score = 0
@@ -863,13 +1011,27 @@ class NflSimCog(commands.Cog):
         await queries.get_or_create_casino_wallet(str(interaction.user.id))
 
         home, away = _pick_matchup()
+        h_off, h_def, h_coa = _generate_ratings()
+        a_off, a_def, a_coa = _generate_ratings()
+        home_prob = _compute_home_prob(h_off, h_def, h_coa, a_off, a_def, a_coa)
+        spread = _compute_spread(home_prob)
+        total = _compute_total(h_off, h_def, a_off, a_def)
+
         table = NflSimTable(
             channel_id=channel_id,
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             home_team=home,
             away_team=away,
-            home_prob=_generate_win_prob(),
+            home_prob=home_prob,
+            home_offense=h_off,
+            home_defense=h_def,
+            home_coaching=h_coa,
+            away_offense=a_off,
+            away_defense=a_def,
+            away_coaching=a_coa,
+            spread=spread,
+            total=total,
         )
         self.active_tables[channel_id] = table
 
