@@ -349,7 +349,7 @@ def _table_embed(
 
 class JoinUTHModal(ui.Modal):
     ante_input = ui.TextInput(
-        label="Ante (Blind placed automatically at same amount)",
+        label="Ante amount (Blind auto-matches)",
         placeholder="e.g. 50",
         required=True, max_length=10,
     )
