@@ -1,4 +1,4 @@
-"""Casino cog — /blackjack and /balance commands with a virtual coin economy."""
+"""Casino cog — multiplayer /blackjack table and /balance commands."""
 import random
 from dataclasses import dataclass, field
 
@@ -18,6 +18,7 @@ RANK_VALUES = {
 }
 SHOE_DECKS = 6
 RESHUFFLE_THRESHOLD = 60
+MAX_PLAYERS = 5
 
 
 def _new_shoe() -> list[str]:
@@ -43,7 +44,6 @@ def _hand_value(hand: list[str]) -> int:
 
 
 def _fmt_card(card: str) -> str:
-    """Format a card for display: `A♠`."""
     return f"`{card}`"
 
 
@@ -57,199 +57,507 @@ def _is_blackjack(hand: list[str]) -> bool:
 
 # ── Game state ────────────────────────────────────────────────────────────────
 
+
 @dataclass
-class BlackjackGame:
+class PlayerHand:
     user_id: int
+    display_name: str
     bet: int
+    hand: list[str] = field(default_factory=list)
+    stood: bool = False
+    busted: bool = False
+    doubled: bool = False
+    blackjack: bool = False
+    payout: int = 0
+
+    @property
+    def done(self) -> bool:
+        return self.stood or self.busted or self.blackjack
+
+
+@dataclass
+class BlackjackTable:
+    channel_id: int
+    dealer_id: int
+    dealer_name: str
     shoe: list[str]
-    player_hand: list[str] = field(default_factory=list)
     dealer_hand: list[str] = field(default_factory=list)
+    players: dict[int, PlayerHand] = field(default_factory=dict)
+    phase: str = "betting"  # betting | playing | finished
+    message: discord.Message | None = None
 
-    def deal_initial(self) -> None:
-        self.player_hand = [self.shoe.pop(), self.shoe.pop()]
-        self.dealer_hand = [self.shoe.pop(), self.shoe.pop()]
-
-    def hit_player(self) -> str:
-        card = self.shoe.pop()
-        self.player_hand.append(card)
-        return card
-
-    def play_dealer(self) -> None:
-        """Dealer hits until 17+."""
-        while _hand_value(self.dealer_hand) < 17:
-            self.dealer_hand.append(self.shoe.pop())
+    def all_done(self) -> bool:
+        return all(p.done for p in self.players.values())
 
 
 # ── Embeds ────────────────────────────────────────────────────────────────────
 
-def _game_embed(
-    game: BlackjackGame,
-    *,
-    reveal: bool = False,
-    outcome: str | None = None,
-    payout: int = 0,
-    new_balance: int = 0,
-) -> discord.Embed:
-    pval = _hand_value(game.player_hand)
-    dval = _hand_value(game.dealer_hand) if reveal else RANK_VALUES[game.dealer_hand[0][:-1]]
 
-    if outcome:
-        colour = {
-            "Blackjack!": discord.Colour.gold(),
-            "You win!": discord.Colour.green(),
-            "Push": discord.Colour.light_grey(),
-            "Bust!": discord.Colour.red(),
-            "Dealer wins": discord.Colour.red(),
-        }.get(outcome, discord.Colour.blurple())
-        title = f"Blackjack — {outcome}"
+def _table_embed(
+    table: BlackjackTable, *, balances: dict[int, int] | None = None,
+) -> discord.Embed:
+    phase = table.phase
+
+    if phase == "betting":
+        colour = discord.Colour.blurple()
+        title = "Blackjack Table — Place Your Bets"
+    elif phase == "finished":
+        colour = discord.Colour.gold()
+        title = "Blackjack Table — Round Complete"
     else:
         colour = discord.Colour.blurple()
-        title = "Blackjack"
+        title = "Blackjack Table"
 
     embed = discord.Embed(title=title, colour=colour)
+    embed.set_footer(text=f"Dealer: {table.dealer_name}")
 
     # Dealer hand
-    if reveal:
-        dealer_str = f"{_fmt_hand(game.dealer_hand)}  ({dval})"
+    if phase == "betting":
+        pass  # no dealer hand yet
+    elif phase == "playing":
+        embed.add_field(
+            name="Dealer",
+            value=f"{_fmt_card(table.dealer_hand[0])} `??`",
+            inline=False,
+        )
+    else:  # finished
+        dval = _hand_value(table.dealer_hand)
+        bust = " — Bust!" if dval > 21 else ""
+        embed.add_field(
+            name="Dealer",
+            value=f"{_fmt_hand(table.dealer_hand)}  ({dval}){bust}",
+            inline=False,
+        )
+
+    # Players
+    if not table.players:
+        embed.add_field(
+            name="Players",
+            value="*No players yet — click Join!*",
+            inline=False,
+        )
     else:
-        dealer_str = f"{_fmt_card(game.dealer_hand[0])} `??`"
-    embed.add_field(name="Dealer", value=dealer_str, inline=False)
+        lines: list[str] = []
+        for p in table.players.values():
+            if phase == "betting":
+                lines.append(f"🃏 **{p.display_name}** — {p.bet}c")
+            elif phase == "playing":
+                val = _hand_value(p.hand)
+                cards = _fmt_hand(p.hand)
+                if p.blackjack:
+                    status = "Blackjack! ✨"
+                    emoji = "✅"
+                elif p.busted:
+                    status = "Bust!"
+                    emoji = "💥"
+                elif p.stood:
+                    status = f"stands ({val})"
+                    emoji = "✋"
+                else:
+                    status = f"({val})"
+                    emoji = "🟦"
+                lines.append(f"{emoji} **{p.display_name}** ({p.bet}c): {cards} — {status}")
+            else:  # finished
+                val = _hand_value(p.hand)
+                cards = _fmt_hand(p.hand)
+                if p.blackjack:
+                    outcome = "Blackjack!"
+                elif p.busted:
+                    outcome = "Bust!"
+                elif p.payout == 0:
+                    outcome = "Dealer wins"
+                elif p.payout == p.bet:
+                    outcome = "Push"
+                else:
+                    outcome = "Win!"
+                net = p.payout - p.bet
+                sign = "+" if net > 0 else ""
+                bal = balances.get(p.user_id, 0) if balances else 0
+                lines.append(
+                    f"**{p.display_name}** ({p.bet}c): {cards} ({val}) — {outcome}"
+                    f"\n  → **{sign}{net}c** (bal: {bal}c)"
+                )
+        embed.add_field(name="Players", value="\n".join(lines), inline=False)
 
-    # Player hand
-    embed.add_field(
-        name="Your Hand",
-        value=f"{_fmt_hand(game.player_hand)}  ({pval})",
-        inline=False,
-    )
-
-    embed.add_field(name="Bet", value=f"{game.bet} coins", inline=True)
-
-    if outcome:
-        sign = "+" if payout > 0 else ""
-        embed.add_field(name="Payout", value=f"{sign}{payout} coins", inline=True)
-        embed.add_field(name="Balance", value=f"{new_balance} coins", inline=True)
+    if phase == "betting":
+        embed.description = "Join the table, then the dealer deals!"
 
     return embed
 
 
-# ── Button view ───────────────────────────────────────────────────────────────
+# ── Modal ─────────────────────────────────────────────────────────────────────
 
-class BlackjackView(ui.View):
-    def __init__(self, game: BlackjackGame, active_games: dict[int, "BlackjackGame"]) -> None:
-        super().__init__(timeout=120)
-        self.game = game
-        self.active_games = active_games
-        self._update_buttons()
 
-    def _update_buttons(self) -> None:
-        pval = _hand_value(self.game.player_hand)
-        can_double = len(self.game.player_hand) == 2 and pval < 21
-        self.double_btn.disabled = not can_double
+class JoinBlackjackModal(ui.Modal):
+    amount = ui.TextInput(
+        label="Bet amount (coins)", placeholder="e.g. 50",
+        required=True, max_length=10,
+    )
 
-    async def _finish(
-        self, interaction: discord.Interaction, outcome: str, payout: int
-    ) -> None:
-        """Resolve the game, pay out, clean up."""
-        new_balance = 0
-        if payout != 0:
-            new_balance = await queries.update_casino_balance(
-                str(self.game.user_id), payout
-            )
-        else:
-            bal = await queries.get_casino_balance(str(self.game.user_id))
-            new_balance = bal or 0
+    def __init__(self, table: BlackjackTable, view: "BlackjackTableView") -> None:
+        super().__init__(title="Join Blackjack Table")
+        self.table = table
+        self.table_view = view
 
-        embed = _game_embed(
-            self.game,
-            reveal=True,
-            outcome=outcome,
-            payout=payout,
-            new_balance=new_balance,
-        )
-        for child in self.children:
-            child.disabled = True  # type: ignore[union-attr]
-        self.stop()
-        self.active_games.pop(self.game.user_id, None)
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    async def _check_owner(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.game.user_id:
-            await interaction.response.send_message(
-                "This isn't your game!", ephemeral=True
-            )
-            return False
-        return True
-
-    @ui.button(label="Hit", style=discord.ButtonStyle.primary, emoji="👊")
-    async def hit_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        if not await self._check_owner(interaction):
-            return
-        self.game.hit_player()
-        pval = _hand_value(self.game.player_hand)
-        if pval > 21:
-            await self._finish(interaction, "Bust!", 0)
-        elif pval == 21:
-            # Auto-stand on 21
-            await self._stand(interaction)
-        else:
-            self._update_buttons()
-            embed = _game_embed(self.game)
-            await interaction.response.edit_message(embed=embed, view=self)
-
-    @ui.button(label="Stand", style=discord.ButtonStyle.secondary, emoji="✋")
-    async def stand_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        if not await self._check_owner(interaction):
-            return
-        await self._stand(interaction)
-
-    @ui.button(label="Double Down", style=discord.ButtonStyle.success, emoji="💰")
-    async def double_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        if not await self._check_owner(interaction):
-            return
-        # Try to deduct the extra bet
+    async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
-            await queries.update_casino_balance(str(self.game.user_id), -self.game.bet)
+            amt = int(self.amount.value)
+        except ValueError:
+            await interaction.response.send_message("Enter a whole number.", ephemeral=True)
+            return
+        if amt < 1:
+            await interaction.response.send_message("Must be at least 1 coin.", ephemeral=True)
+            return
+        uid = interaction.user.id
+        if uid in self.table.players:
+            await interaction.response.send_message("You're already at the table!", ephemeral=True)
+            return
+        try:
+            await queries.update_casino_balance(str(uid), -amt)
+        except ValueError:
+            bal = await queries.get_or_create_casino_wallet(str(uid))
+            await interaction.response.send_message(
+                f"Not enough coins! (have {bal})", ephemeral=True,
+            )
+            return
+        self.table.players[uid] = PlayerHand(
+            user_id=uid, display_name=interaction.user.display_name, bet=amt,
+        )
+        await interaction.response.edit_message(
+            embed=_table_embed(self.table), view=self.table_view,
+        )
+
+
+# ── View ──────────────────────────────────────────────────────────────────────
+
+
+class BlackjackTableView(ui.View):
+    def __init__(
+        self, table: BlackjackTable, active_tables: dict[int, "BlackjackTable"],
+    ) -> None:
+        super().__init__(timeout=180)
+        self.table = table
+        self.active_tables = active_tables
+
+    def _get_active_player(self, interaction: discord.Interaction) -> PlayerHand | None:
+        """Return the player if they're at the table and still playing."""
+        p = self.table.players.get(interaction.user.id)
+        if p is None:
+            return None
+        if p.done:
+            return None
+        return p
+
+    # ── Row 0: Deal / Join / Leave ─────────────────────────────────
+
+    @ui.button(label="Deal", style=discord.ButtonStyle.success, emoji="🃏", row=0)
+    async def deal_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        if interaction.user.id != self.table.dealer_id:
+            await interaction.response.send_message(
+                "Only the table opener can deal!", ephemeral=True,
+            )
+            return
+        if self.table.phase != "betting":
+            await interaction.response.send_message("Already dealt!", ephemeral=True)
+            return
+        if not self.table.players:
+            await interaction.response.send_message(
+                "No players yet! Someone needs to join first.", ephemeral=True,
+            )
+            return
+        await self._deal(interaction)
+
+    @ui.button(label="Join", style=discord.ButtonStyle.primary, emoji="🪑", row=0)
+    async def join_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        if self.table.phase != "betting":
+            await interaction.response.send_message(
+                "Cards already dealt! Wait for the next round.", ephemeral=True,
+            )
+            return
+        uid = interaction.user.id
+        if uid in self.table.players:
+            await interaction.response.send_message(
+                "You're already at the table!", ephemeral=True,
+            )
+            return
+        if len(self.table.players) >= MAX_PLAYERS:
+            await interaction.response.send_message("Table is full!", ephemeral=True)
+            return
+        await queries.get_or_create_casino_wallet(str(uid))
+        await interaction.response.send_modal(JoinBlackjackModal(self.table, self))
+
+    @ui.button(label="Leave", style=discord.ButtonStyle.secondary, emoji="🚪", row=0)
+    async def leave_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        uid = interaction.user.id
+        player = self.table.players.get(uid)
+        if player is None:
+            await interaction.response.send_message(
+                "You're not at this table.", ephemeral=True,
+            )
+            return
+
+        if self.table.phase == "playing" and not player.done:
+            await interaction.response.send_message(
+                "Can't leave mid-hand! Hit or Stand first.", ephemeral=True,
+            )
+            return
+
+        # Opener leaving during betting = abort
+        if uid == self.table.dealer_id and self.table.phase == "betting":
+            await self._abort(interaction, "Dealer left — all bets refunded.")
+            return
+
+        # Refund if still betting
+        if self.table.phase == "betting":
+            await queries.update_casino_balance(str(uid), player.bet)
+            del self.table.players[uid]
+            if not self.table.players and uid != self.table.dealer_id:
+                await interaction.response.edit_message(
+                    embed=_table_embed(self.table), view=self,
+                )
+                return
+            await interaction.response.edit_message(
+                embed=_table_embed(self.table), view=self,
+            )
+            return
+
+        # Playing phase but player is done — just acknowledge
+        await interaction.response.send_message(
+            "You'll see results when the round ends.", ephemeral=True,
+        )
+
+    # ── Row 1: Hit / Stand / Double Down ───────────────────────────
+
+    @ui.button(label="Hit", style=discord.ButtonStyle.primary, emoji="👊", row=1)
+    async def hit_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        player = self._get_active_player(interaction)
+        if player is None:
+            await interaction.response.send_message(
+                "You're not playing or already done!", ephemeral=True,
+            )
+            return
+        player.hand.append(self.table.shoe.pop())
+        val = _hand_value(player.hand)
+        if val > 21:
+            player.busted = True
+        elif val == 21:
+            player.stood = True
+
+        if self.table.all_done():
+            await self._dealer_play_and_finish(interaction)
+        else:
+            await interaction.response.edit_message(
+                embed=_table_embed(self.table), view=self,
+            )
+
+    @ui.button(label="Stand", style=discord.ButtonStyle.secondary, emoji="✋", row=1)
+    async def stand_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        player = self._get_active_player(interaction)
+        if player is None:
+            await interaction.response.send_message(
+                "You're not playing or already done!", ephemeral=True,
+            )
+            return
+        player.stood = True
+
+        if self.table.all_done():
+            await self._dealer_play_and_finish(interaction)
+        else:
+            await interaction.response.edit_message(
+                embed=_table_embed(self.table), view=self,
+            )
+
+    @ui.button(label="Double Down", style=discord.ButtonStyle.success, emoji="💰", row=1)
+    async def double_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        player = self._get_active_player(interaction)
+        if player is None:
+            await interaction.response.send_message(
+                "You're not playing or already done!", ephemeral=True,
+            )
+            return
+        if len(player.hand) != 2:
+            await interaction.response.send_message(
+                "Can only double down on first two cards!", ephemeral=True,
+            )
+            return
+
+        # Deduct extra bet
+        try:
+            await queries.update_casino_balance(str(player.user_id), -player.bet)
         except ValueError:
             await interaction.response.send_message(
-                "Not enough coins to double down!", ephemeral=True
+                "Not enough coins to double down!", ephemeral=True,
             )
             return
-        self.game.bet *= 2
-        self.game.hit_player()
-        pval = _hand_value(self.game.player_hand)
-        if pval > 21:
-            await self._finish(interaction, "Bust!", 0)
-        else:
-            await self._stand(interaction)
+        player.bet *= 2
+        player.doubled = True
 
-    async def _stand(self, interaction: discord.Interaction) -> None:
-        game = self.game
-        game.play_dealer()
-        pval = _hand_value(game.player_hand)
-        dval = _hand_value(game.dealer_hand)
-
-        if _is_blackjack(game.player_hand) and not _is_blackjack(game.dealer_hand):
-            payout = game.bet + (game.bet * 3 // 2)  # 3:2
-            await self._finish(interaction, "Blackjack!", payout)
-        elif dval > 21:
-            await self._finish(interaction, "You win!", game.bet * 2)
-        elif pval > dval:
-            await self._finish(interaction, "You win!", game.bet * 2)
-        elif pval == dval:
-            await self._finish(interaction, "Push", game.bet)  # return bet
+        # Draw one card, auto-stand
+        player.hand.append(self.table.shoe.pop())
+        val = _hand_value(player.hand)
+        if val > 21:
+            player.busted = True
         else:
-            await self._finish(interaction, "Dealer wins", 0)
+            player.stood = True
+
+        if self.table.all_done():
+            await self._dealer_play_and_finish(interaction)
+        else:
+            await interaction.response.edit_message(
+                embed=_table_embed(self.table), view=self,
+            )
+
+    # ── Deal logic ─────────────────────────────────────────────────
+
+    async def _deal(self, interaction: discord.Interaction) -> None:
+        table = self.table
+        table.phase = "playing"
+
+        # Deal 2 cards to each player, then 2 to dealer
+        for p in table.players.values():
+            p.hand = [table.shoe.pop(), table.shoe.pop()]
+        table.dealer_hand = [table.shoe.pop(), table.shoe.pop()]
+
+        dealer_bj = _is_blackjack(table.dealer_hand)
+
+        # Check player naturals
+        for p in table.players.values():
+            if _is_blackjack(p.hand):
+                p.blackjack = True
+                if dealer_bj:
+                    p.payout = p.bet  # push
+                else:
+                    p.payout = p.bet + (p.bet * 3 // 2)  # 3:2
+                    await queries.update_casino_balance(str(p.user_id), p.payout)
+
+        # If dealer has BJ, everyone without BJ loses
+        if dealer_bj:
+            for p in table.players.values():
+                if not p.blackjack:
+                    p.busted = True  # mark as done (lost)
+                    p.payout = 0
+                else:
+                    # Push — refund bet
+                    await queries.update_casino_balance(str(p.user_id), p.payout)
+
+        # If all players done (all naturals or dealer BJ), finish immediately
+        if table.all_done():
+            await self._finish_round(interaction)
+            return
+
+        await interaction.response.edit_message(
+            embed=_table_embed(table), view=self,
+        )
+
+    # ── Dealer play + finish ───────────────────────────────────────
+
+    async def _dealer_play_and_finish(self, interaction: discord.Interaction) -> None:
+        table = self.table
+
+        # Dealer only plays if at least one player hasn't busted
+        any_standing = any(p.stood and not p.busted for p in table.players.values())
+        if any_standing:
+            while _hand_value(table.dealer_hand) < 17:
+                table.dealer_hand.append(table.shoe.pop())
+
+        dval = _hand_value(table.dealer_hand)
+
+        # Resolve each player
+        for p in table.players.values():
+            if p.blackjack:
+                continue  # already paid at deal time
+            if p.busted:
+                p.payout = 0
+                continue
+            pval = _hand_value(p.hand)
+            if dval > 21:
+                p.payout = p.bet * 2
+            elif pval > dval:
+                p.payout = p.bet * 2
+            elif pval == dval:
+                p.payout = p.bet  # push
+            else:
+                p.payout = 0
+
+        await self._finish_round(interaction)
+
+    async def _finish_round(self, interaction: discord.Interaction) -> None:
+        table = self.table
+        table.phase = "finished"
+        balances: dict[int, int] = {}
+
+        for p in table.players.values():
+            if p.blackjack:
+                # BJ payouts already credited at deal time — just read balance
+                balances[p.user_id] = (
+                    await queries.get_casino_balance(str(p.user_id))
+                ) or 0
+            elif p.payout > 0:
+                balances[p.user_id] = await queries.update_casino_balance(
+                    str(p.user_id), p.payout,
+                )
+            else:
+                balances[p.user_id] = (
+                    await queries.get_casino_balance(str(p.user_id))
+                ) or 0
+
+        embed = _table_embed(table, balances=balances)
+        for child in self.children:
+            if hasattr(child, "disabled"):
+                child.disabled = True  # type: ignore[union-attr]
+        self.stop()
+        self.active_tables.pop(table.channel_id, None)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    # ── Abort / timeout ────────────────────────────────────────────
+
+    async def _abort(self, interaction: discord.Interaction, reason: str) -> None:
+        for p in self.table.players.values():
+            try:
+                await queries.update_casino_balance(str(p.user_id), p.bet)
+            except Exception:
+                pass
+        embed = discord.Embed(
+            title="Blackjack Table — Closed",
+            description=reason,
+            colour=discord.Colour.dark_grey(),
+        )
+        for child in self.children:
+            if hasattr(child, "disabled"):
+                child.disabled = True  # type: ignore[union-attr]
+        self.stop()
+        self.active_tables.pop(self.table.channel_id, None)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def on_timeout(self) -> None:
-        self.active_games.pop(self.game.user_id, None)
+        table = self.table
+        if table.phase == "finished":
+            return
+        for p in table.players.values():
+            try:
+                await queries.update_casino_balance(str(p.user_id), p.bet)
+            except Exception:
+                pass
+        self.active_tables.pop(table.channel_id, None)
+        if table.message:
+            try:
+                embed = discord.Embed(
+                    title="Blackjack Table — Timed Out",
+                    description="Table timed out. All bets refunded.",
+                    colour=discord.Colour.dark_grey(),
+                )
+                await table.message.edit(embed=embed, view=None)
+            except Exception:
+                pass
 
 
 # ── Cog ───────────────────────────────────────────────────────────────────────
 
+
 class CasinoCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-        self.active_games: dict[int, BlackjackGame] = {}
+        self.active_tables: dict[int, BlackjackTable] = {}
         self.shoe = _new_shoe()
 
     def _draw_shoe(self) -> list[str]:
@@ -258,73 +566,31 @@ class CasinoCog(commands.Cog):
             self.shoe = _new_shoe()
         return self.shoe
 
-    @app_commands.command(name="blackjack", description="Play a hand of blackjack")
-    @app_commands.describe(bet="Number of coins to wager")
-    async def blackjack(self, interaction: discord.Interaction, bet: int) -> None:
-        user_id = interaction.user.id
-
-        if user_id in self.active_games:
+    @app_commands.command(name="blackjack", description="Open a blackjack table (multiplayer)")
+    async def blackjack(self, interaction: discord.Interaction) -> None:
+        channel_id = interaction.channel_id
+        if channel_id in self.active_tables:
             await interaction.response.send_message(
-                "You already have a game in progress! Finish it first.",
+                "There's already a blackjack table in this channel! Use the buttons to join.",
                 ephemeral=True,
             )
             return
 
-        if bet < 1:
-            await interaction.response.send_message(
-                "Bet must be at least 1 coin.", ephemeral=True
-            )
-            return
+        await queries.get_or_create_casino_wallet(str(interaction.user.id))
 
-        balance = await queries.get_or_create_casino_wallet(str(user_id))
-
-        if bet > balance:
-            await interaction.response.send_message(
-                f"You only have **{balance}** casino coins.", ephemeral=True,
-            )
-            return
-
-        # Deduct bet
-        await queries.update_casino_balance(str(user_id), -bet)
-
-        # Deal
         shoe = self._draw_shoe()
-        game = BlackjackGame(user_id=user_id, bet=bet, shoe=shoe)
-        game.deal_initial()
-        self.active_games[user_id] = game
+        table = BlackjackTable(
+            channel_id=channel_id,
+            dealer_id=interaction.user.id,
+            dealer_name=interaction.user.display_name,
+            shoe=shoe,
+        )
+        self.active_tables[channel_id] = table
 
-        # Check for instant blackjack
-        if _is_blackjack(game.player_hand):
-            payout = bet + (bet * 3 // 2)  # 3:2
-            if _is_blackjack(game.dealer_hand):
-                # Both blackjack — push
-                new_balance = await queries.update_casino_balance(str(user_id), bet)
-                embed = _game_embed(
-                    game, reveal=True, outcome="Push", payout=bet, new_balance=new_balance
-                )
-            else:
-                new_balance = await queries.update_casino_balance(str(user_id), payout)
-                embed = _game_embed(
-                    game, reveal=True, outcome="Blackjack!", payout=payout, new_balance=new_balance
-                )
-            self.active_games.pop(user_id, None)
-            await interaction.response.send_message(embed=embed)
-            return
-
-        # Check if dealer has blackjack
-        if _is_blackjack(game.dealer_hand):
-            embed = _game_embed(
-                game, reveal=True, outcome="Dealer wins", payout=0,
-                new_balance=(await queries.get_casino_balance(str(user_id))) or 0,
-            )
-            self.active_games.pop(user_id, None)
-            await interaction.response.send_message(embed=embed)
-            return
-
-        # Normal play
-        view = BlackjackView(game, self.active_games)
-        embed = _game_embed(game)
+        view = BlackjackTableView(table, self.active_tables)
+        embed = _table_embed(table)
         await interaction.response.send_message(embed=embed, view=view)
+        table.message = await interaction.original_response()
 
     @app_commands.command(name="balance", description="Check your coin balance")
     @app_commands.describe(user="Check another user's balance (optional)")
