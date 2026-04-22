@@ -228,6 +228,7 @@ Slash commands in `.claude/commands/`. Type to invoke.
 
 - `/fresh-eyes` — re-orient at session start. Check git, status, stubs, what's next.
 - `/new-source` — scaffold a new odds source end-to-end.
+- `/new-game` — scaffold a new casino game cog. **Always run this when adding a game.** Reads `GAMES.md` checklist.
 - `/clv-check` — compute CLV for recent bets against close snapshots.
 - `/sanity-check` — adversarial data quality pass before trusting results.
 
