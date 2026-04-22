@@ -28,6 +28,7 @@ COGS = [
     "bot.cogs.uth",
     "bot.cogs.crash",
     "bot.cogs.roulette",
+    "bot.cogs.videopoker",
 ]
 
 GUILD_ID = int(os.environ["DISCORD_GUILD_ID"])
