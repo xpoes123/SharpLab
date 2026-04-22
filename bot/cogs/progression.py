@@ -127,11 +127,11 @@ class ProgressionCog(commands.Cog):
     async def cog_unload(self) -> None:
         self.check_achievements.cancel()
 
-    # ── /profile ─────────────────────────────────────────────────────────────
+    # ── /player ──────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="profile", description="View a player profile")
+    @app_commands.command(name="player", description="View a player profile (XP, level, achievements)")
     @app_commands.describe(user="View another user's profile (optional)")
-    async def profile(
+    async def player(
         self, interaction: discord.Interaction, user: discord.Member | None = None,
     ) -> None:
         target = user or interaction.user
