@@ -24,6 +24,7 @@ COGS = [
     "bot.cogs.trading",
     "bot.cogs.baccarat",
     "bot.cogs.craps",
+    "bot.cogs.paigow",
 ]
 
 GUILD_ID = int(os.environ["DISCORD_GUILD_ID"])
