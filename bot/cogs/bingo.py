@@ -13,10 +13,10 @@ from db import queries
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 10
-MAX_BET = 500
+CARD_PRICE = 500
+MAX_CARDS = 5
 MIN_PLAYERS = 2
 CALL_INTERVAL = 4.0  # seconds between number calls
-HOUSE_EDGE = 0.05  # 5% rake
 
 BINGO_RANGES: list[tuple[str, range]] = [
     ("B", range(1, 16)),
@@ -28,11 +28,124 @@ BINGO_RANGES: list[tuple[str, range]] = [
 BINGO_LETTERS = ["B", "I", "N", "G", "O"]
 
 
+# ── Patterns ─────────────────────────────────────────────────────────────────
+
+
+def _make_target(cells: list[tuple[int, int]]) -> list[list[bool]]:
+    """Build a 5x5 boolean grid from a list of (row, col) pairs."""
+    grid = [[False] * 5 for _ in range(5)]
+    for r, c in cells:
+        grid[r][c] = True
+    return grid
+
+
+@dataclass
+class BingoPattern:
+    name: str
+    emoji: str
+    description: str
+    target: list[list[bool]]  # 5x5, True = cell must be marked to win
+
+    def check(self, card: "BingoCard") -> bool:
+        for r in range(5):
+            for c in range(5):
+                if self.target[r][c] and not card.marked[r][c]:
+                    return False
+        return True
+
+    def progress(self, card: "BingoCard") -> tuple[int, int]:
+        total = marked = 0
+        for r in range(5):
+            for c in range(5):
+                if self.target[r][c]:
+                    total += 1
+                    if card.marked[r][c]:
+                        marked += 1
+        return marked, total
+
+    def preview_text(self) -> str:
+        lines = ["  B  I  N  G  O"]
+        for r in range(5):
+            cells = []
+            for c in range(5):
+                if r == 2 and c == 2:
+                    cells.append(" \u2605 ")
+                elif self.target[r][c]:
+                    cells.append(" \u25a0 ")
+                else:
+                    cells.append(" \u00b7 ")
+            lines.append("".join(cells))
+        return "```\n" + "\n".join(lines) + "\n```"
+
+
+BINGO_PATTERNS: list[BingoPattern] = [
+    BingoPattern(
+        name="Four Corners",
+        emoji="\U0001f4d0",
+        description="Mark all four corners",
+        target=_make_target([(0, 0), (0, 4), (4, 0), (4, 4)]),
+    ),
+    BingoPattern(
+        name="X",
+        emoji="\u274c",
+        description="Complete both diagonals",
+        target=_make_target([
+            (0, 0), (1, 1), (2, 2), (3, 3), (4, 4),
+            (0, 4), (1, 3), (3, 1), (4, 0),
+        ]),
+    ),
+    BingoPattern(
+        name="Plus",
+        emoji="\u2795",
+        description="Fill the center row and center column",
+        target=_make_target([
+            (0, 2), (1, 2), (2, 0), (2, 1), (2, 2), (2, 3), (2, 4),
+            (3, 2), (4, 2),
+        ]),
+    ),
+    BingoPattern(
+        name="Diamond",
+        emoji="\U0001f48e",
+        description="Complete the diamond shape",
+        target=_make_target([
+            (0, 2), (1, 1), (1, 3), (2, 0), (2, 2), (2, 4),
+            (3, 1), (3, 3), (4, 2),
+        ]),
+    ),
+    BingoPattern(
+        name="T Shape",
+        emoji="\u2b06\ufe0f",
+        description="Fill the top row and center column",
+        target=_make_target([
+            (0, 0), (0, 1), (0, 2), (0, 3), (0, 4),
+            (1, 2), (2, 2), (3, 2), (4, 2),
+        ]),
+    ),
+    BingoPattern(
+        name="L Shape",
+        emoji="\u2199\ufe0f",
+        description="Fill the left column and bottom row",
+        target=_make_target([
+            (0, 0), (1, 0), (2, 0), (3, 0), (4, 0),
+            (4, 1), (4, 2), (4, 3), (4, 4),
+        ]),
+    ),
+]
+
+
+def _pick_pattern(last_idx: int = -1) -> tuple[BingoPattern, int]:
+    """Pick a random pattern, avoiding the last one used."""
+    choices = list(range(len(BINGO_PATTERNS)))
+    if last_idx >= 0 and len(choices) > 1:
+        choices.remove(last_idx)
+    idx = random.choice(choices)
+    return BINGO_PATTERNS[idx], idx
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
 def _number_to_bingo(n: int) -> str:
-    """Convert a number to its bingo call, e.g. 42 -> 'N42'."""
     for letter, rng in BINGO_RANGES:
         if n in rng:
             return f"{letter}{n}"
@@ -40,7 +153,6 @@ def _number_to_bingo(n: int) -> str:
 
 
 def generate_card() -> "BingoCard":
-    """Generate a random 5x5 bingo card with free center."""
     grid: list[list[int]] = [[0] * 5 for _ in range(5)]
     for col_idx, (_, rng) in enumerate(BINGO_RANGES):
         nums = random.sample(list(rng), 5)
@@ -53,7 +165,6 @@ def generate_card() -> "BingoCard":
 
 
 def mark_card(card: "BingoCard", number: int) -> bool:
-    """Mark a number on the card if present. Returns True if found."""
     for row in range(5):
         for col in range(5):
             if card.grid[row][col] == number:
@@ -62,54 +173,48 @@ def mark_card(card: "BingoCard", number: int) -> bool:
     return False
 
 
-def check_win(card: "BingoCard") -> list[str]:
-    """Check for completed lines. Returns list of winning pattern names."""
-    wins: list[str] = []
-    # Rows
-    for r in range(5):
-        if all(card.marked[r][c] for c in range(5)):
-            wins.append(f"Row {r + 1}")
-    # Columns
-    for c in range(5):
-        if all(card.marked[r][c] for r in range(5)):
-            wins.append(f"Col {BINGO_LETTERS[c]}")
-    # Diagonals
-    if all(card.marked[i][i] for i in range(5)):
-        wins.append("Diagonal \\")
-    if all(card.marked[i][4 - i] for i in range(5)):
-        wins.append("Diagonal /")
-    return wins
+def format_card_text(
+    card: "BingoCard", pattern: BingoPattern | None = None,
+) -> str:
+    """Render a bingo card.
 
-
-def format_card_text(card: "BingoCard") -> str:
-    """Render a bingo card as monospace text for Discord."""
+    [XX] = marked (number was called)
+    >XX< = target cell you still need
+     XX  = other cell
+    """
     lines = ["  B    I    N    G    O "]
     for row in range(5):
         cells: list[str] = []
         for col in range(5):
             num = card.grid[row][col]
             if row == 2 and col == 2:
-                if card.marked[row][col]:
-                    cells.append(" \u2605\u2605 ")  # ★★
-                else:
-                    cells.append(" \u2605\u2605 ")
+                cells.append(" \u2605\u2605 ")
             elif card.marked[row][col]:
                 cells.append(f"[{num:02d}]")
+            elif pattern and pattern.target[row][col]:
+                cells.append(f">{num:02d}<")
             else:
                 cells.append(f" {num:02d} ")
         lines.append(" ".join(cells))
+    if pattern:
+        marked, total = pattern.progress(card)
+        need = total - marked
+        if need == 0:
+            lines.append(f"\n{pattern.emoji} {pattern.name}: COMPLETE!")
+        else:
+            bar = "\u2588" * marked + "\u2591" * need
+            lines.append(f"\n{pattern.emoji} {pattern.name}: {bar} {marked}/{total}")
     return "```\n" + "\n".join(lines) + "\n```"
 
 
 def _format_called_grid(called_set: set[int]) -> str:
-    """Format called numbers grouped by B-I-N-G-O column."""
     lines: list[str] = []
     for letter, rng in BINGO_RANGES:
         nums = sorted(n for n in called_set if n in rng)
         if nums:
             lines.append(f"**{letter}**: {' '.join(str(n) for n in nums)}")
         else:
-            lines.append(f"**{letter}**: —")
+            lines.append(f"**{letter}**: \u2014")
     return "\n".join(lines)
 
 
@@ -118,7 +223,7 @@ def _format_called_grid(called_set: set[int]) -> str:
 
 @dataclass
 class BingoCard:
-    grid: list[list[int]]  # 5x5, grid[row][col]; center = 0
+    grid: list[list[int]]  # 5x5, center = 0
     marked: list[list[bool]]  # 5x5, center starts True
 
 
@@ -126,11 +231,15 @@ class BingoCard:
 class BingoPlayer:
     user_id: int
     display_name: str
-    bet: int
-    card: BingoCard
+    num_cards: int
+    cards: list[BingoCard]
     won: bool = False
-    win_patterns: list[str] = field(default_factory=list)
+    winning_card: int = -1  # index into cards
     payout: int = 0
+
+    @property
+    def cost(self) -> int:
+        return self.num_cards * CARD_PRICE
 
 
 @dataclass
@@ -143,11 +252,14 @@ class BingoTable:
     message: discord.Message | None = None
     round_num: int = 1
     last_bets: dict[int, tuple[str, int]] = field(default_factory=dict)
-    # Bingo-specific
+    # Pattern
+    pattern: BingoPattern | None = None
+    last_pattern_idx: int = -1
+    # Bingo state
     called_numbers: list[int] = field(default_factory=list)
     called_set: set[int] = field(default_factory=set)
-    pool: list[int] = field(default_factory=list)  # shuffled uncalled
-    winners: list[int] = field(default_factory=list)  # winner user_ids
+    pool: list[int] = field(default_factory=list)
+    winners: list[int] = field(default_factory=list)
     call_task: asyncio.Task | None = field(default=None, repr=False)
 
 
@@ -155,24 +267,39 @@ class BingoTable:
 
 
 def _betting_embed(table: BingoTable) -> discord.Embed:
-    pot = sum(p.bet for p in table.players.values())
+    total_cards = sum(p.num_cards for p in table.players.values())
+    pot = total_cards * CARD_PRICE
+    pat = table.pattern
+
+    title = f"Bingo \u2014 Join the Table (Round {table.round_num})"
+    if pat:
+        desc = (
+            f"First to complete the **{pat.name}** pattern wins the pot!\n"
+            f"{pat.description}."
+        )
+    else:
+        desc = "Join and get your cards!"
+
     embed = discord.Embed(
-        title=f"Bingo \u2014 Join the Table (Round {table.round_num})",
-        description=(
-            "Join and get your card! First to complete a **line** "
-            "(row, column, or diagonal) wins the pot."
-        ),
-        colour=discord.Colour.blurple(),
+        title=title, description=desc, colour=discord.Colour.blurple(),
     )
+
+    if pat:
+        embed.add_field(
+            name=f"{pat.emoji} Pattern: {pat.name}",
+            value=pat.preview_text(),
+            inline=False,
+        )
+
     if pot:
         embed.add_field(
-            name="Pot",
-            value=f"{pot}c (5% house rake)",
-            inline=True,
+            name="Pot", value=f"{pot}c ({total_cards} cards)", inline=True,
         )
+
     if table.players:
         lines = [
-            f"\U0001f3b4 **{p.display_name}** \u2014 {p.bet}c"
+            f"\U0001f3b4 **{p.display_name}** \u2014 "
+            f"{p.num_cards} card{'s' if p.num_cards > 1 else ''} ({p.cost}c)"
             for p in table.players.values()
         ]
         embed.add_field(name="Players", value="\n".join(lines), inline=False)
@@ -182,33 +309,63 @@ def _betting_embed(table: BingoTable) -> discord.Embed:
             value="*No players yet \u2014 click Join!*",
             inline=False,
         )
-    embed.set_footer(text=f"Host: {table.host_name} \u2502 Min {MIN_PLAYERS} players")
+    embed.set_footer(
+        text=(
+            f"Host: {table.host_name} \u2502 "
+            f"{CARD_PRICE}c/card, max {MAX_CARDS} \u2502 "
+            f"Min {MIN_PLAYERS} players"
+        ),
+    )
     return embed
 
 
 def _calling_embed(table: BingoTable) -> discord.Embed:
+    pat = table.pattern
     embed = discord.Embed(
         title=f"Bingo \u2014 Round {table.round_num}",
         colour=discord.Colour.gold(),
     )
+
     if table.called_numbers:
         last = table.called_numbers[-1]
         embed.description = f"# \U0001f3b1 **{_number_to_bingo(last)}**"
     else:
         embed.description = "Starting..."
+
+    # Pattern progress — show who's closest
+    if pat and table.players:
+        best_marked = 0
+        best_name = ""
+        total = 0
+        for p in table.players.values():
+            for card in p.cards:
+                m, t = pat.progress(card)
+                total = t
+                if m > best_marked:
+                    best_marked = m
+                    best_name = p.display_name
+        bar = "\u2588" * best_marked + "\u2591" * (total - best_marked)
+        embed.add_field(
+            name=f"{pat.emoji} {pat.name}",
+            value=f"Closest: **{best_name}** {bar} {best_marked}/{total}",
+            inline=False,
+        )
+
     embed.add_field(
         name=f"Called ({len(table.called_numbers)}/75)",
         value=_format_called_grid(table.called_set),
         inline=False,
     )
-    names = ", ".join(p.display_name for p in table.players.values())
+    player_info = ", ".join(
+        f"{p.display_name}({p.num_cards})" for p in table.players.values()
+    )
     embed.add_field(
         name=f"Players ({len(table.players)})",
-        value=names,
+        value=player_info,
         inline=False,
     )
     embed.set_footer(
-        text=f"Host: {table.host_name} \u2502 Click 'My Card' to see your card",
+        text=f"Host: {table.host_name} \u2502 Click 'My Cards' to see your cards",
     )
     return embed
 
@@ -216,21 +373,18 @@ def _calling_embed(table: BingoTable) -> discord.Embed:
 def _finished_embed(
     table: BingoTable, *, balances: dict[int, int] | None = None,
 ) -> discord.Embed:
-    # Winner announcement
-    winner_names = [
-        table.players[uid].display_name for uid in table.winners
-    ]
+    pat = table.pattern
+    winner_names = [table.players[uid].display_name for uid in table.winners]
+    pat_str = f"\nPattern: {pat.emoji} {pat.name}" if pat else ""
+
     if len(winner_names) == 1:
         p = table.players[table.winners[0]]
-        desc = (
-            f"**{p.display_name}** wins **{p.payout}c**!\n"
-            f"Pattern: {', '.join(p.win_patterns)}"
-        )
+        desc = f"**{p.display_name}** wins **{p.payout}c**!{pat_str}"
     else:
         per = table.players[table.winners[0]].payout
         desc = (
             f"**{' & '.join(winner_names)}** split the pot! "
-            f"({per}c each)"
+            f"({per}c each){pat_str}"
         )
 
     embed = discord.Embed(
@@ -242,9 +396,13 @@ def _finished_embed(
     # Show winning card(s)
     for uid in table.winners:
         p = table.players[uid]
+        card = p.cards[p.winning_card] if p.winning_card >= 0 else p.cards[0]
+        label = f"{p.display_name}'s Winning Card"
+        if p.num_cards > 1:
+            label += f" (#{p.winning_card + 1} of {p.num_cards})"
         embed.add_field(
-            name=f"{p.display_name}'s Card",
-            value=format_card_text(p.card),
+            name=label,
+            value=format_card_text(card, pat),
             inline=True,
         )
 
@@ -252,17 +410,20 @@ def _finished_embed(
     lines: list[str] = []
     for p in table.players.values():
         bal = balances.get(p.user_id, 0) if balances else 0
-        net = p.payout - p.bet
+        net = p.payout - p.cost
         sign = "+" if net >= 0 else ""
+        cards_str = f"{p.num_cards} card{'s' if p.num_cards > 1 else ''}"
         if p.won:
             lines.append(
-                f"\U0001f3c6 **{p.display_name}** \u2014 {p.bet}c \u2192 {p.payout}c "
+                f"\U0001f3c6 **{p.display_name}** ({cards_str}) \u2014 "
+                f"{p.cost}c \u2192 {p.payout}c "
                 f"(**{sign}{net}c**) \u2014 bal: {bal}c"
             )
         else:
             lines.append(
-                f"\u274c **{p.display_name}** \u2014 {p.bet}c \u2192 0c "
-                f"(**-{p.bet}c**) \u2014 bal: {bal}c"
+                f"\u274c **{p.display_name}** ({cards_str}) \u2014 "
+                f"{p.cost}c \u2192 0c "
+                f"(**-{p.cost}c**) \u2014 bal: {bal}c"
             )
     embed.add_field(name="Results", value="\n".join(lines), inline=False)
     embed.add_field(
@@ -278,11 +439,11 @@ def _finished_embed(
 
 
 class JoinBingoModal(ui.Modal):
-    amount = ui.TextInput(
-        label="Bet amount (coins)",
-        placeholder="e.g. 100",
+    num_cards_input = ui.TextInput(
+        label=f"Number of cards ({CARD_PRICE}c each)",
+        placeholder="1-5",
         required=True,
-        max_length=10,
+        max_length=1,
     )
 
     def __init__(
@@ -291,24 +452,20 @@ class JoinBingoModal(ui.Modal):
         super().__init__(title="Join Bingo")
         self.table = table
         self.table_view = view
-        self.amount.placeholder = f"e.g. 100 (bal: {balance}c)"
+        max_affordable = min(MAX_CARDS, balance // CARD_PRICE)
+        self.num_cards_input.placeholder = f"1-{max_affordable} (bal: {balance}c)"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
-            amt = int(self.amount.value)
+            num = int(self.num_cards_input.value)
         except ValueError:
             await interaction.response.send_message(
-                "Enter a whole number.", ephemeral=True,
+                f"Enter a number 1\u2013{MAX_CARDS}.", ephemeral=True,
             )
             return
-        if amt < 1:
+        if num < 1 or num > MAX_CARDS:
             await interaction.response.send_message(
-                "Must be at least 1 coin.", ephemeral=True,
-            )
-            return
-        if amt > MAX_BET:
-            await interaction.response.send_message(
-                f"Max bet is {MAX_BET}c.", ephemeral=True,
+                f"Must be 1\u2013{MAX_CARDS} cards.", ephemeral=True,
             )
             return
 
@@ -319,22 +476,25 @@ class JoinBingoModal(ui.Modal):
             )
             return
 
-        # Deduct coins
+        cost = num * CARD_PRICE
         try:
-            await queries.update_casino_balance(str(uid), -amt)
+            await queries.update_casino_balance(str(uid), -cost)
         except ValueError:
             bal = await queries.get_or_create_casino_wallet(str(uid))
+            max_affordable = bal // CARD_PRICE
             await interaction.response.send_message(
-                f"Not enough coins! (have {bal}c)", ephemeral=True,
+                f"Not enough coins for {num} cards ({cost}c)! "
+                f"You have {bal}c (max {max_affordable} cards).",
+                ephemeral=True,
             )
             return
 
-        card = generate_card()
+        cards = [generate_card() for _ in range(num)]
         self.table.players[uid] = BingoPlayer(
             user_id=uid,
             display_name=interaction.user.display_name,
-            bet=amt,
-            card=card,
+            num_cards=num,
+            cards=cards,
         )
 
         self.table_view._update_buttons()
@@ -377,7 +537,8 @@ class BingoTableView(ui.View):
     # ── Row 0 ────────────────────────────────────────────────────────────────
 
     @ui.button(
-        label="Start", style=discord.ButtonStyle.success, emoji="\u25b6\ufe0f", row=0,
+        label="Start", style=discord.ButtonStyle.success,
+        emoji="\u25b6\ufe0f", row=0,
     )
     async def start_btn(
         self, interaction: discord.Interaction, button: ui.Button,
@@ -400,7 +561,8 @@ class BingoTableView(ui.View):
         await self._start_calling(interaction)
 
     @ui.button(
-        label="Join", style=discord.ButtonStyle.primary, emoji="\U0001f3b4", row=0,
+        label="Join", style=discord.ButtonStyle.primary,
+        emoji="\U0001f3b4", row=0,
     )
     async def join_btn(
         self, interaction: discord.Interaction, button: ui.Button,
@@ -422,12 +584,19 @@ class BingoTableView(ui.View):
             )
             return
         bal = await queries.get_or_create_casino_wallet(str(uid))
+        if bal < CARD_PRICE:
+            await interaction.response.send_message(
+                f"Need at least {CARD_PRICE}c to buy a card! (bal: {bal}c)",
+                ephemeral=True,
+            )
+            return
         await interaction.response.send_modal(
             JoinBingoModal(self.table, self, bal),
         )
 
     @ui.button(
-        label="Re-bet", style=discord.ButtonStyle.primary, emoji="\U0001f504", row=0,
+        label="Re-bet", style=discord.ButtonStyle.primary,
+        emoji="\U0001f504", row=0,
     )
     async def rebet_btn(
         self, interaction: discord.Interaction, button: ui.Button,
@@ -454,19 +623,21 @@ class BingoTableView(ui.View):
                 "Table is full!", ephemeral=True,
             )
             return
-        name, amt = last
+        name, num_cards = last
+        cost = num_cards * CARD_PRICE
         try:
-            await queries.update_casino_balance(str(uid), -amt)
+            await queries.update_casino_balance(str(uid), -cost)
         except ValueError:
             bal = await queries.get_or_create_casino_wallet(str(uid))
             await interaction.response.send_message(
-                f"Not enough coins for {amt}c re-bet! (have {bal}c)",
+                f"Not enough coins for {num_cards} cards ({cost}c)! "
+                f"(have {bal}c)",
                 ephemeral=True,
             )
             return
-        card = generate_card()
+        cards = [generate_card() for _ in range(num_cards)]
         self.table.players[uid] = BingoPlayer(
-            user_id=uid, display_name=name, bet=amt, card=card,
+            user_id=uid, display_name=name, num_cards=num_cards, cards=cards,
         )
         self._update_buttons()
         await interaction.response.edit_message(
@@ -474,7 +645,8 @@ class BingoTableView(ui.View):
         )
 
     @ui.button(
-        label="Leave", style=discord.ButtonStyle.secondary, emoji="\U0001f6aa", row=0,
+        label="Leave", style=discord.ButtonStyle.secondary,
+        emoji="\U0001f6aa", row=0,
     )
     async def leave_btn(
         self, interaction: discord.Interaction, button: ui.Button,
@@ -492,7 +664,7 @@ class BingoTableView(ui.View):
             )
             return
         if self.table.phase == "betting":
-            await queries.update_casino_balance(str(uid), player.bet)
+            await queries.update_casino_balance(str(uid), player.cost)
             del self.table.players[uid]
             self._update_buttons()
             await interaction.response.edit_message(
@@ -506,7 +678,8 @@ class BingoTableView(ui.View):
     # ── Row 1 ────────────────────────────────────────────────────────────────
 
     @ui.button(
-        label="My Card", style=discord.ButtonStyle.primary, emoji="\U0001f440", row=1,
+        label="My Cards", style=discord.ButtonStyle.primary,
+        emoji="\U0001f440", row=1,
     )
     async def my_card_btn(
         self, interaction: discord.Interaction, button: ui.Button,
@@ -518,14 +691,27 @@ class BingoTableView(ui.View):
                 "You're not in this game!", ephemeral=True,
             )
             return
-        await interaction.response.send_message(
-            f"**Your Bingo Card:**\n{format_card_text(player.card)}",
-            ephemeral=True,
+        pat = self.table.pattern
+        parts: list[str] = []
+        for i, card in enumerate(player.cards, 1):
+            if player.num_cards > 1:
+                if pat:
+                    m, t = pat.progress(card)
+                    parts.append(f"**Card {i}** ({m}/{t})")
+                else:
+                    parts.append(f"**Card {i}**")
+            parts.append(format_card_text(card, pat))
+        header = (
+            f"**Your Cards ({player.num_cards}):**"
+            if player.num_cards > 1
+            else "**Your Card:**"
         )
+        msg = header + "\n" + "\n".join(parts)
+        await interaction.response.send_message(msg, ephemeral=True)
 
     @ui.button(
-        label="New Round", style=discord.ButtonStyle.success, emoji="\u25b6\ufe0f",
-        row=1,
+        label="New Round", style=discord.ButtonStyle.success,
+        emoji="\u25b6\ufe0f", row=1,
     )
     async def new_round_btn(
         self, interaction: discord.Interaction, button: ui.Button,
@@ -547,8 +733,8 @@ class BingoTableView(ui.View):
         )
 
     @ui.button(
-        label="Close Table", style=discord.ButtonStyle.danger, emoji="\u2716\ufe0f",
-        row=1,
+        label="Close Table", style=discord.ButtonStyle.danger,
+        emoji="\u2716\ufe0f", row=1,
     )
     async def close_btn(
         self, interaction: discord.Interaction, button: ui.Button,
@@ -566,7 +752,9 @@ class BingoTableView(ui.View):
         if self.table.phase == "betting":
             for p in self.table.players.values():
                 try:
-                    await queries.update_casino_balance(str(p.user_id), p.bet)
+                    await queries.update_casino_balance(
+                        str(p.user_id), p.cost,
+                    )
                 except Exception:
                     pass
         await self._close(interaction, "Table closed by host.")
@@ -600,15 +788,18 @@ class BingoTableView(ui.View):
 
                 # Auto-mark all player cards
                 for player in table.players.values():
-                    mark_card(player.card, number)
+                    for card in player.cards:
+                        mark_card(card, number)
 
-                # Check for winners
+                # Check for winners against the pattern
                 round_winners: list[int] = []
-                for uid, player in table.players.items():
-                    wins = check_win(player.card)
-                    if wins:
-                        player.win_patterns = wins
-                        round_winners.append(uid)
+                if table.pattern:
+                    for uid, player in table.players.items():
+                        for i, card in enumerate(player.cards):
+                            if table.pattern.check(card):
+                                player.winning_card = i
+                                round_winners.append(uid)
+                                break  # one win per player
 
                 if round_winners:
                     table.winners = round_winners
@@ -624,7 +815,7 @@ class BingoTableView(ui.View):
                     except discord.HTTPException:
                         pass
 
-            # All 75 called, no winner (near-impossible for line wins)
+            # All 75 called, no winner
             await self._resolve_no_winner()
 
         except asyncio.CancelledError:
@@ -638,10 +829,8 @@ class BingoTableView(ui.View):
         table = self.table
         table.phase = "finished"
 
-        total_pot = sum(p.bet for p in table.players.values())
-        house_take = max(1, int(total_pot * HOUSE_EDGE))
-        prize_pool = total_pot - house_take
-        payout_each = prize_pool // len(table.winners)
+        total_pot = sum(p.cost for p in table.players.values())
+        payout_each = total_pot // len(table.winners)
 
         for uid in table.winners:
             table.players[uid].won = True
@@ -658,9 +847,9 @@ class BingoTableView(ui.View):
                 bal = await queries.get_casino_balance(str(uid))
                 balances[uid] = bal or 0
 
-        # Save last bets
+        # Save last bets for re-bet
         for uid, player in table.players.items():
-            table.last_bets[uid] = (player.display_name, player.bet)
+            table.last_bets[uid] = (player.display_name, player.num_cards)
 
         self._update_buttons()
         if table.message:
@@ -672,7 +861,6 @@ class BingoTableView(ui.View):
                 pass
 
     async def _resolve_no_winner(self) -> None:
-        """All numbers called with no winner — refund everyone."""
         table = self.table
         table.phase = "finished"
         await self._refund_all()
@@ -680,7 +868,9 @@ class BingoTableView(ui.View):
             try:
                 embed = discord.Embed(
                     title=f"Bingo \u2014 Round {table.round_num} (No Winner)",
-                    description="All 75 numbers called with no winner! Bets refunded.",
+                    description=(
+                        "All 75 numbers called with no winner! Bets refunded."
+                    ),
                     colour=discord.Colour.dark_grey(),
                 )
                 self._update_buttons()
@@ -700,11 +890,15 @@ class BingoTableView(ui.View):
         table.pool.clear()
         table.winners.clear()
         table.call_task = None
+        # Pick a new pattern (different from last round)
+        pattern, idx = _pick_pattern(table.last_pattern_idx)
+        table.pattern = pattern
+        table.last_pattern_idx = idx
 
     async def _refund_all(self) -> None:
         for p in self.table.players.values():
             try:
-                await queries.update_casino_balance(str(p.user_id), p.bet)
+                await queries.update_casino_balance(str(p.user_id), p.cost)
             except Exception:
                 pass
 
@@ -779,10 +973,15 @@ class BingoCog(commands.Cog):
 
         await queries.get_or_create_casino_wallet(str(interaction.user.id))
 
+        # Pick the first pattern
+        pattern, idx = _pick_pattern()
+
         table = BingoTable(
             channel_id=channel_id,
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
+            pattern=pattern,
+            last_pattern_idx=idx,
         )
         self.active_tables[channel_id] = table
 
