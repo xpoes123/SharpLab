@@ -732,6 +732,7 @@ async def get_all_games_filtered(filter_str: str = "", limit: int = 25, sport: s
 # ── Wallets ────────────────────────────────────────────────────────────────────
 
 DAILY_AMOUNT = 100
+SAFETY_NET = 25  # free coins when balance hits 0
 _DAILY_SECONDS = 28800  # 8 hours
 
 
@@ -776,6 +777,15 @@ async def get_or_create_wallet(discord_user: str) -> tuple[int, bool]:
             )
             await db.commit()
             credited = True
+
+        # Safety net: if broke, give 25 coins so they can always play
+        if balance == 0:
+            balance = SAFETY_NET
+            await db.execute(
+                "UPDATE wallets SET balance = ? WHERE discord_user = ?",
+                (balance, discord_user),
+            )
+            await db.commit()
 
         return (balance, credited)
 
