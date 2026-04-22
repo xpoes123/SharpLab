@@ -44,6 +44,28 @@ GAME_LABELS: dict[str, str] = {
     "penalties": "Penalties",
     "geography": "Geography",
     "wordle": "Wordle",
+    "nba-trivia": "NBA Trivia",
+    "nfl-trivia": "NFL Trivia",
+}
+
+GAME_CATEGORIES: list[tuple[str, str]] = [
+    ("Card Games", "\U0001f0cf"),
+    ("Table & Arcade", "\U0001f3b0"),
+    ("Party Games", "\U0001f389"),
+    ("Brain Games", "\U0001f9e0"),
+    ("Sports Sim", "\U0001f3c6"),
+]
+
+MODE_EMOJI: dict[str, str] = {
+    "solo": "\U0001f464",
+    "duo": "\u2694\ufe0f",
+    "party": "\U0001f389",
+}
+
+MODE_LABEL: dict[str, str] = {
+    "solo": "Solo",
+    "duo": "Duo",
+    "party": "Party",
 }
 
 # Hi-Lo counting values
@@ -1295,24 +1317,27 @@ class CasinoCog(commands.Cog):
 
     @app_commands.command(name="games", description="List all available casino games")
     async def games(self, interaction: discord.Interaction) -> None:
-        mp_tag = " `MP`"
-        lines = [
-            f"` /{name} ` — {desc}{mp_tag if mp else ''}"
-            for name, desc, mp in CASINO_GAMES
-        ]
-        embed = discord.Embed(
-            title="Casino Games",
-            description="\n".join(lines),
-            color=0xF1C40F,
-        )
-        embed.set_footer(text=f"{len(CASINO_GAMES)} games available  ·  /random-game to pick one")
-        await interaction.response.send_message(embed=embed)
+        total_pages = len(GAME_CATEGORIES)
+        view = GamesView(page=1)
+        embed = _games_page_embed(1, total_pages)
+        await interaction.response.send_message(embed=embed, view=view)
 
     @app_commands.command(name="random-game", description="Pick a random casino game to play")
-    async def random_game(self, interaction: discord.Interaction) -> None:
-        name, desc, _mp = random.choice(CASINO_GAMES)
+    @app_commands.describe(mode="Filter by player count")
+    @app_commands.choices(mode=RANDOM_GAME_CHOICES)
+    async def random_game(
+        self, interaction: discord.Interaction, mode: str | None = None,
+    ) -> None:
+        if mode:
+            pool = [(n, d) for n, d, _, m in CASINO_GAMES if m == mode]
+            label = MODE_LABEL.get(mode, mode)
+        else:
+            pool = [(n, d) for n, d, _, _ in CASINO_GAMES]
+            label = None
+        name, desc = random.choice(pool)
+        prefix = f"**[{label}]** " if label else ""
         await interaction.response.send_message(
-            f"You should play **/{name}** — {desc}"
+            f"{prefix}You should play **/{name}** \u2014 {desc}"
         )
 
     @app_commands.command(name="casino-stats", description="View casino PnL stats")
@@ -1468,31 +1493,103 @@ class CasinoCog(commands.Cog):
         await interaction.followup.send(embed=embed)
 
 
-CASINO_GAMES: list[tuple[str, str, bool]] = [
-    # (command_name, description, is_multiplayer)
-    ("blackjack", "Blackjack table", True),
-    ("roulette", "American roulette", False),
-    ("craps", "Craps with full side bets", False),
-    ("baccarat", "Baccarat card game", False),
-    ("paigow", "Pai Gow Poker", True),
-    ("uth", "Ultimate Texas Hold'em", False),
-    ("videopoker", "Video Poker (Jacks or Better)", False),
-    ("crash", "Crash rocket game", False),
-    ("plinko", "Plinko ball-drop game", False),
-    ("hilo", "Hi-Lo card guessing game", False),
-    ("bingo", "Bingo", True),
-    ("slots", "Fortune Reels — slots with free spins & bonus rounds", False),
-    ("horserace", "Horse racing with betting", True),
-    ("stockmarket", "Stock market investment game", True),
-    ("math24", "Make 24 from four numbers", True),
-    ("countdown", "Countdown numbers math game", True),
-    ("mastermind", "Code-breaking deduction game", True),
-    ("liarsdice", "Liar's Dice bluffing game", True),
-    ("nbasim", "Simulated NBA game betting", False),
-    ("nflsim", "Simulated NFL game betting", False),
-    ("penalties", "1v1 Penalty Shootout duel", True),
-    ("geography", "Speed Geography \u2014 name the capital first", True),
-    ("wordle", "Wordle Race \u2014 guess the word first", True),
+CASINO_GAMES: list[tuple[str, str, str, str]] = [
+    # (command, description, category, mode)
+    # ── Card Games
+    ("blackjack", "Blackjack table", "Card Games", "duo"),
+    ("baccarat", "Baccarat card game", "Card Games", "solo"),
+    ("paigow", "Pai Gow Poker", "Card Games", "duo"),
+    ("uth", "Ultimate Texas Hold'em", "Card Games", "solo"),
+    ("videopoker", "Video Poker (Jacks or Better)", "Card Games", "solo"),
+    ("hilo", "Hi-Lo card guessing game", "Card Games", "solo"),
+    # ── Table & Arcade
+    ("roulette", "American roulette", "Table & Arcade", "solo"),
+    ("craps", "Craps with full side bets", "Table & Arcade", "solo"),
+    ("crash", "Crash rocket game", "Table & Arcade", "solo"),
+    ("plinko", "Plinko ball-drop game", "Table & Arcade", "solo"),
+    ("slots", "Fortune Reels \u2014 slots & bonus rounds", "Table & Arcade", "solo"),
+    # ── Party Games
+    ("bingo", "Bingo", "Party Games", "party"),
+    ("horserace", "Horse racing with betting", "Party Games", "party"),
+    ("stockmarket", "Stock market investment game", "Party Games", "party"),
+    ("liarsdice", "Liar's Dice bluffing game", "Party Games", "duo"),
+    ("penalties", "1v1 Penalty Shootout duel", "Party Games", "duo"),
+    # ── Brain Games
+    ("math24", "Make 24 from four numbers", "Brain Games", "party"),
+    ("countdown", "Countdown numbers math game", "Brain Games", "party"),
+    ("mastermind", "Code-breaking deduction game", "Brain Games", "duo"),
+    ("geography", "Speed Geography \u2014 name the capital first", "Brain Games", "party"),
+    ("wordle", "Wordle Race \u2014 guess the word first", "Brain Games", "party"),
+    ("nba-trivia", "NBA Roster Trivia \u2014 name the team first", "Brain Games", "party"),
+    ("nfl-trivia", "NFL Roster Trivia \u2014 name the team first", "Brain Games", "party"),
+    # ── Sports Sim
+    ("nbasim", "Simulated NBA game betting", "Sports Sim", "solo"),
+    ("nflsim", "Simulated NFL game betting", "Sports Sim", "solo"),
+]
+
+
+# ── Paginated /games ─────────────────────────────────────────────────────────
+
+
+def _games_page_embed(page: int, total_pages: int) -> discord.Embed:
+    cat_name, cat_emoji = GAME_CATEGORIES[page - 1]
+    games = [(n, d, m) for n, d, cat, m in CASINO_GAMES if cat == cat_name]
+
+    embed = discord.Embed(
+        title=f"{cat_emoji} {cat_name}",
+        colour=0xF1C40F,
+    )
+    lines = []
+    for name, desc, mode in games:
+        tag = MODE_EMOJI.get(mode, "")
+        lines.append(f"{tag} ` /{name} ` \u2014 {desc}")
+    embed.description = "\n".join(lines)
+    embed.set_footer(
+        text=(
+            f"Page {page}/{total_pages} \u00b7 "
+            f"{len(CASINO_GAMES)} games \u00b7 "
+            f"\U0001f464 Solo  \u2694\ufe0f Duo  \U0001f389 Party"
+        ),
+    )
+    return embed
+
+
+class GamesView(discord.ui.View):
+    def __init__(self, page: int = 1) -> None:
+        super().__init__(timeout=120)
+        self.page = page
+        self.total_pages = len(GAME_CATEGORIES)
+        self._sync_buttons()
+
+    def _sync_buttons(self) -> None:
+        self.prev_btn.disabled = self.page <= 1
+        self.next_btn.disabled = self.page >= self.total_pages
+
+    @discord.ui.button(label="\u25c0 Prev", style=discord.ButtonStyle.secondary)
+    async def prev_btn(
+        self, interaction: discord.Interaction, _button: discord.ui.Button,
+    ) -> None:
+        self.page = max(1, self.page - 1)
+        self._sync_buttons()
+        await interaction.response.edit_message(
+            embed=_games_page_embed(self.page, self.total_pages), view=self,
+        )
+
+    @discord.ui.button(label="Next \u25b6", style=discord.ButtonStyle.secondary)
+    async def next_btn(
+        self, interaction: discord.Interaction, _button: discord.ui.Button,
+    ) -> None:
+        self.page = min(self.total_pages, self.page + 1)
+        self._sync_buttons()
+        await interaction.response.edit_message(
+            embed=_games_page_embed(self.page, self.total_pages), view=self,
+        )
+
+
+RANDOM_GAME_CHOICES = [
+    app_commands.Choice(name="Solo \u2014 play against the house", value="solo"),
+    app_commands.Choice(name="Duo \u2014 grab a friend", value="duo"),
+    app_commands.Choice(name="Party \u2014 the more the merrier", value="party"),
 ]
 
 
