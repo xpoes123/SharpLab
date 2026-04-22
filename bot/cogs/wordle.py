@@ -251,8 +251,7 @@ WORDS: list[str] = [
 # Filter to only true 5-letter words (safety)
 WORDS = sorted(set(w for w in WORDS if len(w) == 5 and w.isalpha()))
 
-# WORDS also serves as the valid guess dictionary for hard mode
-VALID_WORDS = set(WORDS)
+VOWELS = set("AEIOUY")
 
 
 # ── Wordle logic ─────────────────────────────────────────────────────────────
@@ -537,6 +536,18 @@ def _playing_embed(table: WordleTable, remaining: int | None = None) -> discord.
     return embed
 
 
+def _all_grids(table: WordleTable) -> list[tuple[str, str]]:
+    """Build (name, grid_text) for every player who made at least one guess."""
+    results: list[tuple[str, str]] = []
+    for p in table.players.values():
+        if not p.guesses:
+            continue
+        grid = format_grid(p.guesses, table.secret_word)
+        tag = "\u2705" if p.solved else f"\u274c ({len(p.guesses)}/{MAX_GUESSES})"
+        results.append((f"{p.display_name} {tag}", grid))
+    return results
+
+
 def _round_result_embed(table: WordleTable) -> discord.Embed:
     winner = table.players[table.round_winner]
     is_last = winner.rounds_won >= WINS_TO_WIN or table.round_num >= MAX_ROUNDS
@@ -546,23 +557,17 @@ def _round_result_embed(table: WordleTable) -> discord.Embed:
         colour=discord.Colour.green(),
     )
 
-    # Show winner's grid
-    grid = format_grid(winner.guesses, table.secret_word)
-
-    # Who else solved it?
-    also_solved: list[str] = []
-    for p in table.players.values():
-        if p.solved and p.user_id != table.round_winner:
-            also_solved.append(f"{p.display_name} ({len(p.guesses)} tries)")
-
     desc = (
         f"\U0001f3c6 **{winner.display_name}** wins with "
         f"**{len(winner.guesses)}** {'guess' if len(winner.guesses) == 1 else 'guesses'}!\n"
+        f"The word was: **{table.secret_word}**"
     )
-    if also_solved:
-        desc += f"Also solved: {', '.join(also_solved)}\n"
-    desc += f"\nThe word was: **{table.secret_word}**\n\n{grid}"
     embed.description = desc
+
+    # Show everyone's grids
+    for name, grid in _all_grids(table):
+        embed.add_field(name=name, value=grid, inline=True)
+
     embed.add_field(name="Scoreboard", value=_scoreboard(table), inline=False)
     if not is_last:
         embed.set_footer(text="Next round in a few seconds\u2026")
@@ -579,10 +584,12 @@ def _timeout_embed(table: WordleTable) -> discord.Embed:
         title=f"\U0001f1fc Wordle \u2014 Round {table.round_num} (Time's Up!)",
         colour=discord.Colour.dark_grey(),
     )
-    embed.description = (
-        f"Nobody guessed it!\n\n"
-        f"The word was: **{table.secret_word}**"
-    )
+    embed.description = f"The word was: **{table.secret_word}**"
+
+    # Show everyone's grids
+    for name, grid in _all_grids(table):
+        embed.add_field(name=name, value=grid, inline=True)
+
     embed.add_field(name="Scoreboard", value=_scoreboard(table), inline=False)
     if not is_last:
         embed.set_footer(text="Next round in a few seconds\u2026")
@@ -763,10 +770,10 @@ class GuessModal(ui.Modal):
             )
             return
 
-        # Must be a word in the dictionary
-        if guess not in VALID_WORDS:
+        # Basic sanity: must contain at least one vowel
+        if not any(c in VOWELS for c in guess):
             await interaction.response.send_message(
-                f"**{guess}** is not in the word list.", ephemeral=True,
+                f"**{guess}** doesn't look like a real word.", ephemeral=True,
             )
             return
 
