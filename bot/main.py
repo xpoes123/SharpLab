@@ -49,6 +49,7 @@ COGS = [
     "bot.cogs.roster",
     "bot.cogs.sudoku",
     "bot.cogs.tictactoe",
+    "bot.cogs.rps",
     "bot.cogs.progression",
     "bot.cogs.challenges",
     "bot.cogs.duels",
