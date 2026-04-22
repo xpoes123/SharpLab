@@ -2,6 +2,15 @@
 Odds format conversion. This is the ONLY place that converts between formats.
 All sources (Kalshi, Polymarket) return probabilities — convert here at the boundary.
 """
+from __future__ import annotations
+
+import json
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import httpx
+
+POLYMARKET_GAMMA = "https://gamma-api.polymarket.com"
 
 
 def prob_to_american(prob: float) -> int:
@@ -139,3 +148,75 @@ def parse_odds_input(raw: str) -> tuple[int, str]:
         return prob_to_american(val / 100), "cents"
 
     return val, "american"
+
+
+# ── Polymarket Gamma API ─────────────────────────────────────────────────────
+
+async def fetch_polymarket_ml(
+    client: "httpx.AsyncClient", home_team: str, away_team: str
+) -> tuple[int, int] | None:
+    """
+    Search Polymarket Gamma API for a game winner market and return
+    (ml_home_american, ml_away_american) or None if not found.
+
+    The ``client`` is an ``httpx.AsyncClient`` supplied by the caller so that
+    activities can share a session while the bot cog can create a short-lived one.
+    """
+    home_short = home_team.split()[-1].lower()
+    away_short = away_team.split()[-1].lower()
+
+    try:
+        resp = await client.get(
+            f"{POLYMARKET_GAMMA}/markets",
+            params={"q": f"{home_short} {away_short}", "active": "true", "closed": "false", "limit": 20},
+            timeout=10.0,
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+    except Exception:
+        return None
+
+    markets = data if isinstance(data, list) else data.get("markets", data.get("data", []))
+    target = next(
+        (
+            m for m in markets
+            if home_short in (m.get("question") or m.get("title") or "").lower()
+            and away_short in (m.get("question") or m.get("title") or "").lower()
+        ),
+        None,
+    )
+    if not target:
+        return None
+
+    tokens = target.get("tokens", [])
+    if isinstance(tokens, str):
+        try:
+            tokens = json.loads(tokens)
+        except Exception:
+            return None
+
+    if not tokens:
+        return None
+
+    home_prob: float | None = None
+    away_prob: float | None = None
+    for token in tokens:
+        outcome = (token.get("outcome") or "").lower()
+        price = token.get("price")
+        if price is None:
+            continue
+        price = float(price)
+        if not (0 < price < 1):
+            continue
+        if home_short in outcome:
+            home_prob = price
+        elif away_short in outcome:
+            away_prob = price
+
+    if home_prob is None or away_prob is None:
+        return None
+    try:
+        return prob_to_american(home_prob), prob_to_american(away_prob)
+    except (ValueError, ZeroDivisionError):
+        return None
