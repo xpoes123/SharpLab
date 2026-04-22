@@ -10,6 +10,7 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
+from bot.cogs._pool import compute_side_pot_payouts
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -261,14 +262,21 @@ def _finished_embed(
     )
 
     lines: list[str] = []
+    winner_set = set(table.winners)
     for uid in table.turn_order:
         p = table.players[uid]
         bal = balances.get(uid, 0) if balances else 0
         net = p.payout - p.bet
         sign = "+" if net >= 0 else ""
-        if p.payout > 0:
+        if uid in winner_set:
             lines.append(
                 f"\U0001f3c6 **{p.display_name}** \u2014 {p.bet}c \u2192 {p.payout}c "
+                f"(**{sign}{net}c**) \u2014 bal: {bal}c"
+            )
+        elif p.payout > 0:
+            # Partial refund from side pot (bet exceeded winner's bet)
+            lines.append(
+                f"\U0001f4b0 **{p.display_name}** \u2014 {p.bet}c \u2192 {p.payout}c "
                 f"(**{sign}{net}c**) \u2014 bal: {bal}c"
             )
         else:
@@ -955,12 +963,13 @@ class LiarTableView(ui.View):
 
         table.winners = [winner_uid]
 
-        total_pot = sum(p.bet for p in table.players.values())
-        house_take = max(1, int(total_pot * HOUSE_EDGE))
-        prize_pool = total_pot - house_take
-        table.players[winner_uid].payout = prize_pool
+        # Side-pot payouts — winner only wins up to their bet from each opponent
+        bets = {uid: p.bet for uid, p in table.players.items()}
+        payouts = compute_side_pot_payouts(bets, [winner_uid], HOUSE_EDGE)
+        for uid, payout in payouts.items():
+            table.players[uid].payout = payout
 
-        # Credit winner and log results
+        # Credit payouts and log results
         balances: dict[int, int] = {}
         for uid, player in table.players.items():
             if player.payout > 0:
@@ -989,7 +998,7 @@ class LiarTableView(ui.View):
             winner = table.players[winner_uid]
             challenge_embed.add_field(
                 name="\U0001f3c6 Game Over!",
-                value=f"**{winner.display_name}** wins **{prize_pool}c**!",
+                value=f"**{winner.display_name}** wins **{winner.payout}c**!",
                 inline=False,
             )
             await self._edit_msg(interaction, embed=challenge_embed, view=self)

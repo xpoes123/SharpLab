@@ -10,6 +10,7 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
+from bot.cogs._pool import compute_side_pot_payouts
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -431,11 +432,18 @@ def _final_embed(
 ) -> discord.Embed:
     if len(winner_uids) == 1:
         winner = table.players[winner_uids[0]]
-        desc = f"**{winner.display_name}** wins **{payouts[winner_uids[0]]}c**!"
+        desc = f"**{winner.display_name}** wins **{payouts.get(winner_uids[0], 0)}c**!"
     else:
+        winner_pays = [payouts.get(uid, 0) for uid in winner_uids]
         names = [table.players[uid].display_name for uid in winner_uids]
-        per = payouts[winner_uids[0]]
-        desc = f"**{' & '.join(names)}** tie and split the pot! ({per}c each)"
+        if len(set(winner_pays)) == 1:
+            desc = f"**{' & '.join(names)}** tie and split the pot! ({winner_pays[0]}c each)"
+        else:
+            parts = [
+                f"**{table.players[uid].display_name}** {payouts.get(uid, 0)}c"
+                for uid in winner_uids
+            ]
+            desc = f"{', '.join(parts)} split the pot!"
 
     embed = discord.Embed(
         title="\U0001f522 Countdown Numbers \u2014 Final Results",
@@ -447,15 +455,21 @@ def _final_embed(
     ranked = sorted(
         table.players.values(), key=lambda p: p.total_points, reverse=True,
     )
+    winner_set = set(winner_uids)
     lines: list[str] = []
     for p in ranked:
         payout = payouts.get(p.user_id, 0)
         bal = balances.get(p.user_id, 0)
         net = payout - p.bet
         sign = "+" if net >= 0 else ""
-        if payout > 0:
+        if p.user_id in winner_set:
             lines.append(
                 f"\U0001f3c6 **{p.display_name}** \u2014 {p.total_points} pts \u2014 "
+                f"{p.bet}c \u2192 {payout}c (**{sign}{net}c**) \u2014 bal: {bal}c"
+            )
+        elif payout > 0:
+            lines.append(
+                f"\U0001f4b0 **{p.display_name}** \u2014 {p.total_points} pts \u2014 "
                 f"{p.bet}c \u2192 {payout}c (**{sign}{net}c**) \u2014 bal: {bal}c"
             )
         else:
@@ -1048,17 +1062,11 @@ class CountdownTableView(ui.View):
             if p.total_points == max_points
         ]
 
-        total_pot = sum(p.bet for p in table.players.values())
-        house_take = max(1, int(total_pot * HOUSE_EDGE))
-        prize_pool = total_pot - house_take
+        # Side-pot payouts
+        bets = {uid: p.bet for uid, p in table.players.items()}
+        payouts = compute_side_pot_payouts(bets, winner_uids, HOUSE_EDGE)
 
-        # Split among winners
-        payout_each = prize_pool // len(winner_uids) if winner_uids else 0
-        payouts: dict[int, int] = {}
-        for uid in winner_uids:
-            payouts[uid] = payout_each
-
-        # Credit winners, log results
+        # Credit payouts, log results
         balances: dict[int, int] = {}
         for uid, player in table.players.items():
             payout = payouts.get(uid, 0)

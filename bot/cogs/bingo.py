@@ -9,6 +9,7 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
+from bot.cogs._pool import compute_side_pot_payouts
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -374,11 +375,18 @@ def _finished_embed(
         p = table.players[table.winners[0]]
         desc = f"**{p.display_name}** wins **{p.payout}c**!{pat_str}"
     else:
-        per = table.players[table.winners[0]].payout
-        desc = (
-            f"**{' & '.join(winner_names)}** split the pot! "
-            f"({per}c each){pat_str}"
-        )
+        winner_payouts = [table.players[uid].payout for uid in table.winners]
+        if len(set(winner_payouts)) == 1:
+            desc = (
+                f"**{' & '.join(winner_names)}** split the pot! "
+                f"({winner_payouts[0]}c each){pat_str}"
+            )
+        else:
+            parts = [
+                f"**{table.players[uid].display_name}** {table.players[uid].payout}c"
+                for uid in table.winners
+            ]
+            desc = f"{', '.join(parts)} split the pot!{pat_str}"
 
     embed = discord.Embed(
         title=f"Bingo \u2014 BINGO! (Round {table.round_num})",
@@ -409,6 +417,12 @@ def _finished_embed(
         if p.won:
             lines.append(
                 f"\U0001f3c6 **{p.display_name}** ({cards_str}) \u2014 "
+                f"{p.cost}c \u2192 {p.payout}c "
+                f"(**{sign}{net}c**) \u2014 bal: {bal}c"
+            )
+        elif p.payout > 0:
+            lines.append(
+                f"\U0001f4b0 **{p.display_name}** ({cards_str}) \u2014 "
                 f"{p.cost}c \u2192 {p.payout}c "
                 f"(**{sign}{net}c**) \u2014 bal: {bal}c"
             )
@@ -833,19 +847,20 @@ class BingoTableView(ui.View):
         table = self.table
         table.phase = "finished"
 
-        total_pot = sum(p.cost for p in table.players.values())
-        payout_each = total_pot // len(table.winners)
-
+        # Side-pot payouts (no house edge for bingo)
+        bets = {uid: p.cost for uid, p in table.players.items()}
+        payouts = compute_side_pot_payouts(bets, table.winners, house_edge=0.0)
         for uid in table.winners:
             table.players[uid].won = True
-            table.players[uid].payout = payout_each
+        for uid, payout in payouts.items():
+            table.players[uid].payout = payout
 
-        # Credit winners
+        # Credit payouts
         balances: dict[int, int] = {}
         for uid, player in table.players.items():
-            if player.won:
+            if player.payout > 0:
                 balances[uid] = await queries.update_casino_balance(
-                    str(uid), payout_each,
+                    str(uid), player.payout,
                 )
             else:
                 bal = await queries.get_casino_balance(str(uid))

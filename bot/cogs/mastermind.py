@@ -9,6 +9,7 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
+from bot.cogs._pool import compute_side_pot_payouts
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -219,7 +220,9 @@ def _playing_embed(table: MastermindTable) -> discord.Embed:
 
 
 def _solved_embed(
-    table: MastermindTable, *, balances: dict[int, int] | None = None,
+    table: MastermindTable, *,
+    balances: dict[int, int] | None = None,
+    payouts: dict[int, int] | None = None,
 ) -> discord.Embed:
     code_display = _code_to_emoji(table.secret_code)
 
@@ -241,32 +244,40 @@ def _solved_embed(
         colour=discord.Colour.gold(),
     )
 
-    # Results per player
-    lines: list[str] = []
-    total_pot = sum(p.bet for p in table.players.values())
-    house_take = max(1, int(total_pot * HOUSE_EDGE))
-    prize_pool = total_pot - house_take
-    per_winner = prize_pool // len(table.winners) if table.winners else 0
+    # Compute payouts if not provided (e.g. from _timeout_embed)
+    if payouts is None:
+        bets = {uid: p.bet for uid, p in table.players.items()}
+        payouts = compute_side_pot_payouts(bets, table.winners, HOUSE_EDGE)
 
+    # Results per player
+    winner_set = set(table.winners)
+    lines: list[str] = []
     for p in table.players.values():
         bal = balances.get(p.user_id, 0) if balances else 0
-        if p.user_id in table.winners:
-            net = per_winner - p.bet
-            sign = "+" if net >= 0 else ""
+        payout = payouts.get(p.user_id, 0)
+        net = payout - p.bet
+        sign = "+" if net >= 0 else ""
+        if p.user_id in winner_set:
             if p.solved:
                 lines.append(
                     f"\U0001f3c6 **{p.display_name}** \u2014 "
                     f"Solved in {p.solve_count} guesses \u2014 "
-                    f"{p.bet}c \u2192 {per_winner}c (**{sign}{net}c**) \u2014 bal: {bal}c"
+                    f"{p.bet}c \u2192 {payout}c (**{sign}{net}c**) \u2014 bal: {bal}c"
                 )
             else:
-                # Won by proximity
                 best_b = max(g[1] for g in p.guesses) if p.guesses else 0
                 lines.append(
                     f"\U0001f3c6 **{p.display_name}** \u2014 "
                     f"Closest ({best_b} black pegs) \u2014 "
-                    f"{p.bet}c \u2192 {per_winner}c (**{sign}{net}c**) \u2014 bal: {bal}c"
+                    f"{p.bet}c \u2192 {payout}c (**{sign}{net}c**) \u2014 bal: {bal}c"
                 )
+        elif payout > 0:
+            best_b = max(g[1] for g in p.guesses) if p.guesses else 0
+            lines.append(
+                f"\U0001f4b0 **{p.display_name}** \u2014 "
+                f"Best: {best_b} black pegs ({len(p.guesses)} guesses) \u2014 "
+                f"{p.bet}c \u2192 {payout}c (**{sign}{net}c**) \u2014 bal: {bal}c"
+            )
         else:
             if p.solved:
                 lines.append(
@@ -549,15 +560,14 @@ class MastermindTableView(ui.View):
         if table.round_task and not table.round_task.done():
             table.round_task.cancel()
 
-        total_pot = sum(p.bet for p in table.players.values())
-        house_take = max(1, int(total_pot * HOUSE_EDGE))
-        prize_pool = total_pot - house_take
-        per_winner = prize_pool // len(winner_uids) if winner_uids else 0
+        # Side-pot payouts
+        bets = {uid: p.bet for uid, p in table.players.items()}
+        payouts = compute_side_pot_payouts(bets, winner_uids, HOUSE_EDGE)
 
-        # Credit winners and log results
+        # Credit payouts and log results
         balances: dict[int, int] = {}
         for uid, player in table.players.items():
-            payout = per_winner if uid in winner_uids else 0
+            payout = payouts.get(uid, 0)
             if payout > 0:
                 balances[uid] = await queries.update_casino_balance(
                     str(uid), payout,
@@ -577,7 +587,8 @@ class MastermindTableView(ui.View):
         if table.message:
             try:
                 await table.message.edit(
-                    embed=_solved_embed(table, balances=balances), view=self,
+                    embed=_solved_embed(table, balances=balances, payouts=payouts),
+                    view=self,
                 )
             except discord.HTTPException:
                 pass

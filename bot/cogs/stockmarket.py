@@ -9,6 +9,7 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
+from bot.cogs._pool import compute_side_pot_payouts
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -430,15 +431,23 @@ def _final_embed(
         holdings_str = ", ".join(holdings_parts) if holdings_parts else "no stocks"
         cash_str = f"cash: {p.cash}c"
 
+        payout = getattr(p, "payout", 0)
+        net = payout - p.bet
+        sign = "+" if net >= 0 else ""
         if p.user_id in table.winners:
-            payout = getattr(p, "payout", 0)
-            sign = "+" if payout - p.bet >= 0 else ""
             medal = "\U0001f3c6" if i == 0 else "\U0001f91d"
             result_lines.append(
                 f"{medal} **{p.display_name}** \u2014 "
                 f"portfolio: **{val}c** ({cash_str}, {holdings_str})\n"
                 f"    {p.bet}c \u2192 {payout}c "
-                f"(**{sign}{payout - p.bet}c**) \u2014 bal: {bal}c"
+                f"(**{sign}{net}c**) \u2014 bal: {bal}c"
+            )
+        elif payout > 0:
+            result_lines.append(
+                f"\U0001f4b0 **{p.display_name}** \u2014 "
+                f"portfolio: **{val}c** ({cash_str}, {holdings_str})\n"
+                f"    {p.bet}c \u2192 {payout}c "
+                f"(**{sign}{net}c**) \u2014 bal: {bal}c"
             )
         else:
             result_lines.append(
@@ -457,11 +466,18 @@ def _final_embed(
             p = table.players[table.winners[0]]
             embed.description = f"**{p.display_name}** wins **{p.payout}c**!"
         else:
-            p = table.players[table.winners[0]]
-            embed.description = (
-                f"**{' & '.join(winner_names)}** tie and split the pot! "
-                f"({p.payout}c each)"
-            )
+            winner_pays = [table.players[uid].payout for uid in table.winners]
+            if len(set(winner_pays)) == 1:
+                embed.description = (
+                    f"**{' & '.join(winner_names)}** tie and split the pot! "
+                    f"({winner_pays[0]}c each)"
+                )
+            else:
+                parts = [
+                    f"**{table.players[uid].display_name}** {table.players[uid].payout}c"
+                    for uid in table.winners
+                ]
+                embed.description = f"{', '.join(parts)} split the pot!"
 
     embed.set_footer(text=f"Host: {table.host_name}")
     return embed
@@ -1120,20 +1136,13 @@ class StockTableView(ui.View):
         max_val = max(values.values())
         table.winners = [uid for uid, val in values.items() if val == max_val]
 
-        # Distribute pot
-        total_pot = sum(p.bet for p in table.players.values())
-        house_take = max(1, int(total_pot * HOUSE_EDGE))
-        prize_pool = total_pot - house_take
-        payout_each = prize_pool // len(table.winners)
-
-        # Assign payouts
+        # Side-pot payouts
+        bets = {uid: p.bet for uid, p in table.players.items()}
+        payouts = compute_side_pot_payouts(bets, table.winners, HOUSE_EDGE)
         for uid, player in table.players.items():
-            if uid in table.winners:
-                player.payout = payout_each
-            else:
-                player.payout = 0
+            player.payout = payouts.get(uid, 0)
 
-        # Credit winners and log results
+        # Credit payouts and log results
         balances: dict[int, int] = {}
         for uid, player in table.players.items():
             if player.payout > 0:

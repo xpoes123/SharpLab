@@ -11,6 +11,7 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
+from bot.cogs._pool import compute_side_pot_payouts
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -501,31 +502,46 @@ def _timeout_embed(table: Math24Table) -> discord.Embed:
 
 
 def _final_embed(
-    table: Math24Table, *, balances: dict[int, int] | None = None,
+    table: Math24Table, *,
+    balances: dict[int, int] | None = None,
+    payouts: dict[int, int] | None = None,
 ) -> discord.Embed:
     # Find the winner(s) — most rounds won
     max_wins = max(p.rounds_won for p in table.players.values())
-    winners = [p for p in table.players.values() if p.rounds_won == max_wins]
+    winner_uids = [
+        uid for uid, p in table.players.items()
+        if p.rounds_won == max_wins and max_wins > 0
+    ]
 
-    pot = sum(p.bet for p in table.players.values())
-    house_take = max(1, int(pot * HOUSE_EDGE))
-    prize_pool = pot - house_take
+    # Compute side-pot payouts if not provided
+    if payouts is None and winner_uids:
+        bets = {uid: p.bet for uid, p in table.players.items()}
+        payouts = compute_side_pot_payouts(bets, winner_uids, HOUSE_EDGE)
+    if payouts is None:
+        payouts = {}
 
     if max_wins == 0:
-        # Nobody won any rounds — full refund
         desc = "No rounds were won \u2014 all bets refunded!"
-        payout_each = 0  # handled by refund logic
-    elif len(winners) == 1:
-        w = winners[0]
-        desc = f"\U0001f3c6 **{w.display_name}** wins the pot of **{prize_pool}c**! ({w.rounds_won}W)"
-        payout_each = prize_pool
+    elif len(winner_uids) == 1:
+        w = table.players[winner_uids[0]]
+        payout = payouts.get(winner_uids[0], 0)
+        desc = f"\U0001f3c6 **{w.display_name}** wins **{payout}c**! ({w.rounds_won}W)"
     else:
-        payout_each = prize_pool // len(winners)
-        names = " & ".join(f"**{w.display_name}**" for w in winners)
-        desc = (
-            f"\U0001f3c6 {names} tied with **{max_wins}W** each \u2014 "
-            f"splitting **{prize_pool}c** ({payout_each}c each)!"
+        winner_pays = [payouts.get(uid, 0) for uid in winner_uids]
+        names = " & ".join(
+            f"**{table.players[uid].display_name}**" for uid in winner_uids
         )
+        if len(set(winner_pays)) == 1:
+            desc = (
+                f"\U0001f3c6 {names} tied with **{max_wins}W** each \u2014 "
+                f"splitting pot ({winner_pays[0]}c each)!"
+            )
+        else:
+            parts = [
+                f"**{table.players[uid].display_name}** {payouts.get(uid, 0)}c"
+                for uid in winner_uids
+            ]
+            desc = f"\U0001f3c6 {', '.join(parts)} tied with **{max_wins}W** each!"
 
     embed = discord.Embed(
         title="Math 24 \u2014 Final Results",
@@ -533,16 +549,23 @@ def _final_embed(
         colour=discord.Colour.gold(),
     )
 
+    winner_set = set(winner_uids)
     lines: list[str] = []
     for p in sorted(table.players.values(), key=lambda x: x.rounds_won, reverse=True):
         bal = balances.get(p.user_id, 0) if balances else 0
-        is_winner = p.rounds_won == max_wins and max_wins > 0
-        if is_winner:
-            net = payout_each - p.bet
-            sign = "+" if net >= 0 else ""
+        payout = payouts.get(p.user_id, 0)
+        net = payout - p.bet
+        sign = "+" if net >= 0 else ""
+        if p.user_id in winner_set:
             lines.append(
                 f"\U0001f3c6 **{p.display_name}** ({p.rounds_won}W) \u2014 "
-                f"{p.bet}c \u2192 {payout_each}c "
+                f"{p.bet}c \u2192 {payout}c "
+                f"(**{sign}{net}c**) \u2014 bal: {bal}c"
+            )
+        elif payout > 0:
+            lines.append(
+                f"\U0001f4b0 **{p.display_name}** ({p.rounds_won}W) \u2014 "
+                f"{p.bet}c \u2192 {payout}c "
                 f"(**{sign}{net}c**) \u2014 bal: {bal}c"
             )
         else:
@@ -1088,7 +1111,7 @@ class Math24TableView(ui.View):
         # Determine winner(s) — most rounds won
         max_wins = max(p.rounds_won for p in table.players.values())
 
-        pot = sum(p.bet for p in table.players.values())
+        bets = {uid: p.bet for uid, p in table.players.items()}
 
         if max_wins == 0:
             # Nobody won any rounds — refund everyone
@@ -1101,17 +1124,20 @@ class Math24TableView(ui.View):
             for p in table.players.values():
                 bal = await queries.get_casino_balance(str(p.user_id))
                 balances[p.user_id] = bal or 0
+            payouts: dict[int, int] = {uid: p.bet for uid, p in table.players.items()}
         else:
-            winners = [p for p in table.players.values() if p.rounds_won == max_wins]
-            house_take = max(1, int(pot * HOUSE_EDGE))
-            prize_pool = pot - house_take
-            payout_each = prize_pool // len(winners)
+            winner_uids = [
+                uid for uid, p in table.players.items()
+                if p.rounds_won == max_wins
+            ]
+            payouts = compute_side_pot_payouts(bets, winner_uids, HOUSE_EDGE)
 
             balances = {}
-            for p in table.players.values():
-                if p.rounds_won == max_wins:
+            for uid, p in table.players.items():
+                payout = payouts.get(uid, 0)
+                if payout > 0:
                     balances[p.user_id] = await queries.update_casino_balance(
-                        str(p.user_id), payout_each,
+                        str(p.user_id), payout,
                     )
                 else:
                     bal = await queries.get_casino_balance(str(p.user_id))
@@ -1119,12 +1145,8 @@ class Math24TableView(ui.View):
 
         # Log casino results for all players
         for p in table.players.values():
-            payout = 0
-            if max_wins > 0 and p.rounds_won == max_wins:
-                wlist = [x for x in table.players.values() if x.rounds_won == max_wins]
-                house_take = max(1, int(pot * HOUSE_EDGE))
-                payout = (pot - house_take) // len(wlist)
-            elif max_wins == 0:
+            payout = payouts.get(p.user_id, 0)
+            if max_wins == 0:
                 payout = p.bet  # refunded
             await queries.log_casino_result(
                 str(p.user_id), "math24", p.bet, payout,
@@ -1134,7 +1156,7 @@ class Math24TableView(ui.View):
         for uid, player in table.players.items():
             table.last_bets[uid] = (player.display_name, player.bet)
 
-        embed = _final_embed(table, balances=balances)
+        embed = _final_embed(table, balances=balances, payouts=payouts)
 
         for child in self.children:
             child.disabled = True  # type: ignore[union-attr]
