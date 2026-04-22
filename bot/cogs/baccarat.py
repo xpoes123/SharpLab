@@ -93,13 +93,25 @@ def _play_hand(shoe: list[str]) -> tuple[list[str], list[str]]:
 
 # ── Game state ───────────────────────────────────────────────────────────────
 
+PANDA_PAYOUT = 25  # 25:1
+DRAGON_PAYOUT = 40  # 40:1
+
+
 @dataclass
 class PlayerSeat:
     user_id: int
     display_name: str
     bet_type: str  # "player" | "banker" | "tie"
     wager: int
+    panda_wager: int = 0  # Panda 8 side bet
+    dragon_wager: int = 0  # Dragon 7 side bet
     payout: int = 0
+    panda_payout: int = 0
+    dragon_payout: int = 0
+
+    @property
+    def total_wager(self) -> int:
+        return self.wager + self.panda_wager + self.dragon_wager
 
 
 @dataclass
@@ -158,7 +170,21 @@ def _resolve_payouts(table: BaccaratTable) -> str:
     else:
         winner = "tie"
 
+    # Panda 8: Player wins with 3-card total of 8
+    panda_hit = (
+        winner == "player"
+        and len(table.player_hand) == 3
+        and p_val == 8
+    )
+    # Dragon 7: Banker wins with 3-card total of 7
+    dragon_hit = (
+        winner == "banker"
+        and len(table.banker_hand) == 3
+        and b_val == 7
+    )
+
     for seat in table.players.values():
+        # Main bet
         if seat.bet_type == "tie":
             seat.payout = (seat.wager + 8 * seat.wager) if winner == "tie" else 0
         elif seat.bet_type == winner:
@@ -171,6 +197,20 @@ def _resolve_payouts(table: BaccaratTable) -> str:
             seat.payout = seat.wager  # push
         else:
             seat.payout = 0
+
+        # Panda 8 side bet
+        if seat.panda_wager > 0:
+            if panda_hit:
+                seat.panda_payout = seat.panda_wager + PANDA_PAYOUT * seat.panda_wager
+            else:
+                seat.panda_payout = 0
+
+        # Dragon 7 side bet
+        if seat.dragon_wager > 0:
+            if dragon_hit:
+                seat.dragon_payout = seat.dragon_wager + DRAGON_PAYOUT * seat.dragon_wager
+            else:
+                seat.dragon_payout = 0
 
     return winner
 
@@ -256,11 +296,39 @@ def _table_embed(
                 f"{emoji} **{seat.display_name}** \u2014 "
                 f"{seat.bet_type.capitalize()} {seat.wager}c"
             )
+            # Show side bets
+            sides = []
+            if seat.panda_wager > 0:
+                sides.append(f"\U0001f43c Panda {seat.panda_wager}c")
+            if seat.dragon_wager > 0:
+                sides.append(f"\U0001f432 Dragon {seat.dragon_wager}c")
+            if sides:
+                line += f" + {' + '.join(sides)}"
+
             if finished and balances:
-                net = seat.payout - seat.wager
+                total_payout = seat.payout + seat.panda_payout + seat.dragon_payout
+                total_wager = seat.total_wager
+                net = total_payout - total_wager
                 sign = "+" if net > 0 else ""
                 bal = balances.get(seat.user_id, 0)
-                line += f"\n\u2003\u2192 **{sign}{net}c** (bal: {bal}c)"
+                # Show side bet results if they had any
+                side_results = []
+                if seat.panda_wager > 0:
+                    if seat.panda_payout > 0:
+                        side_results.append(
+                            f"\U0001f43c Panda 8 \u2714 +{seat.panda_payout - seat.panda_wager}c"
+                        )
+                    else:
+                        side_results.append(f"\U0001f43c Panda 8 \u2716")
+                if seat.dragon_wager > 0:
+                    if seat.dragon_payout > 0:
+                        side_results.append(
+                            f"\U0001f432 Dragon 7 \u2714 +{seat.dragon_payout - seat.dragon_wager}c"
+                        )
+                    else:
+                        side_results.append(f"\U0001f432 Dragon 7 \u2716")
+                side_str = f"\n\u2003{'  '.join(side_results)}" if side_results else ""
+                line += f"{side_str}\n\u2003\u2192 **{sign}{net}c** (bal: {bal}c)"
             lines.append(line)
         embed.add_field(
             name="Seats", value="\n".join(lines[:MAX_PLAYERS]), inline=False,
@@ -352,6 +420,77 @@ class BetModal(ui.Modal):
         )
 
 
+class SideBetModal(ui.Modal):
+    amount = ui.TextInput(
+        label="Side bet amount (coins)", placeholder="e.g. 10",
+        required=True, max_length=10,
+    )
+
+    def __init__(
+        self, table: BaccaratTable, side: str, view: "BaccaratTableView",
+    ) -> None:
+        label = "Panda 8 (25:1)" if side == "panda" else "Dragon 7 (40:1)"
+        super().__init__(title=f"Side Bet — {label}")
+        self.table = table
+        self.side = side
+        self.table_view = view
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        try:
+            amt = int(self.amount.value)
+        except ValueError:
+            await interaction.response.send_message(
+                "Enter a whole number.", ephemeral=True,
+            )
+            return
+        if amt < 1:
+            await interaction.response.send_message(
+                "Must be at least 1 coin.", ephemeral=True,
+            )
+            return
+        uid = interaction.user.id
+        seat = self.table.players.get(uid)
+        if seat is None:
+            await interaction.response.send_message(
+                "Place a main bet first!", ephemeral=True,
+            )
+            return
+        if self.table.dealt:
+            await interaction.response.send_message(
+                "Cards already being dealt!", ephemeral=True,
+            )
+            return
+        # Check if already placed this side bet
+        if self.side == "panda" and seat.panda_wager > 0:
+            await interaction.response.send_message(
+                "You already have a Panda 8 bet!", ephemeral=True,
+            )
+            return
+        if self.side == "dragon" and seat.dragon_wager > 0:
+            await interaction.response.send_message(
+                "You already have a Dragon 7 bet!", ephemeral=True,
+            )
+            return
+        try:
+            await queries.update_casino_balance(str(uid), -amt)
+        except ValueError:
+            bal = await queries.get_or_create_casino_wallet(str(uid))
+            await interaction.response.send_message(
+                f"Not enough coins! (have {bal})", ephemeral=True,
+            )
+            return
+
+        if self.side == "panda":
+            seat.panda_wager = amt
+        else:
+            seat.dragon_wager = amt
+
+        self.table_view._update_buttons()
+        await interaction.response.edit_message(
+            embed=_table_embed(self.table), view=self.table_view,
+        )
+
+
 # ── View ─────────────────────────────────────────────────────────────────────
 
 
@@ -389,6 +528,10 @@ class BaccaratTableView(ui.View):
         self.bet_player_btn.disabled = dealt
         self.bet_banker_btn.disabled = dealt
         self.bet_tie_btn.disabled = dealt
+
+        # Side bet buttons: locked once dealt
+        self.panda_btn.disabled = dealt
+        self.dragon_btn.disabled = dealt
 
     # ── Row 0: Peel Player, Peel Banker, Reveal All ──────────
 
@@ -503,8 +646,8 @@ class BaccaratTableView(ui.View):
                 "Cards are already being dealt!", ephemeral=True,
             )
             return
-        # Refund wager
-        await queries.update_casino_balance(str(uid), seat.wager)
+        # Refund all wagers (main + side bets)
+        await queries.update_casino_balance(str(uid), seat.total_wager)
         del self.table.players[uid]
 
         if not self.table.players:
@@ -515,6 +658,26 @@ class BaccaratTableView(ui.View):
         await interaction.response.edit_message(
             embed=_table_embed(self.table), view=self,
         )
+
+    # ── Row 2: Side Bets ─────────────────────────────────────
+
+    @ui.button(
+        label="Panda 8 (25:1)", style=discord.ButtonStyle.success,
+        emoji="\U0001f43c", row=2,
+    )
+    async def panda_btn(
+        self, interaction: discord.Interaction, button: ui.Button,
+    ) -> None:
+        await self._handle_side_bet(interaction, "panda")
+
+    @ui.button(
+        label="Dragon 7 (40:1)", style=discord.ButtonStyle.success,
+        emoji="\U0001f432", row=2,
+    )
+    async def dragon_btn(
+        self, interaction: discord.Interaction, button: ui.Button,
+    ) -> None:
+        await self._handle_side_bet(interaction, "dragon")
 
     # ── Helpers ──────────────────────────────────────────────
 
@@ -542,15 +705,45 @@ class BaccaratTableView(ui.View):
             BetModal(self.table, bet_type, self),
         )
 
+    async def _handle_side_bet(
+        self, interaction: discord.Interaction, side: str,
+    ) -> None:
+        uid = interaction.user.id
+        if self.table.dealt:
+            await interaction.response.send_message(
+                "Cards already being dealt!", ephemeral=True,
+            )
+            return
+        if uid not in self.table.players:
+            await interaction.response.send_message(
+                "Place a main bet first!", ephemeral=True,
+            )
+            return
+        seat = self.table.players[uid]
+        if side == "panda" and seat.panda_wager > 0:
+            await interaction.response.send_message(
+                "You already have a Panda 8 bet!", ephemeral=True,
+            )
+            return
+        if side == "dragon" and seat.dragon_wager > 0:
+            await interaction.response.send_message(
+                "You already have a Dragon 7 bet!", ephemeral=True,
+            )
+            return
+        await interaction.response.send_modal(
+            SideBetModal(self.table, side, self),
+        )
+
     async def _finish(self, interaction: discord.Interaction) -> None:
         table = self.table
         _resolve_payouts(table)
         balances: dict[int, int] = {}
 
         for seat in table.players.values():
-            if seat.payout > 0:
+            total_payout = seat.payout + seat.panda_payout + seat.dragon_payout
+            if total_payout > 0:
                 balances[seat.user_id] = await queries.update_casino_balance(
-                    str(seat.user_id), seat.payout,
+                    str(seat.user_id), total_payout,
                 )
             else:
                 balances[seat.user_id] = (
@@ -583,10 +776,12 @@ class BaccaratTableView(ui.View):
         table = self.table
         if table.all_revealed:
             return
-        # Refund all wagers
+        # Refund all wagers (main + side bets)
         for seat in table.players.values():
             try:
-                await queries.update_casino_balance(str(seat.user_id), seat.wager)
+                await queries.update_casino_balance(
+                    str(seat.user_id), seat.total_wager,
+                )
             except Exception:
                 pass
         self.active_tables.pop(table.channel_id, None)
