@@ -1800,3 +1800,32 @@ async def get_max_single_profit(discord_user: str) -> int:
         )
         row = await cursor.fetchone()
     return row[0] if row and row[0] else 0
+
+
+# ── User Settings ─────────────────────────────────────────────────────────────
+
+
+async def get_craps_default_bet(discord_user: str) -> int | None:
+    """Return the user's saved default craps bet, or None if not set."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT craps_default_bet FROM user_settings WHERE discord_user = ?",
+            (discord_user,),
+        )
+        row = await cursor.fetchone()
+    return row["craps_default_bet"] if row else None
+
+
+async def set_craps_default_bet(discord_user: str, amount: int) -> None:
+    """Save the user's default craps bet amount (upsert)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO user_settings (discord_user, craps_default_bet)
+            VALUES (?, ?)
+            ON CONFLICT(discord_user) DO UPDATE SET craps_default_bet = excluded.craps_default_bet
+            """,
+            (discord_user, amount),
+        )
+        await db.commit()
