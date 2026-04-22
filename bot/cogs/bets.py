@@ -1,7 +1,6 @@
 """Bet tracking commands — /log and /record."""
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -70,16 +69,10 @@ async def pick_autocomplete(
     payload: dict = {}
     for snap in snaps:
         if snap.source == "draftkings":
-            try:
-                payload = json.loads(snap.payload)
-                break
-            except Exception:
-                pass
+            payload = snap.payload  # already deserialized by queries layer
+            break
     if not payload and snaps:
-        try:
-            payload = json.loads(snaps[0].payload)
-        except Exception:
-            pass
+        payload = snaps[0].payload
 
     if market == "spread":
         spread = payload.get("spread")
