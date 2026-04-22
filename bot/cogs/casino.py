@@ -1280,6 +1280,78 @@ class CasinoCog(commands.Cog):
             f"You should play **/{name}** — {desc}"
         )
 
+    @app_commands.command(name="casino-stats", description="View casino PnL stats")
+    @app_commands.describe(user="View another user's stats (optional)")
+    async def casino_stats(
+        self, interaction: discord.Interaction, user: discord.User | None = None,
+    ) -> None:
+        target = user or interaction.user
+        uid = str(target.id)
+
+        overall = await queries.get_casino_stats(uid)
+        by_game = await queries.get_casino_stats_by_game(uid)
+
+        if overall["rounds"] == 0:
+            await interaction.response.send_message(
+                f"**{target.display_name}** hasn't played any casino games yet.",
+                ephemeral=True,
+            )
+            return
+
+        net = overall["net_profit"]
+        roi = overall["roi"]
+        colour = (
+            discord.Colour.green() if net > 0
+            else discord.Colour.red() if net < 0
+            else discord.Colour.light_grey()
+        )
+
+        embed = discord.Embed(
+            title=f"Casino Stats — {target.display_name}",
+            colour=colour,
+        )
+        embed.add_field(
+            name="Overview",
+            value=(
+                f"**Rounds:** {overall['rounds']:,}\n"
+                f"**Wagered:** {overall['total_wagered']:,}c\n"
+                f"**Won:** {overall['total_payout']:,}c\n"
+                f"**Net:** {net:+,}c\n"
+                f"**ROI:** {roi:+.1f}%"
+            ),
+            inline=False,
+        )
+
+        if by_game:
+            GAME_LABELS = {
+                "blackjack": "Blackjack",
+                "plinko": "Plinko",
+                "craps": "Craps",
+                "hilo": "Hi-Lo",
+                "roulette": "Roulette",
+                "crash": "Crash",
+                "videopoker": "Video Poker",
+                "uth": "Texas Hold'em",
+                "baccarat": "Baccarat",
+                "paigow": "Pai Gow",
+                "bingo": "Bingo",
+            }
+            lines = []
+            for row in by_game:
+                g_net = row["net_profit"]
+                dot = "\U0001f7e2" if g_net > 0 else "\U0001f534" if g_net < 0 else "\u26aa"
+                label = GAME_LABELS.get(row["game"], row["game"].capitalize())
+                lines.append(
+                    f"{dot} **{label}** — {row['rounds']} rounds — {g_net:+,}c"
+                )
+            embed.add_field(name="Per Game", value="\n".join(lines), inline=False)
+
+        bal = await queries.get_casino_balance(uid)
+        if bal is not None:
+            embed.set_footer(text=f"Current balance: {bal:,}c")
+
+        await interaction.response.send_message(embed=embed)
+
 
 CASINO_GAMES: list[tuple[str, str]] = [
     ("blackjack", "Multiplayer blackjack table"),
@@ -1292,6 +1364,7 @@ CASINO_GAMES: list[tuple[str, str]] = [
     ("crash", "Crash rocket game"),
     ("plinko", "Plinko ball-drop game"),
     ("hilo", "Hi-Lo card guessing game"),
+    ("bingo", "Multiplayer bingo game"),
 ]
 
 
