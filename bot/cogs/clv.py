@@ -1,9 +1,12 @@
 """CLV auto-post — fires when a close snapshot lands, posts closing lines and pings bettors."""
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
+
+log = logging.getLogger(__name__)
 
 _ET = ZoneInfo("America/New_York")
 
@@ -17,7 +20,10 @@ from shared.odds_utils import compute_clv, fmt_prob, side_is_home
 
 load_dotenv()
 
-CLV_CHANNEL_ID = int(os.getenv("CLV_CHANNEL_ID") or 0)
+_clv_channel_id_str = os.getenv("CLV_CHANNEL_ID")
+if not _clv_channel_id_str:
+    raise RuntimeError("CLV_CHANNEL_ID environment variable is not set — cannot start CLV cog")
+CLV_CHANNEL_ID = int(_clv_channel_id_str)
 
 
 # ── CLV computation ───────────────────────────────────────────────────────────
@@ -136,6 +142,10 @@ class CLVCog(commands.Cog):
     async def clv_check(self) -> None:
         channel = self.bot.get_channel(CLV_CHANNEL_ID)
         if channel is None:
+            log.warning(
+                "CLV channel %d not found — bot may not be in that server or the channel was deleted",
+                CLV_CHANNEL_ID,
+            )
             return
 
         game_ids = await queries.get_games_with_close_not_posted()
