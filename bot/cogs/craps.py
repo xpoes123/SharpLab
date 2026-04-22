@@ -1,4 +1,5 @@
 """Craps cog — multiplayer table with full side bets."""
+import asyncio
 import random
 from dataclasses import dataclass, field
 from enum import Enum
@@ -521,10 +522,43 @@ class CrapsTableView(ui.View):
             )
             return
 
+        # Pre-determine the actual result
         d1, d2 = _roll_dice()
         total = d1 + d2
-        self.table.roll_history.append(_fmt_dice(d1, d2))
 
+        # ── Dice rolling animation ────────────────────────────────────
+        # Disable all controls during animation
+        for child in self.children:
+            if hasattr(child, "disabled"):
+                child.disabled = True  # type: ignore[union-attr]
+
+        # Frame 1: random tumbling dice
+        r1, r2 = random.randint(1, 6), random.randint(1, 6)
+        self.table.roll_history.append(
+            f"{DICE_EMOJI[r1]} {DICE_EMOJI[r2]}  \U0001f3b2 *rolling...*"
+        )
+        await interaction.response.edit_message(
+            embed=_table_embed(self.table), view=self,
+        )
+
+        # Frame 2: different random dice (ensure visually distinct from result)
+        await asyncio.sleep(0.7)
+        while True:
+            r1, r2 = random.randint(1, 6), random.randint(1, 6)
+            if (r1, r2) != (d1, d2):
+                break
+        self.table.roll_history[-1] = (
+            f"{DICE_EMOJI[r1]} {DICE_EMOJI[r2]}  \U0001f3b2 *rolling...*"
+        )
+        await interaction.edit_original_response(
+            embed=_table_embed(self.table), view=self,
+        )
+
+        # Frame 3: final result
+        await asyncio.sleep(0.7)
+        self.table.roll_history[-1] = _fmt_dice(d1, d2)
+
+        # ── Resolution ────────────────────────────────────────────────
         # Snapshot bets for repeat, then resolve
         for player in self.table.players.values():
             player.last_sides = [(sb.kind, sb.amount) for sb in player.side_bets]
@@ -540,9 +574,15 @@ class CrapsTableView(ui.View):
             finished = self._resolve_point(total)
 
         if finished:
-            await self._finish(interaction)
+            await self._finish(interaction, followup=True)
         else:
-            await interaction.response.edit_message(embed=_table_embed(self.table), view=self)
+            # Re-enable controls
+            for child in self.children:
+                if hasattr(child, "disabled"):
+                    child.disabled = False  # type: ignore[union-attr]
+            await interaction.edit_original_response(
+                embed=_table_embed(self.table), view=self,
+            )
 
     @ui.button(label="Place Odds", style=discord.ButtonStyle.success, emoji="\U0001f4b0", row=0)
     async def odds_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
@@ -723,7 +763,7 @@ class CrapsTableView(ui.View):
             return True
         return False
 
-    async def _finish(self, interaction: discord.Interaction) -> None:
+    async def _finish(self, interaction: discord.Interaction, *, followup: bool = False) -> None:
         table = self.table
         balances: dict[int, int] = {}
 
@@ -746,7 +786,10 @@ class CrapsTableView(ui.View):
                 child.disabled = True  # type: ignore[union-attr]
         self.stop()
         self.active_tables.pop(table.channel_id, None)
-        await interaction.response.edit_message(embed=embed, view=self)
+        if followup:
+            await interaction.edit_original_response(embed=embed, view=self)
+        else:
+            await interaction.response.edit_message(embed=embed, view=self)
 
     async def _abort(self, interaction: discord.Interaction, reason: str) -> None:
         """End table early, refund everyone."""
