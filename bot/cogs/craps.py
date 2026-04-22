@@ -105,24 +105,8 @@ POINT_PHASE_ONLY = {
     "hard_4", "hard_6", "hard_8", "hard_10",
 }
 
-SELECT_OPTIONS = [
-    discord.SelectOption(label="Field", value="field", description="1:1 (2:1 on 2 & 12). One roll.", emoji="\U0001f3b2"),
-    discord.SelectOption(label="Any 7", value="any7", description="4:1. One roll.", emoji="7\ufe0f\u20e3"),
-    discord.SelectOption(label="Any Craps", value="any_craps", description="7:1 on 2/3/12. One roll.", emoji="\U0001f480"),
-    discord.SelectOption(label="Yo (11)", value="yo", description="15:1. One roll.", emoji="\U0001f3af"),
-    discord.SelectOption(label="Come", value="come", description="Like Pass Line from next roll."),
-    discord.SelectOption(label="Don't Come", value="dont_come", description="Like Don't Pass from next roll."),
-    discord.SelectOption(label="Place 4", value="place_4", description="9:5 \u2014 4 before 7."),
-    discord.SelectOption(label="Place 5", value="place_5", description="7:5 \u2014 5 before 7."),
-    discord.SelectOption(label="Place 6", value="place_6", description="7:6 \u2014 6 before 7."),
-    discord.SelectOption(label="Place 8", value="place_8", description="7:6 \u2014 8 before 7."),
-    discord.SelectOption(label="Place 9", value="place_9", description="7:5 \u2014 9 before 7."),
-    discord.SelectOption(label="Place 10", value="place_10", description="9:5 \u2014 10 before 7."),
-    discord.SelectOption(label="Hard 4", value="hard_4", description="7:1 \u2014 2+2 before 7 or easy 4."),
-    discord.SelectOption(label="Hard 6", value="hard_6", description="9:1 \u2014 3+3 before 7 or easy 6."),
-    discord.SelectOption(label="Hard 8", value="hard_8", description="9:1 \u2014 4+4 before 7 or easy 8."),
-    discord.SelectOption(label="Hard 10", value="hard_10", description="7:1 \u2014 5+5 before 7 or easy 10."),
-]
+PLACE_NUMBERS = (4, 5, 6, 8, 9, 10)
+HARDWAY_NUMBERS = (4, 6, 8, 10)
 
 
 # ── Payout helpers ──────────────────────────────────────────────────────────
@@ -478,26 +462,106 @@ class SideBetModal(ui.Modal):
 # ── Views ───────────────────────────────────────────────────────────────────
 
 
-class SideBetSelect(ui.Select):
-    def __init__(self, table: CrapsTable, table_view: "CrapsTableView") -> None:
-        super().__init__(placeholder="Place a side bet...", options=SELECT_OPTIONS, row=2)
-        self.table = table
-        self.table_view = table_view
+class PlaceBetModal(ui.Modal):
+    number = ui.TextInput(
+        label="Number (4, 5, 6, 8, 9, or 10)",
+        placeholder="e.g. 6", required=True, max_length=2,
+    )
+    amount = ui.TextInput(
+        label="Amount (coins)", placeholder="e.g. 25",
+        required=True, max_length=10,
+    )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        kind = self.values[0]
-        if kind in POINT_PHASE_ONLY and self.table.phase != Phase.POINT:
+    def __init__(self, table: CrapsTable, view: "CrapsTableView") -> None:
+        super().__init__(title="Place Bet")
+        self.table = table
+        self.table_view = view
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        try:
+            num = int(self.number.value)
+        except ValueError:
+            await interaction.response.send_message("Enter a valid number.", ephemeral=True)
+            return
+        if num not in PLACE_NUMBERS:
             await interaction.response.send_message(
-                "That bet is only available during the point phase.", ephemeral=True,
+                "Must be 4, 5, 6, 8, 9, or 10.", ephemeral=True,
             )
             return
-        uid = interaction.user.id
-        if len(self.table.players) >= MAX_PLAYERS and uid not in self.table.players:
-            await interaction.response.send_message("Table is full!", ephemeral=True)
+        try:
+            amt = int(self.amount.value)
+        except ValueError:
+            await interaction.response.send_message("Enter a whole number.", ephemeral=True)
             return
-        # Ensure wallet exists
-        await queries.get_or_create_casino_wallet(str(uid))
-        await interaction.response.send_modal(SideBetModal(self.table, kind, self.table_view))
+        if amt < 1:
+            await interaction.response.send_message("Must be at least 1 coin.", ephemeral=True)
+            return
+        uid = interaction.user.id
+        try:
+            await queries.update_casino_balance(str(uid), -amt)
+        except ValueError:
+            await interaction.response.send_message("Not enough coins!", ephemeral=True)
+            return
+        player = self.table.players.get(uid)
+        if player is None:
+            player = PlayerBets(user_id=uid, display_name=interaction.user.display_name)
+            self.table.players[uid] = player
+        player.side_bets.append(SideBet(kind=f"place_{num}", amount=amt))
+        player.coins_in += amt
+        await interaction.response.edit_message(
+            embed=_table_embed(self.table), view=self.table_view,
+        )
+
+
+class HardwayBetModal(ui.Modal):
+    number = ui.TextInput(
+        label="Number (4, 6, 8, or 10)",
+        placeholder="e.g. 8", required=True, max_length=2,
+    )
+    amount = ui.TextInput(
+        label="Amount (coins)", placeholder="e.g. 25",
+        required=True, max_length=10,
+    )
+
+    def __init__(self, table: CrapsTable, view: "CrapsTableView") -> None:
+        super().__init__(title="Hardway Bet")
+        self.table = table
+        self.table_view = view
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        try:
+            num = int(self.number.value)
+        except ValueError:
+            await interaction.response.send_message("Enter a valid number.", ephemeral=True)
+            return
+        if num not in HARDWAY_NUMBERS:
+            await interaction.response.send_message(
+                "Must be 4, 6, 8, or 10.", ephemeral=True,
+            )
+            return
+        try:
+            amt = int(self.amount.value)
+        except ValueError:
+            await interaction.response.send_message("Enter a whole number.", ephemeral=True)
+            return
+        if amt < 1:
+            await interaction.response.send_message("Must be at least 1 coin.", ephemeral=True)
+            return
+        uid = interaction.user.id
+        try:
+            await queries.update_casino_balance(str(uid), -amt)
+        except ValueError:
+            await interaction.response.send_message("Not enough coins!", ephemeral=True)
+            return
+        player = self.table.players.get(uid)
+        if player is None:
+            player = PlayerBets(user_id=uid, display_name=interaction.user.display_name)
+            self.table.players[uid] = player
+        player.side_bets.append(SideBet(kind=f"hard_{num}", amount=amt))
+        player.coins_in += amt
+        await interaction.response.edit_message(
+            embed=_table_embed(self.table), view=self.table_view,
+        )
 
 
 class CrapsTableView(ui.View):
@@ -505,7 +569,6 @@ class CrapsTableView(ui.View):
         super().__init__(timeout=120)
         self.table = table
         self.active_tables = active_tables
-        self.add_item(SideBetSelect(table, self))
 
     # ── Row 0: Roll + Place Odds ──────────────────────────────────
 
@@ -634,9 +697,65 @@ class CrapsTableView(ui.View):
 
         await interaction.response.edit_message(embed=_table_embed(self.table), view=self)
 
-    # ── Row 3: Clear + Repeat ────────────────────────────────────
+    # ── Row 2: One-roll side bets ──────────────────────────────────
 
-    @ui.button(label="Clear My Bets", style=discord.ButtonStyle.danger, emoji="\U0001f5d1\ufe0f", row=3)
+    @ui.button(label="Field", style=discord.ButtonStyle.secondary, emoji="\U0001f3b2", row=2)
+    async def field_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        await self._handle_side_bet_button(interaction, "field")
+
+    @ui.button(label="Any 7", style=discord.ButtonStyle.secondary, emoji="7\ufe0f\u20e3", row=2)
+    async def any7_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        await self._handle_side_bet_button(interaction, "any7")
+
+    @ui.button(label="Any Craps", style=discord.ButtonStyle.secondary, emoji="\U0001f480", row=2)
+    async def any_craps_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        await self._handle_side_bet_button(interaction, "any_craps")
+
+    @ui.button(label="Yo (11)", style=discord.ButtonStyle.secondary, emoji="\U0001f3af", row=2)
+    async def yo_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        await self._handle_side_bet_button(interaction, "yo")
+
+    # ── Row 3: Multi-roll side bets ────────────────────────────────
+
+    @ui.button(label="Come", style=discord.ButtonStyle.secondary, row=3)
+    async def come_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        await self._handle_side_bet_button(interaction, "come")
+
+    @ui.button(label="Don't Come", style=discord.ButtonStyle.secondary, row=3)
+    async def dont_come_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        await self._handle_side_bet_button(interaction, "dont_come")
+
+    @ui.button(label="Place", style=discord.ButtonStyle.secondary, emoji="\U0001f4cd", row=3)
+    async def place_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        if self.table.phase != Phase.POINT:
+            await interaction.response.send_message(
+                "Place bets are only available during the point phase.", ephemeral=True,
+            )
+            return
+        uid = interaction.user.id
+        if len(self.table.players) >= MAX_PLAYERS and uid not in self.table.players:
+            await interaction.response.send_message("Table is full!", ephemeral=True)
+            return
+        await queries.get_or_create_casino_wallet(str(uid))
+        await interaction.response.send_modal(PlaceBetModal(self.table, self))
+
+    @ui.button(label="Hardways", style=discord.ButtonStyle.secondary, emoji="\U0001f3b0", row=3)
+    async def hardways_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        if self.table.phase != Phase.POINT:
+            await interaction.response.send_message(
+                "Hardway bets are only available during the point phase.", ephemeral=True,
+            )
+            return
+        uid = interaction.user.id
+        if len(self.table.players) >= MAX_PLAYERS and uid not in self.table.players:
+            await interaction.response.send_message("Table is full!", ephemeral=True)
+            return
+        await queries.get_or_create_casino_wallet(str(uid))
+        await interaction.response.send_modal(HardwayBetModal(self.table, self))
+
+    # ── Row 4: Clear + Repeat ────────────────────────────────────
+
+    @ui.button(label="Clear My Bets", style=discord.ButtonStyle.danger, emoji="\U0001f5d1\ufe0f", row=4)
     async def clear_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
         uid = interaction.user.id
         player = self.table.players.get(uid)
@@ -653,7 +772,7 @@ class CrapsTableView(ui.View):
         await queries.update_casino_balance(str(uid), refund)
         await interaction.response.edit_message(embed=_table_embed(self.table), view=self)
 
-    @ui.button(label="Repeat Bets", style=discord.ButtonStyle.primary, emoji="\U0001f501", row=3)
+    @ui.button(label="Repeat Bets", style=discord.ButtonStyle.primary, emoji="\U0001f501", row=4)
     async def repeat_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
         uid = interaction.user.id
         player = self.table.players.get(uid)
@@ -690,6 +809,19 @@ class CrapsTableView(ui.View):
         await interaction.response.edit_message(embed=_table_embed(self.table), view=self)
 
     # ── Helpers ────────────────────────────────────────────────────
+
+    async def _handle_side_bet_button(self, interaction: discord.Interaction, kind: str) -> None:
+        if kind in POINT_PHASE_ONLY and self.table.phase != Phase.POINT:
+            await interaction.response.send_message(
+                "That bet is only available during the point phase.", ephemeral=True,
+            )
+            return
+        uid = interaction.user.id
+        if len(self.table.players) >= MAX_PLAYERS and uid not in self.table.players:
+            await interaction.response.send_message("Table is full!", ephemeral=True)
+            return
+        await queries.get_or_create_casino_wallet(str(uid))
+        await interaction.response.send_modal(SideBetModal(self.table, kind, self))
 
     async def _handle_join(self, interaction: discord.Interaction, bet_type: BetType) -> None:
         uid = interaction.user.id
@@ -870,7 +1002,7 @@ class CrapsCog(commands.Cog):
         embed.description = (
             "**Join the table** with Pass Line or Don't Pass, "
             "then the shooter rolls!\n"
-            "Side bets available to everyone via the dropdown."
+            "Side bets available to everyone via the buttons below."
         )
         await interaction.response.send_message(embed=embed, view=view)
         table.message = await interaction.original_response()
