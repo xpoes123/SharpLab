@@ -393,6 +393,76 @@ class JoinBlackjackModal(ui.Modal):
         )
 
 
+class BJSideBetModal(ui.Modal):
+    amount = ui.TextInput(
+        label="Side bet amount (coins)", placeholder="e.g. 10",
+        required=True, max_length=10,
+    )
+
+    def __init__(
+        self, table: BlackjackTable, side: str, view: "BlackjackTableView",
+    ) -> None:
+        label = "Perfect Pairs" if side == "pairs" else "21+3"
+        super().__init__(title=f"Side Bet — {label}")
+        self.table = table
+        self.side = side
+        self.table_view = view
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        try:
+            amt = int(self.amount.value)
+        except ValueError:
+            await interaction.response.send_message(
+                "Enter a whole number.", ephemeral=True,
+            )
+            return
+        if amt < 1:
+            await interaction.response.send_message(
+                "Must be at least 1 coin.", ephemeral=True,
+            )
+            return
+        uid = interaction.user.id
+        player = self.table.players.get(uid)
+        if player is None:
+            await interaction.response.send_message(
+                "Join the table first!", ephemeral=True,
+            )
+            return
+        if self.table.phase != "betting":
+            await interaction.response.send_message(
+                "Cards already dealt!", ephemeral=True,
+            )
+            return
+        if self.side == "pairs" and player.pairs_wager > 0:
+            await interaction.response.send_message(
+                "You already have a Perfect Pairs bet!", ephemeral=True,
+            )
+            return
+        if self.side == "twentyone3" and player.twentyone3_wager > 0:
+            await interaction.response.send_message(
+                "You already have a 21+3 bet!", ephemeral=True,
+            )
+            return
+        try:
+            await queries.update_casino_balance(str(uid), -amt)
+        except ValueError:
+            bal = await queries.get_or_create_casino_wallet(str(uid))
+            await interaction.response.send_message(
+                f"Not enough coins! (have {bal})", ephemeral=True,
+            )
+            return
+
+        if self.side == "pairs":
+            player.pairs_wager = amt
+        else:
+            player.twentyone3_wager = amt
+
+        self.table_view._update_buttons()
+        await interaction.response.edit_message(
+            embed=_table_embed(self.table), view=self.table_view,
+        )
+
+
 # ── View ──────────────────────────────────────────────────────────────────────
 
 
@@ -426,6 +496,10 @@ class BlackjackTableView(ui.View):
         self.new_round_btn.disabled = not finished
         # Count is always enabled
         self.close_btn.disabled = playing
+
+        # Row 3: Side bets — only during betting
+        self.pairs_btn.disabled = not betting
+        self.twentyone3_btn.disabled = not betting
 
     def _get_active_player(self, interaction: discord.Interaction) -> PlayerHand | None:
         """Return the player if they're at the table and still playing."""
@@ -534,9 +608,11 @@ class BlackjackTableView(ui.View):
             await self._abort(interaction, "Dealer left — all bets refunded.")
             return
 
-        # Refund if still betting
+        # Refund if still betting (main + side bets)
         if self.table.phase == "betting":
-            await queries.update_casino_balance(str(uid), player.bet)
+            await queries.update_casino_balance(
+                str(uid), player.bet + player.side_wager,
+            )
             del self.table.players[uid]
             self._update_buttons()
             await interaction.response.edit_message(
@@ -686,7 +762,52 @@ class BlackjackTableView(ui.View):
             # Finished phase — just close
             await self._close(interaction)
 
+    # ── Row 3: Side Bets ─────────────────────────────────────────────
+
+    @ui.button(
+        label="Perfect Pairs", style=discord.ButtonStyle.success,
+        emoji="👯", row=3,
+    )
+    async def pairs_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        await self._handle_side_bet(interaction, "pairs")
+
+    @ui.button(
+        label="21+3", style=discord.ButtonStyle.success,
+        emoji="🃏", row=3,
+    )
+    async def twentyone3_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        await self._handle_side_bet(interaction, "twentyone3")
+
     # ── Deal logic ─────────────────────────────────────────────────
+
+    async def _handle_side_bet(
+        self, interaction: discord.Interaction, side: str,
+    ) -> None:
+        uid = interaction.user.id
+        if self.table.phase != "betting":
+            await interaction.response.send_message(
+                "Cards already dealt!", ephemeral=True,
+            )
+            return
+        if uid not in self.table.players:
+            await interaction.response.send_message(
+                "Join the table first!", ephemeral=True,
+            )
+            return
+        player = self.table.players[uid]
+        if side == "pairs" and player.pairs_wager > 0:
+            await interaction.response.send_message(
+                "You already have a Perfect Pairs bet!", ephemeral=True,
+            )
+            return
+        if side == "twentyone3" and player.twentyone3_wager > 0:
+            await interaction.response.send_message(
+                "You already have a 21+3 bet!", ephemeral=True,
+            )
+            return
+        await interaction.response.send_modal(
+            BJSideBetModal(self.table, side, self),
+        )
 
     async def _deal(self, interaction: discord.Interaction) -> None:
         table = self.table
@@ -698,6 +819,30 @@ class BlackjackTableView(ui.View):
         table.dealer_hand = [table.draw(), table.draw()]
 
         dealer_bj = _is_blackjack(table.dealer_hand)
+        dealer_upcard = table.dealer_hand[0]
+
+        # Resolve side bets immediately (independent of hand outcome)
+        for p in table.players.values():
+            if p.pairs_wager > 0:
+                label, mult = _eval_perfect_pairs(p.hand[0], p.hand[1])
+                if mult > 0:
+                    p.pairs_label = label
+                    p.pairs_payout = p.pairs_wager + mult * p.pairs_wager
+                    await queries.update_casino_balance(
+                        str(p.user_id), p.pairs_payout,
+                    )
+            if p.twentyone3_wager > 0:
+                label, mult = _eval_21_plus_3(
+                    p.hand[0], p.hand[1], dealer_upcard,
+                )
+                if mult > 0:
+                    p.twentyone3_label = label
+                    p.twentyone3_payout = (
+                        p.twentyone3_wager + mult * p.twentyone3_wager
+                    )
+                    await queries.update_casino_balance(
+                        str(p.user_id), p.twentyone3_payout,
+                    )
 
         # Check player naturals
         for p in table.players.values():
@@ -802,7 +947,9 @@ class BlackjackTableView(ui.View):
     async def _abort(self, interaction: discord.Interaction, reason: str) -> None:
         for p in self.table.players.values():
             try:
-                await queries.update_casino_balance(str(p.user_id), p.bet)
+                await queries.update_casino_balance(
+                    str(p.user_id), p.bet + p.side_wager,
+                )
             except Exception:
                 pass
         embed = discord.Embed(
@@ -846,10 +993,11 @@ class BlackjackTableView(ui.View):
                 except Exception:
                     pass
             return
-        # Betting or playing — refund bets
+        # Betting: refund main + side bets. Playing: side bets already resolved.
         for p in table.players.values():
             try:
-                await queries.update_casino_balance(str(p.user_id), p.bet)
+                refund = p.bet + p.side_wager if table.phase == "betting" else p.bet
+                await queries.update_casino_balance(str(p.user_id), refund)
             except Exception:
                 pass
         self.active_tables.pop(table.channel_id, None)
