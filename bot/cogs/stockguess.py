@@ -553,6 +553,19 @@ async def _do_reveal(
     table.phase = "finished"
 
     rankings = compute_rankings(table.players, table.guesses, table.ytd_pct)
+
+    # If nobody submitted a guess, refund all bets and bail out
+    all_no_guess = bool(rankings) and all(r[2] == float("inf") for r in rankings)
+    if all_no_guess:
+        for uid, p in table.players.items():
+            await queries.update_casino_balance(str(uid), p.bet)
+            await queries.log_casino_result(str(uid), "stockguess", p.bet, p.bet)
+        active_tables.pop(table.channel_id, None)
+        await interaction.followup.send(
+            "Nobody submitted a guess — all bets have been refunded!"
+        )
+        return
+
     payouts = compute_payouts(rankings, table.players)
 
     # Award coins and log results
