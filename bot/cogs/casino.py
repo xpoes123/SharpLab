@@ -1352,6 +1352,7 @@ class CasinoCog(commands.Cog):
                 "liarsdice": "Liar's Dice",
                 "slots": "Slots",
                 "nbasim": "NBA Sim",
+                "nflsim": "NFL Sim",
                 "penalties": "Penalties",
             }
             lines = []
@@ -1392,6 +1393,7 @@ CASINO_GAMES: list[tuple[str, str, bool]] = [
     ("mastermind", "Code-breaking deduction game", True),
     ("liarsdice", "Liar's Dice bluffing game", True),
     ("nbasim", "Simulated NBA game betting", False),
+    ("nflsim", "Simulated NFL game betting", False),
     ("penalties", "1v1 Penalty Shootout duel", True),
 ]
 

@@ -40,6 +40,7 @@ COGS = [
     "bot.cogs.countdown",
     "bot.cogs.mastermind",
     "bot.cogs.nbasim",
+    "bot.cogs.nflsim",
     "bot.cogs.penalties",
 ]
 
