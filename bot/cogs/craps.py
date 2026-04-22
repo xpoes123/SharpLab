@@ -73,6 +73,7 @@ class PlayerBets:
     coins_in: int = 0
     coins_out: int = 0
     payout: int = 0
+    last_sides: list[tuple[str, int]] = field(default_factory=list)  # snapshot for repeat
 
 
 @dataclass
@@ -522,7 +523,9 @@ class CrapsTableView(ui.View):
         total = d1 + d2
         self.table.roll_history.append(_fmt_dice(d1, d2))
 
-        # Resolve side bets for ALL players
+        # Snapshot bets for repeat, then resolve
+        for player in self.table.players.values():
+            player.last_sides = [(sb.kind, sb.amount) for sb in player.side_bets]
         for player in self.table.players.values():
             side_credit = _resolve_side_bets_for_player(player, d1, d2)
             if side_credit > 0:
@@ -588,6 +591,63 @@ class CrapsTableView(ui.View):
             return
 
         await interaction.response.edit_message(embed=_table_embed(self.table), view=self)
+
+    # ── Row 3: Clear + Repeat ────────────────────────────────────
+
+    @ui.button(label="Clear My Bets", style=discord.ButtonStyle.danger, emoji="\U0001f5d1\ufe0f", row=3)
+    async def clear_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        uid = interaction.user.id
+        player = self.table.players.get(uid)
+        if player is None:
+            await interaction.response.send_message("You're not at this table.", ephemeral=True)
+            return
+        refund = player.odds_bet + sum(sb.amount for sb in player.side_bets)
+        if refund == 0:
+            await interaction.response.send_message("No side bets or odds to clear.", ephemeral=True)
+            return
+        player.odds_bet = 0
+        player.side_bets.clear()
+        player.coins_in -= refund
+        await queries.update_casino_balance(str(uid), refund)
+        await interaction.response.edit_message(embed=_table_embed(self.table), view=self)
+
+    @ui.button(label="Repeat Bets", style=discord.ButtonStyle.primary, emoji="\U0001f501", row=3)
+    async def repeat_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        uid = interaction.user.id
+        player = self.table.players.get(uid)
+        if player is None:
+            await interaction.response.send_message("You're not at this table.", ephemeral=True)
+            return
+        if not player.last_sides:
+            await interaction.response.send_message("No previous bets to repeat.", ephemeral=True)
+            return
+
+        # Only re-place bets that were consumed (not still active)
+        active_kinds = {sb.kind for sb in player.side_bets}
+        to_place = [
+            (k, a) for k, a in player.last_sides
+            if k not in active_kinds
+            and (k not in POINT_PHASE_ONLY or self.table.phase == Phase.POINT)
+        ]
+        if not to_place:
+            await interaction.response.send_message(
+                "All previous bets are still active (nothing to repeat).", ephemeral=True,
+            )
+            return
+
+        total_cost = sum(a for _, a in to_place)
+        try:
+            await queries.update_casino_balance(str(uid), -total_cost)
+        except ValueError:
+            await interaction.response.send_message("Not enough coins!", ephemeral=True)
+            return
+
+        for kind, amt in to_place:
+            player.side_bets.append(SideBet(kind=kind, amount=amt))
+        player.coins_in += total_cost
+        await interaction.response.edit_message(embed=_table_embed(self.table), view=self)
+
+    # ── Helpers ────────────────────────────────────────────────────
 
     async def _handle_join(self, interaction: discord.Interaction, bet_type: BetType) -> None:
         uid = interaction.user.id
