@@ -17,7 +17,7 @@ from shared.odds_utils import compute_clv, fmt_prob, side_is_home
 
 load_dotenv()
 
-CLV_CHANNEL_ID = int(os.getenv("CLV_CHANNEL_ID", "1485475287054418151"))
+CLV_CHANNEL_ID = int(os.getenv("CLV_CHANNEL_ID") or 0)
 
 
 # ── CLV computation ───────────────────────────────────────────────────────────

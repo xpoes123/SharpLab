@@ -17,7 +17,7 @@ from shared.odds_utils import fmt_prob
 
 load_dotenv()
 
-INJURY_CHANNEL_ID = int(os.getenv("CLV_CHANNEL_ID", "1485475287054418151"))
+INJURY_CHANNEL_ID = int(os.getenv("INJURY_CHANNEL_ID") or 0)
 
 _TRACKED_BOOKS = {"draftkings", "fanduel", "betmgm", "caesars", "kalshi"}
 
