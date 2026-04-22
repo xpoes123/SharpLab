@@ -1,6 +1,6 @@
-"""Baccarat cog — /baccarat with interactive card peeling."""
+"""Baccarat cog — multiplayer table with interactive card peeling."""
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import discord
 from discord import app_commands, ui
@@ -19,6 +19,7 @@ BACCARAT_VALUES = {
 SHOE_DECKS = 8
 RESHUFFLE_THRESHOLD = 80
 CARD_BACK = "🂠"
+MAX_PLAYERS = 8
 
 
 def _new_shoe() -> list[str]:
@@ -29,8 +30,7 @@ def _new_shoe() -> list[str]:
 
 
 def _card_value(card: str) -> int:
-    rank = card[:-1]
-    return BACCARAT_VALUES[rank]
+    return BACCARAT_VALUES[card[:-1]]
 
 
 def _hand_value(hand: list[str]) -> int:
@@ -55,11 +55,9 @@ def _play_hand(shoe: list[str]) -> tuple[list[str], list[str]]:
     p_val = _hand_value(player)
     b_val = _hand_value(banker)
 
-    # Natural — no more cards
     if p_val >= 8 or b_val >= 8:
         return player, banker
 
-    # Player third-card rule
     player_drew = False
     player_third_value = -1
 
@@ -69,7 +67,6 @@ def _play_hand(shoe: list[str]) -> tuple[list[str], list[str]]:
         player_drew = True
         player_third_value = _card_value(third)
 
-    # Banker third-card rule
     b_val = _hand_value(banker)
 
     if not player_drew:
@@ -97,14 +94,26 @@ def _play_hand(shoe: list[str]) -> tuple[list[str], list[str]]:
 # ── Game state ───────────────────────────────────────────────────────────────
 
 @dataclass
-class BaccaratGame:
+class PlayerSeat:
     user_id: int
-    wager: int
+    display_name: str
     bet_type: str  # "player" | "banker" | "tie"
-    player_hand: list[str]
-    banker_hand: list[str]
+    wager: int
+    payout: int = 0
+
+
+@dataclass
+class BaccaratTable:
+    channel_id: int
+    opener_id: int
+    opener_name: str
+    player_hand: list[str] = field(default_factory=list)
+    banker_hand: list[str] = field(default_factory=list)
     player_revealed: int = 0
     banker_revealed: int = 0
+    dealt: bool = False  # True once peeling starts (hands visible)
+    players: dict[int, PlayerSeat] = field(default_factory=dict)
+    message: discord.Message | None = None
 
     @property
     def initial_done(self) -> bool:
@@ -114,7 +123,8 @@ class BaccaratGame:
     @property
     def all_revealed(self) -> bool:
         return (
-            self.player_revealed >= len(self.player_hand)
+            self.dealt
+            and self.player_revealed >= len(self.player_hand)
             and self.banker_revealed >= len(self.banker_hand)
         )
 
@@ -131,13 +141,41 @@ class BaccaratGame:
         return len(self.banker_hand)
 
 
-# ── Embeds ───────────────────────────────────────────────────────────────────
+# ── Resolution ───────────────────────────────────────────────────────────────
 
-BET_CHOICES = [
-    app_commands.Choice(name="Player", value="player"),
-    app_commands.Choice(name="Banker", value="banker"),
-    app_commands.Choice(name="Tie", value="tie"),
-]
+BET_EMOJI = {"player": "\U0001f535", "banker": "\U0001f534", "tie": "\U0001f7e1"}
+
+
+def _resolve_payouts(table: BaccaratTable) -> str:
+    """Set payout on each player seat. Returns 'player' | 'banker' | 'tie'."""
+    p_val = _hand_value(table.player_hand)
+    b_val = _hand_value(table.banker_hand)
+
+    if p_val > b_val:
+        winner = "player"
+    elif b_val > p_val:
+        winner = "banker"
+    else:
+        winner = "tie"
+
+    for seat in table.players.values():
+        if seat.bet_type == "tie":
+            seat.payout = (seat.wager + 8 * seat.wager) if winner == "tie" else 0
+        elif seat.bet_type == winner:
+            if seat.bet_type == "banker":
+                commission = seat.wager * 5 // 100
+                seat.payout = seat.wager + (seat.wager - commission)
+            else:
+                seat.payout = seat.wager * 2
+        elif winner == "tie":
+            seat.payout = seat.wager  # push
+        else:
+            seat.payout = 0
+
+    return winner
+
+
+# ── Embed ────────────────────────────────────────────────────────────────────
 
 
 def _display_hand(hand: list[str], revealed: int, show_all: bool) -> str:
@@ -155,299 +193,459 @@ def _display_hand(hand: list[str], revealed: int, show_all: bool) -> str:
     return display
 
 
-def _peel_embed(game: BaccaratGame) -> discord.Embed:
-    """Embed for the peeling phase — partially revealed cards."""
-    embed = discord.Embed(
-        title="Baccarat \u2014 Peel your cards!",
-        colour=discord.Colour.blurple(),
-    )
+def _table_embed(
+    table: BaccaratTable, *, balances: dict[int, int] | None = None,
+) -> discord.Embed:
+    finished = table.all_revealed
 
-    p_str = _display_hand(game.player_hand, game.player_revealed, game.initial_done)
-    b_str = _display_hand(game.banker_hand, game.banker_revealed, game.initial_done)
+    if not table.dealt:
+        title = "Baccarat Table \u2014 Place your bets!"
+        colour = discord.Colour.blurple()
+    elif finished:
+        title = "Baccarat Table \u2014 Results"
+        colour = discord.Colour.gold()
+    else:
+        title = "Baccarat Table \u2014 Peel your cards!"
+        colour = discord.Colour.blurple()
 
-    embed.add_field(name="Player", value=p_str, inline=False)
-    embed.add_field(name="Banker", value=b_str, inline=False)
-    embed.add_field(
-        name="Your Bet",
-        value=f"{game.bet_type.capitalize()} \u2014 {game.wager} coins",
-        inline=True,
-    )
+    embed = discord.Embed(title=title, colour=colour)
 
-    if not game.all_revealed:
-        p_left = game.player_peelable() - game.player_revealed
-        b_left = game.banker_peelable() - game.banker_revealed
+    # Hands
+    if table.dealt:
+        if finished:
+            p_val = _hand_value(table.player_hand)
+            b_val = _hand_value(table.banker_hand)
+            p_third = " *(drew third)*" if len(table.player_hand) == 3 else ""
+            b_third = " *(drew third)*" if len(table.banker_hand) == 3 else ""
+            embed.add_field(
+                name="Player",
+                value=f"{_fmt_hand(table.player_hand)}  ({p_val}){p_third}",
+                inline=False,
+            )
+            embed.add_field(
+                name="Banker",
+                value=f"{_fmt_hand(table.banker_hand)}  ({b_val}){b_third}",
+                inline=False,
+            )
+            if len(table.player_hand) == 2 and p_val >= 8:
+                embed.add_field(
+                    name="", value=f"Player natural **{p_val}**!", inline=False,
+                )
+            if len(table.banker_hand) == 2 and b_val >= 8:
+                embed.add_field(
+                    name="", value=f"Banker natural **{b_val}**!", inline=False,
+                )
+        else:
+            p_str = _display_hand(
+                table.player_hand, table.player_revealed, table.initial_done,
+            )
+            b_str = _display_hand(
+                table.banker_hand, table.banker_revealed, table.initial_done,
+            )
+            embed.add_field(name="Player", value=p_str, inline=False)
+            embed.add_field(name="Banker", value=b_str, inline=False)
+    else:
+        embed.description = "Place your bets, then peel to start!"
+
+    # Seats
+    if table.players:
+        lines = []
+        for seat in table.players.values():
+            emoji = BET_EMOJI.get(seat.bet_type, "\U0001f535")
+            line = (
+                f"{emoji} **{seat.display_name}** \u2014 "
+                f"{seat.bet_type.capitalize()} {seat.wager}c"
+            )
+            if finished and balances:
+                net = seat.payout - seat.wager
+                sign = "+" if net > 0 else ""
+                bal = balances.get(seat.user_id, 0)
+                line += f"\n\u2003\u2192 **{sign}{net}c** (bal: {bal}c)"
+            lines.append(line)
+        embed.add_field(
+            name="Seats", value="\n".join(lines[:MAX_PLAYERS]), inline=False,
+        )
+    else:
+        embed.add_field(
+            name="Seats",
+            value="*No players yet \u2014 place a bet to join!*",
+            inline=False,
+        )
+
+    # Peel progress footer
+    if table.dealt and not finished:
+        p_left = table.player_peelable() - table.player_revealed
+        b_left = table.banker_peelable() - table.banker_revealed
         total = p_left + b_left
         if total == 1:
             embed.set_footer(text="\U0001f941 Final card!")
-        else:
+        elif total > 0:
             parts = []
             if p_left > 0:
                 parts.append(f"Player: {p_left}")
             if b_left > 0:
                 parts.append(f"Banker: {b_left}")
-            embed.set_footer(text=f"Cards remaining \u2014 {' \u2022 '.join(parts)}")
+            embed.set_footer(
+                text=f"Cards remaining \u2014 {' \u2022 '.join(parts)}",
+            )
 
     return embed
 
 
-def _result_embed(
-    *,
-    player_hand: list[str],
-    banker_hand: list[str],
-    bet_type: str,
-    wager: int,
-    outcome: str,
-    payout: int,
-    new_balance: int,
-) -> discord.Embed:
-    p_val = _hand_value(player_hand)
-    b_val = _hand_value(banker_hand)
+# ── Modals ───────────────────────────────────────────────────────────────────
 
-    if p_val > b_val:
-        winner = "Player wins!"
-    elif b_val > p_val:
-        winner = "Banker wins!"
-    else:
-        winner = "Tie!"
 
-    colour = {
-        "win": discord.Colour.green(),
-        "lose": discord.Colour.red(),
-        "push": discord.Colour.light_grey(),
-    }.get(outcome, discord.Colour.blurple())
-
-    result_label = {
-        "win": "You win!",
-        "lose": "You lose",
-        "push": "Push \u2014 bet returned",
-    }[outcome]
-
-    embed = discord.Embed(title=f"Baccarat \u2014 {result_label}", colour=colour)
-
-    p_third = " *(drew third)*" if len(player_hand) == 3 else ""
-    embed.add_field(
-        name="Player",
-        value=f"{_fmt_hand(player_hand)}  ({p_val}){p_third}",
-        inline=False,
+class BetModal(ui.Modal):
+    amount = ui.TextInput(
+        label="Wager (coins)", placeholder="e.g. 50", required=True, max_length=10,
     )
 
-    b_third = " *(drew third)*" if len(banker_hand) == 3 else ""
-    embed.add_field(
-        name="Banker",
-        value=f"{_fmt_hand(banker_hand)}  ({b_val}){b_third}",
-        inline=False,
-    )
+    def __init__(
+        self, table: BaccaratTable, bet_type: str, view: "BaccaratTableView",
+    ) -> None:
+        super().__init__(title=f"Bet {bet_type.capitalize()}")
+        self.table = table
+        self.bet_type = bet_type
+        self.table_view = view
 
-    if len(player_hand) == 2 and p_val >= 8:
-        embed.add_field(name="", value=f"Player natural **{p_val}**!", inline=False)
-    if len(banker_hand) == 2 and b_val >= 8:
-        embed.add_field(name="", value=f"Banker natural **{b_val}**!", inline=False)
-
-    embed.add_field(name="Result", value=winner, inline=True)
-    embed.add_field(
-        name="Your Bet",
-        value=f"{bet_type.capitalize()} \u2014 {wager} coins",
-        inline=True,
-    )
-
-    sign = "+" if payout > 0 else ""
-    embed.add_field(name="Payout", value=f"{sign}{payout} coins", inline=True)
-    embed.add_field(name="Balance", value=f"{new_balance} coins", inline=True)
-
-    return embed
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        try:
+            amt = int(self.amount.value)
+        except ValueError:
+            await interaction.response.send_message(
+                "Enter a whole number.", ephemeral=True,
+            )
+            return
+        if amt < 1:
+            await interaction.response.send_message(
+                "Must be at least 1 coin.", ephemeral=True,
+            )
+            return
+        uid = interaction.user.id
+        if uid in self.table.players:
+            await interaction.response.send_message(
+                "You already have a bet!", ephemeral=True,
+            )
+            return
+        if self.table.dealt:
+            await interaction.response.send_message(
+                "Cards already being dealt!", ephemeral=True,
+            )
+            return
+        try:
+            await queries.update_casino_balance(str(uid), -amt)
+        except ValueError:
+            bal = await queries.get_or_create_casino_wallet(str(uid))
+            await interaction.response.send_message(
+                f"Not enough coins! (have {bal})", ephemeral=True,
+            )
+            return
+        self.table.players[uid] = PlayerSeat(
+            user_id=uid,
+            display_name=interaction.user.display_name,
+            bet_type=self.bet_type,
+            wager=amt,
+        )
+        self.table_view._update_buttons()
+        await interaction.response.edit_message(
+            embed=_table_embed(self.table), view=self.table_view,
+        )
 
 
 # ── View ─────────────────────────────────────────────────────────────────────
 
-class BaccaratView(ui.View):
+
+class BaccaratTableView(ui.View):
     def __init__(
-        self, game: BaccaratGame, active_games: dict[int, "BaccaratGame"],
+        self,
+        table: BaccaratTable,
+        active_tables: dict[int, "BaccaratTable"],
     ) -> None:
         super().__init__(timeout=120)
-        self.game = game
-        self.active_games = active_games
+        self.table = table
+        self.active_tables = active_tables
         self._update_buttons()
 
     def _update_buttons(self) -> None:
-        game = self.game
-        self.peel_player_btn.disabled = game.player_revealed >= game.player_peelable()
-        self.peel_banker_btn.disabled = game.banker_revealed >= game.banker_peelable()
+        dealt = self.table.dealt
+        has_bets = bool(self.table.players)
 
-    async def _check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.game.user_id:
-            await interaction.response.send_message("Not your game!", ephemeral=True)
-            return False
-        return True
-
-    async def _finish(self, interaction: discord.Interaction) -> None:
-        game = self.game
-        p_val = _hand_value(game.player_hand)
-        b_val = _hand_value(game.banker_hand)
-
-        if p_val > b_val:
-            winner = "player"
-        elif b_val > p_val:
-            winner = "banker"
+        # Peel buttons
+        if dealt:
+            self.peel_player_btn.disabled = (
+                self.table.player_revealed >= self.table.player_peelable()
+            )
+            self.peel_banker_btn.disabled = (
+                self.table.banker_revealed >= self.table.banker_peelable()
+            )
+            self.reveal_all_btn.disabled = False
         else:
-            winner = "tie"
+            # Before dealing: peel enabled only if there are bets (first peel deals)
+            self.peel_player_btn.disabled = not has_bets
+            self.peel_banker_btn.disabled = not has_bets
+            self.reveal_all_btn.disabled = not has_bets
 
-        # Calculate payout
-        if game.bet_type == "tie":
-            if winner == "tie":
-                payout = game.wager + 8 * game.wager
-                outcome = "win"
-            else:
-                payout = 0
-                outcome = "lose"
-        elif game.bet_type == winner:
-            if game.bet_type == "banker":
-                commission = game.wager * 5 // 100
-                payout = game.wager + (game.wager - commission)
-            else:
-                payout = game.wager * 2
-            outcome = "win"
-        elif winner == "tie":
-            payout = game.wager
-            outcome = "push"
-        else:
-            payout = 0
-            outcome = "lose"
+        # Bet buttons: locked once dealt
+        self.bet_player_btn.disabled = dealt
+        self.bet_banker_btn.disabled = dealt
+        self.bet_tie_btn.disabled = dealt
 
-        if payout > 0:
-            new_balance = await queries.update_casino_balance(str(game.user_id), payout)
-        else:
-            new_balance = (await queries.get_casino_balance(str(game.user_id))) or 0
+    # ── Row 0: Peel Player, Peel Banker, Reveal All ──────────
 
-        embed = _result_embed(
-            player_hand=game.player_hand,
-            banker_hand=game.banker_hand,
-            bet_type=game.bet_type,
-            wager=game.wager,
-            outcome=outcome,
-            payout=payout - game.wager,
-            new_balance=new_balance,
-        )
-
-        for child in self.children:
-            child.disabled = True  # type: ignore[union-attr]
-        self.stop()
-        self.active_games.pop(game.user_id, None)
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    @ui.button(label="Peel Player", style=discord.ButtonStyle.primary, emoji="\U0001f0cf")
+    @ui.button(
+        label="Peel Player", style=discord.ButtonStyle.primary,
+        emoji="\U0001f0cf", row=0,
+    )
     async def peel_player_btn(
         self, interaction: discord.Interaction, button: ui.Button,
     ) -> None:
-        if not await self._check(interaction):
+        if not self.table.players:
+            await interaction.response.send_message(
+                "No bets on the table yet!", ephemeral=True,
+            )
             return
-        self.game.player_revealed += 1
-        if self.game.all_revealed:
+        if not self.table.dealt:
+            self.table.dealt = True
+        self.table.player_revealed += 1
+        if self.table.all_revealed:
             await self._finish(interaction)
         else:
             self._update_buttons()
             await interaction.response.edit_message(
-                embed=_peel_embed(self.game), view=self,
+                embed=_table_embed(self.table), view=self,
             )
 
-    @ui.button(label="Peel Banker", style=discord.ButtonStyle.danger, emoji="\U0001f0cf")
+    @ui.button(
+        label="Peel Banker", style=discord.ButtonStyle.danger,
+        emoji="\U0001f0cf", row=0,
+    )
     async def peel_banker_btn(
         self, interaction: discord.Interaction, button: ui.Button,
     ) -> None:
-        if not await self._check(interaction):
+        if not self.table.players:
+            await interaction.response.send_message(
+                "No bets on the table yet!", ephemeral=True,
+            )
             return
-        self.game.banker_revealed += 1
-        if self.game.all_revealed:
+        if not self.table.dealt:
+            self.table.dealt = True
+        self.table.banker_revealed += 1
+        if self.table.all_revealed:
             await self._finish(interaction)
         else:
             self._update_buttons()
             await interaction.response.edit_message(
-                embed=_peel_embed(self.game), view=self,
+                embed=_table_embed(self.table), view=self,
             )
 
-    @ui.button(label="Reveal All", style=discord.ButtonStyle.secondary, emoji="\U0001f441")
-    async def reveal_btn(
+    @ui.button(
+        label="Reveal All", style=discord.ButtonStyle.secondary,
+        emoji="\U0001f441", row=0,
+    )
+    async def reveal_all_btn(
         self, interaction: discord.Interaction, button: ui.Button,
     ) -> None:
-        if not await self._check(interaction):
+        if not self.table.players:
+            await interaction.response.send_message(
+                "No bets on the table yet!", ephemeral=True,
+            )
             return
-        self.game.player_revealed = len(self.game.player_hand)
-        self.game.banker_revealed = len(self.game.banker_hand)
+        self.table.dealt = True
+        self.table.player_revealed = len(self.table.player_hand)
+        self.table.banker_revealed = len(self.table.banker_hand)
         await self._finish(interaction)
 
+    # ── Row 1: Bet Player, Bet Banker, Bet Tie, Leave ────────
+
+    @ui.button(
+        label="Bet Player", style=discord.ButtonStyle.primary,
+        emoji="\U0001f535", row=1,
+    )
+    async def bet_player_btn(
+        self, interaction: discord.Interaction, button: ui.Button,
+    ) -> None:
+        await self._handle_bet(interaction, "player")
+
+    @ui.button(
+        label="Bet Banker", style=discord.ButtonStyle.danger,
+        emoji="\U0001f534", row=1,
+    )
+    async def bet_banker_btn(
+        self, interaction: discord.Interaction, button: ui.Button,
+    ) -> None:
+        await self._handle_bet(interaction, "banker")
+
+    @ui.button(
+        label="Bet Tie", style=discord.ButtonStyle.success,
+        emoji="\U0001f7e1", row=1,
+    )
+    async def bet_tie_btn(
+        self, interaction: discord.Interaction, button: ui.Button,
+    ) -> None:
+        await self._handle_bet(interaction, "tie")
+
+    @ui.button(
+        label="Leave", style=discord.ButtonStyle.secondary,
+        emoji="\U0001f6aa", row=1,
+    )
+    async def leave_btn(
+        self, interaction: discord.Interaction, button: ui.Button,
+    ) -> None:
+        uid = interaction.user.id
+        seat = self.table.players.get(uid)
+        if seat is None:
+            await interaction.response.send_message(
+                "You're not at this table.", ephemeral=True,
+            )
+            return
+        if self.table.dealt:
+            await interaction.response.send_message(
+                "Cards are already being dealt!", ephemeral=True,
+            )
+            return
+        # Refund wager
+        await queries.update_casino_balance(str(uid), seat.wager)
+        del self.table.players[uid]
+
+        if not self.table.players:
+            await self._close(interaction, "All players left \u2014 table closed.")
+            return
+
+        self._update_buttons()
+        await interaction.response.edit_message(
+            embed=_table_embed(self.table), view=self,
+        )
+
+    # ── Helpers ──────────────────────────────────────────────
+
+    async def _handle_bet(
+        self, interaction: discord.Interaction, bet_type: str,
+    ) -> None:
+        uid = interaction.user.id
+        if self.table.dealt:
+            await interaction.response.send_message(
+                "Cards already being dealt!", ephemeral=True,
+            )
+            return
+        if uid in self.table.players:
+            await interaction.response.send_message(
+                "You already have a bet!", ephemeral=True,
+            )
+            return
+        if len(self.table.players) >= MAX_PLAYERS:
+            await interaction.response.send_message(
+                "Table is full!", ephemeral=True,
+            )
+            return
+        await queries.get_or_create_casino_wallet(str(uid))
+        await interaction.response.send_modal(
+            BetModal(self.table, bet_type, self),
+        )
+
+    async def _finish(self, interaction: discord.Interaction) -> None:
+        table = self.table
+        _resolve_payouts(table)
+        balances: dict[int, int] = {}
+
+        for seat in table.players.values():
+            if seat.payout > 0:
+                balances[seat.user_id] = await queries.update_casino_balance(
+                    str(seat.user_id), seat.payout,
+                )
+            else:
+                balances[seat.user_id] = (
+                    await queries.get_casino_balance(str(seat.user_id))
+                ) or 0
+
+        embed = _table_embed(table, balances=balances)
+        for child in self.children:
+            if hasattr(child, "disabled"):
+                child.disabled = True  # type: ignore[union-attr]
+        self.stop()
+        self.active_tables.pop(table.channel_id, None)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _close(self, interaction: discord.Interaction, reason: str) -> None:
+        """Close table early (no cards dealt)."""
+        embed = discord.Embed(
+            title="Baccarat Table \u2014 Closed",
+            description=reason,
+            colour=discord.Colour.dark_grey(),
+        )
+        for child in self.children:
+            if hasattr(child, "disabled"):
+                child.disabled = True  # type: ignore[union-attr]
+        self.stop()
+        self.active_tables.pop(self.table.channel_id, None)
+        await interaction.response.edit_message(embed=embed, view=self)
+
     async def on_timeout(self) -> None:
-        game = self.game
-        if not game.all_revealed:
+        table = self.table
+        if table.all_revealed:
+            return
+        # Refund all wagers
+        for seat in table.players.values():
             try:
-                await queries.update_casino_balance(str(game.user_id), game.wager)
+                await queries.update_casino_balance(str(seat.user_id), seat.wager)
             except Exception:
                 pass
-        self.active_games.pop(game.user_id, None)
+        self.active_tables.pop(table.channel_id, None)
+        if table.message:
+            try:
+                embed = discord.Embed(
+                    title="Baccarat Table \u2014 Timed Out",
+                    description="Table inactive. All bets refunded.",
+                    colour=discord.Colour.dark_grey(),
+                )
+                await table.message.edit(embed=embed, view=None)
+            except Exception:
+                pass
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────
+
 
 class BaccaratCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.shoe = _new_shoe()
-        self.active_games: dict[int, BaccaratGame] = {}
+        self.active_tables: dict[int, BaccaratTable] = {}
 
     def _ensure_shoe(self) -> list[str]:
         if len(self.shoe) < RESHUFFLE_THRESHOLD:
             self.shoe = _new_shoe()
         return self.shoe
 
-    @app_commands.command(name="baccarat", description="Play a hand of baccarat")
-    @app_commands.describe(
-        bet="Player, Banker, or Tie",
-        wager="Number of coins to wager",
+    @app_commands.command(
+        name="baccarat", description="Open a baccarat table (multiplayer)",
     )
-    @app_commands.choices(bet=BET_CHOICES)
-    async def baccarat(
-        self,
-        interaction: discord.Interaction,
-        bet: app_commands.Choice[str],
-        wager: int,
-    ) -> None:
-        user_id = interaction.user.id
-        bet_type = bet.value
-
-        if user_id in self.active_games:
+    async def baccarat(self, interaction: discord.Interaction) -> None:
+        channel_id = interaction.channel_id
+        if channel_id in self.active_tables:
             await interaction.response.send_message(
-                "Finish your current game first!", ephemeral=True,
+                "There's already a baccarat table in this channel!",
+                ephemeral=True,
             )
             return
 
-        if wager < 1:
-            await interaction.response.send_message(
-                "Wager must be at least 1 coin.", ephemeral=True,
-            )
-            return
-
-        balance = await queries.get_or_create_casino_wallet(str(user_id))
-        if wager > balance:
-            await interaction.response.send_message(
-                f"You only have **{balance}** casino coins.", ephemeral=True,
-            )
-            return
-
-        await queries.update_casino_balance(str(user_id), -wager)
+        await queries.get_or_create_casino_wallet(str(interaction.user.id))
 
         shoe = self._ensure_shoe()
         player_hand, banker_hand = _play_hand(shoe)
 
-        game = BaccaratGame(
-            user_id=user_id,
-            wager=wager,
-            bet_type=bet_type,
+        table = BaccaratTable(
+            channel_id=channel_id,
+            opener_id=interaction.user.id,
+            opener_name=interaction.user.display_name,
             player_hand=player_hand,
             banker_hand=banker_hand,
         )
-        self.active_games[user_id] = game
+        self.active_tables[channel_id] = table
 
-        view = BaccaratView(game, self.active_games)
-        embed = _peel_embed(game)
+        view = BaccaratTableView(table, self.active_tables)
+        embed = _table_embed(table)
         await interaction.response.send_message(embed=embed, view=view)
+        table.message = await interaction.original_response()
 
 
 async def setup(bot: commands.Bot) -> None:
