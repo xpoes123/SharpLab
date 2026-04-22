@@ -501,15 +501,34 @@ class BaccaratTableView(ui.View):
         self,
         table: BaccaratTable,
         active_tables: dict[int, "BaccaratTable"],
+        cog: "BaccaratCog",
     ) -> None:
         super().__init__(timeout=120)
         self.table = table
         self.active_tables = active_tables
+        self.cog = cog
         self._update_buttons()
 
     def _update_buttons(self) -> None:
+        finished = self.table.all_revealed
         dealt = self.table.dealt
         has_bets = bool(self.table.players)
+
+        # Post-finish: only New Hand + Close Table active
+        self.new_hand_btn.disabled = not finished
+        self.close_table_btn.disabled = not finished
+
+        if finished:
+            self.peel_player_btn.disabled = True
+            self.peel_banker_btn.disabled = True
+            self.reveal_all_btn.disabled = True
+            self.bet_player_btn.disabled = True
+            self.bet_banker_btn.disabled = True
+            self.bet_tie_btn.disabled = True
+            self.panda_btn.disabled = True
+            self.dragon_btn.disabled = True
+            self.leave_btn.disabled = True
+            return
 
         # Peel buttons
         if dealt:
@@ -681,6 +700,39 @@ class BaccaratTableView(ui.View):
     ) -> None:
         await self._handle_side_bet(interaction, "dragon")
 
+    # ── Row 3: New Hand / Close Table (post-finish) ─────────
+
+    @ui.button(
+        label="New Hand", style=discord.ButtonStyle.success,
+        emoji="\U0001f504", row=3, disabled=True,
+    )
+    async def new_hand_btn(
+        self, interaction: discord.Interaction, button: ui.Button,
+    ) -> None:
+        shoe = self.cog._ensure_shoe()
+        player_hand, banker_hand = _play_hand(shoe)
+
+        self.table.player_hand = player_hand
+        self.table.banker_hand = banker_hand
+        self.table.player_revealed = 0
+        self.table.banker_revealed = 0
+        self.table.dealt = False
+        self.table.players.clear()
+
+        self._update_buttons()
+        await interaction.response.edit_message(
+            embed=_table_embed(self.table), view=self,
+        )
+
+    @ui.button(
+        label="Close Table", style=discord.ButtonStyle.secondary,
+        emoji="\u274c", row=3, disabled=True,
+    )
+    async def close_table_btn(
+        self, interaction: discord.Interaction, button: ui.Button,
+    ) -> None:
+        await self._close(interaction, "Table closed.")
+
     # ── Helpers ──────────────────────────────────────────────
 
     async def _handle_bet(
@@ -754,11 +806,7 @@ class BaccaratTableView(ui.View):
                 ) or 0
 
         embed = _table_embed(table, balances=balances)
-        for child in self.children:
-            if hasattr(child, "disabled"):
-                child.disabled = True  # type: ignore[union-attr]
-        self.stop()
-        self.active_tables.pop(table.channel_id, None)
+        self._update_buttons()
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def _close(self, interaction: discord.Interaction, reason: str) -> None:
@@ -777,9 +825,21 @@ class BaccaratTableView(ui.View):
 
     async def on_timeout(self) -> None:
         table = self.table
+        self.active_tables.pop(table.channel_id, None)
+
         if table.all_revealed:
+            # Hand was finished — just close the table quietly
+            if table.message:
+                try:
+                    for child in self.children:
+                        if hasattr(child, "disabled"):
+                            child.disabled = True  # type: ignore[union-attr]
+                    await table.message.edit(view=self)
+                except Exception:
+                    pass
             return
-        # Refund all wagers (main + side bets)
+
+        # Hand still in progress — refund all wagers
         for seat in table.players.values():
             try:
                 await queries.update_casino_balance(
@@ -787,7 +847,6 @@ class BaccaratTableView(ui.View):
                 )
             except Exception:
                 pass
-        self.active_tables.pop(table.channel_id, None)
         if table.message:
             try:
                 embed = discord.Embed(
@@ -840,7 +899,7 @@ class BaccaratCog(commands.Cog):
         )
         self.active_tables[channel_id] = table
 
-        view = BaccaratTableView(table, self.active_tables)
+        view = BaccaratTableView(table, self.active_tables, self)
         embed = _table_embed(table)
         await interaction.response.send_message(embed=embed, view=view)
         table.message = await interaction.original_response()
