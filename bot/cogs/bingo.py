@@ -692,20 +692,31 @@ class BingoTableView(ui.View):
             )
             return
         pat = self.table.pattern
+
+        # Build (original_index, card) pairs, sorted by closest to winning
+        indexed_cards = list(enumerate(player.cards))
+        if pat and len(indexed_cards) > 2:
+            indexed_cards.sort(
+                key=lambda ic: pat.progress(ic[1])[0], reverse=True,
+            )
+            indexed_cards = indexed_cards[:2]
+
         parts: list[str] = []
-        for i, card in enumerate(player.cards, 1):
+        for i, card in indexed_cards:
             if player.num_cards > 1:
                 if pat:
                     m, t = pat.progress(card)
-                    parts.append(f"**Card {i}** ({m}/{t})")
+                    parts.append(f"**Card {i + 1}** ({m}/{t})")
                 else:
-                    parts.append(f"**Card {i}**")
+                    parts.append(f"**Card {i + 1}**")
             parts.append(format_card_text(card, pat))
-        header = (
-            f"**Your Cards ({player.num_cards}):**"
-            if player.num_cards > 1
-            else "**Your Card:**"
-        )
+
+        if player.num_cards > 2 and pat:
+            header = f"**Best 2 of {player.num_cards} cards:**"
+        elif player.num_cards > 1:
+            header = f"**Your Cards ({player.num_cards}):**"
+        else:
+            header = "**Your Card:**"
         msg = header + "\n" + "\n".join(parts)
         await interaction.response.send_message(msg, ephemeral=True)
 
