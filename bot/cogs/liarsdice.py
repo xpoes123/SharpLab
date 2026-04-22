@@ -2,6 +2,7 @@
 
 import asyncio
 import random
+import time
 from dataclasses import dataclass, field
 
 import discord
@@ -17,6 +18,7 @@ MAX_BET = 500
 MIN_PLAYERS = 2
 HOUSE_EDGE = 0.05
 STARTING_DICE = 5
+SHOT_CLOCK = 60  # seconds per turn
 
 DICE_EMOJI = {1: "\u2680", 2: "\u2681", 3: "\u2682", 4: "\u2683", 5: "\u2684", 6: "\u2685"}
 
@@ -95,6 +97,7 @@ class LiarTable:
     round_num: int = 1
     last_bets: dict[int, tuple[str, int]] = field(default_factory=dict)
     winners: list[int] = field(default_factory=list)
+    shot_clock_expires: float | None = None
 
 
 # ── Embeds ───────────────────────────────────────────────────────────────────
@@ -147,6 +150,10 @@ def _playing_embed(table: LiarTable) -> discord.Embed:
         )
     else:
         embed.description = "No bids yet \u2014 first player must open the bidding."
+
+    if table.shot_clock_expires:
+        ts = int(table.shot_clock_expires)
+        embed.description += f"\n\u23f0 <t:{ts}:R>"
 
     # Players & dice counts
     lines: list[str] = []
@@ -444,12 +451,20 @@ class BidModal(ui.Modal):
                 )
                 return
 
-        # Accept the bid
+        # Verify it's still this player's turn (shot clock may have fired)
         uid = interaction.user.id
+        if _current_player_uid(self.table) != uid:
+            await interaction.response.send_message(
+                "Your turn has passed!", ephemeral=True,
+            )
+            return
+
+        # Accept the bid
         self.table.current_bid = (new_qty, new_face)
         self.table.current_bidder = uid
         _advance_turn(self.table)
 
+        self.table_view._start_shot_clock()
         self.table_view._update_buttons()
         await interaction.response.edit_message(
             embed=_playing_embed(self.table), view=self.table_view,
@@ -466,6 +481,7 @@ class LiarTableView(ui.View):
         super().__init__(timeout=600)
         self.table = table
         self.active_tables = active_tables
+        self._shot_clock_task: asyncio.Task | None = None
         self._update_buttons()
 
     def _update_buttons(self) -> None:
@@ -490,6 +506,82 @@ class LiarTableView(ui.View):
         # Row 2: New Round, Close Table
         self.new_round_btn.disabled = not finished
         self.close_btn.disabled = playing
+
+    # ── Shot clock ────────────────────────────────────────────────────────
+
+    def _start_shot_clock(self) -> None:
+        """Start (or restart) the per-turn shot clock."""
+        self._cancel_shot_clock()
+        self.table.shot_clock_expires = time.time() + SHOT_CLOCK
+        self._shot_clock_task = asyncio.create_task(self._shot_clock_coro())
+
+    def _cancel_shot_clock(self) -> None:
+        if self._shot_clock_task and not self._shot_clock_task.done():
+            self._shot_clock_task.cancel()
+        self._shot_clock_task = None
+        self.table.shot_clock_expires = None
+
+    async def _shot_clock_coro(self) -> None:
+        try:
+            await asyncio.sleep(SHOT_CLOCK)
+        except asyncio.CancelledError:
+            return
+        if self.table.phase != "playing":
+            return
+        self.table.shot_clock_expires = None
+        await self._handle_timeout()
+
+    async def _handle_timeout(self) -> None:
+        """Handle shot clock expiry for current player."""
+        table = self.table
+        current_uid = _current_player_uid(table)
+        current_player = table.players[current_uid]
+
+        if table.current_bid is not None:
+            # Auto-call Liar
+            await self._resolve_challenge(None, caller_uid=current_uid, auto_liar=True)
+        else:
+            # No bid to call — lose a die for stalling
+            current_player.dice_count -= 1
+            lost_last = current_player.dice_count <= 0
+            if lost_last:
+                current_player.eliminated = True
+
+            alive = _alive_players(table)
+            if len(alive) <= 1:
+                await self._resolve_game(None, None, alive)
+                return
+
+            # New sub-round: re-roll, advance turn
+            for uid in alive:
+                table.players[uid].dice = _roll_dice(table.players[uid].dice_count)
+            table.current_bid = None
+            table.current_bidder = None
+            if current_player.eliminated:
+                _set_turn_to(table, current_uid)
+                _advance_turn(table)
+            else:
+                _advance_turn(table)
+
+            embed = _playing_embed(table)
+            timeout_msg = f"\u23f0 **{current_player.display_name}** ran out of time"
+            if lost_last:
+                timeout_msg += " and is eliminated!"
+            else:
+                timeout_msg += f" and loses a die! ({current_player.dice_count} remaining)"
+            embed.description = timeout_msg + "\n\n" + (embed.description or "")
+
+            self._start_shot_clock()
+            self._update_buttons()
+            if table.message:
+                await table.message.edit(embed=embed, view=self)
+
+    async def _edit_msg(self, interaction: discord.Interaction | None, **kwargs) -> None:
+        """Edit the game message via interaction response or direct message edit."""
+        if interaction:
+            await interaction.response.edit_message(**kwargs)
+        elif self.table.message:
+            await self.table.message.edit(**kwargs)
 
     # ── Row 0 ────────────────────────────────────────────────────────────────
 
@@ -674,6 +766,7 @@ class LiarTableView(ui.View):
                 "Nothing to challenge \u2014 no bid has been made yet!", ephemeral=True,
             )
             return
+        self._cancel_shot_clock()
         await self._resolve_challenge(interaction, caller_uid=uid)
 
     @ui.button(
@@ -761,13 +854,14 @@ class LiarTableView(ui.View):
         table.current_bid = None
         table.current_bidder = None
 
+        self._start_shot_clock()
         self._update_buttons()
         await interaction.response.edit_message(
             embed=_playing_embed(table), view=self,
         )
 
     async def _resolve_challenge(
-        self, interaction: discord.Interaction, *, caller_uid: int,
+        self, interaction: discord.Interaction | None, *, caller_uid: int, auto_liar: bool = False,
     ) -> None:
         table = self.table
         bid_qty, bid_face = table.current_bid  # type: ignore[misc]
@@ -832,19 +926,26 @@ class LiarTableView(ui.View):
             inline=False,
         )
 
+        if auto_liar:
+            timeout_name = table.players[caller_uid].display_name
+            challenge_embed.description = (
+                f"\u23f0 **{timeout_name}** ran out of time \u2014 auto Liar!\n\n"
+                + (challenge_embed.description or "")
+            )
+
+        self._start_shot_clock()
         self._update_buttons()
-        await interaction.response.edit_message(
-            embed=challenge_embed, view=self,
-        )
+        await self._edit_msg(interaction, embed=challenge_embed, view=self)
 
     async def _resolve_game(
         self,
-        interaction: discord.Interaction,
-        challenge_embed: discord.Embed,
+        interaction: discord.Interaction | None,
+        challenge_embed: discord.Embed | None,
         alive: list[int],
     ) -> None:
         table = self.table
         table.phase = "finished"
+        self._cancel_shot_clock()
 
         if alive:
             winner_uid = alive[0]
@@ -882,33 +983,31 @@ class LiarTableView(ui.View):
         # updates to show finished state buttons
         finished_embed = _finished_embed(table, balances=balances)
 
-        # Combine challenge + finished into a single message update
-        # Add game over info to the challenge embed
-        winner = table.players[winner_uid]
-        challenge_embed.add_field(
-            name="\U0001f3c6 Game Over!",
-            value=f"**{winner.display_name}** wins **{prize_pool}c**!",
-            inline=False,
-        )
-
         self._update_buttons()
-        await interaction.response.edit_message(
-            embed=challenge_embed, view=self,
-        )
+        if challenge_embed:
+            # Show challenge result first, then finished embed after delay
+            winner = table.players[winner_uid]
+            challenge_embed.add_field(
+                name="\U0001f3c6 Game Over!",
+                value=f"**{winner.display_name}** wins **{prize_pool}c**!",
+                inline=False,
+            )
+            await self._edit_msg(interaction, embed=challenge_embed, view=self)
 
-        # After a brief pause, update to the full results embed
-        if table.message:
-            try:
-                await asyncio.sleep(5)
-                await table.message.edit(
-                    embed=finished_embed, view=self,
-                )
-            except discord.HTTPException:
-                pass
+            if table.message:
+                try:
+                    await asyncio.sleep(5)
+                    await table.message.edit(embed=finished_embed, view=self)
+                except discord.HTTPException:
+                    pass
+        else:
+            # Direct to finished embed (e.g. timeout elimination)
+            await self._edit_msg(interaction, embed=finished_embed, view=self)
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
     def _start_new_round(self) -> None:
+        self._cancel_shot_clock()
         table = self.table
         table.players.clear()
         table.phase = "betting"
@@ -929,6 +1028,7 @@ class LiarTableView(ui.View):
     async def _close(
         self, interaction: discord.Interaction, reason: str,
     ) -> None:
+        self._cancel_shot_clock()
         embed = discord.Embed(
             title="Liar's Dice Table \u2014 Closed",
             description=reason,
@@ -941,6 +1041,7 @@ class LiarTableView(ui.View):
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def on_timeout(self) -> None:
+        self._cancel_shot_clock()
         table = self.table
 
         if table.phase == "finished":
