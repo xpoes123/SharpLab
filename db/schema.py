@@ -166,6 +166,11 @@ CREATE TABLE IF NOT EXISTS paper_bets (
     payout          INTEGER DEFAULT 0,
     clv             REAL
 );
+
+CREATE TABLE IF NOT EXISTS user_settings (
+    discord_user       TEXT PRIMARY KEY,
+    craps_default_bet  INTEGER
+);
 """
 
 
@@ -197,3 +202,14 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass  # column already exists
+        # Migration: add user_settings table (CREATE IF NOT EXISTS handles this idempotently,
+        # but the executescript above only runs DDL at startup — explicit create ensures it
+        # exists on databases created before this table was added)
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS user_settings "
+                "(discord_user TEXT PRIMARY KEY, craps_default_bet INTEGER)"
+            )
+            await db.commit()
+        except Exception:
+            pass

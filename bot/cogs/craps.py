@@ -357,12 +357,21 @@ def _table_embed(
 class JoinModal(ui.Modal):
     amount = ui.TextInput(label="Bet amount (coins)", placeholder="e.g. 50", required=True, max_length=10)
 
-    def __init__(self, table: CrapsTable, bet_type: BetType, view: "CrapsTableView", balance: int) -> None:
+    def __init__(
+        self,
+        table: CrapsTable,
+        bet_type: BetType,
+        view: "CrapsTableView",
+        balance: int,
+        default_bet: int | None = None,
+    ) -> None:
         super().__init__(title=f"Join \u2014 {bet_type.value}")
         self.table = table
         self.bet_type = bet_type
         self.table_view = view
         self.amount.placeholder = f"e.g. 50 (bal: {balance}c)"
+        if default_bet is not None:
+            self.amount.default = str(default_bet)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
@@ -809,7 +818,8 @@ class CrapsTableView(ui.View):
             await interaction.response.send_message("Table is full!", ephemeral=True)
             return
         bal = await queries.get_or_create_casino_wallet(str(uid))
-        await interaction.response.send_modal(JoinModal(self.table, bet_type, self, bal))
+        default_bet = await queries.get_craps_default_bet(str(uid))
+        await interaction.response.send_modal(JoinModal(self.table, bet_type, self, bal, default_bet))
 
     # ── Resolution ────────────────────────────────────────────────
 
@@ -951,8 +961,10 @@ class CrapsCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, CrapsTable] = {}
 
-    @app_commands.command(name="craps", description="Open a craps table (multiplayer)")
-    async def craps(self, interaction: discord.Interaction) -> None:
+    craps_group = app_commands.Group(name="craps", description="Craps table commands")
+
+    @craps_group.command(name="play", description="Open a craps table (multiplayer)")
+    async def craps_play(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:
             await interaction.response.send_message(
@@ -980,6 +992,26 @@ class CrapsCog(commands.Cog):
         )
         await interaction.response.send_message(embed=embed, view=view)
         table.message = await interaction.original_response()
+
+    @craps_group.command(name="setdefault", description="Set your default craps bet amount")
+    @app_commands.describe(amount="Default bet in coins (1–100 000)")
+    async def craps_setdefault(self, interaction: discord.Interaction, amount: int) -> None:
+        if amount < 1:
+            await interaction.response.send_message(
+                "Default bet must be at least 1 coin.", ephemeral=True
+            )
+            return
+        if amount > 100_000:
+            await interaction.response.send_message(
+                "Default bet cannot exceed 100 000 coins.", ephemeral=True
+            )
+            return
+        await queries.set_craps_default_bet(str(interaction.user.id), amount)
+        await interaction.response.send_message(
+            f"Default craps bet set to **{amount:,}** coins. "
+            "It will be pre-filled next time you join a table.",
+            ephemeral=True,
+        )
 
 
 async def setup(bot: commands.Bot) -> None:
