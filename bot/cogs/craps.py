@@ -462,103 +462,84 @@ class SideBetModal(ui.Modal):
 # ── Views ───────────────────────────────────────────────────────────────────
 
 
-class PlaceBetModal(ui.Modal):
-    number = ui.TextInput(
-        label="Number (4, 5, 6, 8, 9, or 10)",
-        placeholder="e.g. 6", required=True, max_length=2,
+class PlaceHardwayModal(ui.Modal):
+    """Combined modal for placing multiple Place and Hardway bets at once."""
+
+    place_4_10 = ui.TextInput(
+        label="Place 4 & 10 (each)", placeholder="blank to skip",
+        required=False, max_length=10,
     )
-    amount = ui.TextInput(
-        label="Amount (coins)", placeholder="e.g. 25",
-        required=True, max_length=10,
+    place_5_9 = ui.TextInput(
+        label="Place 5 & 9 (each)", placeholder="blank to skip",
+        required=False, max_length=10,
+    )
+    place_6_8 = ui.TextInput(
+        label="Place 6 & 8 (each)", placeholder="blank to skip",
+        required=False, max_length=10,
+    )
+    hard_4_10 = ui.TextInput(
+        label="Hard 4 & 10 (each)", placeholder="blank to skip",
+        required=False, max_length=10,
+    )
+    hard_6_8 = ui.TextInput(
+        label="Hard 6 & 8 (each)", placeholder="blank to skip",
+        required=False, max_length=10,
     )
 
     def __init__(self, table: CrapsTable, view: "CrapsTableView") -> None:
-        super().__init__(title="Place Bet")
+        super().__init__(title="Place & Hardway Bets")
         self.table = table
         self.table_view = view
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            num = int(self.number.value)
-        except ValueError:
-            await interaction.response.send_message("Enter a valid number.", ephemeral=True)
+        # Parse all fields into (kind, amount) pairs
+        bets: list[tuple[str, int]] = []
+        field_map: list[tuple[ui.TextInput, list[str]]] = [
+            (self.place_4_10, ["place_4", "place_10"]),
+            (self.place_5_9, ["place_5", "place_9"]),
+            (self.place_6_8, ["place_6", "place_8"]),
+            (self.hard_4_10, ["hard_4", "hard_10"]),
+            (self.hard_6_8, ["hard_6", "hard_8"]),
+        ]
+        for text_input, kinds in field_map:
+            val = text_input.value.strip()
+            if not val:
+                continue
+            try:
+                amt = int(val)
+            except ValueError:
+                await interaction.response.send_message(
+                    f"Invalid amount in **{text_input.label}**: `{val}`", ephemeral=True,
+                )
+                return
+            if amt < 1:
+                await interaction.response.send_message("All amounts must be at least 1.", ephemeral=True)
+                return
+            for kind in kinds:
+                bets.append((kind, amt))
+
+        if not bets:
+            await interaction.response.send_message("You didn't enter any bets!", ephemeral=True)
             return
-        if num not in PLACE_NUMBERS:
-            await interaction.response.send_message(
-                "Must be 4, 5, 6, 8, 9, or 10.", ephemeral=True,
-            )
-            return
-        try:
-            amt = int(self.amount.value)
-        except ValueError:
-            await interaction.response.send_message("Enter a whole number.", ephemeral=True)
-            return
-        if amt < 1:
-            await interaction.response.send_message("Must be at least 1 coin.", ephemeral=True)
-            return
+
+        total_cost = sum(a for _, a in bets)
         uid = interaction.user.id
         try:
-            await queries.update_casino_balance(str(uid), -amt)
+            await queries.update_casino_balance(str(uid), -total_cost)
         except ValueError:
-            await interaction.response.send_message("Not enough coins!", ephemeral=True)
+            bal = await queries.get_or_create_casino_wallet(str(uid))
+            await interaction.response.send_message(
+                f"Not enough coins! Need **{total_cost}**, have **{bal}**.", ephemeral=True,
+            )
             return
+
         player = self.table.players.get(uid)
         if player is None:
             player = PlayerBets(user_id=uid, display_name=interaction.user.display_name)
             self.table.players[uid] = player
-        player.side_bets.append(SideBet(kind=f"place_{num}", amount=amt))
-        player.coins_in += amt
-        await interaction.response.edit_message(
-            embed=_table_embed(self.table), view=self.table_view,
-        )
-
-
-class HardwayBetModal(ui.Modal):
-    number = ui.TextInput(
-        label="Number (4, 6, 8, or 10)",
-        placeholder="e.g. 8", required=True, max_length=2,
-    )
-    amount = ui.TextInput(
-        label="Amount (coins)", placeholder="e.g. 25",
-        required=True, max_length=10,
-    )
-
-    def __init__(self, table: CrapsTable, view: "CrapsTableView") -> None:
-        super().__init__(title="Hardway Bet")
-        self.table = table
-        self.table_view = view
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            num = int(self.number.value)
-        except ValueError:
-            await interaction.response.send_message("Enter a valid number.", ephemeral=True)
-            return
-        if num not in HARDWAY_NUMBERS:
-            await interaction.response.send_message(
-                "Must be 4, 6, 8, or 10.", ephemeral=True,
-            )
-            return
-        try:
-            amt = int(self.amount.value)
-        except ValueError:
-            await interaction.response.send_message("Enter a whole number.", ephemeral=True)
-            return
-        if amt < 1:
-            await interaction.response.send_message("Must be at least 1 coin.", ephemeral=True)
-            return
-        uid = interaction.user.id
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            await interaction.response.send_message("Not enough coins!", ephemeral=True)
-            return
-        player = self.table.players.get(uid)
-        if player is None:
-            player = PlayerBets(user_id=uid, display_name=interaction.user.display_name)
-            self.table.players[uid] = player
-        player.side_bets.append(SideBet(kind=f"hard_{num}", amount=amt))
-        player.coins_in += amt
+        for kind, amt in bets:
+            player.side_bets.append(SideBet(kind=kind, amount=amt))
+        player.coins_in += total_cost
         await interaction.response.edit_message(
             embed=_table_embed(self.table), view=self.table_view,
         )
@@ -725,11 +706,11 @@ class CrapsTableView(ui.View):
     async def dont_come_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
         await self._handle_side_bet_button(interaction, "dont_come")
 
-    @ui.button(label="Place", style=discord.ButtonStyle.secondary, emoji="\U0001f4cd", row=3)
-    async def place_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+    @ui.button(label="Place/Hards", style=discord.ButtonStyle.secondary, emoji="\U0001f4cd", row=3)
+    async def place_hardway_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
         if self.table.phase != Phase.POINT:
             await interaction.response.send_message(
-                "Place bets are only available during the point phase.", ephemeral=True,
+                "Place and hardway bets are only available during the point phase.", ephemeral=True,
             )
             return
         uid = interaction.user.id
@@ -737,21 +718,7 @@ class CrapsTableView(ui.View):
             await interaction.response.send_message("Table is full!", ephemeral=True)
             return
         await queries.get_or_create_casino_wallet(str(uid))
-        await interaction.response.send_modal(PlaceBetModal(self.table, self))
-
-    @ui.button(label="Hardways", style=discord.ButtonStyle.secondary, emoji="\U0001f3b0", row=3)
-    async def hardways_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        if self.table.phase != Phase.POINT:
-            await interaction.response.send_message(
-                "Hardway bets are only available during the point phase.", ephemeral=True,
-            )
-            return
-        uid = interaction.user.id
-        if len(self.table.players) >= MAX_PLAYERS and uid not in self.table.players:
-            await interaction.response.send_message("Table is full!", ephemeral=True)
-            return
-        await queries.get_or_create_casino_wallet(str(uid))
-        await interaction.response.send_modal(HardwayBetModal(self.table, self))
+        await interaction.response.send_modal(PlaceHardwayModal(self.table, self))
 
     # ── Row 4: Clear + Repeat ────────────────────────────────────
 
