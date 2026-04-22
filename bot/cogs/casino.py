@@ -1374,6 +1374,40 @@ class CasinoCog(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
 
+    @app_commands.command(
+        name="casino-leaderboard",
+        description="Casino balance leaderboard",
+    )
+    async def casino_leaderboard(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+
+        rows = await queries.get_casino_leaderboard(limit=10)
+        if not rows:
+            await interaction.followup.send("No casino players yet.")
+            return
+
+        embed = discord.Embed(title="Casino Leaderboard", colour=discord.Colour.gold())
+        lines: list[str] = []
+        for i, row in enumerate(rows, 1):
+            try:
+                member = await self.bot.fetch_user(int(row["discord_user"]))
+                name = member.display_name
+            except Exception:
+                name = f"User {row['discord_user'][:8]}"
+
+            medal = {1: "\U0001f947", 2: "\U0001f948", 3: "\U0001f949"}.get(i, f"**{i}.**")
+            bal = row["balance"]
+            net = row["net_profit"]
+            rounds = row["rounds"]
+            net_str = f"{net:+,}c" if rounds > 0 else "—"
+            lines.append(
+                f"{medal} **{name}** — `{bal:,}`c | P/L {net_str} | {rounds:,} rounds"
+            )
+
+        embed.description = "\n".join(lines)
+        await interaction.followup.send(embed=embed)
+
+
 CASINO_GAMES: list[tuple[str, str, bool]] = [
     # (command_name, description, is_multiplayer)
     ("blackjack", "Blackjack table", True),

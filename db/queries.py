@@ -981,6 +981,31 @@ async def get_casino_stats_by_game(discord_user: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def get_casino_leaderboard(limit: int = 10) -> list[dict]:
+    """Top casino users by current balance, with net profit from history."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT
+                w.discord_user,
+                w.balance,
+                COALESCE(SUM(h.wagered), 0) AS total_wagered,
+                COALESCE(SUM(h.payout), 0)  AS total_payout,
+                COALESCE(SUM(h.payout) - SUM(h.wagered), 0) AS net_profit,
+                COUNT(h.id) AS rounds
+            FROM casino_wallets w
+            LEFT JOIN casino_history h ON w.discord_user = h.discord_user
+            GROUP BY w.discord_user
+            ORDER BY w.balance DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
 async def get_todays_game_for_team(team: str) -> Game | None:
     """Return the next unfinished game today for a given team (exact name match)."""
     today_prefix = datetime.now(timezone.utc).strftime("%Y-%m-%d")
