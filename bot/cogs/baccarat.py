@@ -1,6 +1,6 @@
 """Baccarat cog — /baccarat with interactive card peeling."""
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import discord
 from discord import app_commands, ui
@@ -96,20 +96,6 @@ def _play_hand(shoe: list[str]) -> tuple[list[str], list[str]]:
 
 # ── Game state ───────────────────────────────────────────────────────────────
 
-def _build_reveal_seq(
-    player_hand: list[str], banker_hand: list[str],
-) -> list[tuple[str, int]]:
-    """Build the card reveal order: P1, P2, B1, B2, then third cards."""
-    seq: list[tuple[str, int]] = [
-        ("player", 0), ("player", 1), ("banker", 0), ("banker", 1),
-    ]
-    if len(player_hand) == 3:
-        seq.append(("player", 2))
-    if len(banker_hand) == 3:
-        seq.append(("banker", 2))
-    return seq
-
-
 @dataclass
 class BaccaratGame:
     user_id: int
@@ -117,25 +103,32 @@ class BaccaratGame:
     bet_type: str  # "player" | "banker" | "tie"
     player_hand: list[str]
     banker_hand: list[str]
-    reveal_seq: list[tuple[str, int]] = field(default_factory=list)
-    reveal_pos: int = 0
-
-    @property
-    def player_revealed(self) -> int:
-        return sum(1 for h, _ in self.reveal_seq[:self.reveal_pos] if h == "player")
-
-    @property
-    def banker_revealed(self) -> int:
-        return sum(1 for h, _ in self.reveal_seq[:self.reveal_pos] if h == "banker")
-
-    @property
-    def all_revealed(self) -> bool:
-        return self.reveal_pos >= len(self.reveal_seq)
+    player_revealed: int = 0
+    banker_revealed: int = 0
 
     @property
     def initial_done(self) -> bool:
-        """First 4 cards (2 per side) all revealed."""
-        return self.reveal_pos >= 4
+        """Both sides have their first 2 cards revealed."""
+        return self.player_revealed >= 2 and self.banker_revealed >= 2
+
+    @property
+    def all_revealed(self) -> bool:
+        return (
+            self.player_revealed >= len(self.player_hand)
+            and self.banker_revealed >= len(self.banker_hand)
+        )
+
+    def player_peelable(self) -> int:
+        """Max player cards visible right now."""
+        if not self.initial_done:
+            return 2
+        return len(self.player_hand)
+
+    def banker_peelable(self) -> int:
+        """Max banker cards visible right now."""
+        if not self.initial_done:
+            return 2
+        return len(self.banker_hand)
 
 
 # ── Embeds ───────────────────────────────────────────────────────────────────
@@ -181,14 +174,18 @@ def _peel_embed(game: BaccaratGame) -> discord.Embed:
     )
 
     if not game.all_revealed:
-        cards_left = len(game.reveal_seq) - game.reveal_pos
-        next_hand, _ = game.reveal_seq[game.reveal_pos]
-        if cards_left == 1:
-            embed.set_footer(text=f"\U0001f941 Final card: {next_hand.capitalize()}")
+        p_left = game.player_peelable() - game.player_revealed
+        b_left = game.banker_peelable() - game.banker_revealed
+        total = p_left + b_left
+        if total == 1:
+            embed.set_footer(text="\U0001f941 Final card!")
         else:
-            embed.set_footer(
-                text=f"Next: {next_hand.capitalize()} \u2022 {cards_left} cards left",
-            )
+            parts = []
+            if p_left > 0:
+                parts.append(f"Player: {p_left}")
+            if b_left > 0:
+                parts.append(f"Banker: {b_left}")
+            embed.set_footer(text=f"Cards remaining \u2014 {' \u2022 '.join(parts)}")
 
     return embed
 
@@ -269,6 +266,12 @@ class BaccaratView(ui.View):
         super().__init__(timeout=120)
         self.game = game
         self.active_games = active_games
+        self._update_buttons()
+
+    def _update_buttons(self) -> None:
+        game = self.game
+        self.peel_player_btn.disabled = game.player_revealed >= game.player_peelable()
+        self.peel_banker_btn.disabled = game.banker_revealed >= game.banker_peelable()
 
     async def _check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.game.user_id:
@@ -331,16 +334,32 @@ class BaccaratView(ui.View):
         self.active_games.pop(game.user_id, None)
         await interaction.response.edit_message(embed=embed, view=self)
 
-    @ui.button(label="Peel", style=discord.ButtonStyle.primary, emoji="\U0001f0cf")
-    async def peel_btn(
+    @ui.button(label="Peel Player", style=discord.ButtonStyle.primary, emoji="\U0001f0cf")
+    async def peel_player_btn(
         self, interaction: discord.Interaction, button: ui.Button,
     ) -> None:
         if not await self._check(interaction):
             return
-        self.game.reveal_pos += 1
+        self.game.player_revealed += 1
         if self.game.all_revealed:
             await self._finish(interaction)
         else:
+            self._update_buttons()
+            await interaction.response.edit_message(
+                embed=_peel_embed(self.game), view=self,
+            )
+
+    @ui.button(label="Peel Banker", style=discord.ButtonStyle.danger, emoji="\U0001f0cf")
+    async def peel_banker_btn(
+        self, interaction: discord.Interaction, button: ui.Button,
+    ) -> None:
+        if not await self._check(interaction):
+            return
+        self.game.banker_revealed += 1
+        if self.game.all_revealed:
+            await self._finish(interaction)
+        else:
+            self._update_buttons()
             await interaction.response.edit_message(
                 embed=_peel_embed(self.game), view=self,
             )
@@ -351,7 +370,8 @@ class BaccaratView(ui.View):
     ) -> None:
         if not await self._check(interaction):
             return
-        self.game.reveal_pos = len(self.game.reveal_seq)
+        self.game.player_revealed = len(self.game.player_hand)
+        self.game.banker_revealed = len(self.game.banker_hand)
         await self._finish(interaction)
 
     async def on_timeout(self) -> None:
@@ -422,7 +442,6 @@ class BaccaratCog(commands.Cog):
             bet_type=bet_type,
             player_hand=player_hand,
             banker_hand=banker_hand,
-            reveal_seq=_build_reveal_seq(player_hand, banker_hand),
         )
         self.active_games[user_id] = game
 
