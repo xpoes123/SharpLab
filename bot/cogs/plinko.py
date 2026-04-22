@@ -197,10 +197,11 @@ class JoinPlinkoModal(ui.Modal):
         max_length=10,
     )
 
-    def __init__(self, table: PlinkoTable, view: "PlinkoTableView") -> None:
+    def __init__(self, table: PlinkoTable, view: "PlinkoTableView", balance: int) -> None:
         super().__init__(title="Join Plinko")
         self.table = table
         self.table_view = view
+        self.amount.placeholder = f"e.g. 100 (bal: {balance}c)"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
@@ -318,8 +319,8 @@ class PlinkoTableView(ui.View):
                 "Table is full!", ephemeral=True,
             )
             return
-        await queries.get_or_create_casino_wallet(str(uid))
-        await interaction.response.send_modal(JoinPlinkoModal(self.table, self))
+        bal = await queries.get_or_create_casino_wallet(str(uid))
+        await interaction.response.send_modal(JoinPlinkoModal(self.table, self, bal))
 
     @ui.button(label="Re-bet", style=discord.ButtonStyle.primary, emoji="🔄", row=0)
     async def rebet_btn(

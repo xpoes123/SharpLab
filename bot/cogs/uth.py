@@ -346,10 +346,11 @@ class JoinUTHModal(ui.Modal):
         required=False, max_length=10, default="0",
     )
 
-    def __init__(self, table: UTHTable, view: "UTHTableView") -> None:
+    def __init__(self, table: UTHTable, view: "UTHTableView", balance: int) -> None:
         super().__init__(title="Join UTH Table")
         self.table = table
         self.table_view = view
+        self.ante_input.placeholder = f"e.g. 50 (bal: {balance}c)"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
@@ -482,8 +483,8 @@ class UTHTableView(ui.View):
         if len(self.table.players) >= MAX_PLAYERS:
             await interaction.response.send_message("Table is full!", ephemeral=True)
             return
-        await queries.get_or_create_casino_wallet(str(uid))
-        await interaction.response.send_modal(JoinUTHModal(self.table, self))
+        bal = await queries.get_or_create_casino_wallet(str(uid))
+        await interaction.response.send_modal(JoinUTHModal(self.table, self, bal))
 
     @ui.button(label="Re-bet", style=discord.ButtonStyle.primary, emoji="🔄", row=0)
     async def rebet_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:

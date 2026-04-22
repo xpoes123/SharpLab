@@ -357,11 +357,12 @@ def _table_embed(
 class JoinModal(ui.Modal):
     amount = ui.TextInput(label="Bet amount (coins)", placeholder="e.g. 50", required=True, max_length=10)
 
-    def __init__(self, table: CrapsTable, bet_type: BetType, view: "CrapsTableView") -> None:
+    def __init__(self, table: CrapsTable, bet_type: BetType, view: "CrapsTableView", balance: int) -> None:
         super().__init__(title=f"Join \u2014 {bet_type.value}")
         self.table = table
         self.bet_type = bet_type
         self.table_view = view
+        self.amount.placeholder = f"e.g. 50 (bal: {balance}c)"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
@@ -399,12 +400,13 @@ class JoinModal(ui.Modal):
 class OddsBetModal(ui.Modal):
     amount = ui.TextInput(label="Odds bet amount", placeholder="e.g. 50", required=True, max_length=10)
 
-    def __init__(self, table: CrapsTable, player: PlayerBets, view: "CrapsTableView") -> None:
+    def __init__(self, table: CrapsTable, player: PlayerBets, view: "CrapsTableView", balance: int) -> None:
         max_odds = player.bet * MAX_ODDS_MULTIPLIER
         super().__init__(title=f"Place Odds (max {max_odds}c)")
         self.table = table
         self.player = player
         self.table_view = view
+        self.amount.placeholder = f"e.g. 50 (bal: {balance}c)"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
@@ -429,11 +431,12 @@ class OddsBetModal(ui.Modal):
 class SideBetModal(ui.Modal):
     amount = ui.TextInput(label="Amount (coins)", placeholder="e.g. 25", required=True, max_length=10)
 
-    def __init__(self, table: CrapsTable, kind: str, view: "CrapsTableView") -> None:
+    def __init__(self, table: CrapsTable, kind: str, view: "CrapsTableView", balance: int) -> None:
         super().__init__(title=f"{SIDE_BET_LABELS[kind]} Bet")
         self.table = table
         self.kind = kind
         self.table_view = view
+        self.amount.placeholder = f"e.g. 25 (bal: {balance}c)"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
@@ -486,8 +489,8 @@ class PlaceHardwayModal(ui.Modal):
         required=False, max_length=10,
     )
 
-    def __init__(self, table: CrapsTable, view: "CrapsTableView") -> None:
-        super().__init__(title="Place & Hardway Bets")
+    def __init__(self, table: CrapsTable, view: "CrapsTableView", balance: int) -> None:
+        super().__init__(title=f"Place & Hardway Bets ({balance}c)")
         self.table = table
         self.table_view = view
 
@@ -641,7 +644,8 @@ class CrapsTableView(ui.View):
         if player.odds_bet > 0:
             await interaction.response.send_message("You already placed odds.", ephemeral=True)
             return
-        await interaction.response.send_modal(OddsBetModal(self.table, player, self))
+        bal = await queries.get_or_create_casino_wallet(str(uid))
+        await interaction.response.send_modal(OddsBetModal(self.table, player, self, bal))
 
     # ── Row 1: Join + Leave ───────────────────────────────────────
 
@@ -717,8 +721,8 @@ class CrapsTableView(ui.View):
         if len(self.table.players) >= MAX_PLAYERS and uid not in self.table.players:
             await interaction.response.send_message("Table is full!", ephemeral=True)
             return
-        await queries.get_or_create_casino_wallet(str(uid))
-        await interaction.response.send_modal(PlaceHardwayModal(self.table, self))
+        bal = await queries.get_or_create_casino_wallet(str(uid))
+        await interaction.response.send_modal(PlaceHardwayModal(self.table, self, bal))
 
     # ── Row 4: Clear + Repeat ────────────────────────────────────
 
@@ -787,8 +791,8 @@ class CrapsTableView(ui.View):
         if len(self.table.players) >= MAX_PLAYERS and uid not in self.table.players:
             await interaction.response.send_message("Table is full!", ephemeral=True)
             return
-        await queries.get_or_create_casino_wallet(str(uid))
-        await interaction.response.send_modal(SideBetModal(self.table, kind, self))
+        bal = await queries.get_or_create_casino_wallet(str(uid))
+        await interaction.response.send_modal(SideBetModal(self.table, kind, self, bal))
 
     async def _handle_join(self, interaction: discord.Interaction, bet_type: BetType) -> None:
         uid = interaction.user.id
@@ -804,8 +808,8 @@ class CrapsTableView(ui.View):
         if len(self.table.players) >= MAX_PLAYERS and uid not in self.table.players:
             await interaction.response.send_message("Table is full!", ephemeral=True)
             return
-        await queries.get_or_create_casino_wallet(str(uid))
-        await interaction.response.send_modal(JoinModal(self.table, bet_type, self))
+        bal = await queries.get_or_create_casino_wallet(str(uid))
+        await interaction.response.send_modal(JoinModal(self.table, bet_type, self, bal))
 
     # ── Resolution ────────────────────────────────────────────────
 

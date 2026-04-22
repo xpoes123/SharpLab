@@ -272,10 +272,11 @@ class JoinVPModal(ui.Modal):
         required=True, max_length=10,
     )
 
-    def __init__(self, table: VPTable, view: "VPTableView") -> None:
+    def __init__(self, table: VPTable, view: "VPTableView", balance: int) -> None:
         super().__init__(title="Join Video Poker")
         self.table = table
         self.table_view = view
+        self.amount.placeholder = f"e.g. 50 (bal: {balance}c)"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
@@ -375,8 +376,8 @@ class VPTableView(ui.View):
         if len(self.table.players) >= MAX_PLAYERS:
             await interaction.response.send_message("Table is full!", ephemeral=True)
             return
-        await queries.get_or_create_casino_wallet(str(uid))
-        await interaction.response.send_modal(JoinVPModal(self.table, self))
+        bal = await queries.get_or_create_casino_wallet(str(uid))
+        await interaction.response.send_modal(JoinVPModal(self.table, self, bal))
 
     @ui.button(label="Re-bet", style=discord.ButtonStyle.primary, emoji="🔄", row=0)
     async def rebet_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:

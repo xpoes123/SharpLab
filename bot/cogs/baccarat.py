@@ -369,12 +369,13 @@ class BetModal(ui.Modal):
     )
 
     def __init__(
-        self, table: BaccaratTable, bet_type: str, view: "BaccaratTableView",
+        self, table: BaccaratTable, bet_type: str, view: "BaccaratTableView", balance: int,
     ) -> None:
         super().__init__(title=f"Bet {bet_type.capitalize()}")
         self.table = table
         self.bet_type = bet_type
         self.table_view = view
+        self.amount.placeholder = f"e.g. 50 (bal: {balance}c)"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
@@ -427,13 +428,14 @@ class SideBetModal(ui.Modal):
     )
 
     def __init__(
-        self, table: BaccaratTable, side: str, view: "BaccaratTableView",
+        self, table: BaccaratTable, side: str, view: "BaccaratTableView", balance: int,
     ) -> None:
         label = "Panda 8 (25:1)" if side == "panda" else "Dragon 7 (40:1)"
         super().__init__(title=f"Side Bet — {label}")
         self.table = table
         self.side = side
         self.table_view = view
+        self.amount.placeholder = f"e.g. 10 (bal: {balance}c)"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
@@ -700,9 +702,9 @@ class BaccaratTableView(ui.View):
                 "Table is full!", ephemeral=True,
             )
             return
-        await queries.get_or_create_casino_wallet(str(uid))
+        bal = await queries.get_or_create_casino_wallet(str(uid))
         await interaction.response.send_modal(
-            BetModal(self.table, bet_type, self),
+            BetModal(self.table, bet_type, self, bal),
         )
 
     async def _handle_side_bet(
@@ -730,8 +732,9 @@ class BaccaratTableView(ui.View):
                 "You already have a Dragon 7 bet!", ephemeral=True,
             )
             return
+        bal = await queries.get_or_create_casino_wallet(str(interaction.user.id))
         await interaction.response.send_modal(
-            SideBetModal(self.table, side, self),
+            SideBetModal(self.table, side, self, bal),
         )
 
     async def _finish(self, interaction: discord.Interaction) -> None:

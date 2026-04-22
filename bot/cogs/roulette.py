@@ -283,7 +283,7 @@ class OutsideBetModal(ui.Modal):
 
     def __init__(
         self, table: RouletteTable, category: BetCategory,
-        numbers: frozenset[str], label: str, view: "RouletteView",
+        numbers: frozenset[str], label: str, view: "RouletteView", balance: int,
     ) -> None:
         super().__init__(title=f"{label} ({PAYOUTS[category]}:1)")
         self.table = table
@@ -291,6 +291,7 @@ class OutsideBetModal(ui.Modal):
         self.numbers = numbers
         self.bet_label = label
         self.table_view = view
+        self.amount.placeholder = f"e.g. 50 (bal: {balance}c)"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
@@ -333,10 +334,11 @@ class StraightBetModal(ui.Modal):
         required=True, max_length=10,
     )
 
-    def __init__(self, table: RouletteTable, view: "RouletteView") -> None:
+    def __init__(self, table: RouletteTable, view: "RouletteView", balance: int) -> None:
         super().__init__(title="Straight Up (35:1)")
         self.table = table
         self.table_view = view
+        self.amount.placeholder = f"e.g. 25 (bal: {balance}c)"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         num = self.number.value.strip()
@@ -385,10 +387,11 @@ class SplitBetModal(ui.Modal):
         required=True, max_length=10,
     )
 
-    def __init__(self, table: RouletteTable, view: "RouletteView") -> None:
+    def __init__(self, table: RouletteTable, view: "RouletteView", balance: int) -> None:
         super().__init__(title="Split Bet (17:1)")
         self.table = table
         self.table_view = view
+        self.amount.placeholder = f"e.g. 25 (bal: {balance}c)"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         parts = self.numbers_input.value.strip().split()
@@ -453,10 +456,11 @@ class StreetBetModal(ui.Modal):
         required=True, max_length=10,
     )
 
-    def __init__(self, table: RouletteTable, view: "RouletteView") -> None:
+    def __init__(self, table: RouletteTable, view: "RouletteView", balance: int) -> None:
         super().__init__(title="Street Bet (11:1)")
         self.table = table
         self.table_view = view
+        self.amount.placeholder = f"e.g. 25 (bal: {balance}c)"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
@@ -693,26 +697,26 @@ class RouletteView(ui.View):
 
     @ui.button(label="Straight #", style=discord.ButtonStyle.success, row=3)
     async def straight_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        await self._check_can_bet(interaction)
+        bal = await self._check_can_bet(interaction)
         if interaction.response.is_done():
             return
-        await interaction.response.send_modal(StraightBetModal(self.table, self))
+        await interaction.response.send_modal(StraightBetModal(self.table, self, bal))
 
     @ui.button(label="Split", style=discord.ButtonStyle.success, row=3)
     async def split_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        await self._check_can_bet(interaction)
+        bal = await self._check_can_bet(interaction)
         if interaction.response.is_done():
             return
-        await interaction.response.send_modal(SplitBetModal(self.table, self))
+        await interaction.response.send_modal(SplitBetModal(self.table, self, bal))
 
     # ── Row 4: Street, Clear, New Round, Close ──────────────────────
 
     @ui.button(label="Street", style=discord.ButtonStyle.success, row=4)
     async def street_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        await self._check_can_bet(interaction)
+        bal = await self._check_can_bet(interaction)
         if interaction.response.is_done():
             return
-        await interaction.response.send_modal(StreetBetModal(self.table, self))
+        await interaction.response.send_modal(StreetBetModal(self.table, self, bal))
 
     @ui.button(label="Clear Bets", style=discord.ButtonStyle.danger, emoji="\U0001f5d1\ufe0f", row=4)
     async def clear_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
@@ -782,25 +786,25 @@ class RouletteView(ui.View):
 
     # ── Helpers ──────────────────────────────────────────────────────
 
-    async def _check_can_bet(self, interaction: discord.Interaction) -> None:
+    async def _check_can_bet(self, interaction: discord.Interaction) -> int:
         uid = interaction.user.id
         if self.table.phase != "betting":
             await interaction.response.send_message("Bets are closed!", ephemeral=True)
-            return
+            return 0
         if len(self.table.players) >= MAX_PLAYERS and uid not in self.table.players:
             await interaction.response.send_message("Table is full!", ephemeral=True)
-            return
-        await queries.get_or_create_casino_wallet(str(uid))
+            return 0
+        return await queries.get_or_create_casino_wallet(str(uid))
 
     async def _outside_bet(
         self, interaction: discord.Interaction,
         category: BetCategory, numbers: frozenset[str], label: str,
     ) -> None:
-        await self._check_can_bet(interaction)
+        bal = await self._check_can_bet(interaction)
         if interaction.response.is_done():
             return
         await interaction.response.send_modal(
-            OutsideBetModal(self.table, category, numbers, label, self),
+            OutsideBetModal(self.table, category, numbers, label, self, bal),
         )
 
     async def _resolve(self, interaction: discord.Interaction) -> None:
