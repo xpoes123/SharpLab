@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 _ET = ZoneInfo("America/New_York")
 
 import discord
+import httpx
 from discord import app_commands
 from discord.ext import commands, tasks
 
@@ -22,6 +23,18 @@ log = logging.getLogger(__name__)
 
 MIN_BET = 1
 
+# ESPN public scoreboard endpoints (no API key required).
+# Used as a fallback to detect completed games when the Temporal pipeline
+# hasn't yet written scores to the DB.
+_ESPN_SCOREBOARD: dict[str, str] = {
+    "nba": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+    "mlb": "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard",
+}
+
+# How long after scheduled tip-off before we assume a game could be final.
+# NBA games typically run ≤ 2.5 h; 3.5 h gives a comfortable margin for OT.
+_GAME_COMPLETION_BUFFER = timedelta(hours=3, minutes=30)
+
 MARKET_CHOICES = [
     app_commands.Choice(name="Spread", value="spread"),
     app_commands.Choice(name="Moneyline", value="moneyline"),
@@ -29,6 +42,75 @@ MARKET_CHOICES = [
 ]
 
 EMBED_COLOR = 0xF5A623  # gold/orange — visually distinct from /log green
+
+
+# ── Score fetching (ESPN fallback) ────────────────────────────────────────────
+
+
+async def _fetch_espn_score_for_game(game) -> tuple[int, int] | None:
+    """Fetch the final score for *game* directly from ESPN's free scoreboard API.
+
+    Returns ``(home_score, away_score)`` when the game is marked STATUS_FINAL
+    and has non-zero scores, otherwise ``None``.
+
+    This is used as a fallback by the paper-resolution loop when the Temporal
+    ``BetResolutionWorkflow`` hasn't yet written scores to the local DB.
+    Not writing to the DB here keeps the Temporal pipeline as the authoritative
+    source for real-bet resolution.
+    """
+    url = _ESPN_SCOREBOARD.get(game.sport)
+    if not url:
+        return None
+
+    start = datetime.fromisoformat(game.start_time_utc_iso)
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    espn_date = start.strftime("%Y%m%d")
+
+    home_last = game.home_team.split()[-1].lower()
+    away_last = game.away_team.split()[-1].lower()
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url, params={"dates": espn_date}, timeout=10.0)
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+    except Exception as exc:
+        log.warning("[paper_resolution] ESPN fetch failed for %s: %s", game.game_id, exc)
+        return None
+
+    for event in data.get("events", []):
+        status_type = event.get("status", {}).get("type", {}).get("name", "")
+        if status_type != "STATUS_FINAL":
+            continue
+        comp = event.get("competitions", [{}])[0]
+        competitors = comp.get("competitors", [])
+        home_name = away_name = ""
+        home_score = away_score = 0
+        for c in competitors:
+            team_name = c.get("team", {}).get("displayName", "")
+            try:
+                score = int(c.get("score", "0") or "0")
+            except (ValueError, TypeError):
+                score = 0
+            if c.get("homeAway") == "home":
+                home_name = team_name
+                home_score = score
+            else:
+                away_name = team_name
+                away_score = score
+
+        if not home_name or not away_name:
+            continue
+        if home_score == 0 and away_score == 0:
+            continue  # scores not populated yet despite STATUS_FINAL
+
+        # Match game by last word of each team name (same heuristic as Temporal).
+        if home_last in home_name.lower() and away_last in away_name.lower():
+            return (home_score, away_score)
+
+    return None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -348,43 +430,83 @@ class TradingCog(commands.Cog):
 
     @tasks.loop(minutes=5)
     async def paper_resolution(self) -> None:
-        """Check for final games and auto-resolve paper bets."""
-        game_ids = await queries.get_games_with_open_paper_bets()
+        """Check for final games and auto-resolve paper bets.
+
+        Two-path score lookup:
+        1. DB path  — Temporal's BetResolutionWorkflow has already written
+                      final scores and marked the game 'final'.
+        2. ESPN path — Temporal hasn't processed the game yet (workflow not
+                       running, API down, etc.).  When the game's scheduled
+                       start + _GAME_COMPLETION_BUFFER has passed we fetch
+                       scores directly from ESPN's free public API.
+                       We do NOT mark the game 'final' here; that remains
+                       the Temporal pipeline's responsibility for real-bet
+                       resolution.  Once paper bets are resolved their status
+                       leaves 'open', so this loop won't visit the game again.
+
+        All exceptions are caught per-game so a single bad row can't kill
+        the loop for every subsequent game.
+        """
+        try:
+            game_ids = await queries.get_games_with_open_paper_bets()
+        except Exception as exc:
+            log.exception("[paper_resolution] failed to fetch open paper bets: %s", exc)
+            return
+
         for game_id in game_ids:
-            scores = await queries.get_game_scores(game_id)
+            try:
+                await self._resolve_one_game(game_id)
+            except Exception as exc:
+                log.exception(
+                    "[paper_resolution] unhandled error resolving game %s: %s", game_id, exc
+                )
+
+    async def _resolve_one_game(self, game_id: str) -> None:
+        """Resolve all open paper bets for a single game."""
+        game = await queries.get_game_by_id(game_id)
+        if game is None:
+            return
+
+        # ── Path 1: scores already in DB (Temporal ran) ───────────────────────
+        scores = await queries.get_game_scores(game_id)
+
+        if scores is None:
+            # ── Path 2: ESPN fallback ─────────────────────────────────────────
+            start = datetime.fromisoformat(game.start_time_utc_iso)
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) < start + _GAME_COMPLETION_BUFFER:
+                return  # game still in progress — check again later
+            scores = await _fetch_espn_score_for_game(game)
             if scores is None:
-                continue
-            home_score, away_score = scores
+                return  # ESPN doesn't have a final score yet
 
-            game = await queries.get_game_by_id(game_id)
-            if game is None:
-                continue
+        home_score, away_score = scores
 
-            paper_bets = await queries.get_open_paper_bets_for_game(game_id)
-            for pb in paper_bets:
-                outcome = _resolve_paper_bet(
-                    pb, game.home_team, game.away_team, home_score, away_score,
-                )
-                if outcome == "won":
-                    payout = pb["potential_payout"]
-                elif outcome == "push":
-                    payout = pb["wager"]
-                else:
-                    payout = 0
+        paper_bets = await queries.get_open_paper_bets_for_game(game_id)
+        for pb in paper_bets:
+            outcome = _resolve_paper_bet(
+                pb, game.home_team, game.away_team, home_score, away_score,
+            )
+            if outcome == "won":
+                payout = pb["potential_payout"]
+            elif outcome == "push":
+                payout = pb["wager"]
+            else:
+                payout = 0
 
-                # Compute CLV against closing odds
-                clv = await _compute_paper_clv(pb, game)
+            clv = await _compute_paper_clv(pb, game)
 
-                await queries.resolve_paper_bet(pb["paper_bet_id"], outcome, payout, clv)
-                if payout > 0:
-                    await queries.update_balance(pb["discord_user"], payout)
+            await queries.resolve_paper_bet(pb["paper_bet_id"], outcome, payout, clv)
+            if payout > 0:
+                await queries.update_balance(pb["discord_user"], payout)
 
-                log.info(
-                    "[paper_resolution] bet #%d → %s, payout=%d, clv=%s (%s @ %s %d-%d)",
-                    pb["paper_bet_id"], outcome, payout,
-                    f"{clv:+.1f}pp" if clv is not None else "n/a",
-                    game.away_team, game.home_team, away_score, home_score,
-                )
+            log.info(
+                "[paper_resolution] bet #%d → %s, payout=%d, clv=%s (%s @ %s %d-%d)",
+                pb["paper_bet_id"], outcome, payout,
+                f"{clv:+.1f}pp" if clv is not None else "n/a",
+                game.away_team, game.home_team, away_score, home_score,
+            )
 
     @paper_resolution.before_loop
     async def _wait_ready(self) -> None:

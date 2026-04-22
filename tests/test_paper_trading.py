@@ -1,7 +1,14 @@
 """Unit tests for paper trading — payout math and resolution logic."""
 import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 from shared.odds_utils import american_to_decimal
-from bot.cogs.trading import _compute_cashout, _compute_payout, _resolve_paper_bet, _parse_pick
+from bot.cogs.trading import (
+    _compute_cashout,
+    _compute_payout,
+    _fetch_espn_score_for_game,
+    _resolve_paper_bet,
+    _parse_pick,
+)
 
 
 # ── Payout calculation ────────────────────────────────────────────────────────
@@ -222,3 +229,179 @@ class TestResolveEdgeCases:
         pb = _make_pb("moneyline", "Chicago Bulls")
         result = _resolve_paper_bet(pb, "Boston Celtics", "New York Knicks", 110, 100)
         assert result == "void"
+
+
+# ── _fetch_espn_score_for_game ────────────────────────────────────────────────
+
+
+def _make_game(home_team: str = "Boston Celtics", away_team: str = "New York Knicks",
+               sport: str = "nba",
+               start_time: str = "2026-04-22T23:30:00+00:00") -> MagicMock:
+    g = MagicMock()
+    g.game_id = "test-game-id"
+    g.home_team = home_team
+    g.away_team = away_team
+    g.sport = sport
+    g.start_time_utc_iso = start_time
+    return g
+
+
+def _espn_event(home_name: str, away_name: str,
+                home_score: int, away_score: int,
+                status: str = "STATUS_FINAL") -> dict:
+    return {
+        "status": {"type": {"name": status}},
+        "competitions": [{
+            "competitors": [
+                {
+                    "homeAway": "home",
+                    "team": {"displayName": home_name},
+                    "score": str(home_score),
+                },
+                {
+                    "homeAway": "away",
+                    "team": {"displayName": away_name},
+                    "score": str(away_score),
+                },
+            ]
+        }]
+    }
+
+
+class TestFetchEspnScoreForGame:
+    @pytest.mark.asyncio
+    async def test_returns_scores_when_game_final(self):
+        game = _make_game()
+        espn_data = {"events": [_espn_event("Boston Celtics", "New York Knicks", 112, 104)]}
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = espn_data
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _fetch_espn_score_for_game(game)
+
+        assert result == (112, 104)
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_game_not_final(self):
+        game = _make_game()
+        espn_data = {"events": [_espn_event("Boston Celtics", "New York Knicks", 55, 48,
+                                            status="STATUS_IN_PROGRESS")]}
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = espn_data
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _fetch_espn_score_for_game(game)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_team_does_not_match(self):
+        game = _make_game()
+        # ESPN has a different game on the same day
+        espn_data = {"events": [_espn_event("Los Angeles Lakers", "Golden State Warriors", 110, 108)]}
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = espn_data
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _fetch_espn_score_for_game(game)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_scores_are_zero(self):
+        """STATUS_FINAL but scores not yet populated — skip."""
+        game = _make_game()
+        espn_data = {"events": [_espn_event("Boston Celtics", "New York Knicks", 0, 0)]}
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = espn_data
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _fetch_espn_score_for_game(game)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_http_error(self):
+        game = _make_game()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 503
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _fetch_espn_score_for_game(game)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_network_exception(self):
+        game = _make_game()
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(side_effect=Exception("connection refused"))
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _fetch_espn_score_for_game(game)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_for_unknown_sport(self):
+        """Non-NBA/MLB sport has no ESPN URL — return None immediately."""
+        game = _make_game(sport="nfl")
+        result = await _fetch_espn_score_for_game(game)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_matches_by_last_word_of_team_name(self):
+        """Team-name matching should work on the last word only."""
+        game = _make_game(home_team="Boston Celtics", away_team="New York Knicks")
+        # ESPN might use slightly different names but same last word
+        espn_data = {"events": [_espn_event("Boston Celtics", "New York Knicks", 120, 115)]}
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = espn_data
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _fetch_espn_score_for_game(game)
+
+        assert result == (120, 115)
