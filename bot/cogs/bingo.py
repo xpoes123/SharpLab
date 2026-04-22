@@ -332,36 +332,29 @@ def _calling_embed(table: BingoTable) -> discord.Embed:
     else:
         embed.description = "Starting..."
 
-    # Pattern progress — show who's closest
+    # Pattern progress — show every player's best card progress
     if pat and table.players:
-        best_marked = 0
-        best_name = ""
-        total = 0
+        progress_lines: list[tuple[int, int, str]] = []
         for p in table.players.values():
+            best_m = 0
+            total = 0
             for card in p.cards:
                 m, t = pat.progress(card)
                 total = t
-                if m > best_marked:
-                    best_marked = m
-                    best_name = p.display_name
-        bar = "\u2588" * best_marked + "\u2591" * (total - best_marked)
+                if m > best_m:
+                    best_m = m
+            bar = "\u2588" * best_m + "\u2591" * (total - best_m)
+            progress_lines.append((best_m, total, f"{bar} {best_m}/{total} **{p.display_name}**"))
+        progress_lines.sort(key=lambda x: x[0], reverse=True)
         embed.add_field(
             name=f"{pat.emoji} {pat.name}",
-            value=f"Closest: **{best_name}** {bar} {best_marked}/{total}",
+            value="\n".join(line for _, _, line in progress_lines),
             inline=False,
         )
 
     embed.add_field(
         name=f"Called ({len(table.called_numbers)}/75)",
         value=_format_called_grid(table.called_set),
-        inline=False,
-    )
-    player_info = ", ".join(
-        f"{p.display_name}({p.num_cards})" for p in table.players.values()
-    )
-    embed.add_field(
-        name=f"Players ({len(table.players)})",
-        value=player_info,
         inline=False,
     )
     embed.set_footer(
