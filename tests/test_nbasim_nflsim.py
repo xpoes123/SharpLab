@@ -188,6 +188,26 @@ def test_nfl_quarter_sim_returns_nonneg():
         assert a >= 0
 
 
+# ── modal label length ───────────────────────────────────────────────────────
+# Discord API hard limit: text input labels must be ≤ 45 characters.
+# discord.py does not validate this client-side — over-length labels reach
+# Discord's API which returns 400, silently failing the join interaction.
+
+
+def test_nba_modal_label_lengths():
+    import warnings
+    from bot.cogs.nbasim import JoinNbaSimModal
+    for name in JoinNbaSimModal.__modal_children_items__:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            obj = getattr(JoinNbaSimModal, name)
+            label = obj.label
+        assert len(label) <= 45, (
+            f"TextInput '{name}' label is {len(label)} chars "
+            f"— Discord API limit is 45"
+        )
+
+
 # ── resolution logic (pure logic, no Discord) ─────────────────────────────────
 
 
