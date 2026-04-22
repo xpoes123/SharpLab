@@ -20,6 +20,32 @@ SHOE_DECKS = 2
 RESHUFFLE_THRESHOLD = 20
 MAX_PLAYERS = 5
 
+GAME_LABELS: dict[str, str] = {
+    "blackjack": "Blackjack",
+    "plinko": "Plinko",
+    "craps": "Craps",
+    "hilo": "Hi-Lo",
+    "roulette": "Roulette",
+    "crash": "Crash",
+    "videopoker": "Video Poker",
+    "uth": "Texas Hold'em",
+    "baccarat": "Baccarat",
+    "paigow": "Pai Gow",
+    "bingo": "Bingo",
+    "horserace": "Horse Race",
+    "stockmarket": "Stock Market",
+    "math24": "Math 24",
+    "countdown": "Countdown",
+    "mastermind": "Mastermind",
+    "liarsdice": "Liar's Dice",
+    "slots": "Slots",
+    "nbasim": "NBA Sim",
+    "nflsim": "NFL Sim",
+    "penalties": "Penalties",
+    "geography": "Geography",
+    "wordle": "Wordle",
+}
+
 # Hi-Lo counting values
 HI_LO: dict[str, int] = {
     "2": 1, "3": 1, "4": 1, "5": 1, "6": 1,
@@ -1332,31 +1358,6 @@ class CasinoCog(commands.Cog):
         )
 
         if by_game:
-            GAME_LABELS = {
-                "blackjack": "Blackjack",
-                "plinko": "Plinko",
-                "craps": "Craps",
-                "hilo": "Hi-Lo",
-                "roulette": "Roulette",
-                "crash": "Crash",
-                "videopoker": "Video Poker",
-                "uth": "Texas Hold'em",
-                "baccarat": "Baccarat",
-                "paigow": "Pai Gow",
-                "bingo": "Bingo",
-                "horserace": "Horse Race",
-                "stockmarket": "Stock Market",
-                "math24": "Math 24",
-                "countdown": "Countdown",
-                "mastermind": "Mastermind",
-                "liarsdice": "Liar's Dice",
-                "slots": "Slots",
-                "nbasim": "NBA Sim",
-                "nflsim": "NFL Sim",
-                "penalties": "Penalties",
-                "geography": "Geography",
-                "wordle": "Wordle",
-            }
             lines = []
             for row in by_game:
                 g_net = row["net_profit"]
@@ -1402,6 +1403,65 @@ class CasinoCog(commands.Cog):
             net_str = f"{net:+,}c" if rounds > 0 else "—"
             lines.append(
                 f"{medal} **{name}** — `{bal:,}`c | P/L {net_str} | {rounds:,} rounds"
+            )
+
+        embed.description = "\n".join(lines)
+        await interaction.followup.send(embed=embed)
+
+    # ── /game-leaderboard ────────────────────────────────────────────────────
+
+    async def _game_autocomplete(
+        self, interaction: discord.Interaction, current: str,
+    ) -> list[app_commands.Choice[str]]:
+        matches = [
+            app_commands.Choice(name=label, value=key)
+            for key, label in GAME_LABELS.items()
+            if current.lower() in label.lower() or current.lower() in key.lower()
+        ]
+        return matches[:25]
+
+    @app_commands.command(
+        name="game-leaderboard",
+        description="Leaderboard for a specific casino game",
+    )
+    @app_commands.describe(game="Which game to show the leaderboard for")
+    @app_commands.autocomplete(game=_game_autocomplete)
+    async def game_leaderboard(
+        self, interaction: discord.Interaction, game: str,
+    ) -> None:
+        if game not in GAME_LABELS:
+            await interaction.response.send_message(
+                "Unknown game. Use the autocomplete to pick one.", ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer()
+
+        rows = await queries.get_casino_game_leaderboard(game, limit=10)
+        label = GAME_LABELS[game]
+
+        if not rows:
+            await interaction.followup.send(f"No one has played **{label}** yet.")
+            return
+
+        embed = discord.Embed(
+            title=f"{label} Leaderboard",
+            colour=discord.Colour.gold(),
+        )
+        lines: list[str] = []
+        for i, row in enumerate(rows, 1):
+            try:
+                member = await self.bot.fetch_user(int(row["discord_user"]))
+                name = member.display_name
+            except Exception:
+                name = f"User {row['discord_user'][:8]}"
+
+            medal = {1: "\U0001f947", 2: "\U0001f948", 3: "\U0001f949"}.get(i, f"**{i}.**")
+            net = row["net_profit"]
+            rounds = row["rounds"]
+            roi = (net / row["total_wagered"] * 100) if row["total_wagered"] > 0 else 0
+            lines.append(
+                f"{medal} **{name}** — `{net:+,}`c | {roi:+.1f}% ROI | {rounds:,} rounds"
             )
 
         embed.description = "\n".join(lines)
