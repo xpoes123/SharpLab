@@ -1370,6 +1370,7 @@ CASINO_GAMES: list[tuple[str, str]] = [
     ("plinko", "Plinko ball-drop game"),
     ("hilo", "Hi-Lo card guessing game"),
     ("bingo", "Multiplayer bingo game"),
+    ("slots", "Fortune Reels — slots with free spins & bonus rounds"),
 ]
 
 
