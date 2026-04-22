@@ -15,13 +15,12 @@ from db import queries
 SUITS = ("♠", "♥", "♦", "♣")
 RANKS = ("2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A")
 RANK_VAL: dict[str, int] = {r: i for i, r in enumerate(RANKS, 2)}  # 2..14
-SHOE_DECKS = 2
-RESHUFFLE_THRESHOLD = 20
 MAX_PLAYERS = 5
 
 
-def _new_shoe() -> list[str]:
-    cards = [f"{r}{s}" for s in SUITS for r in RANKS] * SHOE_DECKS
+def _new_deck() -> list[str]:
+    """Standard 52-card deck, shuffled. Fresh deck each hand."""
+    cards = [f"{r}{s}" for s in SUITS for r in RANKS]
     random.shuffle(cards)
     return cards
 
@@ -202,7 +201,7 @@ class UTHTable:
     channel_id: int
     dealer_id: int
     dealer_name: str
-    shoe: list[str]
+    deck: list[str] = field(default_factory=list)
     phase: str = "betting"  # betting | preflop | flop | river | finished
     community: list[str] = field(default_factory=list)
     dealer_hand: list[str] = field(default_factory=list)
@@ -210,11 +209,9 @@ class UTHTable:
     message: discord.Message | None = None
     round_num: int = 1
     last_bets: dict[int, tuple[str, int, int]] = field(default_factory=dict)
-    total_cards: int = 0
-    reshuffled: bool = False
 
     def draw(self) -> str:
-        return self.shoe.pop()
+        return self.deck.pop()
 
     def all_decided(self) -> bool:
         return all(
@@ -224,12 +221,6 @@ class UTHTable:
 
     def any_active(self) -> bool:
         return any(not p.folded for p in self.players.values())
-
-    def check_reshuffle(self) -> None:
-        if len(self.shoe) < RESHUFFLE_THRESHOLD:
-            self.shoe = _new_shoe()
-            self.total_cards = len(self.shoe)
-            self.reshuffled = True
 
 
 # ── Embeds ────────────────────────────────────────────────────────────────────
@@ -252,13 +243,9 @@ def _table_embed(
         title = f"Ultimate Texas Hold'em — {phase_names.get(phase, phase.title())} (Round {table.round_num})"
 
     embed = discord.Embed(title=title, colour=colour)
-    footer = f"Dealer: {table.dealer_name} | Shoe: {len(table.shoe)}/{table.total_cards} cards"
-    embed.set_footer(text=footer)
+    embed.set_footer(text=f"Dealer: {table.dealer_name}")
 
-    if table.reshuffled:
-        embed.description = "🔀 **Shoe reshuffled!**"
-        table.reshuffled = False
-    elif phase == "betting":
+    if phase == "betting":
         embed.description = "Join the table, then the dealer deals!"
     elif phase == "finished":
         embed.description = "Click **New Round** to continue or **Close Table** to end."
@@ -696,6 +683,7 @@ class UTHTableView(ui.View):
     async def _deal(self, interaction: discord.Interaction) -> None:
         table = self.table
         table.phase = "preflop"
+        table.deck = _new_deck()
 
         # Deal 2 hole cards to each player
         for p in table.players.values():
@@ -855,7 +843,6 @@ class UTHTableView(ui.View):
         table.community.clear()
         table.phase = "betting"
         table.round_num += 1
-        table.check_reshuffle()
 
     async def _abort(self, interaction: discord.Interaction, reason: str) -> None:
         for p in self.table.players.values():
@@ -946,13 +933,10 @@ class UTHCog(commands.Cog):
 
         await queries.get_or_create_casino_wallet(str(interaction.user.id))
 
-        shoe = _new_shoe()
         table = UTHTable(
             channel_id=channel_id,
             dealer_id=interaction.user.id,
             dealer_name=interaction.user.display_name,
-            shoe=shoe,
-            total_cards=len(shoe),
         )
         self.active_tables[channel_id] = table
 
