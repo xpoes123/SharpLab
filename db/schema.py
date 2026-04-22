@@ -75,6 +75,81 @@ CREATE TABLE IF NOT EXISTS casino_history (
 );
 CREATE INDEX IF NOT EXISTS idx_casino_history_user ON casino_history(discord_user);
 
+CREATE TABLE IF NOT EXISTS user_xp (
+    discord_user  TEXT PRIMARY KEY,
+    total_xp      INTEGER NOT NULL DEFAULT 0,
+    level         INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS user_achievements (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    discord_user   TEXT NOT NULL,
+    achievement_id TEXT NOT NULL,
+    unlocked_at    TEXT NOT NULL,
+    UNIQUE(discord_user, achievement_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_achievements_user ON user_achievements(discord_user);
+
+CREATE TABLE IF NOT EXISTS daily_challenges (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    discord_user   TEXT NOT NULL,
+    challenge_date TEXT NOT NULL,
+    slot           INTEGER NOT NULL,
+    challenge_id   TEXT NOT NULL,
+    completed      INTEGER DEFAULT 0,
+    completed_at   TEXT,
+    UNIQUE(discord_user, challenge_date, slot)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_challenges_user_date
+    ON daily_challenges(discord_user, challenge_date);
+
+CREATE TABLE IF NOT EXISTS daily_bonus_claimed (
+    discord_user   TEXT NOT NULL,
+    challenge_date TEXT NOT NULL,
+    claimed_at     TEXT NOT NULL,
+    PRIMARY KEY (discord_user, challenge_date)
+);
+
+CREATE TABLE IF NOT EXISTS duels (
+    duel_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    challenger_id    TEXT NOT NULL,
+    opponent_id      TEXT NOT NULL,
+    wager            INTEGER NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'pending',
+    winner_id        TEXT,
+    score_challenger INTEGER DEFAULT 0,
+    score_opponent   INTEGER DEFAULT 0,
+    games_played     TEXT,
+    started_at       TEXT NOT NULL,
+    finished_at      TEXT,
+    channel_id       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tournaments (
+    tournament_id  INTEGER PRIMARY KEY AUTOINCREMENT,
+    game           TEXT NOT NULL,
+    size           INTEGER NOT NULL,
+    buy_in         INTEGER NOT NULL,
+    prize_pool     INTEGER NOT NULL,
+    status         TEXT NOT NULL DEFAULT 'registration',
+    host_id        TEXT NOT NULL,
+    channel_id     TEXT NOT NULL,
+    bracket_json   TEXT,
+    created_at     TEXT NOT NULL,
+    finished_at    TEXT
+);
+
+CREATE TABLE IF NOT EXISTS tournament_entries (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    tournament_id  INTEGER NOT NULL,
+    discord_user   TEXT NOT NULL,
+    seed           INTEGER,
+    eliminated     INTEGER DEFAULT 0,
+    final_place    INTEGER,
+    payout         INTEGER DEFAULT 0,
+    UNIQUE(tournament_id, discord_user)
+);
+
 CREATE TABLE IF NOT EXISTS paper_bets (
     paper_bet_id    INTEGER PRIMARY KEY AUTOINCREMENT,
     game_id         TEXT NOT NULL REFERENCES games(game_id),

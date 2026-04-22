@@ -48,6 +48,10 @@ COGS = [
     "bot.cogs.wordle",
     "bot.cogs.roster",
     "bot.cogs.sudoku",
+    "bot.cogs.progression",
+    "bot.cogs.challenges",
+    "bot.cogs.duels",
+    "bot.cogs.tournaments",
 ]
 
 GUILD_ID = int(os.environ["DISCORD_GUILD_ID"])

@@ -1,6 +1,7 @@
 """All DB access lives here. No raw SQL anywhere else."""
 from __future__ import annotations
 import json
+import math
 from datetime import datetime, timezone
 import aiosqlite
 from shared.models import Bet, Game, InjuryAlert, OddsSnapshot
@@ -924,14 +925,32 @@ async def give_casino_coins(discord_user: str, amount: int) -> int:
 async def log_casino_result(
     discord_user: str, game: str, wagered: int, payout: int,
 ) -> None:
-    """Record a completed casino round for PnL tracking."""
+    """Record a completed casino round for PnL tracking. Also awards XP."""
     now_iso = datetime.now(timezone.utc).isoformat()
+    xp = 10 + (15 if payout > wagered else 0)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO casino_history (discord_user, game, wagered, payout, played_at) "
             "VALUES (?, ?, ?, ?, ?)",
             (discord_user, game, wagered, payout, now_iso),
         )
+        await db.execute(
+            """INSERT INTO user_xp (discord_user, total_xp, level)
+               VALUES (?, ?, 1)
+               ON CONFLICT(discord_user) DO UPDATE SET total_xp = total_xp + ?""",
+            (discord_user, xp, xp),
+        )
+        cursor = await db.execute(
+            "SELECT total_xp FROM user_xp WHERE discord_user = ?",
+            (discord_user,),
+        )
+        row = await cursor.fetchone()
+        if row:
+            new_level = compute_level(row[0])
+            await db.execute(
+                "UPDATE user_xp SET level = ? WHERE discord_user = ?",
+                (new_level, discord_user),
+            )
         await db.commit()
 
 
@@ -1312,3 +1331,472 @@ async def void_paper_bet(paper_bet_id: int) -> None:
             (now, paper_bet_id),
         )
         await db.commit()
+
+
+# ── XP & Leveling ────────────────────────────────────────────────────────────
+
+
+def compute_level(xp: int) -> int:
+    """Level from XP. Level N requires 50*(N-1)^2 XP."""
+    return int(math.isqrt(xp // 50)) + 1 if xp >= 0 else 1
+
+
+def xp_for_level(level: int) -> int:
+    """XP threshold to reach a given level."""
+    return 50 * (level - 1) ** 2
+
+
+async def get_or_create_xp(discord_user: str) -> dict:
+    """Return {total_xp, level} for a user, creating row if needed."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT total_xp, level FROM user_xp WHERE discord_user = ?",
+            (discord_user,),
+        )
+        row = await cursor.fetchone()
+        if row:
+            return dict(row)
+        await db.execute(
+            "INSERT INTO user_xp (discord_user, total_xp, level) VALUES (?, 0, 1)",
+            (discord_user,),
+        )
+        await db.commit()
+    return {"total_xp": 0, "level": 1}
+
+
+async def add_xp(discord_user: str, amount: int) -> dict:
+    """Add XP, recalculate level. Returns {total_xp, level, leveled_up, old_level}."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT total_xp, level FROM user_xp WHERE discord_user = ?",
+            (discord_user,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            old_xp, old_level = 0, 1
+            await db.execute(
+                "INSERT INTO user_xp (discord_user, total_xp, level) VALUES (?, ?, 1)",
+                (discord_user, amount),
+            )
+        else:
+            old_xp, old_level = row["total_xp"], row["level"]
+        new_xp = old_xp + amount
+        new_level = compute_level(new_xp)
+        await db.execute(
+            "UPDATE user_xp SET total_xp = ?, level = ? WHERE discord_user = ?",
+            (new_xp, new_level, discord_user),
+        )
+        await db.commit()
+    return {
+        "total_xp": new_xp,
+        "level": new_level,
+        "leveled_up": new_level > old_level,
+        "old_level": old_level,
+    }
+
+
+# ── Achievements ─────────────────────────────────────────────────────────────
+
+
+async def unlock_achievement(discord_user: str, achievement_id: str) -> bool:
+    """Unlock an achievement. Returns True if newly unlocked."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            await db.execute(
+                "INSERT INTO user_achievements (discord_user, achievement_id, unlocked_at) "
+                "VALUES (?, ?, ?)",
+                (discord_user, achievement_id, now_iso),
+            )
+            await db.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            return False
+
+
+async def get_user_achievements(discord_user: str) -> list[dict]:
+    """All achievements a user has unlocked."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT achievement_id, unlocked_at FROM user_achievements "
+            "WHERE discord_user = ? ORDER BY unlocked_at ASC",
+            (discord_user,),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def has_achievement(discord_user: str, achievement_id: str) -> bool:
+    """Check if user has a specific achievement."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT 1 FROM user_achievements WHERE discord_user = ? AND achievement_id = ?",
+            (discord_user, achievement_id),
+        )
+        return await cursor.fetchone() is not None
+
+
+# ── Daily Challenges ─────────────────────────────────────────────────────────
+
+
+async def get_daily_challenge_slots(
+    discord_user: str, date: str, challenge_ids: list[str],
+) -> list[dict]:
+    """Return the 3 slots for a user/date, creating them if needed."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM daily_challenges WHERE discord_user = ? AND challenge_date = ? "
+            "ORDER BY slot ASC",
+            (discord_user, date),
+        )
+        rows = await cursor.fetchall()
+        if rows:
+            return [dict(r) for r in rows]
+        # Create the 3 slots
+        for i, cid in enumerate(challenge_ids):
+            await db.execute(
+                "INSERT OR IGNORE INTO daily_challenges "
+                "(discord_user, challenge_date, slot, challenge_id) VALUES (?, ?, ?, ?)",
+                (discord_user, date, i, cid),
+            )
+        await db.commit()
+        cursor = await db.execute(
+            "SELECT * FROM daily_challenges WHERE discord_user = ? AND challenge_date = ? "
+            "ORDER BY slot ASC",
+            (discord_user, date),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def complete_daily_challenge(
+    discord_user: str, date: str, slot: int, coins: int,
+) -> None:
+    """Mark a challenge slot as completed and award coins."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE daily_challenges SET completed = 1, completed_at = ? "
+            "WHERE discord_user = ? AND challenge_date = ? AND slot = ?",
+            (now_iso, discord_user, date, slot),
+        )
+        await db.execute(
+            "UPDATE casino_wallets SET balance = balance + ? WHERE discord_user = ?",
+            (coins, discord_user),
+        )
+        await db.commit()
+
+
+async def is_daily_bonus_claimed(discord_user: str, date: str) -> bool:
+    """Check if user already claimed the all-3 bonus."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT 1 FROM daily_bonus_claimed WHERE discord_user = ? AND challenge_date = ?",
+            (discord_user, date),
+        )
+        return await cursor.fetchone() is not None
+
+
+async def claim_daily_bonus(discord_user: str, date: str, coins: int) -> None:
+    """Record all-3 bonus claim and award coins."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO daily_bonus_claimed (discord_user, challenge_date, claimed_at) "
+            "VALUES (?, ?, ?)",
+            (discord_user, date, now_iso),
+        )
+        await db.execute(
+            "UPDATE casino_wallets SET balance = balance + ? WHERE discord_user = ?",
+            (coins, discord_user),
+        )
+        await db.commit()
+
+
+async def get_todays_casino_history(discord_user: str, date: str) -> list[dict]:
+    """All casino history entries for a user on a date (YYYY-MM-DD prefix match)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM casino_history WHERE discord_user = ? AND played_at LIKE ? "
+            "ORDER BY id ASC",
+            (discord_user, f"{date}%"),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_casino_history_since(last_id: int) -> list[dict]:
+    """Return casino_history entries with id > last_id."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM casino_history WHERE id > ? ORDER BY id ASC",
+            (last_id,),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_consecutive_daily_completions(discord_user: str, before_date: str) -> int:
+    """Count consecutive days before `before_date` where all 3 challenges were completed."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT challenge_date,
+                      SUM(completed) AS done, COUNT(*) AS total
+               FROM daily_challenges
+               WHERE discord_user = ? AND challenge_date < ?
+               GROUP BY challenge_date
+               ORDER BY challenge_date DESC""",
+            (discord_user, before_date),
+        )
+        rows = await cursor.fetchall()
+    streak = 0
+    from datetime import timedelta
+    expected = datetime.strptime(before_date, "%Y-%m-%d") - timedelta(days=1)
+    for row in rows:
+        row_date = datetime.strptime(row["challenge_date"], "%Y-%m-%d")
+        if row_date.date() != expected.date():
+            break
+        if row["done"] < 3:
+            break
+        streak += 1
+        expected -= timedelta(days=1)
+    return streak
+
+
+# ── Duels ────────────────────────────────────────────────────────────────────
+
+
+async def create_duel(
+    channel_id: str, challenger_id: str, opponent_id: str, wager: int,
+) -> int:
+    """Create a pending duel. Returns duel_id."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """INSERT INTO duels
+               (channel_id, challenger_id, opponent_id, wager, status,
+                score_challenger, score_opponent, started_at)
+               VALUES (?, ?, ?, ?, 'pending', 1000, 1000, ?)""",
+            (channel_id, challenger_id, opponent_id, wager, now_iso),
+        )
+        await db.commit()
+        return cursor.lastrowid  # type: ignore[return-value]
+
+
+async def get_duel(duel_id: int) -> dict | None:
+    """Return duel row as dict."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM duels WHERE duel_id = ?", (duel_id,),
+        )
+        row = await cursor.fetchone()
+    return dict(row) if row else None
+
+
+async def get_active_duel_in_channel(channel_id: str) -> dict | None:
+    """Return pending or active duel in channel."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM duels WHERE channel_id = ? AND status IN ('pending', 'active') "
+            "ORDER BY duel_id DESC LIMIT 1",
+            (channel_id,),
+        )
+        row = await cursor.fetchone()
+    return dict(row) if row else None
+
+
+async def update_duel(duel_id: int, **kwargs: object) -> None:
+    """Update duel fields dynamically."""
+    if not kwargs:
+        return
+    sets = ", ".join(f"{k} = ?" for k in kwargs)
+    vals = list(kwargs.values()) + [duel_id]
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(f"UPDATE duels SET {sets} WHERE duel_id = ?", vals)
+        await db.commit()
+
+
+async def get_duel_stats(discord_user: str) -> dict:
+    """W-L record for finished duels."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT
+                   SUM(CASE WHEN winner_id = ? THEN 1 ELSE 0 END) AS wins,
+                   SUM(CASE WHEN winner_id IS NOT NULL AND winner_id != ? THEN 1 ELSE 0 END) AS losses,
+                   SUM(CASE WHEN winner_id IS NULL THEN 1 ELSE 0 END) AS draws
+               FROM duels
+               WHERE status = 'finished'
+                 AND (challenger_id = ? OR opponent_id = ?)""",
+            (discord_user, discord_user, discord_user, discord_user),
+        )
+        row = await cursor.fetchone()
+    if row and row["wins"] is not None:
+        return dict(row)
+    return {"wins": 0, "losses": 0, "draws": 0}
+
+
+# ── Tournaments ──────────────────────────────────────────────────────────────
+
+
+async def create_tournament(
+    channel_id: str, host_id: str, size: int, buy_in: int,
+) -> int:
+    """Create a tournament in registration phase. Returns tournament_id."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    prize_pool = size * buy_in
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """INSERT INTO tournaments
+               (game, size, buy_in, prize_pool, status, host_id, channel_id, created_at)
+               VALUES ('minigames', ?, ?, ?, 'registration', ?, ?, ?)""",
+            (size, buy_in, prize_pool, host_id, channel_id, now_iso),
+        )
+        await db.commit()
+        return cursor.lastrowid  # type: ignore[return-value]
+
+
+async def join_tournament(tournament_id: int, discord_user: str) -> None:
+    """Add a player to tournament entries."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO tournament_entries (tournament_id, discord_user) "
+            "VALUES (?, ?)",
+            (tournament_id, discord_user),
+        )
+        await db.commit()
+
+
+async def get_tournament(tournament_id: int) -> dict | None:
+    """Return tournament row as dict."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM tournaments WHERE tournament_id = ?",
+            (tournament_id,),
+        )
+        row = await cursor.fetchone()
+    return dict(row) if row else None
+
+
+async def get_tournament_in_channel(channel_id: str) -> dict | None:
+    """Return active/registration tournament in channel."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM tournaments WHERE channel_id = ? "
+            "AND status IN ('registration', 'active') "
+            "ORDER BY tournament_id DESC LIMIT 1",
+            (channel_id,),
+        )
+        row = await cursor.fetchone()
+    return dict(row) if row else None
+
+
+async def get_tournament_entries(tournament_id: int) -> list[dict]:
+    """All entries for a tournament."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM tournament_entries WHERE tournament_id = ? ORDER BY seed ASC",
+            (tournament_id,),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def update_tournament(tournament_id: int, **kwargs: object) -> None:
+    """Update tournament fields dynamically."""
+    if not kwargs:
+        return
+    sets = ", ".join(f"{k} = ?" for k in kwargs)
+    vals = list(kwargs.values()) + [tournament_id]
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(f"UPDATE tournaments SET {sets} WHERE tournament_id = ?", vals)
+        await db.commit()
+
+
+async def update_tournament_entry(
+    tournament_id: int, discord_user: str, **kwargs: object,
+) -> None:
+    """Update a tournament entry."""
+    if not kwargs:
+        return
+    sets = ", ".join(f"{k} = ?" for k in kwargs)
+    vals = list(kwargs.values()) + [tournament_id, discord_user]
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            f"UPDATE tournament_entries SET {sets} "
+            "WHERE tournament_id = ? AND discord_user = ?",
+            vals,
+        )
+        await db.commit()
+
+
+async def get_tournament_stats(discord_user: str) -> dict:
+    """Tournament stats: wins, entries, total_payout."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT
+                   COUNT(*) AS entries,
+                   SUM(CASE WHEN final_place = 1 THEN 1 ELSE 0 END) AS wins,
+                   COALESCE(SUM(payout), 0) AS total_payout
+               FROM tournament_entries
+               WHERE discord_user = ?""",
+            (discord_user,),
+        )
+        row = await cursor.fetchone()
+    if row and row["entries"] is not None:
+        return dict(row)
+    return {"entries": 0, "wins": 0, "total_payout": 0}
+
+
+async def get_casino_win_streak(discord_user: str) -> int:
+    """Current consecutive win streak from casino_history (most recent first)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT wagered, payout FROM casino_history "
+            "WHERE discord_user = ? ORDER BY id DESC",
+            (discord_user,),
+        )
+        rows = await cursor.fetchall()
+    streak = 0
+    for r in rows:
+        if r["payout"] > r["wagered"]:
+            streak += 1
+        else:
+            break
+    return streak
+
+
+async def get_distinct_games_played(discord_user: str) -> int:
+    """Count of distinct casino games a user has played."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT COUNT(DISTINCT game) FROM casino_history WHERE discord_user = ?",
+            (discord_user,),
+        )
+        row = await cursor.fetchone()
+    return row[0] if row else 0
+
+
+async def get_max_single_profit(discord_user: str) -> int:
+    """Largest single-round profit from casino_history."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT MAX(payout - wagered) FROM casino_history WHERE discord_user = ?",
+            (discord_user,),
+        )
+        row = await cursor.fetchone()
+    return row[0] if row and row[0] else 0

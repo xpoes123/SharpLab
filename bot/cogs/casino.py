@@ -49,6 +49,8 @@ GAME_LABELS: dict[str, str] = {
     "nba-trivia": "NBA Trivia",
     "nfl-trivia": "NFL Trivia",
     "sudoku": "Sudoku Sprint",
+    "duel": "Duels",
+    "tournament": "Tournaments",
 }
 
 GAME_CATEGORIES: list[tuple[str, str]] = [
