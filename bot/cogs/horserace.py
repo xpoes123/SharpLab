@@ -134,31 +134,39 @@ class HorseRaceTable:
 # ── Embeds ───────────────────────────────────────────────────────────────────
 
 
+def _payout_multiplier(prob: float) -> float:
+    """Return the payout multiplier for a horse with the given win probability.
+
+    Payout = bet * multiplier.  Includes house edge (5% rake).
+    """
+    return (1 / prob) * (1 - HOUSE_EDGE)
+
+
 def _betting_embed(table: HorseRaceTable) -> discord.Embed:
-    pot = sum(p.bet for p in table.players.values())
+    total_wagered = sum(p.bet for p in table.players.values())
     embed = discord.Embed(
         title=f"\U0001f3c7 Horse Race \u2014 Place Your Bets (Round {table.round_num})",
         description=(
             "Pick a horse and place your bet! "
-            "First horse to cross the finish line wins the pot."
+            "Longshots pay more \u2014 picks are hidden until the race starts."
         ),
         colour=discord.Colour.blurple(),
     )
-    if pot:
+    if total_wagered:
         embed.add_field(
-            name="Pot",
-            value=f"{pot}c (5% house rake)",
+            name="Total Wagered",
+            value=f"{total_wagered}c",
             inline=True,
         )
 
-    # Horse list with win probabilities
+    # Horse list with win probabilities and payout multipliers
     horse_lines: list[str] = []
     for i in range(NUM_HORSES):
         name, emoji = HORSES[i]
         pct = table.horse_probs[i] * 100
-        fair_x = 1 / table.horse_probs[i]
+        mult = _payout_multiplier(table.horse_probs[i])
         horse_lines.append(
-            f"{emoji} **#{i + 1} {name}** \u2014 {pct:.0f}% chance ({fair_x:.1f}x)"
+            f"{emoji} **#{i + 1} {name}** \u2014 {pct:.0f}% chance \u2014 **{mult:.1f}x** payout"
         )
     embed.add_field(
         name="Horses",
@@ -617,27 +625,11 @@ class HorseRaceTableView(ui.View):
         table = self.table
         table.phase = "finished"
 
-        total_pot = sum(p.bet for p in table.players.values())
-        house_take = max(1, int(total_pot * HOUSE_EDGE))
-        prize_pool = total_pot - house_take
-
-        # Find players who bet on a winning horse
-        winning_players = [
-            uid for uid, p in table.players.items()
-            if p.horse_index in table.winners
-        ]
-
-        if winning_players:
-            # Split prize pool among winners proportional to their bets
-            winner_total_bet = sum(
-                table.players[uid].bet for uid in winning_players
-            )
-            for uid in winning_players:
-                p = table.players[uid]
+        # Fixed-odds payout: bet × (1/prob) × (1 - house_edge)
+        for p in table.players.values():
+            if p.horse_index in table.winners:
                 p.won = True
-                # Proportional share of the prize pool
-                p.payout = int(prize_pool * p.bet / winner_total_bet)
-        # else: no players bet on the winning horse — house takes all
+                p.payout = int(p.bet * _payout_multiplier(table.horse_probs[p.horse_index]))
 
         # Credit winners and log results
         balances: dict[int, int] = {}
