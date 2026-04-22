@@ -31,13 +31,56 @@ def _pick_matchup() -> tuple[tuple[str, str], tuple[str, str]]:
     return (pair[0], pair[1])
 
 
-def _generate_ratings() -> tuple[float, float, float]:
-    """Generate (offense, defense, coaching) ratings each in [45, 95]."""
-    return (
-        random.uniform(45.0, 95.0),
-        random.uniform(45.0, 95.0),
-        random.uniform(45.0, 95.0),
-    )
+# ── Team ratings — 2024-25 NBA season ────────────────────────────────────────
+# All values normalized to [45, 95] where 70 ≈ league average.
+# Offense: based on offensive rating (ortg); Defense: based on defensive rating
+# (drtg, inverted — higher = better); Coaching: judgment from win% vs.
+# expectations, system quality, and in-season performance.
+# Sources: Basketball-Reference, ESPN, NBA.com (through Apr 2025).
+NBA_TEAM_RATINGS: dict[str, tuple[float, float, float]] = {
+    # (offense, defense, coaching)
+    "OKC": (92.0, 79.0, 89.0),  # #1 ortg, top-5 drtg, Daigneault COTY
+    "CLE": (91.0, 75.0, 83.0),  # #2 ortg, solid defense, Atkinson strong 1st yr
+    "BOS": (83.0, 77.0, 84.0),  # Defending champs, Mazzulla system elite
+    "MIN": (65.0, 86.0, 74.0),  # Elite drtg, below-avg offense (Gobert wall)
+    "DEN": (77.0, 74.0, 79.0),  # Jokic system, Malone solid
+    "IND": (85.0, 58.0, 73.0),  # High-octane offense, porous defense
+    "NYK": (78.0, 74.0, 76.0),  # Thibodeau grind, balanced
+    "MIL": (72.0, 65.0, 68.0),  # Dame+Giannis underperformed expectations
+    "DAL": (72.0, 70.0, 70.0),  # Post-Luka-trade transition
+    "LAL": (75.0, 68.0, 71.0),  # LeBron+Luka, JJ Redick rookie year
+    "GSW": (68.0, 66.0, 76.0),  # Aging core, Kerr consistency bump
+    "PHX": (67.0, 63.0, 62.0),  # KD/Beal/Booker chemistry issues
+    "HOU": (68.0, 68.0, 73.0),  # Young playoff team, Udoka development
+    "SAC": (68.0, 61.0, 67.0),  # De'Aaron Fox era, leaky defense
+    "MEM": (67.0, 66.0, 67.0),  # Ja Morant back, inconsistent
+    "MIA": (65.0, 68.0, 71.0),  # Injury-hampered, Spoelstra coaching bump
+    "ATL": (72.0, 58.0, 62.0),  # Trae Young volume scorer, bad defense
+    "CHI": (63.0, 65.0, 63.0),  # Mediocre on both ends
+    "NOP": (62.0, 70.0, 66.0),  # Zion/BI injuries gutted season
+    "ORL": (52.0, 84.0, 73.0),  # Elite defense, bottom-5 offense
+    "PHI": (65.0, 68.0, 66.0),  # Embiid missed most of season
+    "LAC": (68.0, 74.0, 69.0),  # Kawhi-less, decent defense
+    "TOR": (58.0, 59.0, 63.0),  # Full rebuild
+    "SAS": (55.0, 61.0, 66.0),  # Wembanyama developing, Pop-era system
+    "UTA": (55.0, 56.0, 60.0),  # Tank mode
+    "DET": (62.0, 59.0, 63.0),  # Young and improving
+    "POR": (57.0, 58.0, 60.0),  # Rebuild year
+    "CHA": (58.0, 56.0, 57.0),  # Bad across the board
+    "BKN": (60.0, 58.0, 61.0),  # Rebuild after stars traded away
+    "WAS": (52.0, 47.0, 52.0),  # Worst record in league
+}
+
+
+def _generate_ratings(abbr: str = "") -> tuple[float, float, float]:
+    """Return (offense, defense, coaching) for the given team abbreviation.
+
+    Looks up calibrated 2024-25 real-season ratings from NBA_TEAM_RATINGS.
+    Falls back to a random entry from the table if abbr is unknown.
+    """
+    if abbr in NBA_TEAM_RATINGS:
+        return NBA_TEAM_RATINGS[abbr]
+    return random.choice(list(NBA_TEAM_RATINGS.values()))
 
 
 def _compute_home_prob(
@@ -803,8 +846,8 @@ class NbaSimTableView(ui.View):
         home, away = _pick_matchup()
         table.home_team = home
         table.away_team = away
-        h_off, h_def, h_coa = _generate_ratings()
-        a_off, a_def, a_coa = _generate_ratings()
+        h_off, h_def, h_coa = _generate_ratings(home[1])
+        a_off, a_def, a_coa = _generate_ratings(away[1])
         table.home_offense = h_off
         table.home_defense = h_def
         table.home_coaching = h_coa
@@ -899,8 +942,8 @@ class NbaSimCog(commands.Cog):
         await queries.get_or_create_casino_wallet(str(interaction.user.id))
 
         home, away = _pick_matchup()
-        h_off, h_def, h_coa = _generate_ratings()
-        a_off, a_def, a_coa = _generate_ratings()
+        h_off, h_def, h_coa = _generate_ratings(home[1])
+        a_off, a_def, a_coa = _generate_ratings(away[1])
         home_prob = _compute_home_prob(h_off, h_def, h_coa, a_off, a_def, a_coa)
         spread = _compute_spread(home_prob)
         total = _compute_total(h_off, h_def, a_off, a_def)
