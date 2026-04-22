@@ -953,6 +953,9 @@ class BingoTableView(ui.View):
         pattern, idx = _pick_pattern(table.last_pattern_idx)
         table.pattern = pattern
         table.last_pattern_idx = idx
+        # Refresh the select default
+        for opt in self.pattern_select.options:
+            opt.default = (opt.value == str(idx))
 
     async def _refund_all(self) -> None:
         for p in self.table.players.values():
