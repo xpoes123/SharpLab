@@ -34,6 +34,17 @@ NUM_HORSES = len(HORSES)
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
+def _generate_horse_probs() -> list[float]:
+    """Generate random win probabilities for each horse.
+
+    Uses a Dirichlet-like distribution so some horses are favorites
+    and others are longshots, with enough variance to keep it interesting.
+    """
+    raw = [random.gammavariate(1.5, 1) for _ in range(NUM_HORSES)]
+    total = sum(raw)
+    return [r / total for r in raw]
+
+
 def _horse_label(index: int) -> str:
     """Return e.g. '🔴 Thunderbolt' for a horse index."""
     name, emoji = HORSES[index]
@@ -45,18 +56,24 @@ def _horse_short(index: int) -> str:
     return HORSES[index][1]
 
 
-def _render_track(positions: list[int], tick: int) -> str:
+def _render_track(
+    positions: list[int], tick: int, probs: list[float] | None = None,
+) -> str:
     """Render the race track as monospace text for a Discord code block."""
     lines: list[str] = [f"\U0001f3c7 Horse Race \u2014 Tick {tick}"]
     lines.append("")
-    for i, (name, emoji) in enumerate(HORSES):
+    for i, (name, _emoji) in enumerate(HORSES):
         pos = min(positions[i], TRACK_LENGTH)
         pct = int(pos / TRACK_LENGTH * 100)
         filled = pos
         empty = TRACK_LENGTH - pos
         bar = "\u2588" * filled + "\u2591" * empty
         # Use the horse number since emoji won't render in code blocks
-        lines.append(f"  #{i + 1} {name:<12s} {bar} {pct:>3d}%")
+        if probs:
+            prob_tag = f"{probs[i] * 100:>2.0f}%"
+            lines.append(f"  #{i + 1} {prob_tag} {name:<12s} {bar} {pct:>3d}%")
+        else:
+            lines.append(f"  #{i + 1} {name:<12s} {bar} {pct:>3d}%")
     return "```\n" + "\n".join(lines) + "\n```"
 
 
@@ -107,6 +124,7 @@ class HorseRaceTable:
     round_num: int = 1
     last_bets: dict[int, tuple[str, int, int]] = field(default_factory=dict)
     # Race-specific
+    horse_probs: list[float] = field(default_factory=_generate_horse_probs)
     horse_positions: list[int] = field(default_factory=lambda: [0] * NUM_HORSES)
     tick: int = 0
     winners: list[int] = field(default_factory=list)  # winning horse indices
@@ -133,20 +151,14 @@ def _betting_embed(table: HorseRaceTable) -> discord.Embed:
             inline=True,
         )
 
-    # Horse list with odds
-    odds = _compute_pool_odds(table.players)
+    # Horse list with win probabilities
     horse_lines: list[str] = []
     for i in range(NUM_HORSES):
         name, emoji = HORSES[i]
-        # Collect bettors for this horse
-        bettors = [
-            f"{p.display_name} ({p.bet}c)"
-            for p in table.players.values()
-            if p.horse_index == i
-        ]
-        bettor_str = ", ".join(bettors) if bettors else "\u2014"
+        pct = table.horse_probs[i] * 100
+        fair_x = 1 / table.horse_probs[i]
         horse_lines.append(
-            f"{emoji} **#{i + 1} {name}** \u2014 odds: {odds[i]} \u2014 {bettor_str}"
+            f"{emoji} **#{i + 1} {name}** \u2014 {pct:.0f}% chance ({fair_x:.1f}x)"
         )
     embed.add_field(
         name="Horses",
@@ -154,9 +166,10 @@ def _betting_embed(table: HorseRaceTable) -> discord.Embed:
         inline=False,
     )
 
+    # Show who joined + bet amount, but NOT which horse (hidden until race)
     if table.players:
         player_lines = [
-            f"\U0001f3b0 **{p.display_name}** \u2014 {p.bet}c on {_horse_label(p.horse_index)}"
+            f"\U0001f3b0 **{p.display_name}** \u2014 {p.bet}c"
             for p in table.players.values()
         ]
         embed.add_field(name="Players", value="\n".join(player_lines), inline=False)
@@ -177,7 +190,7 @@ def _racing_embed(table: HorseRaceTable) -> discord.Embed:
         title=f"\U0001f3c7 Horse Race \u2014 Round {table.round_num}",
         colour=discord.Colour.gold(),
     )
-    embed.description = _render_track(table.horse_positions, table.tick)
+    embed.description = _render_track(table.horse_positions, table.tick, table.horse_probs)
 
     # Show bets by horse (compact)
     bet_lines: list[str] = []
@@ -215,7 +228,7 @@ def _finished_embed(
     # Show final track
     embed.add_field(
         name="Final Track",
-        value=_render_track(table.horse_positions, table.tick),
+        value=_render_track(table.horse_positions, table.tick, table.horse_probs),
         inline=False,
     )
 
@@ -562,9 +575,16 @@ class HorseRaceTableView(ui.View):
                 await asyncio.sleep(TICK_INTERVAL)
                 table.tick += 1
 
-                # Advance each horse by random 0-3 positions
+                # Advance each horse — weighted by win probability
                 for i in range(NUM_HORSES):
-                    table.horse_positions[i] += random.randint(0, 3)
+                    # speed factor: prob * NUM_HORSES → 1.0 for average horse
+                    s = table.horse_probs[i] * NUM_HORSES
+                    w0 = max(0.1, 2.0 - s)  # weight for 0 steps (high for longshots)
+                    w3 = max(0.1, s)          # weight for 3 steps (high for favorites)
+                    weights = [w0, 1.0, 1.0, w3]
+                    table.horse_positions[i] += random.choices(
+                        [0, 1, 2, 3], weights=weights,
+                    )[0]
 
                 # Check for finishers
                 finishers = [
@@ -656,6 +676,7 @@ class HorseRaceTableView(ui.View):
         table.players.clear()
         table.phase = "betting"
         table.round_num += 1
+        table.horse_probs = _generate_horse_probs()
         table.horse_positions = [0] * NUM_HORSES
         table.tick = 0
         table.winners.clear()
