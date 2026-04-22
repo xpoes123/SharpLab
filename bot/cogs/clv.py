@@ -20,11 +20,6 @@ from shared.odds_utils import compute_clv, fmt_prob, side_is_home
 
 load_dotenv()
 
-_clv_channel_id_str = os.getenv("CLV_CHANNEL_ID")
-if not _clv_channel_id_str:
-    raise RuntimeError("CLV_CHANNEL_ID environment variable is not set — cannot start CLV cog")
-CLV_CHANNEL_ID = int(_clv_channel_id_str)
-
 
 # ── CLV computation ───────────────────────────────────────────────────────────
 
@@ -133,6 +128,12 @@ def _build_closing_lines_field(kalshi_close, dk_close, dk_open=None) -> str:
 class CLVCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
+        _channel_id_str = os.getenv("CLV_CHANNEL_ID")
+        if _channel_id_str:
+            self.clv_channel_id: int | None = int(_channel_id_str)
+        else:
+            self.clv_channel_id = None
+            log.warning("CLV_CHANNEL_ID environment variable is not set — CLV auto-post disabled")
         self.clv_check.start()
 
     def cog_unload(self) -> None:
@@ -140,11 +141,13 @@ class CLVCog(commands.Cog):
 
     @tasks.loop(minutes=5)
     async def clv_check(self) -> None:
-        channel = self.bot.get_channel(CLV_CHANNEL_ID)
+        if self.clv_channel_id is None:
+            return
+        channel = self.bot.get_channel(self.clv_channel_id)
         if channel is None:
             log.warning(
                 "CLV channel %d not found — bot may not be in that server or the channel was deleted",
-                CLV_CHANNEL_ID,
+                self.clv_channel_id,
             )
             return
 
