@@ -763,6 +763,13 @@ class GuessModal(ui.Modal):
             )
             return
 
+        # Must be a word in the dictionary
+        if guess not in VALID_WORDS:
+            await interaction.response.send_message(
+                f"**{guess}** is not in the word list.", ephemeral=True,
+            )
+            return
+
         # Hard mode: must reuse green/yellow info from previous guesses
         hard_err = check_hard_mode(guess, player.guesses, self.table.secret_word)
         if hard_err:
