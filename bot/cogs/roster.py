@@ -1,13 +1,12 @@
 """Casino cog — multiplayer /nba-trivia and /nfl-trivia speed games.
 
-Given a player name, first to type the correct team wins the round.
+Given a player name, pick the correct team from 4 multiple-choice buttons.
 First to WINS_TO_WIN round wins takes the pot.
 """
 
 import asyncio
 import random
 import time
-import unicodedata
 from dataclasses import dataclass, field
 from itertools import groupby
 
@@ -89,39 +88,40 @@ NBA_TEAMS: dict[str, list[str]] = {
 }
 
 # player_name -> (position, team_key)
+# Updated April 2026 — reflects 2025 deadline, 2025 offseason, and 2026 deadline trades.
 NBA_PLAYERS: dict[str, tuple[str, str]] = {
     # ── Hawks ──
-    "Trae Young": ("PG", "Hawks"),
     "Jalen Johnson": ("SF", "Hawks"),
     "De'Andre Hunter": ("SF", "Hawks"),
     "Zaccharie Risacher": ("SF", "Hawks"),
+    "Jonathan Kuminga": ("SF", "Hawks"),
+    "CJ McCollum": ("PG", "Hawks"),
     # ── Celtics ──
     "Jayson Tatum": ("SF", "Celtics"),
     "Jaylen Brown": ("SG", "Celtics"),
     "Derrick White": ("SG", "Celtics"),
-    "Jrue Holiday": ("PG", "Celtics"),
-    "Kristaps Porzingis": ("C", "Celtics"),
+    "Nikola Vucevic": ("C", "Celtics"),
     # ── Nets ──
     "Cam Thomas": ("SG", "Nets"),
-    "Ben Simmons": ("PG", "Nets"),
     # ── Hornets ──
     "LaMelo Ball": ("PG", "Hornets"),
     "Brandon Miller": ("SF", "Hornets"),
     "Mark Williams": ("C", "Hornets"),
     # ── Bulls ──
-    "Zach LaVine": ("SG", "Bulls"),
     "Coby White": ("SG", "Bulls"),
-    "Nikola Vucevic": ("C", "Bulls"),
+    "Anfernee Simons": ("SG", "Bulls"),
+    "Jaden Ivey": ("SG", "Bulls"),
     # ── Cavaliers ──
     "Donovan Mitchell": ("SG", "Cavaliers"),
-    "Darius Garland": ("PG", "Cavaliers"),
     "Evan Mobley": ("PF", "Cavaliers"),
     "Jarrett Allen": ("C", "Cavaliers"),
+    "James Harden": ("PG", "Cavaliers"),
     # ── Mavericks ──
-    "Luka Doncic": ("PG", "Mavericks"),
     "Kyrie Irving": ("PG", "Mavericks"),
     "Klay Thompson": ("SG", "Mavericks"),
     "PJ Washington": ("PF", "Mavericks"),
+    "Cooper Flagg": ("SF", "Mavericks"),
+    "Khris Middleton": ("SF", "Mavericks"),
     # ── Nuggets ──
     "Nikola Jokic": ("C", "Nuggets"),
     "Jamal Murray": ("PG", "Nuggets"),
@@ -129,13 +129,12 @@ NBA_PLAYERS: dict[str, tuple[str, str]] = {
     "Aaron Gordon": ("PF", "Nuggets"),
     # ── Pistons ──
     "Cade Cunningham": ("PG", "Pistons"),
-    "Jaden Ivey": ("SG", "Pistons"),
     "Ausar Thompson": ("SF", "Pistons"),
     # ── Warriors ──
     "Stephen Curry": ("PG", "Warriors"),
     "Draymond Green": ("PF", "Warriors"),
-    "Andrew Wiggins": ("SF", "Warriors"),
-    "Jonathan Kuminga": ("SF", "Warriors"),
+    "Jimmy Butler": ("SF", "Warriors"),
+    "Kristaps Porzingis": ("C", "Warriors"),
     # ── Rockets ──
     "Jalen Green": ("SG", "Rockets"),
     "Alperen Sengun": ("C", "Rockets"),
@@ -146,28 +145,26 @@ NBA_PLAYERS: dict[str, tuple[str, str]] = {
     "Pascal Siakam": ("PF", "Pacers"),
     "Myles Turner": ("C", "Pacers"),
     "Andrew Nembhard": ("PG", "Pacers"),
+    "Ivica Zubac": ("C", "Pacers"),
     # ── Clippers ──
-    "James Harden": ("PG", "Clippers"),
     "Kawhi Leonard": ("SF", "Clippers"),
     "Norman Powell": ("SG", "Clippers"),
-    "Ivica Zubac": ("C", "Clippers"),
+    "Darius Garland": ("PG", "Clippers"),
     # ── Lakers ──
     "LeBron James": ("SF", "Lakers"),
-    "Anthony Davis": ("PF", "Lakers"),
+    "Luka Doncic": ("PG", "Lakers"),
     "Austin Reaves": ("SG", "Lakers"),
     "Rui Hachimura": ("PF", "Lakers"),
     # ── Grizzlies ──
     "Ja Morant": ("PG", "Grizzlies"),
     "Desmond Bane": ("SG", "Grizzlies"),
-    "Jaren Jackson Jr": ("PF", "Grizzlies"),
     # ── Heat ──
     "Bam Adebayo": ("C", "Heat"),
     "Tyler Herro": ("SG", "Heat"),
-    "Jimmy Butler": ("SF", "Heat"),
+    "Andrew Wiggins": ("SF", "Heat"),
     # ── Bucks ──
     "Giannis Antetokounmpo": ("PF", "Bucks"),
     "Damian Lillard": ("PG", "Bucks"),
-    "Khris Middleton": ("SF", "Bucks"),
     "Brook Lopez": ("C", "Bucks"),
     # ── Timberwolves ──
     "Anthony Edwards": ("SG", "Timberwolves"),
@@ -176,9 +173,8 @@ NBA_PLAYERS: dict[str, tuple[str, str]] = {
     "Jaden McDaniels": ("SF", "Timberwolves"),
     # ── Pelicans ──
     "Zion Williamson": ("PF", "Pelicans"),
-    "Brandon Ingram": ("SF", "Pelicans"),
-    "CJ McCollum": ("PG", "Pelicans"),
     "Trey Murphy III": ("SF", "Pelicans"),
+    "Jordan Poole": ("SG", "Pelicans"),
     # ── Knicks ──
     "Jalen Brunson": ("PG", "Knicks"),
     "Karl-Anthony Towns": ("C", "Knicks"),
@@ -203,14 +199,15 @@ NBA_PLAYERS: dict[str, tuple[str, str]] = {
     "Devin Booker": ("SG", "Suns"),
     "Bradley Beal": ("SG", "Suns"),
     # ── Trail Blazers ──
-    "Anfernee Simons": ("SG", "Trail Blazers"),
     "Scoot Henderson": ("PG", "Trail Blazers"),
     "Deandre Ayton": ("C", "Trail Blazers"),
     "Jerami Grant": ("SF", "Trail Blazers"),
+    "Jrue Holiday": ("PG", "Trail Blazers"),
     # ── Kings ──
     "Domantas Sabonis": ("C", "Kings"),
     "DeMar DeRozan": ("SF", "Kings"),
     "Keegan Murray": ("SF", "Kings"),
+    "Zach LaVine": ("SG", "Kings"),
     # ── Spurs ──
     "Victor Wembanyama": ("C", "Spurs"),
     "Devin Vassell": ("SG", "Spurs"),
@@ -221,15 +218,18 @@ NBA_PLAYERS: dict[str, tuple[str, str]] = {
     "Scottie Barnes": ("SF", "Raptors"),
     "RJ Barrett": ("SG", "Raptors"),
     "Immanuel Quickley": ("PG", "Raptors"),
+    "Brandon Ingram": ("SF", "Raptors"),
     # ── Jazz ──
     "Lauri Markkanen": ("PF", "Jazz"),
     "Jordan Clarkson": ("SG", "Jazz"),
     "John Collins": ("PF", "Jazz"),
     "Walker Kessler": ("C", "Jazz"),
+    "Jaren Jackson Jr": ("PF", "Jazz"),
     # ── Wizards ──
+    "Trae Young": ("PG", "Wizards"),
     "Kyle Kuzma": ("PF", "Wizards"),
-    "Jordan Poole": ("SG", "Wizards"),
     "Bilal Coulibaly": ("SF", "Wizards"),
+    "Anthony Davis": ("PF", "Wizards"),
 }
 
 NBA_CONFIG = SportConfig(
@@ -280,6 +280,7 @@ NFL_TEAMS: dict[str, list[str]] = {
 }
 
 # player_name -> (position, team_key)
+# Updated April 2026 — reflects 2025 offseason trades and free agency.
 NFL_PLAYERS: dict[str, tuple[str, str]] = {
     # ── Quarterbacks ──
     "Patrick Mahomes": ("QB", "Chiefs"),
@@ -304,23 +305,22 @@ NFL_PLAYERS: dict[str, tuple[str, str]] = {
     "Bo Nix": ("QB", "Broncos"),
     "Kyler Murray": ("QB", "Cardinals"),
     "Matthew Stafford": ("QB", "Rams"),
-    "Russell Wilson": ("QB", "Steelers"),
+    "Aaron Rodgers": ("QB", "Steelers"),
+    "Russell Wilson": ("QB", "Giants"),
     "Derek Carr": ("QB", "Saints"),
-    "Geno Smith": ("QB", "Seahawks"),
+    "Sam Darnold": ("QB", "Seahawks"),
     "Bryce Young": ("QB", "Panthers"),
-    "Aaron Rodgers": ("QB", "Jets"),
     "Deshaun Watson": ("QB", "Browns"),
     "Will Levis": ("QB", "Titans"),
     "Aidan O'Connell": ("QB", "Raiders"),
     # ── Wide Receivers ──
-    "Tyreek Hill": ("WR", "Dolphins"),
     "Ja'Marr Chase": ("WR", "Bengals"),
     "Justin Jefferson": ("WR", "Vikings"),
     "CeeDee Lamb": ("WR", "Cowboys"),
     "A.J. Brown": ("WR", "Eagles"),
     "Amon-Ra St. Brown": ("WR", "Lions"),
     "Deebo Samuel": ("WR", "49ers"),
-    "DK Metcalf": ("WR", "Seahawks"),
+    "DK Metcalf": ("WR", "Steelers"),
     "Terry McLaurin": ("WR", "Commanders"),
     "Mike Evans": ("WR", "Buccaneers"),
     "Chris Olave": ("WR", "Saints"),
@@ -333,17 +333,18 @@ NFL_PLAYERS: dict[str, tuple[str, str]] = {
     "Marvin Harrison Jr": ("WR", "Cardinals"),
     "Malik Nabers": ("WR", "Giants"),
     "Rome Odunze": ("WR", "Bears"),
-    "George Pickens": ("WR", "Steelers"),
-    "DJ Moore": ("WR", "Bears"),
+    "George Pickens": ("WR", "Cowboys"),
+    "DJ Moore": ("WR", "Bills"),
     "Tank Dell": ("WR", "Texans"),
     "Zay Flowers": ("WR", "Ravens"),
     "Rashee Rice": ("WR", "Chiefs"),
     "Brandon Aiyuk": ("WR", "49ers"),
-    "Cooper Kupp": ("WR", "Rams"),
+    "Cooper Kupp": ("WR", "Seahawks"),
     "Chris Godwin": ("WR", "Buccaneers"),
     "Courtland Sutton": ("WR", "Broncos"),
     "Calvin Ridley": ("WR", "Titans"),
-    "Davante Adams": ("WR", "Jets"),
+    "Davante Adams": ("WR", "Rams"),
+    "Tee Higgins": ("WR", "Bengals"),
     # ── Running Backs ──
     "Derrick Henry": ("RB", "Ravens"),
     "Saquon Barkley": ("RB", "Eagles"),
@@ -364,12 +365,11 @@ NFL_PLAYERS: dict[str, tuple[str, str]] = {
     "Rhamondre Stevenson": ("RB", "Patriots"),
     "Aaron Jones": ("RB", "Vikings"),
     "Kenneth Walker III": ("RB", "Seahawks"),
-    "Nick Chubb": ("RB", "Browns"),
+    "Nick Chubb": ("RB", "Texans"),
     "Alvin Kamara": ("RB", "Saints"),
     "Rachaad White": ("RB", "Buccaneers"),
     "Brian Robinson Jr": ("RB", "Commanders"),
     "Chuba Hubbard": ("RB", "Panthers"),
-    "Jerome Ford": ("RB", "Browns"),
 }
 
 NFL_CONFIG = SportConfig(
@@ -380,26 +380,6 @@ NFL_CONFIG = SportConfig(
     teams=NFL_TEAMS,
     players=NFL_PLAYERS,
 )
-
-
-# ── Answer matching ──────────────────────────────────────────────────────────
-
-
-def _normalize(s: str) -> str:
-    """Lowercase, strip accents and non-alphanumeric chars for fuzzy matching."""
-    nfkd = unicodedata.normalize("NFKD", s)
-    stripped = "".join(c for c in nfkd if not unicodedata.combining(c))
-    return "".join(c.lower() for c in stripped if c.isalnum() or c == " ").strip()
-
-
-def check_answer(guess: str, accepted: list[str]) -> bool:
-    norm_guess = _normalize(guess)
-    if not norm_guess:
-        return False
-    for ans in accepted:
-        if _normalize(ans) == norm_guess:
-            return True
-    return False
 
 
 # ── Payout helpers ───────────────────────────────────────────────────────────
@@ -472,7 +452,8 @@ class RosterTable:
     current_player: str = ""
     current_position: str = ""
     current_team: str = ""       # canonical display name (team key)
-    current_answers: list[str] = field(default_factory=list)
+    current_choices: list[str] = field(default_factory=list)  # 4 team choices
+    round_guessed: set[int] = field(default_factory=set)  # UIDs who already picked
     round_start_time: float = 0.0
     round_winner: int | None = None
     race_task: asyncio.Task | None = field(default=None, repr=False)
@@ -508,7 +489,7 @@ def _betting_embed(table: RosterTable) -> discord.Embed:
         title=f"{cfg.emoji} {cfg.name} Roster Trivia",
         description=(
             f"Name the team! **First to {WINS_TO_WIN} wins** takes the pot.\n"
-            "Type your answer directly in chat \u2014 fastest correct answer wins each round!"
+            "Pick the correct team from the buttons below \u2014 fastest correct pick wins!"
         ),
         colour=discord.Colour(cfg.colour),
     )
@@ -553,7 +534,7 @@ def _playing_embed(table: RosterTable, remaining: int | None = None) -> discord.
 
     embed.description = (
         f"# What team does **{table.current_player}** ({table.current_position}) play for?\n\n"
-        "**Type your answer in chat!**"
+        "**Pick the correct team below!**"
     )
 
     secs = remaining if remaining is not None else ROUND_TIME
@@ -735,6 +716,57 @@ class JoinRosterModal(ui.Modal):
         )
 
 
+# ── Choice button ────────────────────────────────────────────────────────────
+
+
+class ChoiceButton(ui.Button["RosterTableView"]):
+    """One of the 4 multiple-choice team buttons shown during a round."""
+
+    def __init__(self, label: str, team_key: str, is_correct: bool) -> None:
+        super().__init__(label=label, style=discord.ButtonStyle.primary, row=2)
+        self.team_key = team_key
+        self.is_correct = is_correct
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        assert self.view is not None
+        table = self.view.table
+        uid = interaction.user.id
+
+        if table.phase != "playing":
+            await interaction.response.defer()
+            return
+        if uid not in table.players:
+            await interaction.response.send_message(
+                "You're not in this game!", ephemeral=True,
+            )
+            return
+        if table.round_winner is not None:
+            await interaction.response.send_message(
+                "Already answered!", ephemeral=True,
+            )
+            return
+        if uid in table.round_guessed:
+            await interaction.response.send_message(
+                "You already guessed this round!", ephemeral=True,
+            )
+            return
+
+        table.round_guessed.add(uid)
+
+        if self.is_correct:
+            player = table.players[uid]
+            player.answer = self.team_key
+            player.answer_time = time.monotonic()
+            player.rounds_won += 1
+            table.round_winner = uid
+            table.round_solved.set()
+            await interaction.response.defer()
+        else:
+            await interaction.response.send_message(
+                "\u274c Wrong!", ephemeral=True,
+            )
+
+
 # ── View ─────────────────────────────────────────────────────────────────────
 
 
@@ -745,6 +777,7 @@ class RosterTableView(ui.View):
         super().__init__(timeout=900)  # 15 min
         self.table = table
         self.active_tables = active_tables
+        self._choice_buttons: list[ChoiceButton] = []
         self._update_buttons()
 
     def _update_buttons(self) -> None:
@@ -759,6 +792,29 @@ class RosterTableView(ui.View):
         self.rebet_btn.disabled = not betting or not self.table.last_bets
         self.leave_btn.disabled = not betting
         self.close_btn.disabled = racing
+
+    def _add_choices(self, correct_team: str) -> None:
+        """Add 4 multiple-choice team buttons for the current round."""
+        self._remove_choices()
+        all_teams = list(self.table.config.teams.keys())
+        wrong = random.sample([t for t in all_teams if t != correct_team], 3)
+        choices = [correct_team] + wrong
+        random.shuffle(choices)
+        self.table.current_choices = choices
+        for team in choices:
+            btn = ChoiceButton(
+                label=team,
+                team_key=team,
+                is_correct=(team == correct_team),
+            )
+            self._choice_buttons.append(btn)
+            self.add_item(btn)
+
+    def _remove_choices(self) -> None:
+        """Remove all choice buttons from the view."""
+        for btn in self._choice_buttons:
+            self.remove_item(btn)
+        self._choice_buttons.clear()
 
     # ── Row 0: Betting ───────────────────────────────────────────────────
 
@@ -911,10 +967,10 @@ class RosterTableView(ui.View):
 
     # ── Race logic ───────────────────────────────────────────────────────
 
-    def _pick_player(self) -> tuple[str, str, str, list[str]]:
+    def _pick_player(self) -> tuple[str, str, str]:
         """Pick a random player that hasn't been used yet.
 
-        Returns (player_name, position, team_display, accepted_answers).
+        Returns (player_name, position, team_key).
         """
         cfg = self.table.config
         available = [p for p in cfg.players if p not in self.table.used_players]
@@ -924,8 +980,7 @@ class RosterTableView(ui.View):
         name = random.choice(available)
         self.table.used_players.append(name)
         pos, team_key = cfg.players[name]
-        accepted = cfg.teams[team_key]
-        return name, pos, team_key, accepted
+        return name, pos, team_key
 
     async def _start_race(self, interaction: discord.Interaction) -> None:
         table = self.table
@@ -933,13 +988,13 @@ class RosterTableView(ui.View):
         for uid, p in table.players.items():
             table.last_bets[uid] = (p.display_name, p.bet)
 
-        name, pos, team, accepted = self._pick_player()
+        name, pos, team = self._pick_player()
         table.current_player = name
         table.current_position = pos
         table.current_team = team
-        table.current_answers = accepted
         table.round_num = 1
         table.round_winner = None
+        table.round_guessed.clear()
         table.round_solved.clear()
         table.phase = "playing"
         table.round_start_time = time.monotonic()
@@ -949,6 +1004,7 @@ class RosterTableView(ui.View):
             p.answer_time = None
 
         self._update_buttons()
+        self._add_choices(team)
         await interaction.response.edit_message(
             embed=_playing_embed(table), view=self,
         )
@@ -991,13 +1047,13 @@ class RosterTableView(ui.View):
                 rnd += 1
 
                 if rnd > 1:
-                    name, pos, team, accepted = self._pick_player()
+                    name, pos, team = self._pick_player()
                     table.current_player = name
                     table.current_position = pos
                     table.current_team = team
-                    table.current_answers = accepted
                     table.round_num = rnd
                     table.round_winner = None
+                    table.round_guessed.clear()
                     table.round_solved.clear()
                     table.phase = "playing"
                     table.round_start_time = time.monotonic()
@@ -1007,6 +1063,7 @@ class RosterTableView(ui.View):
                         p.answer_time = None
 
                     self._update_buttons()
+                    self._add_choices(team)
                     if table.message:
                         try:
                             await table.message.edit(
@@ -1017,6 +1074,7 @@ class RosterTableView(ui.View):
 
                 solved = await self._wait_for_solve_or_timeout()
                 table.total_rounds_played += 1
+                self._remove_choices()
 
                 if solved and table.round_winner is not None:
                     if table.message:
@@ -1214,51 +1272,6 @@ class RosterCog(commands.Cog):
     )
     async def nfl_trivia(self, interaction: discord.Interaction) -> None:
         await self._open_table(interaction, NFL_CONFIG)
-
-    @commands.Cog.listener("on_message")
-    async def on_message(self, message: discord.Message) -> None:
-        if message.author.bot:
-            return
-
-        table = self.active_tables.get(message.channel.id)
-        if table is None or table.phase != "playing":
-            return
-
-        uid = message.author.id
-        if uid not in table.players:
-            return
-
-        if table.round_winner is not None:
-            return
-
-        guess = message.content.strip()
-        if len(guess) < 2 or guess.isdigit():
-            return
-
-        alpha_chars = sum(1 for c in guess if c.isalpha())
-        if alpha_chars < len(guess) * 0.4:
-            return
-
-        if check_answer(guess, table.current_answers):
-            now = time.monotonic()
-            player = table.players[uid]
-            player.answer = guess
-            player.answer_time = now
-            player.rounds_won += 1
-            table.round_winner = uid
-
-            try:
-                await message.add_reaction("\u2705")
-            except discord.HTTPException:
-                pass
-
-            table.round_solved.set()
-        else:
-            try:
-                await message.add_reaction("\u274c")
-            except discord.HTTPException:
-                pass
-
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(RosterCog(bot))
