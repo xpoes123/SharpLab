@@ -826,7 +826,8 @@ async def get_balance(discord_user: str) -> int | None:
 
 # ── Casino Wallets (separate from paper-trading wallets) ──────────────────────
 
-CASINO_STARTING_COINS = 100
+CASINO_STARTING_COINS = 1000
+CASINO_MIN_BALANCE = 1000
 
 
 async def get_or_create_casino_wallet(discord_user: str) -> int:
@@ -839,7 +840,15 @@ async def get_or_create_casino_wallet(discord_user: str) -> int:
         )
         row = await cursor.fetchone()
         if row is not None:
-            return row["balance"]
+            bal = row["balance"]
+            if bal < CASINO_MIN_BALANCE:
+                bal = CASINO_MIN_BALANCE
+                await db.execute(
+                    "UPDATE casino_wallets SET balance = ? WHERE discord_user = ?",
+                    (bal, discord_user),
+                )
+                await db.commit()
+            return bal
         await db.execute(
             "INSERT INTO casino_wallets (discord_user, balance) VALUES (?, ?)",
             (discord_user, CASINO_STARTING_COINS),
@@ -862,6 +871,8 @@ async def update_casino_balance(discord_user: str, delta: int) -> int:
         new_balance = row["balance"] + delta
         if new_balance < 0:
             raise ValueError(f"Insufficient casino coins (have {row['balance']}, need {-delta})")
+        if new_balance < CASINO_MIN_BALANCE:
+            new_balance = CASINO_MIN_BALANCE
         await db.execute(
             "UPDATE casino_wallets SET balance = ? WHERE discord_user = ?",
             (new_balance, discord_user),
