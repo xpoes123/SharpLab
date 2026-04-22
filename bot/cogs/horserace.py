@@ -648,17 +648,20 @@ class HorseRaceTableView(ui.View):
         table.phase = "finished"
 
         # Pari-mutuel payout: winners split the total pool proportional to their bet.
-        # payout_i = bet_i × (total_pool / total_bet_on_winning_horse)
+        # For ties, the denominator is the combined pool of all winning horses so
+        # total payouts never exceed total_pool (zero-sum regardless of tie count).
+        # payout_i = bet_i × (total_pool / winning_pool)
         total_pool = sum(p.bet for p in table.players.values())
         horse_pool: dict[int, int] = {i: 0 for i in range(NUM_HORSES)}
         for p in table.players.values():
             horse_pool[p.horse_index] += p.bet
 
+        winning_pool = sum(horse_pool[w] for w in table.winners if horse_pool[w] > 0)
+
         for p in table.players.values():
             if p.horse_index in table.winners:
                 p.won = True
-                hp = horse_pool[p.horse_index]
-                p.payout = int(p.bet * total_pool / hp) if hp > 0 else p.bet
+                p.payout = int(p.bet * total_pool / winning_pool) if winning_pool > 0 else p.bet
 
         # Credit winners and log results
         balances: dict[int, int] = {}
