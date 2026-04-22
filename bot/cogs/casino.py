@@ -1501,6 +1501,304 @@ class CasinoCog(commands.Cog):
         embed.description = "\n".join(lines)
         await interaction.followup.send(embed=embed)
 
+    @app_commands.command(name="explain", description="Learn the rules of any casino game")
+    async def explain(self, interaction: discord.Interaction) -> None:
+        view = ExplainSelectView()
+        await interaction.response.send_message(
+            "Pick a game to see how it works:", view=view, ephemeral=True,
+        )
+
+
+# ── /explain dropdown ────────────────────────────────────────────────────────
+
+
+class _ExplainCategorySelect(ui.Select):
+    """One dropdown per game category (avoids Discord's 25-option limit)."""
+
+    def __init__(self, cat_name: str, cat_emoji: str, row: int) -> None:
+        options = [
+            discord.SelectOption(
+                label=GAME_LABELS.get(cmd, cmd),
+                value=cmd,
+                description=desc[:100],
+            )
+            for cmd, desc, cat, _ in CASINO_GAMES
+            if cat == cat_name
+        ]
+        super().__init__(
+            placeholder=f"{cat_emoji} {cat_name}",
+            options=options,
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        key = self.values[0]
+        label = GAME_LABELS.get(key, key)
+        rules = GAME_RULES.get(key, f"No rules written yet for **{label}**.")
+        embed = discord.Embed(
+            title=f"How to Play: {label}",
+            description=rules,
+            colour=0xF1C40F,
+        )
+        embed.set_footer(text=f"Start playing with /{key}")
+        await interaction.response.edit_message(embed=embed, view=self.view)
+
+
+class ExplainSelectView(ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=120)
+        for i, (cat_name, cat_emoji) in enumerate(GAME_CATEGORIES):
+            self.add_item(_ExplainCategorySelect(cat_name, cat_emoji, row=i))
+
+
+GAME_RULES: dict[str, str] = {
+    "blackjack": (
+        "**Blackjack** (2-deck shoe)\n"
+        "Beat the dealer by getting closer to 21 without going over.\n\n"
+        "**How to play:** Join the table, place your bet, then the dealer deals 2 cards to each "
+        "player and themselves (one face-down). Hit to draw cards, Stand to stop, Double Down to "
+        "double your bet and take exactly one more card, or Split matching pairs into two hands.\n\n"
+        "**Payouts:** Win = 2:1 | Blackjack (21 on first 2 cards) = 3:2 | Push = bet returned\n"
+        "**Dealer rule:** Hits on 16 or below, stands on 17+\n"
+        "**Side bets:** Perfect Pairs (same rank = 6x/12x/25x) | 21+3 (your 2 + dealer upcard "
+        "make poker hands = 5x to 100x)\n"
+        "**Card counting:** Running count and true count are displayed on the table."
+    ),
+    "baccarat": (
+        "**Baccarat** (8-deck shoe)\n"
+        "Bet on Player, Banker, or Tie before cards are dealt.\n\n"
+        "**How to play:** Choose your side and wager. Two cards are dealt to Player and Banker. "
+        "Hand values are the last digit of the sum (e.g. 7+8=15 -> 5). Drawing rules are automatic: "
+        "Player draws on 0-5, Banker's draw depends on Player's third card.\n\n"
+        "**Payouts:** Player = 1:1 | Banker = 1:1 (5% commission) | Tie = 8:1\n"
+        "**Side bets:** Panda 8 (Player wins with 8 = 25:1) | Dragon 7 (Banker wins with 7 "
+        "using 3 cards = 40:1)\n"
+        "**Interactive peel:** Players reveal cards one by one for suspense."
+    ),
+    "paigow": (
+        "**Pai Gow Poker**\n"
+        "Beat the dealer by arranging 7 cards into a 5-card high hand and a 2-card low hand.\n\n"
+        "**How to play:** You and the dealer each get 7 cards. Set them into a 5-card hand (back) "
+        "and a 2-card hand (front). Your high hand must beat your low hand. Win both to win, "
+        "lose both to lose, split = push.\n\n"
+        "**Payouts:** Win = 1:1 | Push = bet returned\n"
+        "**Strategy:** Balance strength between both hands. Don't stack everything in the high hand."
+    ),
+    "uth": (
+        "**Ultimate Texas Hold'em**\n"
+        "Poker against the dealer with escalating bet decisions.\n\n"
+        "**How to play:** Post an Ante and Blind bet. You get 2 hole cards, then decide: bet 3x-4x "
+        "(pre-flop), 2x (after flop), or 1x (after river). You can also check and wait. If you "
+        "never bet, you fold and lose Ante + Blind. Best 5-card hand wins.\n\n"
+        "**Payouts:** Ante = 1:1 (dealer needs pair+ to qualify) | Blind pays bonus for "
+        "Straight+ | Play bet = 1:1"
+    ),
+    "videopoker": (
+        "**Video Poker** (Jacks or Better)\n"
+        "Draw poker against a paytable, not other players.\n\n"
+        "**How to play:** You're dealt 5 cards. Choose which to hold and which to discard, then "
+        "draw replacements. Your final hand pays according to the paytable.\n\n"
+        "**Paytable:** Jacks or Better = 1:1 | Two Pair = 2:1 | Three of a Kind = 3:1 | "
+        "Straight = 4:1 | Flush = 6:1 | Full House = 9:1 | Four of a Kind = 25:1 | "
+        "Straight Flush = 50:1 | Royal Flush = 800:1"
+    ),
+    "hilo": (
+        "**Hi-Lo**\n"
+        "Predict whether the next card will be higher or lower.\n\n"
+        "**How to play:** A card is shown. Guess Higher or Lower for the next card. "
+        "Correct guesses multiply your winnings based on the true odds from the remaining deck. "
+        "Cash out anytime to bank your streak. Ties push (no loss).\n\n"
+        "**Payouts:** Fair odds based on remaining cards. Riskier guesses = bigger multipliers.\n"
+        "**Strategy:** Count what's left in the deck. Cash out before it gets too risky."
+    ),
+    "roulette": (
+        "**Roulette** (American, 0 + 00)\n"
+        "Bet on where the ball will land on a 38-number wheel.\n\n"
+        "**How to play:** Place bets on numbers, groups, or properties before the spin.\n\n"
+        "**Bet types & payouts:**\n"
+        "Straight (single number) = 35:1 | Split (2 adjacent) = 17:1 | "
+        "Street (row of 3) = 11:1 | Corner (4 numbers) = 8:1\n"
+        "Column/Dozen = 2:1 | Red/Black, Odd/Even, High/Low = 1:1\n\n"
+        "**House edge:** 5.26% from the 0 and 00 slots."
+    ),
+    "craps": (
+        "**Craps**\n"
+        "Dice game with a come-out roll and a point phase.\n\n"
+        "**How to play:** The shooter rolls two dice. **Come-out:** 7 or 11 = Pass Line wins, "
+        "2/3/12 = Pass Line loses. Any other number sets the Point. **Point phase:** Roll the "
+        "point again before a 7 to win.\n\n"
+        "**Bets:** Pass Line (1:1) | Don't Pass (1:1, 12=push) | Odds (true odds, 0% edge) | "
+        "Field (2:1 / 3:1 on 2&12) | Place bets | Hardways | Come/Don't Come\n\n"
+        "**Tip:** Odds bets behind Pass/Don't Pass are the best bet in the casino (0% house edge)."
+    ),
+    "crash": (
+        "**Crash**\n"
+        "A multiplier rises until it randomly crashes. Cash out before it does.\n\n"
+        "**How to play:** Place your bet. A rocket launches and the multiplier climbs exponentially. "
+        "Hit Cash Out to lock in your current multiplier. If the rocket crashes before you cash out, "
+        "you lose your bet.\n\n"
+        "**Auto-cashout:** Set a target multiplier and it cashes out automatically.\n"
+        "**Payouts:** Your bet x your cashout multiplier.\n"
+        "**Odds:** ~1% chance of instant crash. Median crash around 2x."
+    ),
+    "plinko": (
+        "**Plinko**\n"
+        "Drop a ball through pegs and see which bucket it lands in.\n\n"
+        "**How to play:** Choose a risk level (Low, Medium, or High) and place your bet. "
+        "The ball drops through 8 rows of pegs and lands in one of 9 buckets, each with a "
+        "different multiplier.\n\n"
+        "**Risk levels:**\n"
+        "Low: 0.5x to 5.6x (safer) | Medium: 0.3x to 13x | High: 0x to 29x (volatile)\n"
+        "**Fair game:** Expected value = 1.0x across all risk levels."
+    ),
+    "slots": (
+        "**Fortune Reels** (Slots)\n"
+        "5-reel, 3-row slot machine with 20 paylines.\n\n"
+        "**How to play:** Place your bet and spin. Matching symbols across paylines win. "
+        "Wilds substitute for any symbol. Scatters trigger free spins. Bonus symbols "
+        "trigger a pick-a-box mini-game.\n\n"
+        "**Free Spins:** 3 Scatters = choose 5 spins at 2x, 10 spins at 1x, or 15 spins.\n"
+        "**Bonus Round:** Pick 3 of 8 boxes for coin prizes. 5 are skulls (game over).\n"
+        "**Gamble:** After any win, double-or-nothing on a card flip."
+    ),
+    "bingo": (
+        "**Bingo**\n"
+        "Classic 75-ball bingo with pattern objectives.\n\n"
+        "**How to play:** Buy a card (5x5 grid, free center square). Numbers are called "
+        "from 1-75 and auto-marked on your card. First player to complete the target pattern wins.\n\n"
+        "**Patterns:** Four Corners | X | Plus | Diamond | T | L\n"
+        "**Payouts:** Winner takes the pot (side-pot rules for unequal bets).\n"
+        "**Host:** Picks the pattern before starting. Calls come every few seconds."
+    ),
+    "horserace": (
+        "**Horse Race**\n"
+        "Bet on horses and watch them race.\n\n"
+        "**How to play:** Each horse has different odds. Place your bet on a horse before the "
+        "race starts. Horses advance randomly each tick based on their speed ratings. "
+        "First horse to the finish line wins.\n\n"
+        "**Payouts:** Based on the horse's pre-race odds. Longshots pay more."
+    ),
+    "stockmarket": (
+        "**Stock Market**\n"
+        "Buy and sell fictional stocks across multiple rounds.\n\n"
+        "**How to play:** You start with cash. Each round, stock prices move randomly "
+        "(up, down, crash, boom). Buy low, sell high. The player with the highest portfolio "
+        "value at the end wins.\n\n"
+        "**Strategy:** Diversify or go all-in. Watch for crash events. Timing is everything."
+    ),
+    "liarsdice": (
+        "**Liar's Dice**\n"
+        "Bluffing game with hidden dice.\n\n"
+        "**How to play:** Each player rolls 5 dice (hidden). Take turns bidding on how many of "
+        "a certain face value exist across ALL players' dice. Each bid must raise the quantity "
+        "or face value. Call \"Liar!\" if you think the bid is wrong.\n\n"
+        "**Resolution:** If the bid was valid, the challenger loses a die. If wrong, the bidder "
+        "loses one. Last player with dice wins.\n"
+        "**Tip:** 1s are wild (count as any face) unless someone bids 1s specifically."
+    ),
+    "penalties": (
+        "**Penalty Shootout** (1v1 Duel)\n"
+        "Take turns as kicker and goalkeeper.\n\n"
+        "**How to play:** Each player takes 5 penalty kicks. As the kicker, choose a direction "
+        "(left, center, right). As the keeper, choose where to dive. If the keeper guesses "
+        "correctly, the shot is saved.\n\n"
+        "**Scoring:** Most goals after 5 rounds wins. Ties go to sudden death.\n"
+        "**Strategy:** Mix up your shots. Don't be predictable."
+    ),
+    "math24": (
+        "**Math 24**\n"
+        "Use four numbers and basic operations to make exactly 24.\n\n"
+        "**How to play:** Four numbers are revealed. Type a valid expression using +, -, *, / "
+        "and parentheses that equals exactly 24. Each number must be used exactly once.\n\n"
+        "**Example:** Numbers: 1, 2, 3, 4 -> `1*2*3*4` = 24\n"
+        "**Tip:** Look for factors of 24 (1x24, 2x12, 3x8, 4x6)."
+    ),
+    "countdown": (
+        "**Countdown** (Numbers Game)\n"
+        "Get as close to a target number as possible using 6 numbers.\n\n"
+        "**How to play:** You get 6 numbers (mix of small 1-10 and large 25/50/75/100) and a "
+        "3-digit target. Use +, -, *, / to reach the target. Each number can only be used once. "
+        "Closest answer wins.\n\n"
+        "**Scoring:** Exact = full points. Within 5 = partial. Within 10 = small points."
+    ),
+    "mastermind": (
+        "**Mastermind**\n"
+        "Crack a secret code by deduction.\n\n"
+        "**How to play:** A secret 4-color code is generated. Each turn, guess a combination. "
+        "You get feedback: correct color in correct position, or correct color in wrong position. "
+        "Use logic to narrow it down.\n\n"
+        "**Scoring:** Fewer guesses = better score. Compete to crack it first.\n"
+        "**Strategy:** First guess should maximize information. Use process of elimination."
+    ),
+    "geography": (
+        "**Speed Geography**\n"
+        "Name the capital city of the given country.\n\n"
+        "**How to play:** A country is shown. Type the capital city as fast as you can. "
+        "First correct answer wins the round. Multiple rounds per game.\n\n"
+        "**Scoring:** Points for speed. Spelling must be close (fuzzy matching).\n"
+        "**Tip:** Brush up on obscure capitals (Ouagadougou, Thimphu, Naypyidaw...)."
+    ),
+    "wordle": (
+        "**Wordle Race**\n"
+        "Guess the 5-letter word before your opponents.\n\n"
+        "**How to play:** Everyone guesses the same hidden word. After each guess, letters are "
+        "colored: green = right letter, right spot | yellow = right letter, wrong spot | "
+        "gray = not in the word. First to solve it wins.\n\n"
+        "**Rounds:** 6 guesses max per player.\n"
+        "**Strategy:** Start with vowel-heavy words (CRANE, SLATE, ADIEU)."
+    ),
+    "nba-trivia": (
+        "**NBA Roster Trivia**\n"
+        "Identify which NBA team a player belongs to.\n\n"
+        "**How to play:** An NBA player's name is shown. Type the team name or abbreviation "
+        "as fast as you can. First correct answer wins the round.\n\n"
+        "**Scoring:** Points for speed across multiple rounds.\n"
+        "**Tip:** Keep up with trades and free agency."
+    ),
+    "nfl-trivia": (
+        "**NFL Roster Trivia**\n"
+        "Identify which NFL team a player belongs to.\n\n"
+        "**How to play:** An NFL player's name is shown. Type the team name or abbreviation "
+        "as fast as you can. First correct answer wins the round.\n\n"
+        "**Scoring:** Points for speed across multiple rounds.\n"
+        "**Tip:** Know your depth charts."
+    ),
+    "sudoku": (
+        "**Sudoku Sprint** (4x4)\n"
+        "Fill the grid fastest to win.\n\n"
+        "**How to play:** A partially-filled 4x4 Sudoku grid is shown. Fill in the missing "
+        "numbers (1-4) so each row, column, and 2x2 box contains all digits. First to submit "
+        "a correct solution wins.\n\n"
+        "**Tip:** Start with rows/columns/boxes that have the most clues."
+    ),
+    "nbasim": (
+        "**NBA Sim**\n"
+        "Bet on a simulated NBA game.\n\n"
+        "**How to play:** A matchup is generated with a spread, moneyline, and total. "
+        "Place bets on any market. The game simulates quarter by quarter with live scoring. "
+        "Bets resolve against the final score.\n\n"
+        "**Markets:** Spread | Moneyline | Over/Under\n"
+        "**Payouts:** Standard sportsbook odds. Pushes refunded."
+    ),
+    "nflsim": (
+        "**NFL Sim**\n"
+        "Bet on a simulated NFL game.\n\n"
+        "**How to play:** A matchup is generated with a spread, moneyline, and total. "
+        "Place bets on any market. The game simulates quarter by quarter with live scoring. "
+        "Bets resolve against the final score.\n\n"
+        "**Markets:** Spread | Moneyline | Over/Under\n"
+        "**Payouts:** Standard sportsbook odds. Pushes refunded."
+    ),
+    "mlbsim": (
+        "**MLB Sim**\n"
+        "Bet on a simulated MLB game.\n\n"
+        "**How to play:** A matchup is generated with a run line, moneyline, and total. "
+        "Place bets on any market. The game simulates inning by inning with live scoring. "
+        "Bets resolve against the final score.\n\n"
+        "**Markets:** Run Line | Moneyline | Over/Under\n"
+        "**Payouts:** Standard sportsbook odds. Pushes refunded."
+    ),
+}
 
 CASINO_GAMES: list[tuple[str, str, str, str]] = [
     # (command, description, category, mode)
