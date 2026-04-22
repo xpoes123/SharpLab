@@ -19,9 +19,7 @@ from db import queries
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 8
-MAX_BET = 500
 MIN_PLAYERS = 2
-HOUSE_EDGE = 0.05
 ROUND_TIME = 45  # seconds per round
 ROUND_DELAY = 4  # seconds between rounds
 WINS_TO_WIN = 4  # first to N wins
@@ -424,6 +422,7 @@ class Math24Table:
     round_winner: int | None = None
     race_task: asyncio.Task | None = field(default=None, repr=False)
     round_solved: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    correct_players: set[int] = field(default_factory=set)
     last_bets: dict[int, tuple[str, int]] = field(default_factory=dict)
     total_rounds_played: int = 0
 
@@ -447,7 +446,9 @@ def _scoreboard(table: Math24Table) -> str:
     for i, p in enumerate(sorted_players):
         prefix = MEDALS[i] if i < len(MEDALS) and p.rounds_won > 0 else "\u25aa\ufe0f"
         line = f"{prefix} **{p.display_name}** \u2014 {p.rounds_won}/{WINS_TO_WIN}"
-        if p.rounds_won == WINS_TO_WIN - 1:
+        if p.user_id in table.correct_players:
+            line += " \u2705"
+        elif p.rounds_won == WINS_TO_WIN - 1:
             line += " *(match point!)*"
         lines.append(line)
     return "\n".join(lines) if lines else "No scores yet"
@@ -462,13 +463,13 @@ def _betting_embed(table: Math24Table) -> discord.Embed:
         description=(
             f"Race to solve Math 24 puzzles! **First to {WINS_TO_WIN} wins** takes the pot.\n"
             "Use all 4 numbers with `+ - * / ( )` to make **24**.\n"
-            "Type answers directly in chat \u2014 fastest correct answer wins each round!"
+            "Click **Answer** to submit \u2014 fastest correct answer wins each round!"
         ),
         colour=discord.Colour.blue(),
     )
 
     if pot:
-        embed.add_field(name="Pot", value=f"{pot}c (5% rake)", inline=True)
+        embed.add_field(name="Pot", value=f"{pot}c", inline=True)
     embed.add_field(name="Goal", value=f"First to {WINS_TO_WIN}", inline=True)
 
     # Paytable preview
@@ -496,7 +497,6 @@ def _betting_embed(table: Math24Table) -> discord.Embed:
     embed.set_footer(
         text=(
             f"Host: {table.host_name} \u2502 "
-            f"Max bet {MAX_BET}c \u2502 "
             f"Min {MIN_PLAYERS} players"
         ),
     )
@@ -512,7 +512,7 @@ def _playing_embed(table: Math24Table, remaining: int | None = None) -> discord.
     embed.description = (
         f"# {_numbers_display(table.numbers)}\n"
         f"*Numbers: {', '.join(str(n) for n in table.numbers)}*\n\n"
-        "**Type your answer in chat!**\n"
+        "Click **Answer** to submit your expression!\n"
         "Use all 4 numbers with `+ - * / ( )` to make **24**."
     )
 
@@ -521,6 +521,11 @@ def _playing_embed(table: Math24Table, remaining: int | None = None) -> discord.
 
     pot = sum(p.bet for p in table.players.values())
     embed.add_field(name="Pot", value=f"{pot}c", inline=True)
+
+    solved = len(table.correct_players)
+    total = len(table.players)
+    if solved > 0:
+        embed.add_field(name="Solved", value=f"{solved}/{total}", inline=True)
 
     embed.add_field(name="Scoreboard", value=_scoreboard(table), inline=False)
     embed.set_footer(text=f"Host: {table.host_name}")
@@ -536,11 +541,22 @@ def _round_result_embed(table: Math24Table) -> discord.Embed:
         title=f"Math 24 \u2014 Round {table.round_num} \u2705",
         colour=discord.Colour.green(),
     )
-    embed.description = (
-        f"\U0001f3c6 **{winner.display_name}** solved it in **{solve_time:.1f}s**!\n\n"
-        f"Numbers: {', '.join(str(n) for n in table.numbers)}\n"
+    # Who else solved it?
+    also_solved: list[str] = []
+    for uid in table.correct_players:
+        if uid != table.round_winner:
+            p = table.players[uid]
+            t = p.answer_time - table.round_start_time
+            also_solved.append(f"{p.display_name} ({t:.1f}s)")
+
+    desc = f"\U0001f3c6 **{winner.display_name}** solved it first in **{solve_time:.1f}s**!"
+    if also_solved:
+        desc += f"\nAlso solved: {', '.join(also_solved)}"
+    desc += (
+        f"\n\nNumbers: {', '.join(str(n) for n in table.numbers)}\n"
         f"Expression: `{winner.answer}`"
     )
+    embed.description = desc
     embed.add_field(name="Scoreboard", value=_scoreboard(table), inline=False)
     if not is_last:
         embed.set_footer(text="Next round in a few seconds\u2026")
@@ -666,12 +682,6 @@ class JoinMath24Modal(ui.Modal):
                 "Must be at least 1 coin.", ephemeral=True,
             )
             return
-        if amt > MAX_BET:
-            await interaction.response.send_message(
-                f"Max bet is {MAX_BET}c.", ephemeral=True,
-            )
-            return
-
         uid = interaction.user.id
         if uid in self.table.players:
             await interaction.response.send_message(
@@ -713,8 +723,9 @@ class AnswerModal(ui.Modal):
         super().__init__(title="Math 24 \u2014 Answer")
         self.table = table
         self.table_view = view
-        nums_str = ", ".join(str(n) for n in table.numbers)
-        self.expression.placeholder = f"Numbers: {nums_str}"
+        # Pre-fill with the numbers so players can see them in the box
+        self.expression.default = "  ".join(str(n) for n in table.numbers)
+        self.expression.placeholder = "Add +, -, *, /, ( ) between the numbers"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         uid = interaction.user.id
@@ -729,9 +740,9 @@ class AnswerModal(ui.Modal):
                 "Round is not active!", ephemeral=True,
             )
             return
-        if self.table.round_winner is not None:
+        if uid in self.table.correct_players:
             await interaction.response.send_message(
-                "Someone already solved this round!", ephemeral=True,
+                "You already solved this round!", ephemeral=True,
             )
             return
 
@@ -744,21 +755,39 @@ class AnswerModal(ui.Modal):
             )
             return
 
-        # Winner!
+        # Correct answer!
         now = time.monotonic()
         player = self.table.players[uid]
         player.answer = expr
         player.answer_time = now
-        player.rounds_won += 1
 
-        self.table.round_winner = uid
+        # First correct answer wins the point
+        if self.table.round_winner is None:
+            self.table.round_winner = uid
+            player.rounds_won += 1
 
-        # Signal the race loop
-        self.table.round_solved.set()
+        self.table.correct_players.add(uid)
+
+        # End round when all but 1 player have solved it
+        if len(self.table.correct_players) >= len(self.table.players) - 1:
+            self.table.round_solved.set()
 
         await interaction.response.send_message(
             "\u2705 Correct!", ephemeral=True,
         )
+
+        # Update the embed to show the checkmark in scoreboard
+        if self.table.message:
+            remaining = max(0, int(
+                self.table.round_start_time + ROUND_TIME - time.monotonic(),
+            ))
+            try:
+                await self.table.message.edit(
+                    embed=_playing_embed(self.table, remaining=remaining),
+                    view=self.table_view,
+                )
+            except discord.HTTPException:
+                pass
 
 
 # ── View ─────────────────────────────────────────────────────────────────────
@@ -939,9 +968,9 @@ class Math24TableView(ui.View):
                 "You're not in this game!", ephemeral=True,
             )
             return
-        if self.table.round_winner is not None:
+        if uid in self.table.correct_players:
             await interaction.response.send_message(
-                "Someone already solved this round!", ephemeral=True,
+                "You already solved this round!", ephemeral=True,
             )
             return
         await interaction.response.send_modal(
@@ -1011,6 +1040,7 @@ class Math24TableView(ui.View):
         table.round_num = 1
         table.round_winner = None
         table.round_solved.clear()
+        table.correct_players.clear()
         table.phase = "playing"
         table.round_start_time = time.monotonic()
 
@@ -1076,6 +1106,7 @@ class Math24TableView(ui.View):
                     table.round_num = rnd
                     table.round_winner = None
                     table.round_solved.clear()
+                    table.correct_players.clear()
                     table.phase = "playing"
                     table.round_start_time = time.monotonic()
 
