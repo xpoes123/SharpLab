@@ -80,24 +80,24 @@ NUM_LINES = len(PAYLINES)
 # ── Paytable (multiplier of per-line bet) ────────────────────────────────────
 
 PAYTABLE: dict[str, dict[int, int]] = {
-    "CH": {3: 4, 4: 10, 5: 20},
-    "LM": {3: 4, 4: 10, 5: 20},
-    "GR": {3: 6, 4: 15, 5: 40},
-    "BL": {3: 10, 4: 30, 5: 100},
-    "DI": {3: 20, 4: 60, 5: 250},
-    "SV": {3: 40, 4: 200, 5: 1000},
-    "WD": {3: 40, 4: 200, 5: 2000},
+    "CH": {3: 4, 4: 12, 5: 28},
+    "LM": {3: 4, 4: 12, 5: 28},
+    "GR": {3: 6, 4: 18, 5: 45},
+    "BL": {3: 10, 4: 30, 5: 70},
+    "DI": {3: 18, 4: 45, 5: 130},
+    "SV": {3: 28, 4: 90, 5: 450},
+    "WD": {3: 28, 4: 90, 5: 650},
 }
 
 # Scatter pays (multiplier of TOTAL bet, not per-line)
-SCATTER_PAY: dict[int, int] = {3: 2, 4: 5, 5: 20}
+SCATTER_PAY: dict[int, int] = {3: 2, 4: 3, 5: 10}
 
 # ── Free spins config ────────────────────────────────────────────────────────
 
 FREE_SPIN_OPTIONS: list[tuple[int, int]] = [
-    (5, 3),   # 5 spins at 3x multiplier — high risk
-    (10, 2),  # 10 spins at 2x multiplier — balanced
-    (20, 1),  # 20 spins at 1x multiplier — safe grind
+    (5, 2),   # 5 spins at 2x multiplier — high risk
+    (10, 1),  # 10 spins at 1x multiplier — balanced
+    (15, 1),  # 15 spins at 1x multiplier — safe grind
 ]
 
 # ── Bonus config ─────────────────────────────────────────────────────────────
@@ -105,10 +105,10 @@ FREE_SPIN_OPTIONS: list[tuple[int, int]] = [
 BONUS_TRIGGER = 3
 NUM_BOXES = 8
 # Multipliers for bonus prizes (of total bet). Shuffled each bonus.
-BONUS_PRIZE_POOL = [2, 3, 5, 8, 10, 15, 25]
-NUM_TRAPS = 3  # skull = game over
-# 5 prizes + 3 traps = 8 boxes
-BONUS_PRIZES_USED = 5
+BONUS_PRIZE_POOL = [1, 1, 2, 2, 3, 5, 8]
+NUM_TRAPS = 5  # skull = game over
+# 3 prizes + 5 traps = 8 boxes
+BONUS_PRIZES_USED = 3
 
 # ── Gamble config ────────────────────────────────────────────────────────────
 
@@ -1020,7 +1020,7 @@ class FreeSpinPickView(ui.View):
         self.cog = cog
 
     @ui.button(
-        label="5 Spins \u00d73x", style=discord.ButtonStyle.danger,
+        label="5 Spins \u00d72x", style=discord.ButtonStyle.danger,
         emoji="\U0001f525", row=0,
     )
     async def pick_1(
@@ -1029,7 +1029,7 @@ class FreeSpinPickView(ui.View):
         await self._pick(interaction, 0)
 
     @ui.button(
-        label="10 Spins \u00d72x", style=discord.ButtonStyle.primary,
+        label="10 Spins \u00d71x", style=discord.ButtonStyle.primary,
         emoji="\u2b50", row=0,
     )
     async def pick_2(
@@ -1038,7 +1038,7 @@ class FreeSpinPickView(ui.View):
         await self._pick(interaction, 1)
 
     @ui.button(
-        label="20 Spins \u00d71x", style=discord.ButtonStyle.success,
+        label="15 Spins \u00d71x", style=discord.ButtonStyle.success,
         emoji="\U0001f4ab", row=0,
     )
     async def pick_3(
