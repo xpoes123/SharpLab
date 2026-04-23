@@ -160,6 +160,26 @@ class TestOrderPlacement:
         with pytest.raises(ValueError, match="side must be"):
             await queries.place_market_order(mid, yes_oid, "alice", "long", 60, 5)
 
+    @pytest.mark.asyncio
+    async def test_order_rejected_on_resolved_market(self):
+        """Cannot place orders on a market that is no longer open."""
+        await _fund_user("alice", 5000)
+        await _fund_user("bob", 5000)
+        mid, yes_oid, no_oid = await _create_binary_market()
+        # Place matching orders and resolve
+        await queries.place_market_order(mid, yes_oid, "alice", "buy", 60, 1)
+        await queries.place_market_order(mid, no_oid, "bob", "buy", 40, 1)
+        await queries.match_orders(mid)
+        await queries.resolve_market(mid, yes_oid, "resolver")
+        # Now try to place an order on the resolved market
+        with pytest.raises(ValueError, match="Market is not open"):
+            await queries.place_market_order(mid, yes_oid, "alice", "buy", 50, 1)
+        # Balance should be unchanged (escrow never deducted)
+        bal = await queries.get_casino_balance("alice")
+        assert bal is not None
+        # Alice started with 5000, spent 60 on order, got 100 from winning
+        assert bal == 5000 - 60 + 100
+
 
 # ── Order matching — binary markets ─────────────────────────────────────────
 

@@ -1887,6 +1887,8 @@ async def place_market_order(
     market = await get_prediction_market(market_id)
     if market is None:
         raise ValueError(f"Market {market_id} not found")
+    if market["status"] != "open":
+        raise ValueError(f"Market is not open (status: {market['status']})")
     if len(market["outcomes"]) == 2 and side == "sell":
         raise ValueError("Binary markets only support 'buy' orders")
     escrow = price * quantity
