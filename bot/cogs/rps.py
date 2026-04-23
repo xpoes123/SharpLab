@@ -9,28 +9,23 @@ import discord
 from discord import app_commands, ui
 from discord.ext import commands
 
+from bot.cogs._minigames import RPSLogic
 from bot.cogs._pool import compute_side_pot_payouts
 from db import queries
 
-# ── Constants ────────────────────────────────────────────────────────────────
+# ── Constants (derived from shared RPSLogic) ─────────────────────────────────
 
-CHOICES = ("rock", "paper", "scissors")
-CHOICE_EMOJI = {"rock": "\u270a", "paper": "\u270b", "scissors": "\u270c\ufe0f"}
+CHOICES = RPSLogic.CHOICES
+CHOICE_EMOJI = RPSLogic.EMOJI
 MATCH_TIMEOUT = 180  # seconds
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# ── Helpers (delegate to shared RPSLogic) ────────────────────────────────────
 
 
 def _rps_winner(a: str, b: str) -> str:
     """Return 'a', 'b', or 'tie'."""
-    if a == b:
-        return "tie"
-    if (a == "rock" and b == "scissors") or \
-       (a == "scissors" and b == "paper") or \
-       (a == "paper" and b == "rock"):
-        return "a"
-    return "b"
+    return RPSLogic.winner(a, b)
 
 
 # ── Dataclass ────────────────────────────────────────────────────────────────

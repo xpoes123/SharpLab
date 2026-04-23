@@ -99,6 +99,68 @@ def _dice_display(d1: int, d2: int) -> str:
     return f"{DICE_EMOJI[d1]} {DICE_EMOJI[d2]}  =  **{d1 + d2}**"
 
 
+# ── Shared Game Logic (imported by standalone cogs for feature parity) ─────
+
+
+class TTTBoard:
+    """Pure tic-tac-toe state. No Discord dependency — used by both the
+    minigame and the standalone /tictactoe cog."""
+
+    WIN_LINES = [
+        (0, 1, 2), (3, 4, 5), (6, 7, 8),
+        (0, 3, 6), (1, 4, 7), (2, 5, 8),
+        (0, 4, 8), (2, 4, 6),
+    ]
+    EMPTY = "\u2b1c"
+    X = "\u274c"
+    O = "\u2b55"
+
+    def __init__(self) -> None:
+        self.cells: list[int] = [0] * 9  # 0=empty, 1=X, 2=O
+
+    def place(self, cell: int, player: int) -> bool:
+        """Place a mark (1 or 2). Returns False if cell is taken."""
+        if self.cells[cell] != 0:
+            return False
+        self.cells[cell] = player
+        return True
+
+    def check_winner(self) -> int:
+        """Return 1 (X wins), 2 (O wins), -1 (draw if full), 0 (ongoing)."""
+        for a, b, c in self.WIN_LINES:
+            if self.cells[a] == self.cells[b] == self.cells[c] != 0:
+                return self.cells[a]
+        if all(c != 0 for c in self.cells):
+            return -1
+        return 0
+
+    def render(self) -> str:
+        """Render the board as emoji text."""
+        symbols = {0: self.EMPTY, 1: self.X, 2: self.O}
+        rows = []
+        for r in range(3):
+            rows.append("".join(symbols[self.cells[r * 3 + c]] for c in range(3)))
+        return "\n".join(rows)
+
+
+class RPSLogic:
+    """Pure rock-paper-scissors resolution. Used by both the minigame and
+    the standalone /rps cog."""
+
+    CHOICES = ("rock", "paper", "scissors")
+    EMOJI = {"rock": "\u270a", "paper": "\u270b", "scissors": "\u270c\ufe0f"}
+    BEATS = {"rock": "scissors", "scissors": "paper", "paper": "rock"}
+
+    @staticmethod
+    def winner(a: str, b: str) -> str:
+        """Return 'a', 'b', or 'tie'."""
+        if a == b:
+            return "tie"
+        if RPSLogic.BEATS[a] == b:
+            return "a"
+        return "b"
+
+
 # ── 1. HigherCard ───────────────────────────────────────────────────────────
 
 
@@ -1112,15 +1174,10 @@ class CoinFlip:
 
 # ── 7. TicTacToe ────────────────────────────────────────────────────────────
 
-_TTT_EMPTY = "\u2b1c"
-_TTT_X = "\u274c"
-_TTT_O = "\u2b55"
-
-_TTT_WIN_LINES = [
-    (0, 1, 2), (3, 4, 5), (6, 7, 8),  # rows
-    (0, 3, 6), (1, 4, 7), (2, 5, 8),  # columns
-    (0, 4, 8), (2, 4, 6),             # diagonals
-]
+# Use shared TTTBoard for game logic — aliases for local readability
+_TTT_EMPTY = TTTBoard.EMPTY
+_TTT_X = TTTBoard.X
+_TTT_O = TTTBoard.O
 
 
 class _TicTacToeView(ui.View):
@@ -1251,7 +1308,7 @@ class _TicTacToeView(ui.View):
 
     def _check_winner(self) -> int:
         """Return 1 if P1 won, 2 if P2 won, 0 if no winner yet."""
-        for a, b, c in _TTT_WIN_LINES:
+        for a, b, c in TTTBoard.WIN_LINES:
             if self.board[a] == self.board[b] == self.board[c] != 0:
                 return self.board[a]
         return 0

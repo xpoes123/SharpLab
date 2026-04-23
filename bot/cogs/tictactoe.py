@@ -6,53 +6,35 @@ import discord
 from discord import app_commands, ui
 from discord.ext import commands
 
+from bot.cogs._minigames import TTTBoard
 from bot.cogs._pool import compute_side_pot_payouts
 from db import queries
 
-# ── Constants ────────────────────────────────────────────────────────────────
+# ── Constants (derived from shared TTTBoard) ─────────────────────────────────
 
-EMPTY = "\u2b1c"  # white square
-X_EMOJI = "\u274c"  # X mark
-O_EMOJI = "\u2b55"  # O circle
-
-WIN_LINES = [
-    # Rows
-    (0, 1, 2),
-    (3, 4, 5),
-    (6, 7, 8),
-    # Columns
-    (0, 3, 6),
-    (1, 4, 7),
-    (2, 5, 8),
-    # Diagonals
-    (0, 4, 8),
-    (2, 4, 6),
-]
+EMPTY = TTTBoard.EMPTY
+X_EMOJI = TTTBoard.X
+O_EMOJI = TTTBoard.O
+WIN_LINES = TTTBoard.WIN_LINES
 
 MOVE_TIMEOUT = 180  # seconds, view timeout
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# ── Helpers (delegate to shared TTTBoard) ────────────────────────────────────
 
 
 def _check_winner(board: list[int]) -> int:
     """Return 0 (none), 1 (X wins), 2 (O wins), or -1 (draw if board full)."""
-    for a, b, c in WIN_LINES:
-        if board[a] != 0 and board[a] == board[b] == board[c]:
-            return board[a]
-    if all(cell != 0 for cell in board):
-        return -1  # draw
-    return 0  # game still going
+    b = TTTBoard()
+    b.cells = board
+    return b.check_winner()
 
 
 def _render_board(board: list[int]) -> str:
     """Render the 3x3 grid as emoji string."""
-    symbols = {0: EMPTY, 1: X_EMOJI, 2: O_EMOJI}
-    rows = []
-    for r in range(3):
-        cells = [symbols[board[r * 3 + c]] for c in range(3)]
-        rows.append(" ".join(cells))
-    return "\n".join(rows)
+    b = TTTBoard()
+    b.cells = board
+    return b.render()
 
 
 def _game_embed(game: "TTTGame") -> discord.Embed:
