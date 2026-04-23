@@ -1,8 +1,8 @@
 """Mini-game engine for 1v1 duels and tournaments.
 
-Eight quick games playable between two players. Each game class exposes a
+Nine quick games playable between two players. Each game class exposes a
 uniform interface so the duel/tournament system can pick and run them
-generically.
+generically.  Most games run best-of-3 rounds via ``_play_best_of_3``.
 
 Interface per game:
     name: str           -- display name
@@ -97,6 +97,68 @@ def _roll_2d6() -> tuple[int, int]:
 
 def _dice_display(d1: int, d2: int) -> str:
     return f"{DICE_EMOJI[d1]} {DICE_EMOJI[d2]}  =  **{d1 + d2}**"
+
+
+# ── Best-of-3 Helper ──────────────────────────────────────────────────────
+
+
+async def _play_best_of_3(
+    message: discord.Message,
+    p1_id: int,
+    p1_name: str,
+    p2_id: int,
+    p2_name: str,
+    game_emoji: str,
+    game_name: str,
+    round_fn,
+) -> int:
+    """Run a best-of-3 series.
+
+    *round_fn(message, round_num)* plays one round and returns the winner's
+    user-id (or 0 for a draw).  First to 2 round-wins takes the series.
+    """
+    p1w = p2w = 0
+    for rnd in range(1, 4):
+        if p1w == 2 or p2w == 2:
+            break
+
+        score = f"**{p1_name}** {p1w} \u2014 {p2w} **{p2_name}**"
+        embed = discord.Embed(
+            title=f"{game_emoji} {game_name} \u2014 Round {rnd}/3",
+            description=score,
+            colour=discord.Colour.blue(),
+        )
+        await message.edit(embed=embed, view=None)
+        await asyncio.sleep(1.5)
+
+        winner = await round_fn(message, rnd)
+        if winner == p1_id:
+            p1w += 1
+        elif winner == p2_id:
+            p2w += 1
+
+        # Let the round result stay visible briefly
+        await asyncio.sleep(2)
+
+    # Determine series winner
+    if p1w > p2w:
+        overall = p1_id
+        desc = f"**{p1_name}** wins the series **{p1w}\u2013{p2w}**!"
+    elif p2w > p1w:
+        overall = p2_id
+        desc = f"**{p2_name}** wins the series **{p2w}\u2013{p1w}**!"
+    else:
+        overall = 0
+        desc = f"Series tied **{p1w}\u2013{p2w}**!"
+
+    colour = discord.Colour.gold() if overall else discord.Colour.greyple()
+    embed = discord.Embed(
+        title=f"{game_emoji} {game_name} \u2014 Final",
+        description=desc,
+        colour=colour,
+    )
+    await message.edit(embed=embed, view=None)
+    return overall
 
 
 # ── Shared Game Logic (imported by standalone cogs for feature parity) ─────
@@ -249,105 +311,142 @@ class HigherCard:
         p2_id: int,
         p2_name: str,
     ) -> int:
-        deck = list(DECK)
-        random.shuffle(deck)
-        c1 = deck[0]
-        c2 = deck[1]
+        async def _round(msg: discord.Message, _rnd: int) -> int:
+            deck = list(DECK)
+            random.shuffle(deck)
+            c1 = deck[0]
+            c2 = deck[1]
 
-        view = _DrawCardView(p1_id, p1_name, p2_id, p2_name, c1, c2)
+            view = _DrawCardView(p1_id, p1_name, p2_id, p2_name, c1, c2)
 
-        embed = discord.Embed(
-            title=f"{self.emoji} Higher Card",
-            description="Both players: draw your card!",
-            colour=discord.Colour.blue(),
-        )
-        embed.add_field(name=p1_name, value="🎴", inline=True)
-        embed.add_field(name="vs", value="\u200b", inline=True)
-        embed.add_field(name=p2_name, value="🎴", inline=True)
-        await message.edit(embed=embed, view=view)
+            embed = discord.Embed(
+                title=f"{self.emoji} Higher Card",
+                description="Both players: draw your card!",
+                colour=discord.Colour.blue(),
+            )
+            embed.add_field(name=p1_name, value="🎴", inline=True)
+            embed.add_field(name="vs", value="\u200b", inline=True)
+            embed.add_field(name=p2_name, value="🎴", inline=True)
+            await msg.edit(embed=embed, view=view)
 
-        # Wait for draws, updating the embed as each player draws
-        while not view.done.is_set():
-            try:
-                await asyncio.wait_for(view.done.wait(), timeout=1.0)
-            except asyncio.TimeoutError:
-                pass
+            while not view.done.is_set():
+                try:
+                    await asyncio.wait_for(view.done.wait(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    pass
 
-            # Check if one player has drawn and update the embed
-            p1_val = _card_str(*c1) if p1_id in view.drawn else "🎴"
-            p2_val = _card_str(*c2) if p2_id in view.drawn else "🎴"
+                p1_val = _card_str(*c1) if p1_id in view.drawn else "🎴"
+                p2_val = _card_str(*c2) if p2_id in view.drawn else "🎴"
 
-            drawn_count = len(view.drawn)
-            if drawn_count == 1:
-                embed = discord.Embed(
-                    title=f"{self.emoji} Higher Card",
-                    description="Waiting for the other player to draw...",
-                    colour=discord.Colour.blue(),
-                )
-                embed.add_field(name=p1_name, value=p1_val, inline=True)
-                embed.add_field(name="vs", value="\u200b", inline=True)
-                embed.add_field(name=p2_name, value=p2_val, inline=True)
-                await message.edit(embed=embed, view=view)
-            elif drawn_count == 2:
-                break
+                drawn_count = len(view.drawn)
+                if drawn_count == 1:
+                    embed = discord.Embed(
+                        title=f"{self.emoji} Higher Card",
+                        description="Waiting for the other player to draw...",
+                        colour=discord.Colour.blue(),
+                    )
+                    embed.add_field(name=p1_name, value=p1_val, inline=True)
+                    embed.add_field(name="vs", value="\u200b", inline=True)
+                    embed.add_field(name=p2_name, value=p2_val, inline=True)
+                    await msg.edit(embed=embed, view=view)
+                elif drawn_count == 2:
+                    break
 
-            # Check if total timeout exceeded (20 seconds handled by view)
-            if not view.is_finished():
-                continue
+                if not view.is_finished():
+                    continue
+                else:
+                    break
+
+            view.stop()
+
+            if p1_id not in view.drawn:
+                view.drawn[p1_id] = c1
+            if p2_id not in view.drawn:
+                view.drawn[p2_id] = c2
+
+            r1 = _card_rank(*c1)
+            r2 = _card_rank(*c2)
+
+            if r1 > r2:
+                winner_id, winner_name = p1_id, p1_name
+            elif r2 > r1:
+                winner_id, winner_name = p2_id, p2_name
             else:
-                break
+                winner_id, winner_name = 0, "Nobody"
 
-        view.stop()
+            result_colour = discord.Colour.gold() if winner_id else discord.Colour.greyple()
+            embed = discord.Embed(
+                title=f"{self.emoji} Higher Card",
+                colour=result_colour,
+            )
+            embed.add_field(name=p1_name, value=_card_str(*c1), inline=True)
+            embed.add_field(name="vs", value="\u200b", inline=True)
+            embed.add_field(name=p2_name, value=_card_str(*c2), inline=True)
 
-        # Anyone who didn't draw gets their random card anyway
-        if p1_id not in view.drawn:
-            view.drawn[p1_id] = c1
-        if p2_id not in view.drawn:
-            view.drawn[p2_id] = c2
+            if winner_id:
+                winning_card = c1 if winner_id == p1_id else c2
+                embed.description = f"**{winner_name}** wins with {_card_str(*winning_card)}!"
+            else:
+                embed.description = "It's a tie!"
 
-        r1 = _card_rank(*c1)
-        r2 = _card_rank(*c2)
+            await msg.edit(embed=embed, view=None)
+            return winner_id
 
-        if r1 > r2:
-            winner_id, winner_name = p1_id, p1_name
-        elif r2 > r1:
-            winner_id, winner_name = p2_id, p2_name
-        else:
-            winner_id, winner_name = 0, "Nobody"
-
-        result_colour = discord.Colour.gold() if winner_id else discord.Colour.greyple()
-        embed = discord.Embed(
-            title=f"{self.emoji} Higher Card",
-            colour=result_colour,
+        return await _play_best_of_3(
+            message, p1_id, p1_name, p2_id, p2_name,
+            self.emoji, self.name, _round,
         )
-        embed.add_field(name=p1_name, value=_card_str(*c1), inline=True)
-        embed.add_field(name="vs", value="\u200b", inline=True)
-        embed.add_field(name=p2_name, value=_card_str(*c2), inline=True)
-
-        if winner_id:
-            winning_card = c1 if winner_id == p1_id else c2
-            embed.description = f"**{winner_name}** wins with {_card_str(*winning_card)}!"
-        else:
-            embed.description = "It's a tie!"
-
-        await message.edit(embed=embed, view=None)
-        return winner_id
 
 
 # ── 2. DiceRoll ─────────────────────────────────────────────────────────────
 
 
-class _DiceRollView(ui.View):
-    """Each player clicks 'Roll!' to roll their 2d6."""
+class _DiceOneView(ui.View):
+    """Turn-based dice: each player rolls one die at a time."""
 
-    def __init__(self, p1_id: int, p2_id: int) -> None:
-        super().__init__(timeout=20)
+    def __init__(
+        self,
+        p1_id: int,
+        p2_id: int,
+        p1_name: str,
+        p2_name: str,
+    ) -> None:
+        super().__init__(timeout=30)
         self.p1_id = p1_id
         self.p2_id = p2_id
-        self.rolls: dict[int, tuple[int, int]] = {}
+        self.p1_name = p1_name
+        self.p2_name = p2_name
+        self.turn = p1_id
+        self.p1_dice: list[int] = []
+        self.p2_dice: list[int] = []
         self.done = asyncio.Event()
 
-    @ui.button(label="Roll!", emoji="🎲", style=discord.ButtonStyle.primary)
+    def _player_dice(self, uid: int) -> list[int]:
+        return self.p1_dice if uid == self.p1_id else self.p2_dice
+
+    def _dice_field(self, dice: list[int]) -> str:
+        if not dice:
+            return "\u2b1c \u2b1c"
+        parts = [DICE_EMOJI[d] for d in dice]
+        if len(parts) < 2:
+            parts.append("\u2b1c")
+        text = " ".join(parts)
+        if len(dice) == 2:
+            text += f"  =  **{sum(dice)}**"
+        return text
+
+    def _make_embed(self, status: str) -> discord.Embed:
+        embed = discord.Embed(
+            title="\U0001f3b2 Dice Roll",
+            description=status,
+            colour=discord.Colour.orange(),
+        )
+        embed.add_field(name=self.p1_name, value=self._dice_field(self.p1_dice), inline=True)
+        embed.add_field(name="vs", value="\u200b", inline=True)
+        embed.add_field(name=self.p2_name, value=self._dice_field(self.p2_dice), inline=True)
+        return embed
+
+    @ui.button(label="Roll!", emoji="\U0001f3b2", style=discord.ButtonStyle.primary)
     async def roll_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
         uid = interaction.user.id
         if uid not in (self.p1_id, self.p2_id):
@@ -355,29 +454,47 @@ class _DiceRollView(ui.View):
                 "You're not in this duel!", ephemeral=True,
             )
             return
-        if uid in self.rolls:
-            d1, d2 = self.rolls[uid]
+        if uid != self.turn:
+            turn_name = self.p1_name if self.turn == self.p1_id else self.p2_name
             await interaction.response.send_message(
-                f"You already rolled {DICE_EMOJI[d1]}{DICE_EMOJI[d2]} = {d1 + d2}!",
-                ephemeral=True,
+                f"It's **{turn_name}**'s turn!", ephemeral=True,
             )
             return
 
-        d1, d2 = _roll_2d6()
-        self.rolls[uid] = (d1, d2)
-        await interaction.response.send_message(
-            f"You rolled {DICE_EMOJI[d1]}{DICE_EMOJI[d2]} = {d1 + d2}!",
-            ephemeral=True,
-        )
+        dice = self._player_dice(uid)
+        if len(dice) >= 2:
+            await interaction.response.send_message(
+                "You already rolled both dice!", ephemeral=True,
+            )
+            return
 
-        if self.p1_id in self.rolls and self.p2_id in self.rolls:
-            self.done.set()
-            self.stop()
+        roll = random.randint(1, 6)
+        dice.append(roll)
+        name = self.p1_name if uid == self.p1_id else self.p2_name
+
+        if len(dice) == 2:
+            # Player done rolling — switch turn or finish
+            if uid == self.p1_id:
+                self.turn = self.p2_id
+                next_name = self.p2_name
+                status = f"**{name}** rolled {DICE_EMOJI[roll]}! Total: **{sum(dice)}**\n**{next_name}**, your turn!"
+            else:
+                status = f"**{name}** rolled {DICE_EMOJI[roll]}! Total: **{sum(dice)}**"
+                self.done.set()
+                self.stop()
+        else:
+            status = f"**{name}** rolled {DICE_EMOJI[roll]}! Roll again for your second die."
+
+        embed = self._make_embed(status)
+        if self.done.is_set():
+            await interaction.response.edit_message(embed=embed, view=None)
+        else:
+            await interaction.response.edit_message(embed=embed, view=self)
 
 
 class DiceRoll:
     name = "Dice Roll"
-    emoji = "🎲"
+    emoji = "\U0001f3b2"
     stakes = 200
 
     async def play(
@@ -393,57 +510,24 @@ class DiceRoll:
         for attempt in range(max_rounds):
             round_label = f" (Reroll {attempt})" if attempt > 0 else ""
 
-            view = _DiceRollView(p1_id, p2_id)
-
-            embed = discord.Embed(
-                title=f"{self.emoji} Dice Roll{round_label}",
-                description="Both players: click Roll!",
-                colour=discord.Colour.orange(),
-            )
-            embed.add_field(name=p1_name, value="\u2b1c\u2b1c", inline=True)
-            embed.add_field(name="vs", value="\u200b", inline=True)
-            embed.add_field(name=p2_name, value="\u2b1c\u2b1c", inline=True)
+            view = _DiceOneView(p1_id, p2_id, p1_name, p2_name)
+            status = f"**{p1_name}**, click Roll!{round_label}"
+            embed = view._make_embed(status)
             await message.edit(embed=embed, view=view)
 
-            # Poll for partial updates
-            while not view.done.is_set():
-                try:
-                    await asyncio.wait_for(view.done.wait(), timeout=1.0)
-                except asyncio.TimeoutError:
-                    pass
+            try:
+                await asyncio.wait_for(view.done.wait(), timeout=30)
+            except asyncio.TimeoutError:
+                view.stop()
 
-                p1_rolled = p1_id in view.rolls
-                p2_rolled = p2_id in view.rolls
+            # Auto-roll for anyone who didn't finish
+            while len(view.p1_dice) < 2:
+                view.p1_dice.append(random.randint(1, 6))
+            while len(view.p2_dice) < 2:
+                view.p2_dice.append(random.randint(1, 6))
 
-                if (p1_rolled or p2_rolled) and not view.done.is_set():
-                    p1_val = _dice_display(*view.rolls[p1_id]) if p1_rolled else "\u2b1c\u2b1c"
-                    p2_val = _dice_display(*view.rolls[p2_id]) if p2_rolled else "\u2b1c\u2b1c"
-                    waiting = "Waiting for the other player..."
-                    embed = discord.Embed(
-                        title=f"{self.emoji} Dice Roll{round_label}",
-                        description=waiting,
-                        colour=discord.Colour.orange(),
-                    )
-                    embed.add_field(name=p1_name, value=p1_val, inline=True)
-                    embed.add_field(name="vs", value="\u200b", inline=True)
-                    embed.add_field(name=p2_name, value=p2_val, inline=True)
-                    await message.edit(embed=embed, view=view)
-
-                if view.is_finished():
-                    break
-
-            view.stop()
-
-            # Assign random rolls for anyone who didn't roll
-            if p1_id not in view.rolls:
-                view.rolls[p1_id] = _roll_2d6()
-            if p2_id not in view.rolls:
-                view.rolls[p2_id] = _roll_2d6()
-
-            d1a, d1b = view.rolls[p1_id]
-            d2a, d2b = view.rolls[p2_id]
-            t1 = d1a + d1b
-            t2 = d2a + d2b
+            t1 = sum(view.p1_dice)
+            t2 = sum(view.p2_dice)
 
             if t1 > t2:
                 winner_id, winner_name = p1_id, p1_name
@@ -453,36 +537,22 @@ class DiceRoll:
                 winner_id = 0
 
             if winner_id or attempt == max_rounds - 1:
-                result_colour = discord.Colour.gold() if winner_id else discord.Colour.greyple()
-                embed = discord.Embed(
-                    title=f"{self.emoji} Dice Roll{round_label}",
-                    colour=result_colour,
-                )
-                embed.add_field(name=p1_name, value=_dice_display(d1a, d1b), inline=True)
-                embed.add_field(name="vs", value="\u200b", inline=True)
-                embed.add_field(name=p2_name, value=_dice_display(d2a, d2b), inline=True)
-
                 if winner_id:
-                    embed.description = f"**{winner_name}** wins!"
+                    desc = f"**{winner_name}** wins!"
                 else:
-                    embed.description = "Tied after 3 rolls -- it's a draw!"
+                    desc = "Tied after 3 rolls \u2014 it's a draw!"
 
+                embed = view._make_embed(desc)
+                embed.colour = discord.Colour.gold() if winner_id else discord.Colour.greyple()
                 await message.edit(embed=embed, view=None)
                 return winner_id
 
-            # Tie -- show it and reroll
-            embed = discord.Embed(
-                title=f"{self.emoji} Dice Roll{round_label}",
-                description="Tied! Rerolling...",
-                colour=discord.Colour.orange(),
-            )
-            embed.add_field(name=p1_name, value=_dice_display(d1a, d1b), inline=True)
-            embed.add_field(name="vs", value="\u200b", inline=True)
-            embed.add_field(name=p2_name, value=_dice_display(d2a, d2b), inline=True)
+            # Tie — reroll
+            embed = view._make_embed("Tied! Rerolling...")
             await message.edit(embed=embed, view=None)
             await asyncio.sleep(1.5)
 
-        return 0  # unreachable but satisfies type checker
+        return 0
 
 
 # ── 3. SpeedMath ────────────────────────────────────────────────────────────
@@ -614,64 +684,70 @@ class SpeedMath:
         p2_id: int,
         p2_name: str,
     ) -> int:
-        problem, answer = _generate_math_problem()
+        async def _round(msg: discord.Message, _rnd: int) -> int:
+            problem, answer = _generate_math_problem()
 
-        embed = discord.Embed(
-            title=f"{self.emoji} Speed Math",
-            description=(
-                f"**{p1_name}** vs **{p2_name}**\n\n"
-                f"## {problem} = ?\n\n"
-                "First correct answer wins! Wrong answer loses."
-            ),
-            colour=discord.Colour.green(),
-        )
-
-        view = _MathView(p1_id, p2_id, answer)
-        await message.edit(embed=embed, view=view)
-
-        try:
-            await asyncio.wait_for(view.done.wait(), timeout=20)
-        except asyncio.TimeoutError:
-            view.stop()
-
-        result = view.result
-        if result is None:
             embed = discord.Embed(
                 title=f"{self.emoji} Speed Math",
                 description=(
-                    f"**{problem} = {answer}**\n\n"
-                    "Time's up! Neither player answered -- draw."
+                    f"**{p1_name}** vs **{p2_name}**\n\n"
+                    f"## {problem} = ?\n\n"
+                    "First correct answer wins! Wrong answer loses."
                 ),
-                colour=discord.Colour.greyple(),
-            )
-            await message.edit(embed=embed, view=None)
-            return 0
-
-        uid, is_correct = result
-        responder_name = p1_name if uid == p1_id else p2_name
-        other_id = p2_id if uid == p1_id else p1_id
-        other_name = p2_name if uid == p1_id else p1_name
-
-        if is_correct:
-            winner_id, winner_name = uid, responder_name
-            desc = (
-                f"**{problem} = {answer}**\n\n"
-                f"**{responder_name}** answered correctly first and wins!"
-            )
-        else:
-            winner_id, winner_name = other_id, other_name
-            desc = (
-                f"**{problem} = {answer}**\n\n"
-                f"**{responder_name}** answered wrong -- **{other_name}** wins!"
+                colour=discord.Colour.green(),
             )
 
-        embed = discord.Embed(
-            title=f"{self.emoji} Speed Math",
-            description=desc,
-            colour=discord.Colour.gold(),
+            view = _MathView(p1_id, p2_id, answer)
+            await msg.edit(embed=embed, view=view)
+
+            try:
+                await asyncio.wait_for(view.done.wait(), timeout=20)
+            except asyncio.TimeoutError:
+                view.stop()
+
+            result = view.result
+            if result is None:
+                embed = discord.Embed(
+                    title=f"{self.emoji} Speed Math",
+                    description=(
+                        f"**{problem} = {answer}**\n\n"
+                        "Time's up! Neither player answered \u2014 draw."
+                    ),
+                    colour=discord.Colour.greyple(),
+                )
+                await msg.edit(embed=embed, view=None)
+                return 0
+
+            uid, is_correct = result
+            responder_name = p1_name if uid == p1_id else p2_name
+            other_id = p2_id if uid == p1_id else p1_id
+            other_name = p2_name if uid == p1_id else p1_name
+
+            if is_correct:
+                winner_id = uid
+                desc = (
+                    f"**{problem} = {answer}**\n\n"
+                    f"**{responder_name}** answered correctly first!"
+                )
+            else:
+                winner_id = other_id
+                desc = (
+                    f"**{problem} = {answer}**\n\n"
+                    f"**{responder_name}** answered wrong \u2014 **{other_name}** takes it!"
+                )
+
+            embed = discord.Embed(
+                title=f"{self.emoji} Speed Math",
+                description=desc,
+                colour=discord.Colour.gold(),
+            )
+            await msg.edit(embed=embed, view=None)
+            return winner_id
+
+        return await _play_best_of_3(
+            message, p1_id, p1_name, p2_id, p2_name,
+            self.emoji, self.name, _round,
         )
-        await message.edit(embed=embed, view=None)
-        return winner_id
 
 
 # ── 4. Trivia ───────────────────────────────────────────────────────────────
@@ -689,7 +765,10 @@ def _generate_trivia() -> tuple[str, list[str], int]:
 
     Returns (question, [4 options], correct_index).
     """
-    category = random.choice(["geo_country", "geo_state", "nba", "nfl"])
+    pool = ["geo_country", "geo_state", "nba"]
+    if NFL_PLAYERS:  # populated from ESPN at startup
+        pool.append("nfl")
+    category = random.choice(pool)
 
     if category == "geo_country":
         country = random.choice(list(CAPITALS.keys()))
@@ -796,153 +875,213 @@ class Trivia:
         p2_id: int,
         p2_name: str,
     ) -> int:
-        question, options, correct_index = _generate_trivia()
+        async def _round(msg: discord.Message, _rnd: int) -> int:
+            question, options, correct_index = _generate_trivia()
 
-        embed = discord.Embed(
-            title=f"{self.emoji} Trivia",
-            description=(
-                f"**{p1_name}** vs **{p2_name}**\n\n"
-                f"**{question}**\n\n"
-                "First correct answer wins! Wrong answer loses."
-            ),
-            colour=discord.Colour.teal(),
-        )
-
-        view = _TriviaView(p1_id, p2_id, correct_index, options)
-        await message.edit(embed=embed, view=view)
-
-        try:
-            await asyncio.wait_for(view.done.wait(), timeout=15)
-        except asyncio.TimeoutError:
-            view.stop()
-
-        correct_label = f"**{OPTION_LABELS[correct_index]}: {options[correct_index]}**"
-
-        if view.result is None:
             embed = discord.Embed(
                 title=f"{self.emoji} Trivia",
                 description=(
+                    f"**{p1_name}** vs **{p2_name}**\n\n"
+                    f"**{question}**\n\n"
+                    "First correct answer wins! Wrong answer loses."
+                ),
+                colour=discord.Colour.teal(),
+            )
+
+            view = _TriviaView(p1_id, p2_id, correct_index, options)
+            await msg.edit(embed=embed, view=view)
+
+            try:
+                await asyncio.wait_for(view.done.wait(), timeout=15)
+            except asyncio.TimeoutError:
+                view.stop()
+
+            correct_label = f"**{OPTION_LABELS[correct_index]}: {options[correct_index]}**"
+
+            if view.result is None:
+                embed = discord.Embed(
+                    title=f"{self.emoji} Trivia",
+                    description=(
+                        f"**{question}**\n\n"
+                        f"Answer: {correct_label}\n\n"
+                        "Time's up! Neither player answered \u2014 draw."
+                    ),
+                    colour=discord.Colour.greyple(),
+                )
+                await msg.edit(embed=embed, view=None)
+                return 0
+
+            uid, chosen_index = view.result
+            responder_name = p1_name if uid == p1_id else p2_name
+            other_id = p2_id if uid == p1_id else p1_id
+            other_name = p2_name if uid == p1_id else p1_name
+            is_correct = chosen_index == correct_index
+            chosen_label = f"{OPTION_LABELS[chosen_index]}: {options[chosen_index]}"
+
+            if is_correct:
+                winner_id = uid
+                desc = (
                     f"**{question}**\n\n"
                     f"Answer: {correct_label}\n\n"
-                    "Time's up! Neither player answered -- draw."
-                ),
-                colour=discord.Colour.greyple(),
-            )
-            await message.edit(embed=embed, view=None)
-            return 0
+                    f"**{responder_name}** picked {chosen_label} \u2014 Correct!"
+                )
+            else:
+                winner_id = other_id
+                desc = (
+                    f"**{question}**\n\n"
+                    f"Answer: {correct_label}\n\n"
+                    f"**{responder_name}** picked {chosen_label} \u2014 Wrong! **{other_name}** takes it!"
+                )
 
-        uid, chosen_index = view.result
-        responder_name = p1_name if uid == p1_id else p2_name
-        other_id = p2_id if uid == p1_id else p1_id
-        other_name = p2_name if uid == p1_id else p1_name
-        is_correct = chosen_index == correct_index
-        chosen_label = f"{OPTION_LABELS[chosen_index]}: {options[chosen_index]}"
-
-        if is_correct:
-            winner_id = uid
-            desc = (
-                f"**{question}**\n\n"
-                f"Answer: {correct_label}\n\n"
-                f"**{responder_name}** picked {chosen_label} -- Correct! **{responder_name}** wins!"
+            embed = discord.Embed(
+                title=f"{self.emoji} Trivia",
+                description=desc,
+                colour=discord.Colour.gold(),
             )
-        else:
-            winner_id = other_id
-            desc = (
-                f"**{question}**\n\n"
-                f"Answer: {correct_label}\n\n"
-                f"**{responder_name}** picked {chosen_label} -- Wrong! **{other_name}** wins!"
-            )
+            await msg.edit(embed=embed, view=None)
+            return winner_id
 
-        embed = discord.Embed(
-            title=f"{self.emoji} Trivia",
-            description=desc,
-            colour=discord.Colour.gold(),
+        return await _play_best_of_3(
+            message, p1_id, p1_name, p2_id, p2_name,
+            self.emoji, self.name, _round,
         )
-        await message.edit(embed=embed, view=None)
-        return winner_id
 
 
 # ── 5. GuessTheNumber ──────────────────────────────────────────────────────
 
 
-class _GuessModal(ui.Modal):
-    guess_input = ui.TextInput(
-        label="Your guess (1-100)",
-        placeholder="Enter a number between 1 and 100",
+class _PickNumberModal(ui.Modal):
+    number_input = ui.TextInput(
+        label="Pick a number (1-20)",
+        placeholder="1-20",
         required=True,
-        max_length=3,
+        max_length=2,
     )
 
-    def __init__(
-        self,
-        p1_id: int,
-        p2_id: int,
-        guesses: dict[int, int],
-        done: asyncio.Event,
-    ) -> None:
-        super().__init__(title="Guess the Number")
-        self.p1_id = p1_id
-        self.p2_id = p2_id
-        self.guesses = guesses
+    def __init__(self, picker_id: int, done: asyncio.Event) -> None:
+        super().__init__(title="Pick a Number")
+        self.picker_id = picker_id
         self._done = done
+        self.number: int | None = None
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        uid = interaction.user.id
-        if uid not in (self.p1_id, self.p2_id):
-            await interaction.response.send_message("You're not in this duel!", ephemeral=True)
+        if interaction.user.id != self.picker_id:
+            await interaction.response.send_message("Not your turn!", ephemeral=True)
             return
-        if uid in self.guesses:
-            await interaction.response.send_message(
-                f"You already guessed {self.guesses[uid]}!", ephemeral=True,
-            )
-            return
-
         try:
-            guess = int(self.guess_input.value.strip())
+            n = int(self.number_input.value.strip())
         except ValueError:
             await interaction.response.send_message("Enter a valid number!", ephemeral=True)
             return
-
-        if guess < 1 or guess > 100:
-            await interaction.response.send_message("Must be between 1 and 100!", ephemeral=True)
+        if n < 1 or n > 20:
+            await interaction.response.send_message("Must be 1\u201320!", ephemeral=True)
             return
-
-        self.guesses[uid] = guess
-        await interaction.response.send_message(
-            f"You guessed **{guess}**. Locked in!", ephemeral=True,
-        )
-
-        if self.p1_id in self.guesses and self.p2_id in self.guesses:
-            self._done.set()
+        self.number = n
+        await interaction.response.send_message(f"You picked **{n}**. Locked in!", ephemeral=True)
+        self._done.set()
 
 
-class _GuessView(ui.View):
-    def __init__(self, p1_id: int, p2_id: int) -> None:
+class _PickNumberView(ui.View):
+    def __init__(self, picker_id: int) -> None:
         super().__init__(timeout=20)
-        self.p1_id = p1_id
-        self.p2_id = p2_id
-        self.guesses: dict[int, int] = {}
+        self.picker_id = picker_id
         self.done = asyncio.Event()
+        self._modal = _PickNumberModal(picker_id, self.done)
 
-    @ui.button(label="Submit Guess", emoji="🔢", style=discord.ButtonStyle.success)
-    async def submit(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        uid = interaction.user.id
-        if uid not in (self.p1_id, self.p2_id):
-            await interaction.response.send_message("You're not in this duel!", ephemeral=True)
+    @property
+    def number(self) -> int | None:
+        return self._modal.number
+
+    @ui.button(label="Pick Number", emoji="\U0001f512", style=discord.ButtonStyle.primary)
+    async def pick(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        if interaction.user.id != self.picker_id:
+            await interaction.response.send_message("Not your turn to pick!", ephemeral=True)
             return
-        if uid in self.guesses:
-            await interaction.response.send_message(
-                f"You already guessed {self.guesses[uid]}!", ephemeral=True,
-            )
+        if self._modal.number is not None:
+            await interaction.response.send_message("Already picked!", ephemeral=True)
             return
-        modal = _GuessModal(self.p1_id, self.p2_id, self.guesses, self.done)
+        modal = _PickNumberModal(self.picker_id, self.done)
+        old = self._modal
+        self._modal = modal
+        original = modal.on_submit
+
+        async def _linked(inter: discord.Interaction) -> None:
+            await original(inter)
+            old.number = modal.number
+            self._modal = old
+
+        modal.on_submit = _linked  # type: ignore[assignment]
+        await interaction.response.send_modal(modal)
+
+
+class _GuessNumberModal(ui.Modal):
+    guess_input = ui.TextInput(
+        label="Guess (1-20)",
+        placeholder="1-20",
+        required=True,
+        max_length=2,
+    )
+
+    def __init__(self, guesser_id: int, done: asyncio.Event) -> None:
+        super().__init__(title="Guess the Number")
+        self.guesser_id = guesser_id
+        self._done = done
+        self.guess: int | None = None
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self.guesser_id:
+            await interaction.response.send_message("Not your turn!", ephemeral=True)
+            return
+        try:
+            g = int(self.guess_input.value.strip())
+        except ValueError:
+            await interaction.response.send_message("Enter a valid number!", ephemeral=True)
+            return
+        if g < 1 or g > 20:
+            await interaction.response.send_message("Must be 1\u201320!", ephemeral=True)
+            return
+        self.guess = g
+        await interaction.response.defer()
+        self._done.set()
+
+
+class _GuessNumberView(ui.View):
+    def __init__(self, guesser_id: int) -> None:
+        super().__init__(timeout=15)
+        self.guesser_id = guesser_id
+        self.done = asyncio.Event()
+        self._modal = _GuessNumberModal(guesser_id, self.done)
+
+    @property
+    def guess(self) -> int | None:
+        return self._modal.guess
+
+    @ui.button(label="Guess", emoji="🔢", style=discord.ButtonStyle.success)
+    async def guess_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        if interaction.user.id != self.guesser_id:
+            await interaction.response.send_message("Not your turn to guess!", ephemeral=True)
+            return
+        if self._modal.guess is not None:
+            await interaction.response.send_message("Already guessed!", ephemeral=True)
+            return
+        modal = _GuessNumberModal(self.guesser_id, self.done)
+        old = self._modal
+        self._modal = modal
+        original = modal.on_submit
+
+        async def _linked(inter: discord.Interaction) -> None:
+            await original(inter)
+            old.guess = modal.guess
+            self._modal = old
+
+        modal.on_submit = _linked  # type: ignore[assignment]
         await interaction.response.send_modal(modal)
 
 
 class GuessTheNumber:
     name = "Guess the Number"
     emoji = "🔢"
-    stakes = 200
+    stakes = 300
 
     async def play(
         self,
@@ -952,109 +1091,125 @@ class GuessTheNumber:
         p2_id: int,
         p2_name: str,
     ) -> int:
-        target = random.randint(1, 100)
-
-        embed = discord.Embed(
-            title=f"{self.emoji} Guess the Number",
-            description=(
-                f"**{p1_name}** vs **{p2_name}**\n\n"
-                "I'm thinking of a number between **1** and **100**.\n"
-                "Both players: submit your guess! Closest wins."
-            ),
-            colour=discord.Colour.dark_green(),
-        )
-
-        view = _GuessView(p1_id, p2_id)
-        await message.edit(embed=embed, view=view)
-
-        try:
-            await asyncio.wait_for(view.done.wait(), timeout=20)
-        except asyncio.TimeoutError:
-            view.stop()
-
-        g1 = view.guesses.get(p1_id)
-        g2 = view.guesses.get(p2_id)
-
-        p1_display = f"**{g1}**" if g1 is not None else "*(no guess)*"
-        p2_display = f"**{g2}**" if g2 is not None else "*(no guess)*"
-
-        if g1 is not None and g2 is not None:
-            d1 = abs(g1 - target)
-            d2 = abs(g2 - target)
-            if d1 < d2:
-                winner_id, winner_name = p1_id, p1_name
-            elif d2 < d1:
-                winner_id, winner_name = p2_id, p2_name
+        async def _round(msg: discord.Message, rnd: int) -> int:
+            # Alternate picker: odd rounds P1 picks, even rounds P2 picks
+            if rnd % 2 == 1:
+                picker_id, picker_name = p1_id, p1_name
+                guesser_id, guesser_name = p2_id, p2_name
             else:
-                winner_id = 0
-        elif g1 is not None:
-            winner_id, winner_name = p1_id, p1_name
-        elif g2 is not None:
-            winner_id, winner_name = p2_id, p2_name
-        else:
-            winner_id = 0
+                picker_id, picker_name = p2_id, p2_name
+                guesser_id, guesser_name = p1_id, p1_name
 
-        result_colour = discord.Colour.gold() if winner_id else discord.Colour.greyple()
-        embed = discord.Embed(
-            title=f"{self.emoji} Guess the Number",
-            colour=result_colour,
-        )
-        embed.add_field(name=p1_name, value=p1_display, inline=True)
-        embed.add_field(name="Target", value=f"**{target}**", inline=True)
-        embed.add_field(name=p2_name, value=p2_display, inline=True)
-
-        if g1 is not None and g2 is not None:
-            d1 = abs(g1 - target)
-            d2 = abs(g2 - target)
-            embed.add_field(
-                name="Distance",
-                value=f"{p1_name}: {d1} away | {p2_name}: {d2} away",
-                inline=False,
+            # Phase 1: Picker picks a number
+            pick_view = _PickNumberView(picker_id)
+            embed = discord.Embed(
+                title=f"{self.emoji} Guess the Number",
+                description=f"**{picker_name}**, pick a secret number (1\u201320)!",
+                colour=discord.Colour.dark_green(),
             )
+            await msg.edit(embed=embed, view=pick_view)
 
-        if winner_id:
-            embed.description = f"The number was **{target}**! **{winner_name}** wins!"
-        elif g1 is None and g2 is None:
-            embed.description = f"The number was **{target}**. Neither player guessed -- draw!"
-        else:
-            embed.description = f"The number was **{target}**. Equal distance -- draw!"
+            try:
+                await asyncio.wait_for(pick_view.done.wait(), timeout=20)
+            except asyncio.TimeoutError:
+                pick_view.stop()
 
-        await message.edit(embed=embed, view=None)
-        return winner_id
+            target = pick_view.number or random.randint(1, 20)
+
+            # Phase 2: Guesser gets 3 attempts with higher/lower hints
+            attempts_left = 3
+            history: list[str] = []
+
+            while attempts_left > 0:
+                guess_view = _GuessNumberView(guesser_id)
+                hist_text = "\n".join(history) if history else ""
+                embed = discord.Embed(
+                    title=f"{self.emoji} Guess the Number",
+                    description=(
+                        f"**{picker_name}** has picked!\n"
+                        f"**{guesser_name}**, guess the number (1\u201320)!\n"
+                        f"Attempts left: **{attempts_left}**\n\n"
+                        f"{hist_text}"
+                    ),
+                    colour=discord.Colour.dark_green(),
+                )
+                await msg.edit(embed=embed, view=guess_view)
+
+                try:
+                    await asyncio.wait_for(guess_view.done.wait(), timeout=15)
+                except asyncio.TimeoutError:
+                    guess_view.stop()
+
+                guess = guess_view.guess
+                if guess is None:
+                    attempts_left -= 1
+                    history.append("*(timed out)*")
+                    continue
+
+                if guess == target:
+                    embed = discord.Embed(
+                        title=f"{self.emoji} Guess the Number",
+                        description=(
+                            f"**{guesser_name}** guessed **{guess}** \u2014 Correct!\n"
+                            f"**{guesser_name}** wins this round!"
+                        ),
+                        colour=discord.Colour.gold(),
+                    )
+                    await msg.edit(embed=embed, view=None)
+                    return guesser_id
+
+                attempts_left -= 1
+                hint = "Too high!" if guess > target else "Too low!"
+                history.append(f"**{guess}** \u2014 {hint}")
+
+            # Guesser failed
+            embed = discord.Embed(
+                title=f"{self.emoji} Guess the Number",
+                description=(
+                    f"Out of attempts! The number was **{target}**.\n"
+                    f"**{picker_name}** wins this round!"
+                ),
+                colour=discord.Colour.gold(),
+            )
+            await msg.edit(embed=embed, view=None)
+            return picker_id
+
+        return await _play_best_of_3(
+            message, p1_id, p1_name, p2_id, p2_name,
+            self.emoji, self.name, _round,
+        )
 
 
 # ── 6. CoinFlip ─────────────────────────────────────────────────────────────
 
 
-class _CoinFlipView(ui.View):
-    """Both players simultaneously pick Heads or Tails."""
+class _CoinCallView(ui.View):
+    """The caller picks Heads or Tails."""
 
-    def __init__(self, p1_id: int, p2_id: int) -> None:
+    def __init__(self, caller_id: int) -> None:
         super().__init__(timeout=15)
-        self.p1_id = p1_id
-        self.p2_id = p2_id
-        self.picks: dict[int, str] = {}
+        self.caller_id = caller_id
+        self.pick: str | None = None
         self.done = asyncio.Event()
 
     async def _handle_pick(self, interaction: discord.Interaction, pick: str) -> None:
         uid = interaction.user.id
-        if uid not in (self.p1_id, self.p2_id):
+        if uid != self.caller_id:
             await interaction.response.send_message(
-                "You're not in this duel!", ephemeral=True,
+                "It's not your call!", ephemeral=True,
             )
             return
-        if uid in self.picks:
+        if self.pick is not None:
             await interaction.response.send_message(
-                f"You already picked {self.picks[uid]}!", ephemeral=True,
+                f"You already called {self.pick}!", ephemeral=True,
             )
             return
-        self.picks[uid] = pick
+        self.pick = pick
         await interaction.response.send_message(
-            f"You picked **{pick}**.", ephemeral=True,
+            f"You called **{pick}**!", ephemeral=True,
         )
-        if self.p1_id in self.picks and self.p2_id in self.picks:
-            self.done.set()
-            self.stop()
+        self.done.set()
+        self.stop()
 
     @ui.button(label="Heads", emoji="\U0001fa99", style=discord.ButtonStyle.primary)
     async def heads(self, interaction: discord.Interaction, button: ui.Button) -> None:
@@ -1078,98 +1233,63 @@ class CoinFlip:
         p2_id: int,
         p2_name: str,
     ) -> int:
-        max_flips = 3
+        async def _round(msg: discord.Message, rnd: int) -> int:
+            # Alternate caller: odd rounds P1 calls, even rounds P2 calls
+            if rnd % 2 == 1:
+                caller_id, caller_name = p1_id, p1_name
+                other_id, other_name = p2_id, p2_name
+            else:
+                caller_id, caller_name = p2_id, p2_name
+                other_id, other_name = p1_id, p1_name
 
-        for attempt in range(max_flips):
-            round_label = f" (Reflip {attempt})" if attempt > 0 else ""
-
-            view = _CoinFlipView(p1_id, p2_id)
+            view = _CoinCallView(caller_id)
             embed = discord.Embed(
-                title=f"{self.emoji} Coin Flip{round_label}",
-                description=(
-                    f"**{p1_name}** vs **{p2_name}**\n\n"
-                    "Both players: pick **Heads** or **Tails**!"
-                ),
+                title=f"{self.emoji} Coin Flip",
+                description=f"**{caller_name}**, call it! Heads or Tails?",
                 colour=discord.Colour.blue(),
             )
-            await message.edit(embed=embed, view=view)
+            await msg.edit(embed=embed, view=view)
 
             try:
                 await asyncio.wait_for(view.done.wait(), timeout=15)
             except asyncio.TimeoutError:
                 view.stop()
 
-            # Default picks for anyone who didn't choose
-            if p1_id not in view.picks:
-                view.picks[p1_id] = random.choice(["Heads", "Tails"])
-            if p2_id not in view.picks:
-                view.picks[p2_id] = random.choice(["Heads", "Tails"])
+            call = view.pick or random.choice(["Heads", "Tails"])
 
-            p1_pick = view.picks[p1_id]
-            p2_pick = view.picks[p2_id]
-
-            # Animate the flip
+            # Flip animation
             embed = discord.Embed(
-                title=f"{self.emoji} Coin Flip{round_label}",
-                description="Flipping...",
+                title=f"{self.emoji} Coin Flip",
+                description=f"**{caller_name}** calls **{call}**!\n\nFlipping...",
                 colour=discord.Colour.yellow(),
             )
-            await message.edit(embed=embed, view=None)
+            await msg.edit(embed=embed, view=None)
             await asyncio.sleep(1.5)
 
-            # Flip the coin
             result = random.choice(["Heads", "Tails"])
-            p1_correct = p1_pick == result
-            p2_correct = p2_pick == result
 
-            if p1_correct and not p2_correct:
-                winner_id, winner_name = p1_id, p1_name
-            elif p2_correct and not p1_correct:
-                winner_id, winner_name = p2_id, p2_name
+            if call == result:
+                winner_id = caller_id
+                desc = f"It's **{result}**! **{caller_name}** called it right!"
             else:
-                # Both correct or both wrong (same pick) -- reflip
-                winner_id = 0
+                winner_id = other_id
+                desc = (
+                    f"It's **{result}**! {caller_name} called {call} "
+                    f"\u2014 **{other_name}** takes it!"
+                )
 
             embed = discord.Embed(
-                title=f"{self.emoji} Coin Flip{round_label}",
-                colour=discord.Colour.gold() if winner_id else discord.Colour.greyple(),
+                title=f"{self.emoji} Coin Flip",
+                description=desc,
+                colour=discord.Colour.gold(),
             )
-            result_emoji = "\U0001fa99"
-            embed.add_field(
-                name=p1_name,
-                value=f"Picked: **{p1_pick}** {'-- correct!' if p1_correct else ''}",
-                inline=True,
-            )
-            embed.add_field(
-                name=f"{result_emoji} Result",
-                value=f"**{result}**",
-                inline=True,
-            )
-            embed.add_field(
-                name=p2_name,
-                value=f"Picked: **{p2_pick}** {'-- correct!' if p2_correct else ''}",
-                inline=True,
-            )
+            await msg.edit(embed=embed, view=None)
+            return winner_id
 
-            if winner_id:
-                embed.description = f"It's **{result}**! **{winner_name}** wins!"
-                await message.edit(embed=embed, view=None)
-                return winner_id
-
-            if attempt < max_flips - 1:
-                embed.description = (
-                    f"It's **{result}**! Both picked the same side -- reflipping..."
-                )
-                await message.edit(embed=embed, view=None)
-                await asyncio.sleep(1.5)
-            else:
-                embed.description = (
-                    f"It's **{result}**! Both picked the same side 3 times -- draw!"
-                )
-                await message.edit(embed=embed, view=None)
-                return 0
-
-        return 0  # unreachable
+        return await _play_best_of_3(
+            message, p1_id, p1_name, p2_id, p2_name,
+            self.emoji, self.name, _round,
+        )
 
 
 # ── 7. TicTacToe ────────────────────────────────────────────────────────────
@@ -1405,11 +1525,12 @@ class TicTacToe:
 # ── 8. BlackjackShowdown ────────────────────────────────────────────────────
 
 
-class _BlackjackView(ui.View):
-    """Both players independently play Hit/Stand on their blackjack hand."""
+class _BJTurnView(ui.View):
+    """Turn-based blackjack. Only the active player can hit/stand."""
 
     def __init__(
         self,
+        active_id: int,
         p1_id: int,
         p2_id: int,
         p1_name: str,
@@ -1417,9 +1538,10 @@ class _BlackjackView(ui.View):
         p1_hand: list[tuple[str, str]],
         p2_hand: list[tuple[str, str]],
         deck: list[tuple[str, str]],
-        message: discord.Message,
+        show_p2: bool,
     ) -> None:
-        super().__init__(timeout=30)
+        super().__init__(timeout=25)
+        self.active_id = active_id
         self.p1_id = p1_id
         self.p2_id = p2_id
         self.p1_name = p1_name
@@ -1427,133 +1549,78 @@ class _BlackjackView(ui.View):
         self.p1_hand = p1_hand
         self.p2_hand = p2_hand
         self.deck = deck
-        self.message = message
-        self.stood: set[int] = set()  # player IDs who have stood (or busted)
+        self.show_p2 = show_p2
         self.done = asyncio.Event()
+        self.busted = False
 
-    def _player_hand(self, uid: int) -> list[tuple[str, str]]:
-        return self.p1_hand if uid == self.p1_id else self.p2_hand
-
-    def _player_name(self, uid: int) -> str:
-        return self.p1_name if uid == self.p1_id else self.p2_name
-
-    def _check_done(self) -> None:
-        if self.p1_id in self.stood and self.p2_id in self.stood:
-            self.done.set()
-            self.stop()
-
-    def _make_embed(self, status: str, colour: discord.Colour) -> discord.Embed:
+    def _make_embed(self, status: str) -> discord.Embed:
         embed = discord.Embed(
-            title="🃏 Blackjack Showdown",
+            title="\U0001f0cf Blackjack",
             description=status,
-            colour=colour,
+            colour=discord.Colour.dark_purple(),
         )
-        p1_status = " (standing)" if self.p1_id in self.stood else ""
-        p2_status = " (standing)" if self.p2_id in self.stood else ""
-        p1_total = _bj_hand_total(self.p1_hand)
-        p2_total = _bj_hand_total(self.p2_hand)
-        if p1_total > 21:
-            p1_status = " (BUST)"
-        if p2_total > 21:
-            p2_status = " (BUST)"
-
         embed.add_field(
-            name=f"{self.p1_name}{p1_status}",
+            name=self.p1_name,
             value=_bj_hand_display(self.p1_hand),
             inline=True,
         )
         embed.add_field(name="\u200b", value="\u200b", inline=True)
-        embed.add_field(
-            name=f"{self.p2_name}{p2_status}",
-            value=_bj_hand_display(self.p2_hand),
-            inline=True,
-        )
+        if self.show_p2:
+            embed.add_field(
+                name=self.p2_name,
+                value=_bj_hand_display(self.p2_hand),
+                inline=True,
+            )
+        else:
+            embed.add_field(name=self.p2_name, value="\U0001f0cf \U0001f0cf", inline=True)
         return embed
 
-    @ui.button(label="Hit", emoji="🃏", style=discord.ButtonStyle.primary, row=1)
+    def _active_hand(self) -> list[tuple[str, str]]:
+        return self.p1_hand if self.active_id == self.p1_id else self.p2_hand
+
+    @ui.button(label="Hit", emoji="\U0001f0cf", style=discord.ButtonStyle.primary, row=1)
     async def hit(self, interaction: discord.Interaction, button: ui.Button) -> None:
         uid = interaction.user.id
-        if uid not in (self.p1_id, self.p2_id):
-            await interaction.response.send_message(
-                "You're not in this game!", ephemeral=True,
-            )
-            return
-        if uid in self.stood:
-            await interaction.response.send_message(
-                "You already stood (or busted)!", ephemeral=True,
-            )
+        if uid != self.active_id:
+            await interaction.response.send_message("Not your turn!", ephemeral=True)
             return
 
-        hand = self._player_hand(uid)
+        hand = self._active_hand()
         card = self.deck.pop()
         hand.append(card)
         total = _bj_hand_total(hand)
+        name = self.p1_name if uid == self.p1_id else self.p2_name
 
         if total > 21:
-            self.stood.add(uid)
-            await interaction.response.send_message(
-                f"You drew {_card_str(*card)} -- **BUST** ({total})!",
-                ephemeral=True,
-            )
+            self.busted = True
+            self.done.set()
+            self.stop()
+            embed = self._make_embed(f"**{name}** draws {_card_str(*card)} \u2014 **BUST!**")
+            await interaction.response.edit_message(embed=embed, view=None)
         else:
-            await interaction.response.send_message(
-                f"You drew {_card_str(*card)} -- total: **{total}**.",
-                ephemeral=True,
+            embed = self._make_embed(
+                f"**{name}** draws {_card_str(*card)}. Hit or Stand?",
             )
+            await interaction.response.edit_message(embed=embed, view=self)
 
-        # Update the public embed
-        status = self._turn_status()
-        embed = self._make_embed(status, discord.Colour.dark_purple())
-        try:
-            await self.message.edit(embed=embed, view=self)
-        except discord.NotFound:
-            pass
-
-        self._check_done()
-
-    @ui.button(label="Stand", emoji="🛑", style=discord.ButtonStyle.danger, row=1)
+    @ui.button(label="Stand", emoji="\U0001f6d1", style=discord.ButtonStyle.danger, row=1)
     async def stand(self, interaction: discord.Interaction, button: ui.Button) -> None:
         uid = interaction.user.id
-        if uid not in (self.p1_id, self.p2_id):
-            await interaction.response.send_message(
-                "You're not in this game!", ephemeral=True,
-            )
-            return
-        if uid in self.stood:
-            await interaction.response.send_message(
-                "You already stood!", ephemeral=True,
-            )
+        if uid != self.active_id:
+            await interaction.response.send_message("Not your turn!", ephemeral=True)
             return
 
-        self.stood.add(uid)
-        total = _bj_hand_total(self._player_hand(uid))
-        await interaction.response.send_message(
-            f"You stand at **{total}**.", ephemeral=True,
-        )
-
-        status = self._turn_status()
-        embed = self._make_embed(status, discord.Colour.dark_purple())
-        try:
-            await self.message.edit(embed=embed, view=self)
-        except discord.NotFound:
-            pass
-
-        self._check_done()
-
-    def _turn_status(self) -> str:
-        waiting = []
-        if self.p1_id not in self.stood:
-            waiting.append(self.p1_name)
-        if self.p2_id not in self.stood:
-            waiting.append(self.p2_name)
-        if waiting:
-            return f"Waiting on: **{'**, **'.join(waiting)}**"
-        return "Both players are done!"
+        name = self.p1_name if uid == self.p1_id else self.p2_name
+        total = _bj_hand_total(self._active_hand())
+        self.done.set()
+        self.stop()
+        embed = self._make_embed(f"**{name}** stands at **{total}**.")
+        await interaction.response.edit_message(embed=embed, view=None)
 
 
 class BlackjackShowdown:
-    name = "Blackjack Showdown"
-    emoji = "🃏"
+    name = "Blackjack"
+    emoji = "\U0001f0cf"
     stakes = 300
 
     async def play(
@@ -1564,52 +1631,78 @@ class BlackjackShowdown:
         p2_id: int,
         p2_name: str,
     ) -> int:
-        # Fresh shuffled deck
         deck = list(DECK)
         random.shuffle(deck)
-
-        # Deal 2 cards each
         p1_hand = [deck.pop(), deck.pop()]
         p2_hand = [deck.pop(), deck.pop()]
 
-        view = _BlackjackView(
-            p1_id, p2_id, p1_name, p2_name, p1_hand, p2_hand, deck, message,
-        )
+        # --- Phase 1: P1 plays (P2's hand hidden) ---
+        p1_total = _bj_hand_total(p1_hand)
+        p1_natural = p1_total == 21 and len(p1_hand) == 2
 
-        status = f"**{p1_name}** vs **{p2_name}** -- Hit or Stand!"
-        embed = view._make_embed(status, discord.Colour.dark_purple())
-        await message.edit(embed=embed, view=view)
+        if not p1_natural:
+            view = _BJTurnView(
+                p1_id, p1_id, p2_id, p1_name, p2_name,
+                p1_hand, p2_hand, deck, show_p2=False,
+            )
+            embed = view._make_embed(f"**{p1_name}**'s turn. Hit or Stand?")
+            await message.edit(embed=embed, view=view)
 
-        try:
-            await asyncio.wait_for(view.done.wait(), timeout=30)
-        except asyncio.TimeoutError:
-            view.stop()
-            # Auto-stand anyone who hasn't acted
-            if p1_id not in view.stood:
-                view.stood.add(p1_id)
-            if p2_id not in view.stood:
-                view.stood.add(p2_id)
+            try:
+                await asyncio.wait_for(view.done.wait(), timeout=25)
+            except asyncio.TimeoutError:
+                view.stop()
 
+        await asyncio.sleep(1)
+
+        # --- Phase 2: P2 plays (both hands visible) ---
+        p1_total = _bj_hand_total(p1_hand)
+        p1_bust = p1_total > 21
+        p2_total = _bj_hand_total(p2_hand)
+        p2_natural = p2_total == 21 and len(p2_hand) == 2
+
+        if p1_bust:
+            # P1 busted \u2014 P2 wins automatically, just reveal
+            pass
+        elif not p2_natural:
+            view2 = _BJTurnView(
+                p2_id, p1_id, p2_id, p1_name, p2_name,
+                p1_hand, p2_hand, deck, show_p2=True,
+            )
+            status = (
+                f"**{p1_name}** finished at **{p1_total}**."
+                + (" Blackjack!" if p1_natural else "")
+                + f"\n**{p2_name}**'s turn. Hit or Stand?"
+            )
+            embed = view2._make_embed(status)
+            await message.edit(embed=embed, view=view2)
+
+            try:
+                await asyncio.wait_for(view2.done.wait(), timeout=25)
+            except asyncio.TimeoutError:
+                view2.stop()
+
+        # --- Resolve ---
         t1 = _bj_hand_total(p1_hand)
         t2 = _bj_hand_total(p2_hand)
-        p1_bust = t1 > 21
-        p2_bust = t2 > 21
-        p1_bj = t1 == 21 and len(p1_hand) == 2
-        p2_bj = t2 == 21 and len(p2_hand) == 2
+        b1 = t1 > 21
+        b2 = t2 > 21
+        bj1 = t1 == 21 and len(p1_hand) == 2
+        bj2 = t2 == 21 and len(p2_hand) == 2
 
-        if p1_bust and p2_bust:
+        if b1 and b2:
             winner_id = 0
-            desc = "Both players busted -- draw!"
-        elif p1_bust:
+            desc = "Both players busted \u2014 draw!"
+        elif b1:
             winner_id = p2_id
             desc = f"**{p1_name}** busted! **{p2_name}** wins with {t2}!"
-        elif p2_bust:
+        elif b2:
             winner_id = p1_id
             desc = f"**{p2_name}** busted! **{p1_name}** wins with {t1}!"
-        elif p1_bj and not p2_bj:
+        elif bj1 and not bj2:
             winner_id = p1_id
             desc = f"**{p1_name}** has Blackjack! **{p1_name}** wins!"
-        elif p2_bj and not p1_bj:
+        elif bj2 and not bj1:
             winner_id = p2_id
             desc = f"**{p2_name}** has Blackjack! **{p2_name}** wins!"
         elif t1 > t2:
@@ -1620,11 +1713,19 @@ class BlackjackShowdown:
             desc = f"**{p2_name}** wins with {t2} vs {t1}!"
         else:
             winner_id = 0
-            desc = f"Both have {t1} -- draw!"
+            desc = f"Both have {t1} \u2014 draw!"
 
         colour = discord.Colour.gold() if winner_id else discord.Colour.greyple()
-        embed = view._make_embed(desc, colour)
-        await message.edit(embed=embed, view=None)
+        # Build final embed showing both hands
+        final = discord.Embed(
+            title="\U0001f0cf Blackjack",
+            description=desc,
+            colour=colour,
+        )
+        final.add_field(name=p1_name, value=_bj_hand_display(p1_hand), inline=True)
+        final.add_field(name="\u200b", value="\u200b", inline=True)
+        final.add_field(name=p2_name, value=_bj_hand_display(p2_hand), inline=True)
+        await message.edit(embed=final, view=None)
         return winner_id
 
 
@@ -1752,247 +1853,71 @@ class WordScramble:
         p2_id: int,
         p2_name: str,
     ) -> int:
-        word = random.choice(WORD_POOL)
-        scrambled = _scramble_word(word)
+        async def _round(msg: discord.Message, _rnd: int) -> int:
+            word = random.choice(WORD_POOL)
+            scrambled = _scramble_word(word)
 
-        embed = discord.Embed(
-            title=f"{self.emoji} Word Scramble",
-            description=(
-                f"**{p1_name}** vs **{p2_name}**\n\n"
-                f"## `{scrambled.upper()}`\n\n"
-                "Unscramble the word! First correct answer wins."
-            ),
-            colour=discord.Colour.dark_teal(),
-        )
-
-        view = _UnscrambleView(p1_id, p2_id, word)
-        await message.edit(embed=embed, view=view)
-
-        try:
-            await asyncio.wait_for(view.done.wait(), timeout=20)
-        except asyncio.TimeoutError:
-            view.stop()
-
-        result = view.result
-        if result is None:
             embed = discord.Embed(
                 title=f"{self.emoji} Word Scramble",
                 description=(
+                    f"**{p1_name}** vs **{p2_name}**\n\n"
+                    f"## `{scrambled.upper()}`\n\n"
+                    "Unscramble the word! First correct answer wins."
+                ),
+                colour=discord.Colour.dark_teal(),
+            )
+
+            view = _UnscrambleView(p1_id, p2_id, word)
+            await msg.edit(embed=embed, view=view)
+
+            try:
+                await asyncio.wait_for(view.done.wait(), timeout=20)
+            except asyncio.TimeoutError:
+                view.stop()
+
+            result = view.result
+            if result is None:
+                embed = discord.Embed(
+                    title=f"{self.emoji} Word Scramble",
+                    description=(
+                        f"`{scrambled.upper()}` = **{word.upper()}**\n\n"
+                        "Time's up! Neither player answered \u2014 draw."
+                    ),
+                    colour=discord.Colour.greyple(),
+                )
+                await msg.edit(embed=embed, view=None)
+                return 0
+
+            uid, is_correct = result
+            responder_name = p1_name if uid == p1_id else p2_name
+            other_id = p2_id if uid == p1_id else p1_id
+            other_name = p2_name if uid == p1_id else p1_name
+
+            if is_correct:
+                winner_id = uid
+                desc = (
                     f"`{scrambled.upper()}` = **{word.upper()}**\n\n"
-                    "Time's up! Neither player answered -- draw."
-                ),
-                colour=discord.Colour.greyple(),
-            )
-            await message.edit(embed=embed, view=None)
-            return 0
+                    f"**{responder_name}** unscrambled it first!"
+                )
+            else:
+                winner_id = other_id
+                desc = (
+                    f"`{scrambled.upper()}` = **{word.upper()}**\n\n"
+                    f"**{responder_name}** guessed wrong \u2014 **{other_name}** takes it!"
+                )
 
-        uid, is_correct = result
-        responder_name = p1_name if uid == p1_id else p2_name
-        other_id = p2_id if uid == p1_id else p1_id
-        other_name = p2_name if uid == p1_id else p1_name
-
-        if is_correct:
-            winner_id = uid
-            desc = (
-                f"`{scrambled.upper()}` = **{word.upper()}**\n\n"
-                f"**{responder_name}** unscrambled it first and wins!"
-            )
-        else:
-            winner_id = other_id
-            desc = (
-                f"`{scrambled.upper()}` = **{word.upper()}**\n\n"
-                f"**{responder_name}** guessed wrong -- **{other_name}** wins!"
-            )
-
-        embed = discord.Embed(
-            title=f"{self.emoji} Word Scramble",
-            description=desc,
-            colour=discord.Colour.gold(),
-        )
-        await message.edit(embed=embed, view=None)
-        return winner_id
-
-
-# ── 10. TypingRace ─────────────────────────────────────────────────────────
-
-PHRASES = [
-    "the quick brown fox jumps over the lazy dog",
-    "all that glitters is not gold",
-    "actions speak louder than words",
-    "practice makes perfect every time",
-    "fortune favors the bold and brave",
-    "knowledge is power in every situation",
-    "the early bird catches the worm",
-    "where there is a will there is a way",
-    "every cloud has a silver lining",
-    "time flies when you are having fun",
-    "better late than never they always say",
-    "curiosity killed the cat but satisfaction brought it back",
-    "the pen is mightier than the sword",
-    "you miss every shot you do not take",
-    "when in rome do as the romans do",
-    "two wrongs do not make a right",
-    "the best things in life are free",
-    "a journey of a thousand miles begins with a single step",
-    "do not count your chickens before they hatch",
-    "honesty is the best policy for everyone",
-]
-
-
-class _TypingModal(ui.Modal):
-    typed = ui.TextInput(
-        label="Type the phrase exactly",
-        style=discord.TextStyle.paragraph,
-        placeholder="Type it here...",
-        required=True,
-        max_length=200,
-    )
-
-    def __init__(
-        self, p1_id: int, p2_id: int, phrase: str, done: asyncio.Event,
-    ) -> None:
-        super().__init__(title="Typing Race")
-        self.p1_id = p1_id
-        self.p2_id = p2_id
-        self.phrase = phrase
-        self._done = done
-        self.result: tuple[int, bool] | None = None
-        self._resolved = False
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        uid = interaction.user.id
-        if uid not in (self.p1_id, self.p2_id):
-            await interaction.response.send_message("You're not in this duel!", ephemeral=True)
-            return
-        if self._resolved:
-            await interaction.response.send_message("Already submitted!", ephemeral=True)
-            return
-
-        self._resolved = True
-        attempt = self.typed.value.strip().lower()
-        is_correct = attempt == self.phrase
-        self.result = (uid, is_correct)
-
-        if is_correct:
-            await interaction.response.send_message("Perfect!", ephemeral=True)
-        else:
-            await interaction.response.send_message("Not quite right!", ephemeral=True)
-        self._done.set()
-
-
-class _TypingView(ui.View):
-    def __init__(self, p1_id: int, p2_id: int, phrase: str) -> None:
-        super().__init__(timeout=30)
-        self.p1_id = p1_id
-        self.p2_id = p2_id
-        self.phrase = phrase
-        self.done = asyncio.Event()
-        self._modal = _TypingModal(p1_id, p2_id, phrase, self.done)
-
-    @property
-    def result(self) -> tuple[int, bool] | None:
-        return self._modal.result
-
-    @ui.button(label="Start Typing", emoji="\u2328\ufe0f", style=discord.ButtonStyle.success)
-    async def start(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        uid = interaction.user.id
-        if uid not in (self.p1_id, self.p2_id):
-            await interaction.response.send_message("You're not in this duel!", ephemeral=True)
-            return
-        if self._modal._resolved:
-            await interaction.response.send_message("Already submitted!", ephemeral=True)
-            return
-        modal = _TypingModal(self.p1_id, self.p2_id, self.phrase, self.done)
-        modal._resolved = self._modal._resolved
-        old = self._modal
-        self._modal = modal
-
-        original_submit = modal.on_submit
-
-        async def _linked(inter: discord.Interaction) -> None:
-            await original_submit(inter)
-            old.result = modal.result
-            old._resolved = modal._resolved
-            self._modal = old
-            self._modal.result = modal.result
-            self._modal._resolved = modal._resolved
-
-        modal.on_submit = _linked  # type: ignore[assignment]
-        await interaction.response.send_modal(modal)
-
-
-class TypingRace:
-    name = "Typing Race"
-    emoji = "\u2328\ufe0f"
-    stakes = 300
-
-    async def play(
-        self,
-        message: discord.Message,
-        p1_id: int,
-        p1_name: str,
-        p2_id: int,
-        p2_name: str,
-    ) -> int:
-        phrase = random.choice(PHRASES)
-
-        embed = discord.Embed(
-            title=f"{self.emoji} Typing Race",
-            description=(
-                f"**{p1_name}** vs **{p2_name}**\n\n"
-                f"Type this phrase exactly:\n"
-                f"```{phrase}```\n"
-                "First to type it perfectly wins! Typos lose."
-            ),
-            colour=discord.Colour.dark_blue(),
-        )
-
-        view = _TypingView(p1_id, p2_id, phrase)
-        await message.edit(embed=embed, view=view)
-
-        try:
-            await asyncio.wait_for(view.done.wait(), timeout=30)
-        except asyncio.TimeoutError:
-            view.stop()
-
-        result = view.result
-        if result is None:
             embed = discord.Embed(
-                title=f"{self.emoji} Typing Race",
-                description=(
-                    f"```{phrase}```\n"
-                    "Time's up! Neither player typed it -- draw."
-                ),
-                colour=discord.Colour.greyple(),
+                title=f"{self.emoji} Word Scramble",
+                description=desc,
+                colour=discord.Colour.gold(),
             )
-            await message.edit(embed=embed, view=None)
-            return 0
+            await msg.edit(embed=embed, view=None)
+            return winner_id
 
-        uid, is_correct = result
-        responder_name = p1_name if uid == p1_id else p2_name
-        other_id = p2_id if uid == p1_id else p1_id
-        other_name = p2_name if uid == p1_id else p1_name
-
-        if is_correct:
-            winner_id = uid
-            desc = (
-                f"```{phrase}```\n"
-                f"**{responder_name}** typed it perfectly and wins!"
-            )
-        else:
-            winner_id = other_id
-            desc = (
-                f"```{phrase}```\n"
-                f"**{responder_name}** made a typo -- **{other_name}** wins!"
-            )
-
-        embed = discord.Embed(
-            title=f"{self.emoji} Typing Race",
-            description=desc,
-            colour=discord.Colour.gold(),
+        return await _play_best_of_3(
+            message, p1_id, p1_name, p2_id, p2_name,
+            self.emoji, self.name, _round,
         )
-        await message.edit(embed=embed, view=None)
-        return winner_id
 
 
 # ── Registry & Picker ───────────────────────────────────────────────────────
@@ -2007,7 +1932,6 @@ ALL_GAMES: list[MiniGame] = [
     TicTacToe(),
     BlackjackShowdown(),
     WordScramble(),
-    TypingRace(),
 ]
 
 

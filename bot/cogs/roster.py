@@ -5,16 +5,20 @@ First to WINS_TO_WIN round wins takes the pot.
 """
 
 import asyncio
+import logging
 import random
 import time
 from dataclasses import dataclass, field
 from itertools import groupby
 
 import discord
+import httpx
 from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
+
+log = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -242,7 +246,8 @@ NBA_CONFIG = SportConfig(
 )
 
 # ── NFL data ─────────────────────────────────────────────────────────────────
-# QBs, WRs, and RBs only.  Update as free agency / trades happen.
+# Teams are hardcoded (aliases don't change).
+# Players are fetched live from ESPN at cog load — always current, all positions.
 
 NFL_TEAMS: dict[str, list[str]] = {
     "Cardinals": ["Cardinals", "Arizona Cardinals", "Arizona", "ARI"],
@@ -279,98 +284,74 @@ NFL_TEAMS: dict[str, list[str]] = {
     "Commanders": ["Commanders", "Washington Commanders", "Washington", "WAS"],
 }
 
-# player_name -> (position, team_key)
-# Updated April 2026 — reflects 2025 offseason trades and free agency.
-NFL_PLAYERS: dict[str, tuple[str, str]] = {
-    # ── Quarterbacks ──
-    "Patrick Mahomes": ("QB", "Chiefs"),
-    "Josh Allen": ("QB", "Bills"),
-    "Lamar Jackson": ("QB", "Ravens"),
-    "Joe Burrow": ("QB", "Bengals"),
-    "Jalen Hurts": ("QB", "Eagles"),
-    "Dak Prescott": ("QB", "Cowboys"),
-    "Justin Herbert": ("QB", "Chargers"),
-    "Tua Tagovailoa": ("QB", "Dolphins"),
-    "C.J. Stroud": ("QB", "Texans"),
-    "Brock Purdy": ("QB", "49ers"),
-    "Jordan Love": ("QB", "Packers"),
-    "Anthony Richardson": ("QB", "Colts"),
-    "Trevor Lawrence": ("QB", "Jaguars"),
-    "Jared Goff": ("QB", "Lions"),
-    "Baker Mayfield": ("QB", "Buccaneers"),
-    "Kirk Cousins": ("QB", "Falcons"),
-    "Caleb Williams": ("QB", "Bears"),
-    "Jayden Daniels": ("QB", "Commanders"),
-    "Drake Maye": ("QB", "Patriots"),
-    "Bo Nix": ("QB", "Broncos"),
-    "Kyler Murray": ("QB", "Cardinals"),
-    "Matthew Stafford": ("QB", "Rams"),
-    "Aaron Rodgers": ("QB", "Steelers"),
-    "Russell Wilson": ("QB", "Giants"),
-    "Derek Carr": ("QB", "Saints"),
-    "Sam Darnold": ("QB", "Seahawks"),
-    "Bryce Young": ("QB", "Panthers"),
-    "Deshaun Watson": ("QB", "Browns"),
-    "Will Levis": ("QB", "Titans"),
-    "Aidan O'Connell": ("QB", "Raiders"),
-    # ── Wide Receivers ──
-    "Ja'Marr Chase": ("WR", "Bengals"),
-    "Justin Jefferson": ("WR", "Vikings"),
-    "CeeDee Lamb": ("WR", "Cowboys"),
-    "A.J. Brown": ("WR", "Eagles"),
-    "Amon-Ra St. Brown": ("WR", "Lions"),
-    "Deebo Samuel": ("WR", "49ers"),
-    "DK Metcalf": ("WR", "Steelers"),
-    "Terry McLaurin": ("WR", "Commanders"),
-    "Mike Evans": ("WR", "Buccaneers"),
-    "Chris Olave": ("WR", "Saints"),
-    "Garrett Wilson": ("WR", "Jets"),
-    "Puka Nacua": ("WR", "Rams"),
-    "Nico Collins": ("WR", "Texans"),
-    "Drake London": ("WR", "Falcons"),
-    "DeVonta Smith": ("WR", "Eagles"),
-    "Jaylen Waddle": ("WR", "Dolphins"),
-    "Marvin Harrison Jr": ("WR", "Cardinals"),
-    "Malik Nabers": ("WR", "Giants"),
-    "Rome Odunze": ("WR", "Bears"),
-    "George Pickens": ("WR", "Cowboys"),
-    "DJ Moore": ("WR", "Bills"),
-    "Tank Dell": ("WR", "Texans"),
-    "Zay Flowers": ("WR", "Ravens"),
-    "Rashee Rice": ("WR", "Chiefs"),
-    "Brandon Aiyuk": ("WR", "49ers"),
-    "Cooper Kupp": ("WR", "Seahawks"),
-    "Chris Godwin": ("WR", "Buccaneers"),
-    "Courtland Sutton": ("WR", "Broncos"),
-    "Calvin Ridley": ("WR", "Titans"),
-    "Davante Adams": ("WR", "Rams"),
-    "Tee Higgins": ("WR", "Bengals"),
-    # ── Running Backs ──
-    "Derrick Henry": ("RB", "Ravens"),
-    "Saquon Barkley": ("RB", "Eagles"),
-    "Josh Jacobs": ("RB", "Packers"),
-    "Christian McCaffrey": ("RB", "49ers"),
-    "Breece Hall": ("RB", "Jets"),
-    "Bijan Robinson": ("RB", "Falcons"),
-    "Jonathan Taylor": ("RB", "Colts"),
-    "Joe Mixon": ("RB", "Texans"),
-    "Travis Etienne": ("RB", "Jaguars"),
-    "Tony Pollard": ("RB", "Titans"),
-    "Jahmyr Gibbs": ("RB", "Lions"),
-    "David Montgomery": ("RB", "Lions"),
-    "Kyren Williams": ("RB", "Rams"),
-    "Isiah Pacheco": ("RB", "Chiefs"),
-    "De'Von Achane": ("RB", "Dolphins"),
-    "James Cook": ("RB", "Bills"),
-    "Rhamondre Stevenson": ("RB", "Patriots"),
-    "Aaron Jones": ("RB", "Vikings"),
-    "Kenneth Walker III": ("RB", "Seahawks"),
-    "Nick Chubb": ("RB", "Texans"),
-    "Alvin Kamara": ("RB", "Saints"),
-    "Rachaad White": ("RB", "Buccaneers"),
-    "Brian Robinson Jr": ("RB", "Commanders"),
-    "Chuba Hubbard": ("RB", "Panthers"),
+# ESPN team ID → team key (must match NFL_TEAMS keys)
+_ESPN_NFL_IDS: dict[int, str] = {
+    1: "Falcons", 2: "Bills", 3: "Bears", 4: "Bengals", 5: "Browns",
+    6: "Cowboys", 7: "Broncos", 8: "Lions", 9: "Packers", 10: "Titans",
+    11: "Colts", 12: "Chiefs", 13: "Raiders", 14: "Rams", 15: "Dolphins",
+    16: "Vikings", 17: "Patriots", 18: "Saints", 19: "Giants", 20: "Jets",
+    21: "Eagles", 22: "Cardinals", 23: "Steelers", 24: "Chargers",
+    25: "49ers", 26: "Seahawks", 27: "Buccaneers", 28: "Commanders",
+    29: "Panthers", 30: "Jaguars", 33: "Ravens", 34: "Texans",
 }
+
+# Skill positions + defensive starters — skip OL / K / P / LS
+_TRIVIA_POS = {
+    "QB", "RB", "FB", "WR", "TE",
+    "DE", "DT", "NT", "EDGE",
+    "LB", "ILB", "OLB", "MLB",
+    "CB", "SS", "FS", "S",
+}
+
+def _norm_pos(pos: str) -> str:
+    """Normalize ESPN position abbreviation for display."""
+    return {"FB": "RB", "NT": "DT", "ILB": "LB", "OLB": "LB",
+            "MLB": "LB", "SS": "S", "FS": "S"}.get(pos, pos)
+
+
+# Starts empty — populated from ESPN at cog load.
+NFL_PLAYERS: dict[str, tuple[str, str]] = {}
+
+
+async def refresh_nfl_rosters() -> None:
+    """Fetch active NFL rosters from ESPN and update *NFL_PLAYERS* in place."""
+    new_players: dict[str, tuple[str, str]] = {}
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        async def _fetch_team(team_id: int, team_key: str) -> None:
+            url = (
+                f"https://site.api.espn.com/apis/site/v2/sports/football"
+                f"/nfl/teams/{team_id}/roster"
+            )
+            resp = await client.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+            for group in data.get("athletes", []):
+                for athlete in group.get("items", []):
+                    pos = athlete.get("position", {}).get("abbreviation", "")
+                    name = athlete.get("displayName", "")
+                    if pos in _TRIVIA_POS and name:
+                        new_players[name] = (_norm_pos(pos), team_key)
+
+        coros = [
+            _fetch_team(tid, tkey) for tid, tkey in _ESPN_NFL_IDS.items()
+        ]
+        results = await asyncio.gather(*coros, return_exceptions=True)
+
+        errors = [r for r in results if isinstance(r, Exception)]
+        if errors:
+            log.warning(
+                "ESPN NFL roster fetch: %d/%d teams failed",
+                len(errors), len(_ESPN_NFL_IDS),
+            )
+
+    if new_players:
+        NFL_PLAYERS.clear()
+        NFL_PLAYERS.update(new_players)
+        log.info("NFL rosters refreshed: %d players from ESPN", len(NFL_PLAYERS))
+    else:
+        log.warning("ESPN roster fetch returned 0 players; NFL trivia disabled until next restart")
+
 
 NFL_CONFIG = SportConfig(
     name="NFL",
@@ -1232,6 +1213,9 @@ class RosterCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.active_tables: dict[int, RosterTable] = {}
+
+    async def cog_load(self) -> None:
+        await refresh_nfl_rosters()
 
     async def _open_table(
         self, interaction: discord.Interaction, config: SportConfig,
