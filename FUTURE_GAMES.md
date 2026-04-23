@@ -52,3 +52,24 @@ Each player gets one card face-up on their "forehead" — everyone can see every
 - Render bracket as monospace ASCII or embed image
 - Each round reveal is a separate message for suspense
 - Side pots: optional "upset special" bonus for correctly calling a lower-seed win
+
+## 14. Lyric Guesser
+Play a snippet of song lyrics (3-4 lines, censoring the title/artist name if it appears). Players guess the song title and/or artist. Faster correct answer = more points. Rounds escalate: first hint is a deep-cut line, second is the chorus, third is a dead giveaway. Can theme rounds (90s hip-hop, pop hits, etc.). Source lyrics from a curated bank to avoid API/copyright issues. Solo or multiplayer — works great as a timed sprint.
+
+## 15. NBA Silhouette Guesser
+Show a blacked-out silhouette of an NBA player (action shot — dunk, jumper, celebration) and players guess who it is. Progressive hints: silhouette only → add jersey number → add team colors → reveal partial face. Fewer hints needed = more points. Source from a curated image bank of ~100+ recognizable players. Variant: guess the era (70s/80s/90s/00s/10s/20s) from the silhouette style. Great sports knowledge test.
+
+## 16. Stat Line Guesser
+Show a stat line from a real NBA game (e.g., "38 PTS / 7 REB / 6 AST / 4 STL") and players guess which player posted it. Harder rounds use role players or historic lines. Variants: guess the game/opponent, guess if the team won or lost, or "higher or lower" (did this player average more or fewer PPG that season?). Deep basketball knowledge expression.
+
+## 17. Over/Under Trivia
+Flash a question with a numeric answer (e.g., "How many career points does LeBron have?" or "What's the population of Tokyo?"). Set a line. Players bet over or under. Reveal the answer — correct side wins. Basically prop betting on trivia. Can theme rounds (sports stats, geography, science, history). Plays into the betting DNA of the server.
+
+## 18. Who Said It?
+Show a quote and 3-4 possible speakers (athletes, coaches, public figures). Players pick who said it. Rounds mix famous quotes with obscure press conference gems. Variant: "player or AI?" — was this post-game quote real or generated? Tests cultural literacy + BS detection.
+
+## 19. Emoji Movie / Song
+Translate a movie or song title into 3-5 emojis. Players race to decode it. Simple, fast, zero-infrastructure — just a curated bank of emoji puzzles. Works great as a duel mini-game or tournament filler round.
+
+## 20. Price Is Right (Sneakers / Cards Edition)
+Show a sneaker, trading card, or sports memorabilia item. Players guess the resale price. Closest without going over wins (classic Price Is Right rules). Source from a curated bank with known market values. Teaches market intuition in a fun wrapper.

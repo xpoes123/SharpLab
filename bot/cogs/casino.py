@@ -56,6 +56,7 @@ GAME_LABELS: dict[str, str] = {
     "duel": "Duels",
     "tournament": "Tournaments",
     "figgie": "Figgie",
+    "mathsprint": "Math Sprint",
 }
 
 GAME_CATEGORIES: list[tuple[str, str]] = [
@@ -1830,6 +1831,18 @@ GAME_RULES: dict[str, str] = {
         "Score = remaining chips + 10 \u00d7 goal-suit cards. Highest score wins the pot.\n\n"
         "**Key insight:** If you see lots of one suit, its same-colour partner is likely the goal!"
     ),
+    "mathsprint": (
+        "**Mental Math Sprint**\n"
+        "10 rapid-fire arithmetic problems. Fastest correct answer wins each point.\n\n"
+        "**How to play:** Join the table and place your bet. Each round presents a math problem "
+        "(multiplication, division, percentages, squares, cubes, powers, roots, remainders, "
+        "combinations, GCD, factorials). Click **Answer** and type the number. "
+        "First correct answer wins 1 point. Wrong answers can retry!\n\n"
+        "**Scoring:** After 10 problems, most points wins. "
+        "Ties broken by total solve time (faster wins). "
+        "Payouts follow the paytable based on player count.\n\n"
+        "**Tip:** You have 20 seconds per problem. Speed and accuracy both matter!"
+    ),
 }
 
 CASINO_GAMES: list[tuple[str, str, str, str]] = [
@@ -1866,6 +1879,7 @@ CASINO_GAMES: list[tuple[str, str, str, str]] = [
     ("nfl-trivia", "NFL Roster Trivia \u2014 name the team first", "Brain Games", "party"),
     ("sudoku", "Sudoku Sprint \u2014 fill the 4\u00d74 grid fastest", "Brain Games", "party"),
     ("stockguess", "Guess a stock's YTD % change \u2014 closest wins!", "Brain Games", "party"),
+    ("mathsprint", "Mental Math Sprint \u2014 10 rapid-fire problems", "Brain Games", "party"),
     # ── Sports Sim
     ("nbasim", "Simulated NBA game betting", "Sports Sim", "solo"),
     ("nflsim", "Simulated NFL game betting", "Sports Sim", "solo"),
