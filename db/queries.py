@@ -2258,3 +2258,22 @@ async def get_market_positions(market_id: int) -> list[dict]:
         )
         rows = await cursor.fetchall()
     return [dict(r) for r in rows]
+
+
+async def get_recently_resolved_markets(hours: int = 24) -> list[dict]:
+    """Return markets resolved within the last *hours*, newest first, with winning outcome label."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT pm.*, mo.label AS winning_label
+            FROM prediction_markets pm
+            LEFT JOIN market_outcomes mo ON pm.winning_outcome_id = mo.outcome_id
+            WHERE pm.status = 'resolved'
+              AND pm.resolved_at >= datetime('now', ?)
+            ORDER BY pm.resolved_at DESC
+            """,
+            (f"-{hours} hours",),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
