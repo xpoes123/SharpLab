@@ -1,6 +1,6 @@
 """Mini-game engine for 1v1 duels and tournaments.
 
-Seven quick games playable between two players. Each game class exposes a
+Eight quick games playable between two players. Each game class exposes a
 uniform interface so the duel/tournament system can pick and run them
 generically.
 
@@ -39,7 +39,7 @@ class MiniGame(Protocol):
     ) -> int: ...
 
 
-# ── 1. HigherCard ───────────────────────────────────────────────────────────
+# ── Card Utilities ──────────────────────────────────────────────────────────
 
 SUITS = ["♠", "♥", "♦", "♣"]  # Spades > Hearts > Diamonds > Clubs
 SUIT_RANK = {s: i for i, s in enumerate(reversed(SUITS))}  # ♠=3, ♥=2, ♦=1, ♣=0
@@ -50,13 +50,128 @@ DECK = [(v, s) for s in SUITS for v in VALUES]
 
 
 def _card_str(value: str, suit: str) -> str:
-    """Render a card like 'A♠' with suit coloring hint."""
+    """Render a card like 'A♠'."""
     return f"**{value}{suit}**"
 
 
 def _card_rank(value: str, suit: str) -> tuple[int, int]:
     """Return (value_rank, suit_rank) for comparison."""
     return (VALUE_RANK[value], SUIT_RANK[suit])
+
+
+def _bj_value(value: str) -> int:
+    """Blackjack face value of a single card (A=11, J/Q/K=10)."""
+    if value == "A":
+        return 11
+    if value in ("J", "Q", "K"):
+        return 10
+    return int(value)
+
+
+def _bj_hand_total(cards: list[tuple[str, str]]) -> int:
+    """Best blackjack hand total. Aces drop from 11 to 1 to avoid bust."""
+    total = sum(_bj_value(v) for v, _ in cards)
+    aces = sum(1 for v, _ in cards if v == "A")
+    while total > 21 and aces > 0:
+        total -= 10
+        aces -= 1
+    return total
+
+
+def _bj_hand_display(cards: list[tuple[str, str]]) -> str:
+    """Render a blackjack hand: cards + total."""
+    card_strs = " ".join(_card_str(v, s) for v, s in cards)
+    total = _bj_hand_total(cards)
+    bust = " (BUST)" if total > 21 else ""
+    return f"{card_strs} = **{total}**{bust}"
+
+
+# ── Dice Utilities ──────────────────────────────────────────────────────────
+
+DICE_EMOJI = {1: "⚀", 2: "⚁", 3: "⚂", 4: "⚃", 5: "⚄", 6: "⚅"}
+
+
+def _roll_2d6() -> tuple[int, int]:
+    return (random.randint(1, 6), random.randint(1, 6))
+
+
+def _dice_display(d1: int, d2: int) -> str:
+    return f"{DICE_EMOJI[d1]} {DICE_EMOJI[d2]}  =  **{d1 + d2}**"
+
+
+# ── 1. HigherCard ───────────────────────────────────────────────────────────
+
+
+class _DrawCardView(ui.View):
+    """Each player clicks their own 'Draw Card' button to reveal."""
+
+    def __init__(
+        self,
+        p1_id: int,
+        p1_name: str,
+        p2_id: int,
+        p2_name: str,
+        c1: tuple[str, str],
+        c2: tuple[str, str],
+    ) -> None:
+        super().__init__(timeout=20)
+        self.p1_id = p1_id
+        self.p2_id = p2_id
+        self.p1_name = p1_name
+        self.p2_name = p2_name
+        self.c1 = c1
+        self.c2 = c2
+        self.drawn: dict[int, tuple[str, str]] = {}
+        self.done = asyncio.Event()
+
+        btn1 = ui.Button(
+            label=f"{p1_name}: Draw Card",
+            emoji="🎴",
+            style=discord.ButtonStyle.primary,
+            custom_id="draw_p1",
+            row=0,
+        )
+        btn1.callback = self._make_draw_callback(p1_id, c1)
+        self.add_item(btn1)
+
+        btn2 = ui.Button(
+            label=f"{p2_name}: Draw Card",
+            emoji="🎴",
+            style=discord.ButtonStyle.primary,
+            custom_id="draw_p2",
+            row=0,
+        )
+        btn2.callback = self._make_draw_callback(p2_id, c2)
+        self.add_item(btn2)
+
+    def _make_draw_callback(self, player_id: int, card: tuple[str, str]):
+        async def callback(interaction: discord.Interaction) -> None:
+            uid = interaction.user.id
+            if uid not in (self.p1_id, self.p2_id):
+                await interaction.response.send_message(
+                    "You're not in this duel!", ephemeral=True,
+                )
+                return
+            if uid != player_id:
+                await interaction.response.send_message(
+                    "That's not your button!", ephemeral=True,
+                )
+                return
+            if uid in self.drawn:
+                await interaction.response.send_message(
+                    f"You already drew {_card_str(*self.drawn[uid])}!", ephemeral=True,
+                )
+                return
+            self.drawn[uid] = card
+            await interaction.response.send_message(
+                f"You drew {_card_str(*card)}!", ephemeral=True,
+            )
+            # Update the embed to reveal this player's card
+            if self.p1_id in self.drawn and self.p2_id in self.drawn:
+                self.done.set()
+                self.stop()
+
+        return callback
 
 
 class HigherCard:
@@ -77,17 +192,56 @@ class HigherCard:
         c1 = deck[0]
         c2 = deck[1]
 
-        # Dramatic reveal
+        view = _DrawCardView(p1_id, p1_name, p2_id, p2_name, c1, c2)
+
         embed = discord.Embed(
             title=f"{self.emoji} Higher Card",
-            description="Drawing cards...",
+            description="Both players: draw your card!",
             colour=discord.Colour.blue(),
         )
         embed.add_field(name=p1_name, value="🎴", inline=True)
         embed.add_field(name="vs", value="\u200b", inline=True)
         embed.add_field(name=p2_name, value="🎴", inline=True)
-        await message.edit(embed=embed, view=None)
-        await asyncio.sleep(1.5)
+        await message.edit(embed=embed, view=view)
+
+        # Wait for draws, updating the embed as each player draws
+        while not view.done.is_set():
+            try:
+                await asyncio.wait_for(view.done.wait(), timeout=1.0)
+            except asyncio.TimeoutError:
+                pass
+
+            # Check if one player has drawn and update the embed
+            p1_val = _card_str(*c1) if p1_id in view.drawn else "🎴"
+            p2_val = _card_str(*c2) if p2_id in view.drawn else "🎴"
+
+            drawn_count = len(view.drawn)
+            if drawn_count == 1:
+                embed = discord.Embed(
+                    title=f"{self.emoji} Higher Card",
+                    description="Waiting for the other player to draw...",
+                    colour=discord.Colour.blue(),
+                )
+                embed.add_field(name=p1_name, value=p1_val, inline=True)
+                embed.add_field(name="vs", value="\u200b", inline=True)
+                embed.add_field(name=p2_name, value=p2_val, inline=True)
+                await message.edit(embed=embed, view=view)
+            elif drawn_count == 2:
+                break
+
+            # Check if total timeout exceeded (20 seconds handled by view)
+            if not view.is_finished():
+                continue
+            else:
+                break
+
+        view.stop()
+
+        # Anyone who didn't draw gets their random card anyway
+        if p1_id not in view.drawn:
+            view.drawn[p1_id] = c1
+        if p2_id not in view.drawn:
+            view.drawn[p2_id] = c2
 
         r1 = _card_rank(*c1)
         r2 = _card_rank(*c2)
@@ -109,8 +263,6 @@ class HigherCard:
         embed.add_field(name=p2_name, value=_card_str(*c2), inline=True)
 
         if winner_id:
-            embed.description = f"**{winner_name}** wins with {_card_str(*({c1} if winner_id == p1_id else {c2}))}!"
-            # Simpler approach:
             winning_card = c1 if winner_id == p1_id else c2
             embed.description = f"**{winner_name}** wins with {_card_str(*winning_card)}!"
         else:
@@ -122,15 +274,43 @@ class HigherCard:
 
 # ── 2. DiceRoll ─────────────────────────────────────────────────────────────
 
-DICE_EMOJI = {1: "⚀", 2: "⚁", 3: "⚂", 4: "⚃", 5: "⚄", 6: "⚅"}
 
+class _DiceRollView(ui.View):
+    """Each player clicks 'Roll!' to roll their 2d6."""
 
-def _roll_2d6() -> tuple[int, int]:
-    return (random.randint(1, 6), random.randint(1, 6))
+    def __init__(self, p1_id: int, p2_id: int) -> None:
+        super().__init__(timeout=20)
+        self.p1_id = p1_id
+        self.p2_id = p2_id
+        self.rolls: dict[int, tuple[int, int]] = {}
+        self.done = asyncio.Event()
 
+    @ui.button(label="Roll!", emoji="🎲", style=discord.ButtonStyle.primary)
+    async def roll_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        uid = interaction.user.id
+        if uid not in (self.p1_id, self.p2_id):
+            await interaction.response.send_message(
+                "You're not in this duel!", ephemeral=True,
+            )
+            return
+        if uid in self.rolls:
+            d1, d2 = self.rolls[uid]
+            await interaction.response.send_message(
+                f"You already rolled {DICE_EMOJI[d1]}{DICE_EMOJI[d2]} = {d1 + d2}!",
+                ephemeral=True,
+            )
+            return
 
-def _dice_display(d1: int, d2: int) -> str:
-    return f"{DICE_EMOJI[d1]} {DICE_EMOJI[d2]}  =  **{d1 + d2}**"
+        d1, d2 = _roll_2d6()
+        self.rolls[uid] = (d1, d2)
+        await interaction.response.send_message(
+            f"You rolled {DICE_EMOJI[d1]}{DICE_EMOJI[d2]} = {d1 + d2}!",
+            ephemeral=True,
+        )
+
+        if self.p1_id in self.rolls and self.p2_id in self.rolls:
+            self.done.set()
+            self.stop()
 
 
 class DiceRoll:
@@ -147,21 +327,61 @@ class DiceRoll:
         p2_name: str,
     ) -> int:
         max_rounds = 3
-        for attempt in range(max_rounds):
-            d1a, d1b = _roll_2d6()
-            d2a, d2b = _roll_2d6()
-            t1 = d1a + d1b
-            t2 = d2a + d2b
 
+        for attempt in range(max_rounds):
             round_label = f" (Reroll {attempt})" if attempt > 0 else ""
+
+            view = _DiceRollView(p1_id, p2_id)
 
             embed = discord.Embed(
                 title=f"{self.emoji} Dice Roll{round_label}",
-                description="Rolling...",
+                description="Both players: click Roll!",
                 colour=discord.Colour.orange(),
             )
-            await message.edit(embed=embed, view=None)
-            await asyncio.sleep(1.2)
+            embed.add_field(name=p1_name, value="\u2b1c\u2b1c", inline=True)
+            embed.add_field(name="vs", value="\u200b", inline=True)
+            embed.add_field(name=p2_name, value="\u2b1c\u2b1c", inline=True)
+            await message.edit(embed=embed, view=view)
+
+            # Poll for partial updates
+            while not view.done.is_set():
+                try:
+                    await asyncio.wait_for(view.done.wait(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    pass
+
+                p1_rolled = p1_id in view.rolls
+                p2_rolled = p2_id in view.rolls
+
+                if (p1_rolled or p2_rolled) and not view.done.is_set():
+                    p1_val = _dice_display(*view.rolls[p1_id]) if p1_rolled else "\u2b1c\u2b1c"
+                    p2_val = _dice_display(*view.rolls[p2_id]) if p2_rolled else "\u2b1c\u2b1c"
+                    waiting = "Waiting for the other player..."
+                    embed = discord.Embed(
+                        title=f"{self.emoji} Dice Roll{round_label}",
+                        description=waiting,
+                        colour=discord.Colour.orange(),
+                    )
+                    embed.add_field(name=p1_name, value=p1_val, inline=True)
+                    embed.add_field(name="vs", value="\u200b", inline=True)
+                    embed.add_field(name=p2_name, value=p2_val, inline=True)
+                    await message.edit(embed=embed, view=view)
+
+                if view.is_finished():
+                    break
+
+            view.stop()
+
+            # Assign random rolls for anyone who didn't roll
+            if p1_id not in view.rolls:
+                view.rolls[p1_id] = _roll_2d6()
+            if p2_id not in view.rolls:
+                view.rolls[p2_id] = _roll_2d6()
+
+            d1a, d1b = view.rolls[p1_id]
+            d2a, d2b = view.rolls[p2_id]
+            t1 = d1a + d1b
+            t2 = d2a + d2b
 
             if t1 > t2:
                 winner_id, winner_name = p1_id, p1_name
@@ -171,7 +391,6 @@ class DiceRoll:
                 winner_id = 0
 
             if winner_id or attempt == max_rounds - 1:
-                # Final result
                 result_colour = discord.Colour.gold() if winner_id else discord.Colour.greyple()
                 embed = discord.Embed(
                     title=f"{self.emoji} Dice Roll{round_label}",
@@ -184,12 +403,12 @@ class DiceRoll:
                 if winner_id:
                     embed.description = f"**{winner_name}** wins!"
                 else:
-                    embed.description = "Tied after 3 rolls — it's a draw!"
+                    embed.description = "Tied after 3 rolls -- it's a draw!"
 
                 await message.edit(embed=embed, view=None)
                 return winner_id
 
-            # Tie — show it and reroll
+            # Tie -- show it and reroll
             embed = discord.Embed(
                 title=f"{self.emoji} Dice Roll{round_label}",
                 description="Tied! Rerolling...",
@@ -204,180 +423,8 @@ class DiceRoll:
         return 0  # unreachable but satisfies type checker
 
 
-# ── 3. Rock Paper Scissors ──────────────────────────────────────────────────
+# ── 3. SpeedMath ────────────────────────────────────────────────────────────
 
-RPS_BEATS = {"Rock": "Scissors", "Paper": "Rock", "Scissors": "Paper"}
-RPS_EMOJI = {"Rock": "🪨", "Paper": "📄", "Scissors": "✂️"}
-
-
-class _RPSView(ui.View):
-    """View with Rock/Paper/Scissors buttons for two players."""
-
-    def __init__(self, p1_id: int, p2_id: int) -> None:
-        super().__init__(timeout=15)
-        self.p1_id = p1_id
-        self.p2_id = p2_id
-        self.choices: dict[int, str] = {}
-        self.done = asyncio.Event()
-
-    def _check_done(self) -> None:
-        if self.p1_id in self.choices and self.p2_id in self.choices:
-            self.done.set()
-            self.stop()
-
-    async def _handle_choice(self, interaction: discord.Interaction, choice: str) -> None:
-        uid = interaction.user.id
-        if uid not in (self.p1_id, self.p2_id):
-            await interaction.response.send_message(
-                "You're not in this duel!", ephemeral=True,
-            )
-            return
-        if uid in self.choices:
-            await interaction.response.send_message(
-                f"You already chose {RPS_EMOJI[self.choices[uid]]} {self.choices[uid]}.",
-                ephemeral=True,
-            )
-            return
-        self.choices[uid] = choice
-        await interaction.response.send_message(
-            f"You chose {RPS_EMOJI[choice]} {choice}.", ephemeral=True,
-        )
-        self._check_done()
-
-    @ui.button(label="Rock", emoji="🪨", style=discord.ButtonStyle.primary)
-    async def rock(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        await self._handle_choice(interaction, "Rock")
-
-    @ui.button(label="Paper", emoji="📄", style=discord.ButtonStyle.primary)
-    async def paper(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        await self._handle_choice(interaction, "Paper")
-
-    @ui.button(label="Scissors", emoji="✂️", style=discord.ButtonStyle.primary)
-    async def scissors(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        await self._handle_choice(interaction, "Scissors")
-
-
-class RockPaperScissors:
-    name = "Rock Paper Scissors"
-    emoji = "✂️"
-    stakes = 200
-
-    async def play(
-        self,
-        message: discord.Message,
-        p1_id: int,
-        p1_name: str,
-        p2_id: int,
-        p2_name: str,
-    ) -> int:
-        max_rounds = 2  # play once, replay on tie, then draw
-
-        for attempt in range(max_rounds):
-            round_label = " (Replay)" if attempt > 0 else ""
-
-            embed = discord.Embed(
-                title=f"{self.emoji} Rock Paper Scissors{round_label}",
-                description=(
-                    f"**{p1_name}** vs **{p2_name}**\n\n"
-                    "Both players: pick your move!"
-                ),
-                colour=discord.Colour.purple(),
-            )
-
-            view = _RPSView(p1_id, p2_id)
-            await message.edit(embed=embed, view=view)
-
-            try:
-                await asyncio.wait_for(view.done.wait(), timeout=15)
-            except asyncio.TimeoutError:
-                view.stop()
-
-            c1 = view.choices.get(p1_id)
-            c2 = view.choices.get(p2_id)
-
-            # If one player didn't pick, the other wins
-            if c1 and not c2:
-                await self._show_result(message, p1_name, c1, p2_name, None, p1_id, p1_name, round_label)
-                return p1_id
-            if c2 and not c1:
-                await self._show_result(message, p1_name, None, p2_name, c2, p2_id, p2_name, round_label)
-                return p2_id
-            if not c1 and not c2:
-                await self._show_timeout(message, round_label)
-                return 0
-
-            # Both chose
-            if c1 == c2:
-                # Tie
-                if attempt < max_rounds - 1:
-                    embed = discord.Embed(
-                        title=f"{self.emoji} Rock Paper Scissors{round_label}",
-                        description=(
-                            f"{RPS_EMOJI[c1]} **{c1}** vs **{c2}** {RPS_EMOJI[c2]}\n\n"
-                            "Tie! Replaying..."
-                        ),
-                        colour=discord.Colour.orange(),
-                    )
-                    embed.add_field(name=p1_name, value=f"{RPS_EMOJI[c1]} {c1}", inline=True)
-                    embed.add_field(name="vs", value="\u200b", inline=True)
-                    embed.add_field(name=p2_name, value=f"{RPS_EMOJI[c2]} {c2}", inline=True)
-                    await message.edit(embed=embed, view=None)
-                    await asyncio.sleep(1.5)
-                    continue
-                else:
-                    await self._show_result(message, p1_name, c1, p2_name, c2, 0, "Nobody", round_label)
-                    return 0
-
-            # Determine winner
-            if RPS_BEATS[c1] == c2:
-                winner_id, winner_name = p1_id, p1_name
-            else:
-                winner_id, winner_name = p2_id, p2_name
-
-            await self._show_result(message, p1_name, c1, p2_name, c2, winner_id, winner_name, round_label)
-            return winner_id
-
-        return 0  # unreachable
-
-    async def _show_result(
-        self,
-        message: discord.Message,
-        p1_name: str,
-        c1: str | None,
-        p2_name: str,
-        c2: str | None,
-        winner_id: int,
-        winner_name: str,
-        round_label: str,
-    ) -> None:
-        result_colour = discord.Colour.gold() if winner_id else discord.Colour.greyple()
-        embed = discord.Embed(
-            title=f"{self.emoji} Rock Paper Scissors{round_label}",
-            colour=result_colour,
-        )
-        p1_display = f"{RPS_EMOJI[c1]} {c1}" if c1 else "*(timed out)*"
-        p2_display = f"{RPS_EMOJI[c2]} {c2}" if c2 else "*(timed out)*"
-        embed.add_field(name=p1_name, value=p1_display, inline=True)
-        embed.add_field(name="vs", value="\u200b", inline=True)
-        embed.add_field(name=p2_name, value=p2_display, inline=True)
-
-        if winner_id:
-            embed.description = f"**{winner_name}** wins!"
-        else:
-            embed.description = "It's a draw!"
-
-        await message.edit(embed=embed, view=None)
-
-    async def _show_timeout(self, message: discord.Message, round_label: str) -> None:
-        embed = discord.Embed(
-            title=f"{self.emoji} Rock Paper Scissors{round_label}",
-            description="Neither player chose in time — draw!",
-            colour=discord.Colour.greyple(),
-        )
-        await message.edit(embed=embed, view=None)
-
-
-# ── 4. Speed Math ───────────────────────────────────────────────────────────
 
 def _generate_math_problem() -> tuple[str, int]:
     """Generate a problem with two 2-digit numbers and +/-/*. Returns (display, answer)."""
@@ -478,7 +525,6 @@ class _MathView(ui.View):
         # Link back so the result propagates
         old_modal = self._modal
         self._modal = modal
-        # Proxy resolved state
         original_on_submit = modal.on_submit
 
         async def _linked_submit(inter: discord.Interaction) -> None:
@@ -528,12 +574,11 @@ class SpeedMath:
 
         result = view.result
         if result is None:
-            # Nobody answered
             embed = discord.Embed(
                 title=f"{self.emoji} Speed Math",
                 description=(
                     f"**{problem} = {answer}**\n\n"
-                    "Time's up! Neither player answered — draw."
+                    "Time's up! Neither player answered -- draw."
                 ),
                 colour=discord.Colour.greyple(),
             )
@@ -555,7 +600,7 @@ class SpeedMath:
             winner_id, winner_name = other_id, other_name
             desc = (
                 f"**{problem} = {answer}**\n\n"
-                f"**{responder_name}** answered wrong — **{other_name}** wins!"
+                f"**{responder_name}** answered wrong -- **{other_name}** wins!"
             )
 
         embed = discord.Embed(
@@ -567,169 +612,60 @@ class SpeedMath:
         return winner_id
 
 
-# ── 5. Trivia ───────────────────────────────────────────────────────────────
+# ── 4. Trivia ───────────────────────────────────────────────────────────────
 
-# (question, [A, B, C, D], correct_index)
-TRIVIA_POOL: list[tuple[str, list[str], int]] = [
-    (
-        "Which NBA team has won the most championships?",
-        ["Lakers", "Celtics", "Bulls", "Warriors"],
-        1,
-    ),
-    (
-        "Who holds the NBA record for most points in a single game?",
-        ["Kobe Bryant", "Michael Jordan", "Wilt Chamberlain", "LeBron James"],
-        2,
-    ),
-    (
-        "What year was the first Super Bowl played?",
-        ["1965", "1966", "1967", "1968"],
-        2,
-    ),
-    (
-        "Which MLB team has won the most World Series titles?",
-        ["Boston Red Sox", "St. Louis Cardinals", "New York Yankees", "Los Angeles Dodgers"],
-        2,
-    ),
-    (
-        "Who has the most career home runs in MLB history?",
-        ["Babe Ruth", "Hank Aaron", "Barry Bonds", "Alex Rodriguez"],
-        2,
-    ),
-    (
-        "Which country has won the most FIFA World Cup titles?",
-        ["Germany", "Argentina", "Italy", "Brazil"],
-        3,
-    ),
-    (
-        "What is the diameter of a basketball hoop in inches?",
-        ["16", "18", "20", "22"],
-        1,
-    ),
-    (
-        "Who won the first-ever NBA MVP award?",
-        ["George Mikan", "Bob Cousy", "Bill Russell", "Bob Pettit"],
-        3,
-    ),
-    (
-        "How many players are on an NFL team's active roster?",
-        ["46", "48", "52", "53"],
-        3,
-    ),
-    (
-        "Which tennis player has won the most Grand Slam singles titles (men's)?",
-        ["Roger Federer", "Rafael Nadal", "Novak Djokovic", "Pete Sampras"],
-        2,
-    ),
-    (
-        "What is the length of an NBA court in feet?",
-        ["84", "90", "94", "100"],
-        2,
-    ),
-    (
-        "Who holds the NFL record for most career passing touchdowns?",
-        ["Peyton Manning", "Tom Brady", "Drew Brees", "Aaron Rodgers"],
-        1,
-    ),
-    (
-        "Which team won the first NBA game ever played?",
-        ["New York Knicks", "Toronto Huskies", "Boston Celtics", "Philadelphia Warriors"],
-        0,
-    ),
-    (
-        "How many dimples does a regulation golf ball typically have?",
-        ["252", "336", "392", "412"],
-        1,
-    ),
-    (
-        "Who was the first player to break the MLB color barrier?",
-        ["Satchel Paige", "Larry Doby", "Jackie Robinson", "Willie Mays"],
-        2,
-    ),
-    (
-        "What is the maximum number of clubs allowed in a golf bag during a round?",
-        ["12", "14", "16", "18"],
-        1,
-    ),
-    (
-        "Which NBA player is known as 'The Greek Freak'?",
-        ["Luka Doncic", "Nikola Jokic", "Giannis Antetokounmpo", "Joel Embiid"],
-        2,
-    ),
-    (
-        "How long is a standard NHL ice rink in feet?",
-        ["180", "190", "200", "210"],
-        2,
-    ),
-    (
-        "Who scored the 'Hand of God' goal in the 1986 World Cup?",
-        ["Pele", "Zinedine Zidane", "Diego Maradona", "Ronaldo"],
-        2,
-    ),
-    (
-        "What sport is played at Wimbledon?",
-        ["Cricket", "Tennis", "Golf", "Polo"],
-        1,
-    ),
-    (
-        "Which boxer was known as 'The Greatest'?",
-        ["Mike Tyson", "Floyd Mayweather", "Muhammad Ali", "Sugar Ray Leonard"],
-        2,
-    ),
-    (
-        "How many periods are in a regulation NHL hockey game?",
-        ["2", "3", "4", "5"],
-        1,
-    ),
-    (
-        "What is the only team to go 16-0 in the NFL regular season?",
-        ["1985 Bears", "2007 Patriots", "1972 Dolphins", "2013 Broncos"],
-        1,
-    ),
-    (
-        "Who holds the NBA record for most assists in a career?",
-        ["Magic Johnson", "Jason Kidd", "John Stockton", "Steve Nash"],
-        2,
-    ),
-    (
-        "In baseball, how many balls result in a walk?",
-        ["3", "4", "5", "6"],
-        1,
-    ),
-    (
-        "Which team has the most Premier League titles?",
-        ["Liverpool", "Chelsea", "Arsenal", "Manchester United"],
-        3,
-    ),
-    (
-        "How many rings are on the Olympic flag?",
-        ["4", "5", "6", "7"],
-        1,
-    ),
-    (
-        "Who was the NBA's first overall draft pick in 2003?",
-        ["Carmelo Anthony", "Dwyane Wade", "Chris Bosh", "LeBron James"],
-        3,
-    ),
-    (
-        "What is the distance of a marathon in miles (approximately)?",
-        ["24.2", "25.2", "26.2", "27.2"],
-        2,
-    ),
-    (
-        "Which NFL quarterback has the most Super Bowl wins?",
-        ["Joe Montana", "Tom Brady", "Terry Bradshaw", "Peyton Manning"],
-        1,
-    ),
-]
+# Pull question data from existing game cogs (no duplication)
+from bot.cogs.geography import CAPITALS, US_STATE_CAPITALS
+from bot.cogs.roster import (
+    NBA_PLAYERS, NBA_TEAMS,
+    NFL_PLAYERS, NFL_TEAMS,
+)
+
+
+def _generate_trivia() -> tuple[str, list[str], int]:
+    """Generate a random trivia question from geography or sports data.
+
+    Returns (question, [4 options], correct_index).
+    """
+    category = random.choice(["geo_country", "geo_state", "nba", "nfl"])
+
+    if category == "geo_country":
+        country = random.choice(list(CAPITALS.keys()))
+        correct = CAPITALS[country][0]
+        wrong_pool = [v[0] for k, v in CAPITALS.items() if k != country]
+        wrongs = random.sample(wrong_pool, min(3, len(wrong_pool)))
+        question = f"What is the capital of **{country}**?"
+
+    elif category == "geo_state":
+        state = random.choice(list(US_STATE_CAPITALS.keys()))
+        correct = US_STATE_CAPITALS[state][0]
+        wrong_pool = [v[0] for k, v in US_STATE_CAPITALS.items() if k != state]
+        wrongs = random.sample(wrong_pool, min(3, len(wrong_pool)))
+        question = f"What is the capital of **{state}**?"
+
+    elif category == "nba":
+        player = random.choice(list(NBA_PLAYERS.keys()))
+        _pos, team_key = NBA_PLAYERS[player]
+        correct = team_key
+        wrong_pool = [k for k in NBA_TEAMS if k != team_key]
+        wrongs = random.sample(wrong_pool, min(3, len(wrong_pool)))
+        question = f"Which NBA team does **{player}** play for?"
+
+    else:  # nfl
+        player = random.choice(list(NFL_PLAYERS.keys()))
+        _pos, team_key = NFL_PLAYERS[player]
+        correct = team_key
+        wrong_pool = [k for k in NFL_TEAMS if k != team_key]
+        wrongs = random.sample(wrong_pool, min(3, len(wrong_pool)))
+        question = f"Which NFL team does **{player}** play for?"
+
+    options = wrongs + [correct]
+    random.shuffle(options)
+    correct_index = options.index(correct)
+    return question, options, correct_index
+
 
 OPTION_LABELS = ["A", "B", "C", "D"]
-OPTION_STYLES = [
-    discord.ButtonStyle.primary,
-    discord.ButtonStyle.primary,
-    discord.ButtonStyle.primary,
-    discord.ButtonStyle.primary,
-]
 
 
 class _TriviaView(ui.View):
@@ -744,13 +680,12 @@ class _TriviaView(ui.View):
         self.result: tuple[int, int] | None = None  # (user_id, chosen_index)
         self._answered = False
 
-        # Create buttons dynamically
         for i, option in enumerate(options):
             button = ui.Button(
                 label=f"{OPTION_LABELS[i]}: {option}",
                 style=discord.ButtonStyle.primary,
                 custom_id=f"trivia_{i}",
-                row=i // 2,  # 2 buttons per row
+                row=i // 2,
             )
             button.callback = self._make_callback(i)
             self.add_item(button)
@@ -774,11 +709,11 @@ class _TriviaView(ui.View):
             label = OPTION_LABELS[index]
             if is_correct:
                 await interaction.response.send_message(
-                    f"You picked **{label}** — Correct!", ephemeral=True,
+                    f"You picked **{label}** -- Correct!", ephemeral=True,
                 )
             else:
                 await interaction.response.send_message(
-                    f"You picked **{label}** — Wrong!", ephemeral=True,
+                    f"You picked **{label}** -- Wrong!", ephemeral=True,
                 )
             self.done.set()
             self.stop()
@@ -787,7 +722,7 @@ class _TriviaView(ui.View):
 
 
 class Trivia:
-    name = "Sports Trivia"
+    name = "Trivia"
     emoji = "🧠"
     stakes = 300
 
@@ -799,10 +734,10 @@ class Trivia:
         p2_id: int,
         p2_name: str,
     ) -> int:
-        question, options, correct_index = random.choice(TRIVIA_POOL)
+        question, options, correct_index = _generate_trivia()
 
         embed = discord.Embed(
-            title=f"{self.emoji} Sports Trivia",
+            title=f"{self.emoji} Trivia",
             description=(
                 f"**{p1_name}** vs **{p2_name}**\n\n"
                 f"**{question}**\n\n"
@@ -823,11 +758,11 @@ class Trivia:
 
         if view.result is None:
             embed = discord.Embed(
-                title=f"{self.emoji} Sports Trivia",
+                title=f"{self.emoji} Trivia",
                 description=(
                     f"**{question}**\n\n"
                     f"Answer: {correct_label}\n\n"
-                    "Time's up! Neither player answered — draw."
+                    "Time's up! Neither player answered -- draw."
                 ),
                 colour=discord.Colour.greyple(),
             )
@@ -846,178 +781,26 @@ class Trivia:
             desc = (
                 f"**{question}**\n\n"
                 f"Answer: {correct_label}\n\n"
-                f"**{responder_name}** picked {chosen_label} — Correct! **{responder_name}** wins!"
+                f"**{responder_name}** picked {chosen_label} -- Correct! **{responder_name}** wins!"
             )
-            colour = discord.Colour.gold()
         else:
             winner_id = other_id
             desc = (
                 f"**{question}**\n\n"
                 f"Answer: {correct_label}\n\n"
-                f"**{responder_name}** picked {chosen_label} — Wrong! **{other_name}** wins!"
+                f"**{responder_name}** picked {chosen_label} -- Wrong! **{other_name}** wins!"
             )
-            colour = discord.Colour.gold()
 
         embed = discord.Embed(
-            title=f"{self.emoji} Sports Trivia",
+            title=f"{self.emoji} Trivia",
             description=desc,
-            colour=colour,
-        )
-        await message.edit(embed=embed, view=None)
-        return winner_id
-
-
-# ── 6. Reaction ─────────────────────────────────────────────────────────────
-
-
-class _ReactionWaitView(ui.View):
-    """View shown during 'Get ready...' phase to catch false starts."""
-
-    def __init__(self, p1_id: int, p2_id: int) -> None:
-        super().__init__(timeout=None)  # Managed externally
-        self.p1_id = p1_id
-        self.p2_id = p2_id
-        self.false_starter: int | None = None
-        self.done = asyncio.Event()
-
-    @ui.button(label="Wait...", emoji="🔴", style=discord.ButtonStyle.danger, disabled=False)
-    async def wait_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        uid = interaction.user.id
-        if uid not in (self.p1_id, self.p2_id):
-            await interaction.response.send_message(
-                "You're not in this duel!", ephemeral=True,
-            )
-            return
-        # False start!
-        self.false_starter = uid
-        await interaction.response.send_message(
-            "False start! You clicked too early!", ephemeral=True,
-        )
-        self.done.set()
-        self.stop()
-
-
-class _ReactionGoView(ui.View):
-    """View shown when 'GO!' appears."""
-
-    def __init__(self, p1_id: int, p2_id: int) -> None:
-        super().__init__(timeout=10)
-        self.p1_id = p1_id
-        self.p2_id = p2_id
-        self.clicker: int | None = None
-        self.done = asyncio.Event()
-
-    @ui.button(label="CLICK!", emoji="🟢", style=discord.ButtonStyle.success)
-    async def go_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        uid = interaction.user.id
-        if uid not in (self.p1_id, self.p2_id):
-            await interaction.response.send_message(
-                "You're not in this duel!", ephemeral=True,
-            )
-            return
-        if self.clicker is not None:
-            await interaction.response.send_message(
-                "Someone already clicked!", ephemeral=True,
-            )
-            return
-        self.clicker = uid
-        await interaction.response.send_message(
-            "You got it!", ephemeral=True,
-        )
-        self.done.set()
-        self.stop()
-
-
-class Reaction:
-    name = "Reaction Time"
-    emoji = "⚡"
-    stakes = 200
-
-    async def play(
-        self,
-        message: discord.Message,
-        p1_id: int,
-        p1_name: str,
-        p2_id: int,
-        p2_name: str,
-    ) -> int:
-        # Phase 1: "Get ready..." with false-start detection
-        wait_view = _ReactionWaitView(p1_id, p2_id)
-
-        embed = discord.Embed(
-            title=f"{self.emoji} Reaction Time",
-            description=(
-                f"**{p1_name}** vs **{p2_name}**\n\n"
-                "Get ready... **DO NOT** click yet!\n"
-                "Wait for the green button..."
-            ),
-            colour=discord.Colour.red(),
-        )
-        await message.edit(embed=embed, view=wait_view)
-
-        delay = random.uniform(2.0, 5.0)
-        try:
-            await asyncio.wait_for(wait_view.done.wait(), timeout=delay)
-        except asyncio.TimeoutError:
-            pass  # No false start — proceed to GO
-
-        wait_view.stop()
-
-        if wait_view.false_starter is not None:
-            # Someone clicked early
-            fs_id = wait_view.false_starter
-            fs_name = p1_name if fs_id == p1_id else p2_name
-            winner_id = p2_id if fs_id == p1_id else p1_id
-            winner_name = p2_name if fs_id == p1_id else p1_name
-
-            embed = discord.Embed(
-                title=f"{self.emoji} Reaction Time",
-                description=(
-                    f"**{fs_name}** jumped the gun! False start!\n\n"
-                    f"**{winner_name}** wins!"
-                ),
-                colour=discord.Colour.gold(),
-            )
-            await message.edit(embed=embed, view=None)
-            return winner_id
-
-        # Phase 2: GO!
-        go_view = _ReactionGoView(p1_id, p2_id)
-
-        embed = discord.Embed(
-            title=f"{self.emoji} Reaction Time",
-            description="# GO! Click now!",
-            colour=discord.Colour.green(),
-        )
-        await message.edit(embed=embed, view=go_view)
-
-        try:
-            await asyncio.wait_for(go_view.done.wait(), timeout=10)
-        except asyncio.TimeoutError:
-            go_view.stop()
-
-        if go_view.clicker is None:
-            embed = discord.Embed(
-                title=f"{self.emoji} Reaction Time",
-                description="Neither player clicked in time — draw!",
-                colour=discord.Colour.greyple(),
-            )
-            await message.edit(embed=embed, view=None)
-            return 0
-
-        winner_id = go_view.clicker
-        winner_name = p1_name if winner_id == p1_id else p2_name
-
-        embed = discord.Embed(
-            title=f"{self.emoji} Reaction Time",
-            description=f"**{winner_name}** clicked first and wins!",
             colour=discord.Colour.gold(),
         )
         await message.edit(embed=embed, view=None)
         return winner_id
 
 
-# ── 7. Guess The Number ────────────────────────────────────────────────────
+# ── 5. GuessTheNumber ──────────────────────────────────────────────────────
 
 
 class _GuessModal(ui.Modal):
@@ -1130,7 +913,6 @@ class GuessTheNumber:
         g1 = view.guesses.get(p1_id)
         g2 = view.guesses.get(p2_id)
 
-        # Build result
         p1_display = f"**{g1}**" if g1 is not None else "*(no guess)*"
         p2_display = f"**{g2}**" if g2 is not None else "*(no guess)*"
 
@@ -1171,10 +953,620 @@ class GuessTheNumber:
         if winner_id:
             embed.description = f"The number was **{target}**! **{winner_name}** wins!"
         elif g1 is None and g2 is None:
-            embed.description = f"The number was **{target}**. Neither player guessed — draw!"
+            embed.description = f"The number was **{target}**. Neither player guessed -- draw!"
         else:
-            embed.description = f"The number was **{target}**. Equal distance — draw!"
+            embed.description = f"The number was **{target}**. Equal distance -- draw!"
 
+        await message.edit(embed=embed, view=None)
+        return winner_id
+
+
+# ── 6. CoinFlip ─────────────────────────────────────────────────────────────
+
+
+class _CoinFlipView(ui.View):
+    """Both players simultaneously pick Heads or Tails."""
+
+    def __init__(self, p1_id: int, p2_id: int) -> None:
+        super().__init__(timeout=15)
+        self.p1_id = p1_id
+        self.p2_id = p2_id
+        self.picks: dict[int, str] = {}
+        self.done = asyncio.Event()
+
+    async def _handle_pick(self, interaction: discord.Interaction, pick: str) -> None:
+        uid = interaction.user.id
+        if uid not in (self.p1_id, self.p2_id):
+            await interaction.response.send_message(
+                "You're not in this duel!", ephemeral=True,
+            )
+            return
+        if uid in self.picks:
+            await interaction.response.send_message(
+                f"You already picked {self.picks[uid]}!", ephemeral=True,
+            )
+            return
+        self.picks[uid] = pick
+        await interaction.response.send_message(
+            f"You picked **{pick}**.", ephemeral=True,
+        )
+        if self.p1_id in self.picks and self.p2_id in self.picks:
+            self.done.set()
+            self.stop()
+
+    @ui.button(label="Heads", emoji="\U0001fa99", style=discord.ButtonStyle.primary)
+    async def heads(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        await self._handle_pick(interaction, "Heads")
+
+    @ui.button(label="Tails", emoji="\U0001fa99", style=discord.ButtonStyle.primary)
+    async def tails(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        await self._handle_pick(interaction, "Tails")
+
+
+class CoinFlip:
+    name = "Coin Flip"
+    emoji = "\U0001fa99"
+    stakes = 200
+
+    async def play(
+        self,
+        message: discord.Message,
+        p1_id: int,
+        p1_name: str,
+        p2_id: int,
+        p2_name: str,
+    ) -> int:
+        max_flips = 3
+
+        for attempt in range(max_flips):
+            round_label = f" (Reflip {attempt})" if attempt > 0 else ""
+
+            view = _CoinFlipView(p1_id, p2_id)
+            embed = discord.Embed(
+                title=f"{self.emoji} Coin Flip{round_label}",
+                description=(
+                    f"**{p1_name}** vs **{p2_name}**\n\n"
+                    "Both players: pick **Heads** or **Tails**!"
+                ),
+                colour=discord.Colour.blue(),
+            )
+            await message.edit(embed=embed, view=view)
+
+            try:
+                await asyncio.wait_for(view.done.wait(), timeout=15)
+            except asyncio.TimeoutError:
+                view.stop()
+
+            # Default picks for anyone who didn't choose
+            if p1_id not in view.picks:
+                view.picks[p1_id] = random.choice(["Heads", "Tails"])
+            if p2_id not in view.picks:
+                view.picks[p2_id] = random.choice(["Heads", "Tails"])
+
+            p1_pick = view.picks[p1_id]
+            p2_pick = view.picks[p2_id]
+
+            # Animate the flip
+            embed = discord.Embed(
+                title=f"{self.emoji} Coin Flip{round_label}",
+                description="Flipping...",
+                colour=discord.Colour.yellow(),
+            )
+            await message.edit(embed=embed, view=None)
+            await asyncio.sleep(1.5)
+
+            # Flip the coin
+            result = random.choice(["Heads", "Tails"])
+            p1_correct = p1_pick == result
+            p2_correct = p2_pick == result
+
+            if p1_correct and not p2_correct:
+                winner_id, winner_name = p1_id, p1_name
+            elif p2_correct and not p1_correct:
+                winner_id, winner_name = p2_id, p2_name
+            else:
+                # Both correct or both wrong (same pick) -- reflip
+                winner_id = 0
+
+            embed = discord.Embed(
+                title=f"{self.emoji} Coin Flip{round_label}",
+                colour=discord.Colour.gold() if winner_id else discord.Colour.greyple(),
+            )
+            result_emoji = "\U0001fa99"
+            embed.add_field(
+                name=p1_name,
+                value=f"Picked: **{p1_pick}** {'-- correct!' if p1_correct else ''}",
+                inline=True,
+            )
+            embed.add_field(
+                name=f"{result_emoji} Result",
+                value=f"**{result}**",
+                inline=True,
+            )
+            embed.add_field(
+                name=p2_name,
+                value=f"Picked: **{p2_pick}** {'-- correct!' if p2_correct else ''}",
+                inline=True,
+            )
+
+            if winner_id:
+                embed.description = f"It's **{result}**! **{winner_name}** wins!"
+                await message.edit(embed=embed, view=None)
+                return winner_id
+
+            if attempt < max_flips - 1:
+                embed.description = (
+                    f"It's **{result}**! Both picked the same side -- reflipping..."
+                )
+                await message.edit(embed=embed, view=None)
+                await asyncio.sleep(1.5)
+            else:
+                embed.description = (
+                    f"It's **{result}**! Both picked the same side 3 times -- draw!"
+                )
+                await message.edit(embed=embed, view=None)
+                return 0
+
+        return 0  # unreachable
+
+
+# ── 7. TicTacToe ────────────────────────────────────────────────────────────
+
+_TTT_EMPTY = "\u2b1c"
+_TTT_X = "\u274c"
+_TTT_O = "\u2b55"
+
+_TTT_WIN_LINES = [
+    (0, 1, 2), (3, 4, 5), (6, 7, 8),  # rows
+    (0, 3, 6), (1, 4, 7), (2, 5, 8),  # columns
+    (0, 4, 8), (2, 4, 6),             # diagonals
+]
+
+
+class _TicTacToeView(ui.View):
+    """3x3 grid of buttons for Tic Tac Toe."""
+
+    def __init__(
+        self,
+        p1_id: int,
+        p2_id: int,
+        p1_name: str,
+        p2_name: str,
+        message: discord.Message,
+    ) -> None:
+        super().__init__(timeout=None)  # Timeout managed per-turn externally
+        self.p1_id = p1_id
+        self.p2_id = p2_id
+        self.p1_name = p1_name
+        self.p2_name = p2_name
+        self.message = message
+        self.board: list[int] = [0] * 9  # 0=empty, 1=P1(X), 2=P2(O)
+        self.current_player = 1  # 1 = P1's turn, 2 = P2's turn
+        self.winner_id = 0
+        self.game_over = False
+        self.done = asyncio.Event()
+        self.turn_event = asyncio.Event()  # Set each time a valid move is made
+
+        # Create the 9 buttons
+        for i in range(9):
+            button = ui.Button(
+                label="\u200b",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"ttt_{i}",
+                row=i // 3,
+            )
+            button.callback = self._make_callback(i)
+            self.add_item(button)
+
+    def _make_callback(self, cell: int):
+        async def callback(interaction: discord.Interaction) -> None:
+            uid = interaction.user.id
+            if uid not in (self.p1_id, self.p2_id):
+                await interaction.response.send_message(
+                    "You're not in this game!", ephemeral=True,
+                )
+                return
+            if self.game_over:
+                await interaction.response.send_message(
+                    "Game is over!", ephemeral=True,
+                )
+                return
+
+            expected_id = self.p1_id if self.current_player == 1 else self.p2_id
+            if uid != expected_id:
+                await interaction.response.send_message(
+                    "It's not your turn!", ephemeral=True,
+                )
+                return
+            if self.board[cell] != 0:
+                await interaction.response.send_message(
+                    "That cell is taken!", ephemeral=True,
+                )
+                return
+
+            # Place the mark
+            self.board[cell] = self.current_player
+            self._update_buttons()
+
+            # Check for win
+            winner = self._check_winner()
+            if winner:
+                self.game_over = True
+                self.winner_id = self.p1_id if winner == 1 else self.p2_id
+                self.done.set()
+                self.stop()
+                winner_name = self.p1_name if winner == 1 else self.p2_name
+                embed = self._make_embed(
+                    f"**{winner_name}** wins!",
+                    discord.Colour.gold(),
+                )
+                await interaction.response.edit_message(embed=embed, view=self)
+                return
+
+            # Check for draw (board full)
+            if all(c != 0 for c in self.board):
+                self.game_over = True
+                self.winner_id = 0
+                self.done.set()
+                self.stop()
+                embed = self._make_embed(
+                    "Board full -- it's a draw!",
+                    discord.Colour.greyple(),
+                )
+                await interaction.response.edit_message(embed=embed, view=self)
+                return
+
+            # Switch turns
+            self.current_player = 2 if self.current_player == 1 else 1
+            next_name = self.p1_name if self.current_player == 1 else self.p2_name
+            next_mark = _TTT_X if self.current_player == 1 else _TTT_O
+            embed = self._make_embed(
+                f"**{next_name}**'s turn ({next_mark})",
+                discord.Colour.blue(),
+            )
+            await interaction.response.edit_message(embed=embed, view=self)
+            self.turn_event.set()
+            self.turn_event = asyncio.Event()
+
+        return callback
+
+    def _update_buttons(self) -> None:
+        """Update button labels/styles to reflect the board."""
+        for i, item in enumerate(self.children):
+            if not isinstance(item, ui.Button):
+                continue
+            cell_val = self.board[i]
+            if cell_val == 1:
+                item.label = _TTT_X
+                item.style = discord.ButtonStyle.danger
+                item.disabled = True
+            elif cell_val == 2:
+                item.label = _TTT_O
+                item.style = discord.ButtonStyle.success
+                item.disabled = True
+            else:
+                item.label = "\u200b"
+                item.style = discord.ButtonStyle.secondary
+                item.disabled = self.game_over
+
+    def _check_winner(self) -> int:
+        """Return 1 if P1 won, 2 if P2 won, 0 if no winner yet."""
+        for a, b, c in _TTT_WIN_LINES:
+            if self.board[a] == self.board[b] == self.board[c] != 0:
+                return self.board[a]
+        return 0
+
+    def _make_embed(self, status: str, colour: discord.Colour) -> discord.Embed:
+        embed = discord.Embed(
+            title=f"\u274c\u2b55 Tic Tac Toe",
+            description=(
+                f"**{self.p1_name}** ({_TTT_X}) vs **{self.p2_name}** ({_TTT_O})\n\n"
+                f"{status}"
+            ),
+            colour=colour,
+        )
+        # Show board as text for clarity
+        rows = []
+        for r in range(3):
+            row_str = ""
+            for c in range(3):
+                val = self.board[r * 3 + c]
+                if val == 1:
+                    row_str += _TTT_X
+                elif val == 2:
+                    row_str += _TTT_O
+                else:
+                    row_str += _TTT_EMPTY
+            rows.append(row_str)
+        embed.add_field(name="Board", value="\n".join(rows), inline=False)
+        return embed
+
+
+class TicTacToe:
+    name = "Tic Tac Toe"
+    emoji = "\u274c"
+    stakes = 300
+
+    async def play(
+        self,
+        message: discord.Message,
+        p1_id: int,
+        p1_name: str,
+        p2_id: int,
+        p2_name: str,
+    ) -> int:
+        view = _TicTacToeView(p1_id, p2_id, p1_name, p2_name, message)
+
+        embed = view._make_embed(
+            f"**{p1_name}**'s turn ({_TTT_X})",
+            discord.Colour.blue(),
+        )
+        await message.edit(embed=embed, view=view)
+
+        # Run the game with a 15-second per-turn timeout
+        while not view.game_over:
+            current_name = p1_name if view.current_player == 1 else p2_name
+            opponent_id = p2_id if view.current_player == 1 else p1_id
+            opponent_name = p2_name if view.current_player == 1 else p1_name
+
+            try:
+                # Wait for either the game to end or a turn to be taken
+                done_task = asyncio.ensure_future(view.done.wait())
+                turn_task = asyncio.ensure_future(view.turn_event.wait())
+                finished, pending = await asyncio.wait(
+                    [done_task, turn_task],
+                    timeout=15,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for t in pending:
+                    t.cancel()
+
+                if not finished:
+                    # Timeout -- current player loses
+                    view.game_over = True
+                    view.winner_id = opponent_id
+                    view.stop()
+                    embed = view._make_embed(
+                        f"**{current_name}** ran out of time! **{opponent_name}** wins!",
+                        discord.Colour.gold(),
+                    )
+                    view._update_buttons()
+                    # Disable all remaining buttons
+                    for item in view.children:
+                        if isinstance(item, ui.Button):
+                            item.disabled = True
+                    await message.edit(embed=embed, view=view)
+                    return opponent_id
+
+            except asyncio.CancelledError:
+                view.stop()
+                return 0
+
+        return view.winner_id
+
+
+# ── 8. BlackjackShowdown ────────────────────────────────────────────────────
+
+
+class _BlackjackView(ui.View):
+    """Both players independently play Hit/Stand on their blackjack hand."""
+
+    def __init__(
+        self,
+        p1_id: int,
+        p2_id: int,
+        p1_name: str,
+        p2_name: str,
+        p1_hand: list[tuple[str, str]],
+        p2_hand: list[tuple[str, str]],
+        deck: list[tuple[str, str]],
+        message: discord.Message,
+    ) -> None:
+        super().__init__(timeout=30)
+        self.p1_id = p1_id
+        self.p2_id = p2_id
+        self.p1_name = p1_name
+        self.p2_name = p2_name
+        self.p1_hand = p1_hand
+        self.p2_hand = p2_hand
+        self.deck = deck
+        self.message = message
+        self.stood: set[int] = set()  # player IDs who have stood (or busted)
+        self.done = asyncio.Event()
+
+    def _player_hand(self, uid: int) -> list[tuple[str, str]]:
+        return self.p1_hand if uid == self.p1_id else self.p2_hand
+
+    def _player_name(self, uid: int) -> str:
+        return self.p1_name if uid == self.p1_id else self.p2_name
+
+    def _check_done(self) -> None:
+        if self.p1_id in self.stood and self.p2_id in self.stood:
+            self.done.set()
+            self.stop()
+
+    def _make_embed(self, status: str, colour: discord.Colour) -> discord.Embed:
+        embed = discord.Embed(
+            title="🃏 Blackjack Showdown",
+            description=status,
+            colour=colour,
+        )
+        p1_status = " (standing)" if self.p1_id in self.stood else ""
+        p2_status = " (standing)" if self.p2_id in self.stood else ""
+        p1_total = _bj_hand_total(self.p1_hand)
+        p2_total = _bj_hand_total(self.p2_hand)
+        if p1_total > 21:
+            p1_status = " (BUST)"
+        if p2_total > 21:
+            p2_status = " (BUST)"
+
+        embed.add_field(
+            name=f"{self.p1_name}{p1_status}",
+            value=_bj_hand_display(self.p1_hand),
+            inline=True,
+        )
+        embed.add_field(name="\u200b", value="\u200b", inline=True)
+        embed.add_field(
+            name=f"{self.p2_name}{p2_status}",
+            value=_bj_hand_display(self.p2_hand),
+            inline=True,
+        )
+        return embed
+
+    @ui.button(label="Hit", emoji="🃏", style=discord.ButtonStyle.primary, row=1)
+    async def hit(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        uid = interaction.user.id
+        if uid not in (self.p1_id, self.p2_id):
+            await interaction.response.send_message(
+                "You're not in this game!", ephemeral=True,
+            )
+            return
+        if uid in self.stood:
+            await interaction.response.send_message(
+                "You already stood (or busted)!", ephemeral=True,
+            )
+            return
+
+        hand = self._player_hand(uid)
+        card = self.deck.pop()
+        hand.append(card)
+        total = _bj_hand_total(hand)
+
+        if total > 21:
+            self.stood.add(uid)
+            await interaction.response.send_message(
+                f"You drew {_card_str(*card)} -- **BUST** ({total})!",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                f"You drew {_card_str(*card)} -- total: **{total}**.",
+                ephemeral=True,
+            )
+
+        # Update the public embed
+        status = self._turn_status()
+        embed = self._make_embed(status, discord.Colour.dark_purple())
+        try:
+            await self.message.edit(embed=embed, view=self)
+        except discord.NotFound:
+            pass
+
+        self._check_done()
+
+    @ui.button(label="Stand", emoji="🛑", style=discord.ButtonStyle.danger, row=1)
+    async def stand(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        uid = interaction.user.id
+        if uid not in (self.p1_id, self.p2_id):
+            await interaction.response.send_message(
+                "You're not in this game!", ephemeral=True,
+            )
+            return
+        if uid in self.stood:
+            await interaction.response.send_message(
+                "You already stood!", ephemeral=True,
+            )
+            return
+
+        self.stood.add(uid)
+        total = _bj_hand_total(self._player_hand(uid))
+        await interaction.response.send_message(
+            f"You stand at **{total}**.", ephemeral=True,
+        )
+
+        status = self._turn_status()
+        embed = self._make_embed(status, discord.Colour.dark_purple())
+        try:
+            await self.message.edit(embed=embed, view=self)
+        except discord.NotFound:
+            pass
+
+        self._check_done()
+
+    def _turn_status(self) -> str:
+        waiting = []
+        if self.p1_id not in self.stood:
+            waiting.append(self.p1_name)
+        if self.p2_id not in self.stood:
+            waiting.append(self.p2_name)
+        if waiting:
+            return f"Waiting on: **{'**, **'.join(waiting)}**"
+        return "Both players are done!"
+
+
+class BlackjackShowdown:
+    name = "Blackjack Showdown"
+    emoji = "🃏"
+    stakes = 300
+
+    async def play(
+        self,
+        message: discord.Message,
+        p1_id: int,
+        p1_name: str,
+        p2_id: int,
+        p2_name: str,
+    ) -> int:
+        # Fresh shuffled deck
+        deck = list(DECK)
+        random.shuffle(deck)
+
+        # Deal 2 cards each
+        p1_hand = [deck.pop(), deck.pop()]
+        p2_hand = [deck.pop(), deck.pop()]
+
+        view = _BlackjackView(
+            p1_id, p2_id, p1_name, p2_name, p1_hand, p2_hand, deck, message,
+        )
+
+        status = f"**{p1_name}** vs **{p2_name}** -- Hit or Stand!"
+        embed = view._make_embed(status, discord.Colour.dark_purple())
+        await message.edit(embed=embed, view=view)
+
+        try:
+            await asyncio.wait_for(view.done.wait(), timeout=30)
+        except asyncio.TimeoutError:
+            view.stop()
+            # Auto-stand anyone who hasn't acted
+            if p1_id not in view.stood:
+                view.stood.add(p1_id)
+            if p2_id not in view.stood:
+                view.stood.add(p2_id)
+
+        t1 = _bj_hand_total(p1_hand)
+        t2 = _bj_hand_total(p2_hand)
+        p1_bust = t1 > 21
+        p2_bust = t2 > 21
+        p1_bj = t1 == 21 and len(p1_hand) == 2
+        p2_bj = t2 == 21 and len(p2_hand) == 2
+
+        if p1_bust and p2_bust:
+            winner_id = 0
+            desc = "Both players busted -- draw!"
+        elif p1_bust:
+            winner_id = p2_id
+            desc = f"**{p1_name}** busted! **{p2_name}** wins with {t2}!"
+        elif p2_bust:
+            winner_id = p1_id
+            desc = f"**{p2_name}** busted! **{p1_name}** wins with {t1}!"
+        elif p1_bj and not p2_bj:
+            winner_id = p1_id
+            desc = f"**{p1_name}** has Blackjack! **{p1_name}** wins!"
+        elif p2_bj and not p1_bj:
+            winner_id = p2_id
+            desc = f"**{p2_name}** has Blackjack! **{p2_name}** wins!"
+        elif t1 > t2:
+            winner_id = p1_id
+            desc = f"**{p1_name}** wins with {t1} vs {t2}!"
+        elif t2 > t1:
+            winner_id = p2_id
+            desc = f"**{p2_name}** wins with {t2} vs {t1}!"
+        else:
+            winner_id = 0
+            desc = f"Both have {t1} -- draw!"
+
+        colour = discord.Colour.gold() if winner_id else discord.Colour.greyple()
+        embed = view._make_embed(desc, colour)
         await message.edit(embed=embed, view=None)
         return winner_id
 
@@ -1184,11 +1576,12 @@ class GuessTheNumber:
 ALL_GAMES: list[MiniGame] = [
     HigherCard(),
     DiceRoll(),
-    RockPaperScissors(),
     SpeedMath(),
     Trivia(),
-    Reaction(),
     GuessTheNumber(),
+    CoinFlip(),
+    TicTacToe(),
+    BlackjackShowdown(),
 ]
 
 
