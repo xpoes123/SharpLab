@@ -338,14 +338,26 @@ def _calling_embed(table: BingoTable) -> discord.Embed:
         progress_lines: list[tuple[int, int, str]] = []
         for p in table.players.values():
             best_m = 0
+            best_card = None
             total = 0
             for card in p.cards:
                 m, t = pat.progress(card)
                 total = t
                 if m > best_m:
                     best_m = m
-            bar = "\u2588" * best_m + "\u2591" * (total - best_m)
-            progress_lines.append((best_m, total, f"{bar} {best_m}/{total} **{p.display_name}**"))
+                    best_card = card
+            need = total - best_m
+            bar = "\u2588" * best_m + "\u2591" * need
+            line = f"{bar} {best_m}/{total} **{p.display_name}**"
+            if need <= 2 and best_card is not None:
+                needed = [
+                    _number_to_bingo(best_card.grid[r][c])
+                    for r in range(5) for c in range(5)
+                    if pat.target[r][c] and not best_card.marked[r][c]
+                ]
+                if needed:
+                    line += f" (needs **{', '.join(needed)}**)"
+            progress_lines.append((best_m, total, line))
         progress_lines.sort(key=lambda x: x[0], reverse=True)
         embed.add_field(
             name=f"{pat.emoji} {pat.name}",
