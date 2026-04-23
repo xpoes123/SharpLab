@@ -1571,6 +1571,373 @@ class BlackjackShowdown:
         return winner_id
 
 
+# ── 9. WordScramble ────────────────────────────────────────────────────────
+
+WORD_POOL = [
+    "planet", "bridge", "castle", "frozen", "galaxy", "jungle", "knight",
+    "market", "orange", "pirate", "rocket", "silver", "throne", "valley",
+    "wizard", "anchor", "breeze", "circus", "dragon", "empire", "flight",
+    "goblin", "harbor", "insect", "jigsaw", "kitten", "locket", "magnet",
+    "nickel", "oyster", "parrot", "quartz", "ribbon", "saddle", "temple",
+    "unwind", "velvet", "walnut", "zenith", "blazer", "candle", "desert",
+    "falcon", "gentle", "hermit", "impact", "jacket", "lantern", "muffin",
+    "noodle", "puzzle", "random", "shield", "turnip", "violin", "wrench",
+    "basket", "copper", "digest", "fabric", "golden", "honest", "island",
+    "launch", "mental", "object", "pencil", "result", "simple", "travel",
+    "wealth", "branch", "custom", "donkey", "expert", "forest", "guitar",
+    "helmet", "legend", "meteor", "notice", "prison", "salmon", "ticket",
+]
+
+
+def _scramble_word(word: str) -> str:
+    """Shuffle letters ensuring it differs from the original."""
+    letters = list(word)
+    for _ in range(50):
+        random.shuffle(letters)
+        if "".join(letters) != word:
+            return "".join(letters)
+    return "".join(letters)
+
+
+class _UnscrambleModal(ui.Modal):
+    answer_input = ui.TextInput(
+        label="Unscramble the word",
+        placeholder="Type the word",
+        required=True,
+        max_length=20,
+    )
+
+    def __init__(
+        self, p1_id: int, p2_id: int, word: str, done: asyncio.Event,
+    ) -> None:
+        super().__init__(title="Word Scramble")
+        self.p1_id = p1_id
+        self.p2_id = p2_id
+        self.word = word
+        self._done = done
+        self.result: tuple[int, bool] | None = None
+        self._resolved = False
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        uid = interaction.user.id
+        if uid not in (self.p1_id, self.p2_id):
+            await interaction.response.send_message("You're not in this duel!", ephemeral=True)
+            return
+        if self._resolved:
+            await interaction.response.send_message("Already answered!", ephemeral=True)
+            return
+
+        guess = self.answer_input.value.strip().lower()
+        self._resolved = True
+        is_correct = guess == self.word
+        self.result = (uid, is_correct)
+
+        if is_correct:
+            await interaction.response.send_message("Correct!", ephemeral=True)
+        else:
+            await interaction.response.send_message(
+                f"Wrong! You guessed '{guess}'.", ephemeral=True,
+            )
+        self._done.set()
+
+
+class _UnscrambleView(ui.View):
+    def __init__(self, p1_id: int, p2_id: int, word: str) -> None:
+        super().__init__(timeout=20)
+        self.p1_id = p1_id
+        self.p2_id = p2_id
+        self.word = word
+        self.done = asyncio.Event()
+        self._modal = _UnscrambleModal(p1_id, p2_id, word, self.done)
+
+    @property
+    def result(self) -> tuple[int, bool] | None:
+        return self._modal.result
+
+    @ui.button(label="Submit Answer", emoji="\U0001f524", style=discord.ButtonStyle.success)
+    async def submit(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        uid = interaction.user.id
+        if uid not in (self.p1_id, self.p2_id):
+            await interaction.response.send_message("You're not in this duel!", ephemeral=True)
+            return
+        if self._modal._resolved:
+            await interaction.response.send_message("Already answered!", ephemeral=True)
+            return
+        modal = _UnscrambleModal(self.p1_id, self.p2_id, self.word, self.done)
+        modal._resolved = self._modal._resolved
+        old = self._modal
+        self._modal = modal
+
+        original_submit = modal.on_submit
+
+        async def _linked(inter: discord.Interaction) -> None:
+            await original_submit(inter)
+            old.result = modal.result
+            old._resolved = modal._resolved
+            self._modal = old
+            self._modal.result = modal.result
+            self._modal._resolved = modal._resolved
+
+        modal.on_submit = _linked  # type: ignore[assignment]
+        await interaction.response.send_modal(modal)
+
+
+class WordScramble:
+    name = "Word Scramble"
+    emoji = "\U0001f524"
+    stakes = 300
+
+    async def play(
+        self,
+        message: discord.Message,
+        p1_id: int,
+        p1_name: str,
+        p2_id: int,
+        p2_name: str,
+    ) -> int:
+        word = random.choice(WORD_POOL)
+        scrambled = _scramble_word(word)
+
+        embed = discord.Embed(
+            title=f"{self.emoji} Word Scramble",
+            description=(
+                f"**{p1_name}** vs **{p2_name}**\n\n"
+                f"## `{scrambled.upper()}`\n\n"
+                "Unscramble the word! First correct answer wins."
+            ),
+            colour=discord.Colour.dark_teal(),
+        )
+
+        view = _UnscrambleView(p1_id, p2_id, word)
+        await message.edit(embed=embed, view=view)
+
+        try:
+            await asyncio.wait_for(view.done.wait(), timeout=20)
+        except asyncio.TimeoutError:
+            view.stop()
+
+        result = view.result
+        if result is None:
+            embed = discord.Embed(
+                title=f"{self.emoji} Word Scramble",
+                description=(
+                    f"`{scrambled.upper()}` = **{word.upper()}**\n\n"
+                    "Time's up! Neither player answered -- draw."
+                ),
+                colour=discord.Colour.greyple(),
+            )
+            await message.edit(embed=embed, view=None)
+            return 0
+
+        uid, is_correct = result
+        responder_name = p1_name if uid == p1_id else p2_name
+        other_id = p2_id if uid == p1_id else p1_id
+        other_name = p2_name if uid == p1_id else p1_name
+
+        if is_correct:
+            winner_id = uid
+            desc = (
+                f"`{scrambled.upper()}` = **{word.upper()}**\n\n"
+                f"**{responder_name}** unscrambled it first and wins!"
+            )
+        else:
+            winner_id = other_id
+            desc = (
+                f"`{scrambled.upper()}` = **{word.upper()}**\n\n"
+                f"**{responder_name}** guessed wrong -- **{other_name}** wins!"
+            )
+
+        embed = discord.Embed(
+            title=f"{self.emoji} Word Scramble",
+            description=desc,
+            colour=discord.Colour.gold(),
+        )
+        await message.edit(embed=embed, view=None)
+        return winner_id
+
+
+# ── 10. TypingRace ─────────────────────────────────────────────────────────
+
+PHRASES = [
+    "the quick brown fox jumps over the lazy dog",
+    "all that glitters is not gold",
+    "actions speak louder than words",
+    "practice makes perfect every time",
+    "fortune favors the bold and brave",
+    "knowledge is power in every situation",
+    "the early bird catches the worm",
+    "where there is a will there is a way",
+    "every cloud has a silver lining",
+    "time flies when you are having fun",
+    "better late than never they always say",
+    "curiosity killed the cat but satisfaction brought it back",
+    "the pen is mightier than the sword",
+    "you miss every shot you do not take",
+    "when in rome do as the romans do",
+    "two wrongs do not make a right",
+    "the best things in life are free",
+    "a journey of a thousand miles begins with a single step",
+    "do not count your chickens before they hatch",
+    "honesty is the best policy for everyone",
+]
+
+
+class _TypingModal(ui.Modal):
+    typed = ui.TextInput(
+        label="Type the phrase exactly",
+        style=discord.TextStyle.paragraph,
+        placeholder="Type it here...",
+        required=True,
+        max_length=200,
+    )
+
+    def __init__(
+        self, p1_id: int, p2_id: int, phrase: str, done: asyncio.Event,
+    ) -> None:
+        super().__init__(title="Typing Race")
+        self.p1_id = p1_id
+        self.p2_id = p2_id
+        self.phrase = phrase
+        self._done = done
+        self.result: tuple[int, bool] | None = None
+        self._resolved = False
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        uid = interaction.user.id
+        if uid not in (self.p1_id, self.p2_id):
+            await interaction.response.send_message("You're not in this duel!", ephemeral=True)
+            return
+        if self._resolved:
+            await interaction.response.send_message("Already submitted!", ephemeral=True)
+            return
+
+        self._resolved = True
+        attempt = self.typed.value.strip().lower()
+        is_correct = attempt == self.phrase
+        self.result = (uid, is_correct)
+
+        if is_correct:
+            await interaction.response.send_message("Perfect!", ephemeral=True)
+        else:
+            await interaction.response.send_message("Not quite right!", ephemeral=True)
+        self._done.set()
+
+
+class _TypingView(ui.View):
+    def __init__(self, p1_id: int, p2_id: int, phrase: str) -> None:
+        super().__init__(timeout=30)
+        self.p1_id = p1_id
+        self.p2_id = p2_id
+        self.phrase = phrase
+        self.done = asyncio.Event()
+        self._modal = _TypingModal(p1_id, p2_id, phrase, self.done)
+
+    @property
+    def result(self) -> tuple[int, bool] | None:
+        return self._modal.result
+
+    @ui.button(label="Start Typing", emoji="\u2328\ufe0f", style=discord.ButtonStyle.success)
+    async def start(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        uid = interaction.user.id
+        if uid not in (self.p1_id, self.p2_id):
+            await interaction.response.send_message("You're not in this duel!", ephemeral=True)
+            return
+        if self._modal._resolved:
+            await interaction.response.send_message("Already submitted!", ephemeral=True)
+            return
+        modal = _TypingModal(self.p1_id, self.p2_id, self.phrase, self.done)
+        modal._resolved = self._modal._resolved
+        old = self._modal
+        self._modal = modal
+
+        original_submit = modal.on_submit
+
+        async def _linked(inter: discord.Interaction) -> None:
+            await original_submit(inter)
+            old.result = modal.result
+            old._resolved = modal._resolved
+            self._modal = old
+            self._modal.result = modal.result
+            self._modal._resolved = modal._resolved
+
+        modal.on_submit = _linked  # type: ignore[assignment]
+        await interaction.response.send_modal(modal)
+
+
+class TypingRace:
+    name = "Typing Race"
+    emoji = "\u2328\ufe0f"
+    stakes = 300
+
+    async def play(
+        self,
+        message: discord.Message,
+        p1_id: int,
+        p1_name: str,
+        p2_id: int,
+        p2_name: str,
+    ) -> int:
+        phrase = random.choice(PHRASES)
+
+        embed = discord.Embed(
+            title=f"{self.emoji} Typing Race",
+            description=(
+                f"**{p1_name}** vs **{p2_name}**\n\n"
+                f"Type this phrase exactly:\n"
+                f"```{phrase}```\n"
+                "First to type it perfectly wins! Typos lose."
+            ),
+            colour=discord.Colour.dark_blue(),
+        )
+
+        view = _TypingView(p1_id, p2_id, phrase)
+        await message.edit(embed=embed, view=view)
+
+        try:
+            await asyncio.wait_for(view.done.wait(), timeout=30)
+        except asyncio.TimeoutError:
+            view.stop()
+
+        result = view.result
+        if result is None:
+            embed = discord.Embed(
+                title=f"{self.emoji} Typing Race",
+                description=(
+                    f"```{phrase}```\n"
+                    "Time's up! Neither player typed it -- draw."
+                ),
+                colour=discord.Colour.greyple(),
+            )
+            await message.edit(embed=embed, view=None)
+            return 0
+
+        uid, is_correct = result
+        responder_name = p1_name if uid == p1_id else p2_name
+        other_id = p2_id if uid == p1_id else p1_id
+        other_name = p2_name if uid == p1_id else p1_name
+
+        if is_correct:
+            winner_id = uid
+            desc = (
+                f"```{phrase}```\n"
+                f"**{responder_name}** typed it perfectly and wins!"
+            )
+        else:
+            winner_id = other_id
+            desc = (
+                f"```{phrase}```\n"
+                f"**{responder_name}** made a typo -- **{other_name}** wins!"
+            )
+
+        embed = discord.Embed(
+            title=f"{self.emoji} Typing Race",
+            description=desc,
+            colour=discord.Colour.gold(),
+        )
+        await message.edit(embed=embed, view=None)
+        return winner_id
+
+
 # ── Registry & Picker ───────────────────────────────────────────────────────
 
 ALL_GAMES: list[MiniGame] = [
@@ -1582,6 +1949,8 @@ ALL_GAMES: list[MiniGame] = [
     CoinFlip(),
     TicTacToe(),
     BlackjackShowdown(),
+    WordScramble(),
+    TypingRace(),
 ]
 
 
