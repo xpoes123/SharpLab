@@ -2,16 +2,21 @@
 from __future__ import annotations
 
 import logging
+import os
+from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from db import queries
 
 log = logging.getLogger(__name__)
 
 EMBED_COLOR = 0x7B68EE  # medium slate blue
+_ET = ZoneInfo("America/New_York")
+RECAP_HOUR = 8  # 8 AM Eastern
 
 
 async def _market_autocomplete(
@@ -52,6 +57,99 @@ async def _outcome_autocomplete(
 class PredictionsCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        _ch = os.getenv("MARKET_RECAP_CHANNEL_ID")
+        self.recap_channel_id: int | None = int(_ch) if _ch else None
+        self._last_recap_date: date | None = None
+        if self.recap_channel_id:
+            self.market_recap_loop.start()
+        else:
+            log.info("MARKET_RECAP_CHANNEL_ID not set — daily recap disabled")
+
+    def cog_unload(self) -> None:
+        self.market_recap_loop.cancel()
+
+    # ── Daily recap loop ─────────────────────────────────────────────────────
+
+    @tasks.loop(minutes=5)
+    async def market_recap_loop(self) -> None:
+        now_et = datetime.now(_ET)
+        today = now_et.date()
+        if now_et.hour != RECAP_HOUR or self._last_recap_date == today:
+            return
+
+        channel = self.bot.get_channel(self.recap_channel_id)
+        if channel is None:
+            log.warning("[market_recap] Channel %s not found", self.recap_channel_id)
+            return
+
+        try:
+            embed = await self._build_recap_embed()
+            await channel.send(embed=embed)
+            self._last_recap_date = today
+            log.info("[market_recap] Posted daily recap")
+        except Exception as exc:
+            log.exception("[market_recap] Failed: %s", exc)
+
+    @market_recap_loop.before_loop
+    async def _before_recap(self) -> None:
+        await self.bot.wait_until_ready()
+
+    async def _build_recap_embed(self) -> discord.Embed:
+        """Build the daily market recap embed."""
+        open_markets = await queries.list_open_markets()
+        resolved = await queries.get_recently_resolved_markets(hours=24)
+
+        embed = discord.Embed(
+            title="Daily Market Recap",
+            color=EMBED_COLOR,
+            timestamp=datetime.now(timezone.utc),
+        )
+
+        if not open_markets and not resolved:
+            embed.description = "No open or recently resolved markets."
+            return embed
+
+        # Open markets section
+        if open_markets:
+            lines = []
+            for m in open_markets[:8]:
+                mid = m["market_id"]
+                q = m["question"]
+                parts = []
+                for o in m["outcomes"]:
+                    book = await queries.get_order_book(mid, o["outcome_id"])
+                    best = book["buys"][0]["price"] if book["buys"] else None
+                    depth = sum(b["quantity"] - b["filled_qty"] for b in book["buys"])
+                    if best is not None:
+                        parts.append(f"{o['label']} **{best}c** ({depth})")
+                    else:
+                        parts.append(f"{o['label']} -")
+                prices_str = " | ".join(parts)
+                lines.append(f"**#{mid}** {q}\n> {prices_str}")
+            embed.add_field(
+                name=f"Open Markets ({len(open_markets)})",
+                value="\n".join(lines),
+                inline=False,
+            )
+        else:
+            embed.add_field(name="Open Markets", value="None", inline=False)
+
+        # Recently resolved section
+        if resolved:
+            lines = []
+            for m in resolved[:5]:
+                winner = m.get("winning_label", "?")
+                lines.append(f"**#{m['market_id']}** {m['question']} — Winner: **{winner}**")
+            embed.add_field(
+                name=f"Resolved (last 24h)",
+                value="\n".join(lines),
+                inline=False,
+            )
+
+        embed.set_footer(text="Use /market bet to place orders")
+        return embed
+
+    # ── Slash commands ───────────────────────────────────────────────────────
 
     market_group = app_commands.Group(name="market", description="Prediction markets")
 
