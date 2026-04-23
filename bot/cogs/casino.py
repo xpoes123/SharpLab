@@ -55,6 +55,7 @@ GAME_LABELS: dict[str, str] = {
     "sudoku": "Sudoku Sprint",
     "duel": "Duels",
     "tournament": "Tournaments",
+    "figgie": "Figgie",
 }
 
 GAME_CATEGORIES: list[tuple[str, str]] = [
@@ -1815,6 +1816,20 @@ GAME_RULES: dict[str, str] = {
         "and knockout rounds. Bet on which team wins the whole thing.\n\n"
         "**Payouts:** Based on pre-game win probability. Tournament payouts based on team strength."
     ),
+    "figgie": (
+        "**Figgie** (Jane Street trading game)\n"
+        "Deduce the hidden goal suit and trade to accumulate it.\n\n"
+        "**Setup:** 40 cards across 4 suits (\u2660\u2665\u2666\u2663) with an *uneven* distribution: "
+        "one suit has 12 cards (the **common suit**), one has 10 (the **goal suit**), and two have 8. "
+        "The goal suit is always the same-colour partner of the common suit.\n\n"
+        "**How to play:** Each player is dealt cards and starts with 200 trading chips. "
+        "Over 6 rounds (45s each), post Buy or Sell orders on the order book. "
+        "When a buy price meets a sell price, the trade executes instantly. "
+        "Use your hand, the trades, and the order book to deduce which suit is the goal.\n\n"
+        "**Scoring:** At game end the goal suit is revealed. "
+        "Score = remaining chips + 10 \u00d7 goal-suit cards. Highest score wins the pot.\n\n"
+        "**Key insight:** If you see lots of one suit, its same-colour partner is likely the goal!"
+    ),
 }
 
 CASINO_GAMES: list[tuple[str, str, str, str]] = [
@@ -1826,6 +1841,7 @@ CASINO_GAMES: list[tuple[str, str, str, str]] = [
     ("uth", "Ultimate Texas Hold'em", "Card Games", "solo"),
     ("videopoker", "Video Poker (Jacks or Better)", "Card Games", "solo"),
     ("hilo", "Hi-Lo card guessing game", "Card Games", "solo"),
+    ("figgie", "Figgie \u2014 Jane Street trading game", "Card Games", "party"),
     # ── Table & Arcade
     ("roulette", "American roulette", "Table & Arcade", "solo"),
     ("craps", "Craps with full side bets", "Table & Arcade", "solo"),

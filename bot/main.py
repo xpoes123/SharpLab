@@ -56,6 +56,7 @@ COGS = [
     "bot.cogs.challenges",
     "bot.cogs.duels",
     "bot.cogs.tournaments",
+    "bot.cogs.figgie",
 ]
 
 GUILD_ID = int(os.environ["DISCORD_GUILD_ID"])
