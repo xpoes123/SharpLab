@@ -24,7 +24,7 @@ from db import queries
 
 MAX_PLAYERS = 8
 MIN_PLAYERS = 1
-PART_TIME = 20  # seconds per bonus part
+PART_TIME = 10  # seconds per bonus part
 BETWEEN_PARTS_DELAY = 3  # seconds between parts
 BETWEEN_BONUS_DELAY = 4  # seconds between bonuses
 BATCH_SIZE = 5  # bonuses fetched per API call
@@ -62,6 +62,15 @@ QB_CATEGORIES: list[tuple[str, str, str]] = [
     ("Trash", "Trash (Pop Culture)", "\U0001f4fa"),
 ]
 
+# qbreader difficulty levels
+QB_DIFFICULTIES: list[tuple[str, str, str, list[int]]] = [
+    # (value, label, emoji, difficulty numbers)
+    ("all", "All Difficulties", "\U0001f3b2", []),
+    ("ms", "Middle School", "\U0001f4d7", [1, 2, 3]),
+    ("hs", "High School", "\U0001f4d8", [4, 5, 6]),
+    ("college", "College", "\U0001f4d5", [7, 8, 9]),
+]
+
 # ── qbreader API helpers ─────────────────────────────────────────────────────
 
 
@@ -74,6 +83,7 @@ def _strip_html(text: str) -> str:
 async def _fetch_bonuses(
     client: httpx.AsyncClient,
     category: str,
+    difficulty: str = "all",
     count: int = BATCH_SIZE,
 ) -> list[dict]:
     """Fetch random 3-part bonuses from qbreader."""
@@ -83,6 +93,12 @@ async def _fetch_bonuses(
     }
     if category != "all":
         params["categories"] = category
+    # Map difficulty label to qbreader difficulty numbers
+    diff_nums = next(
+        (d for v, _, _, d in QB_DIFFICULTIES if v == difficulty), [],
+    )
+    if diff_nums:
+        params["difficulties"] = ",".join(str(d) for d in diff_nums)
     resp = await client.get(f"{QB_API}/random-bonus", params=params, timeout=10)
     resp.raise_for_status()
     data = resp.json()
@@ -175,6 +191,7 @@ class QBTable:
     message: discord.Message | None = None
     thread: discord.Thread | None = None
     category: str = "all"
+    difficulty: str = "all"
     # Current bonus state
     bonus_queue: deque[dict] = field(default_factory=deque)
     bonus_num: int = 0
@@ -201,6 +218,13 @@ def _cat_label(cat: str) -> str:
     return cat
 
 
+def _diff_label(diff: str) -> str:
+    for val, label, _, _ in QB_DIFFICULTIES:
+        if val == diff:
+            return label
+    return diff
+
+
 def _scoreboard(table: QBTable) -> str:
     sorted_players = sorted(
         table.players.values(), key=lambda p: p.score, reverse=True,
@@ -217,10 +241,12 @@ def _betting_embed(table: QBTable) -> discord.Embed:
     n = len(table.players)
     cat = _cat_label(table.category)
 
+    diff = _diff_label(table.difficulty)
+
     embed = discord.Embed(
         title="\U0001f9e0 Quiz Bowl",
         description=(
-            f"**Category:** {cat}\n"
+            f"**Category:** {cat} \u2502 **Difficulty:** {diff}\n"
             "3-part bonus questions. First correct answer per part wins 10 pts.\n"
             "Game runs until the host ends it. Type answers in the game thread!"
         ),
@@ -481,12 +507,48 @@ class EndGameView(ui.View):
         await interaction.response.edit_message(view=self)
 
 
+class SkipPartView(ui.View):
+    """Attached to each part question so players can skip."""
+
+    def __init__(self, table: QBTable) -> None:
+        super().__init__(timeout=PART_TIME + 5)
+        self.table = table
+
+    @ui.button(
+        label="Skip", style=discord.ButtonStyle.secondary,
+        emoji="\u23ed\ufe0f", row=0,
+    )
+    async def skip_btn(
+        self, interaction: discord.Interaction, button: ui.Button,
+    ) -> None:
+        if interaction.user.id not in self.table.players:
+            await interaction.response.send_message(
+                "You're not in this game!", ephemeral=True,
+            )
+            return
+        if self.table.part_winner is not None:
+            await interaction.response.send_message(
+                "Already answered!", ephemeral=True,
+            )
+            return
+        # Skip — trigger timeout without a winner
+        button.disabled = True
+        button.label = "Skipped"
+        await interaction.response.edit_message(view=self)
+        self.table.part_solved.set()
+
+
 # ── Lobby View (main channel) ───────────────────────────────────────────────
 
 
 _CATEGORY_OPTIONS = [
     discord.SelectOption(label=label, value=value, emoji=emoji, default=(value == "all"))
     for value, label, emoji in QB_CATEGORIES
+]
+
+_DIFFICULTY_OPTIONS = [
+    discord.SelectOption(label=label, value=value, emoji=emoji, default=(value == "all"))
+    for value, label, emoji, _ in QB_DIFFICULTIES
 ]
 
 
@@ -509,6 +571,7 @@ class QBLobbyView(ui.View):
         self.leave_btn.disabled = not betting
         self.close_btn.disabled = self.table.phase == "playing"
         self.category_select.disabled = not betting
+        self.difficulty_select.disabled = not betting
 
     # ── Row 0: Betting ──────────────────────────────────────────────────
 
@@ -690,6 +753,37 @@ class QBLobbyView(ui.View):
             embed=_betting_embed(self.table), view=self,
         )
 
+    # ── Row 3: Difficulty select ────────────────────────────────────────
+
+    @ui.select(
+        placeholder="Difficulty: All Difficulties",
+        options=_DIFFICULTY_OPTIONS,
+        row=3,
+    )
+    async def difficulty_select(
+        self, interaction: discord.Interaction, select: ui.Select,
+    ) -> None:
+        if interaction.user.id != self.table.host_id:
+            await interaction.response.send_message(
+                "Only the host can change the difficulty!", ephemeral=True,
+            )
+            return
+        if self.table.phase != "betting":
+            await interaction.response.send_message(
+                "Can't change difficulty once started!", ephemeral=True,
+            )
+            return
+        self.table.difficulty = select.values[0]
+        chosen = next(
+            (o for o in _DIFFICULTY_OPTIONS if o.value == self.table.difficulty), None,
+        )
+        select.placeholder = f"Difficulty: {chosen.label}" if chosen else "Difficulty"
+        for opt in select.options:
+            opt.default = opt.value == self.table.difficulty
+        await interaction.response.edit_message(
+            embed=_betting_embed(self.table), view=self,
+        )
+
     # ── Game start ──────────────────────────────────────────────────────
 
     async def _start_game(self, interaction: discord.Interaction) -> None:
@@ -741,7 +835,9 @@ class QBLobbyView(ui.View):
                     # Refill queue if empty
                     if not table.bonus_queue:
                         try:
-                            bonuses = await _fetch_bonuses(client, table.category)
+                            bonuses = await _fetch_bonuses(
+                                client, table.category, table.difficulty,
+                            )
                             table.bonus_queue.extend(bonuses)
                         except Exception:
                             # API error — wait and retry
@@ -776,9 +872,13 @@ class QBLobbyView(ui.View):
                         table.phase = "playing"
                         table.part_start_time = time.monotonic()
 
-                        # Post the question
+                        # Post the question with Skip button
+                        skip_view: SkipPartView | None = None
                         if table.thread:
-                            await table.thread.send(embed=_part_embed(table))
+                            skip_view = SkipPartView(table)
+                            await table.thread.send(
+                                embed=_part_embed(table), view=skip_view,
+                            )
 
                         # Wait for answer or timeout
                         try:
@@ -787,6 +887,10 @@ class QBLobbyView(ui.View):
                             )
                         except asyncio.TimeoutError:
                             pass
+
+                        # Disable the skip button
+                        if skip_view is not None:
+                            skip_view.stop()
 
                         # Show result
                         answer = _strip_html(bonus["answers_sanitized"][part_idx])
