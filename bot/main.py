@@ -6,7 +6,7 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
-from db import schema
+from db import schema, queries
 
 load_dotenv()
 
@@ -78,6 +78,13 @@ class SharpBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         await schema.init_db()
+        # Clean up games left over from previous bot session
+        duels = await queries.cleanup_stale_duels()
+        tournaments = await queries.cleanup_stale_tournaments()
+        sessions = await queries.cleanup_stale_game_sessions()
+        total = duels + tournaments + sessions
+        if total:
+            print(f"Startup cleanup: {duels} duels, {tournaments} tournaments, {sessions} web sessions expired+refunded.")
         for cog in COGS:
             await self.load_extension(cog)
         guild = discord.Object(id=GUILD_ID)

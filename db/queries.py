@@ -2495,3 +2495,130 @@ async def get_game_session(room_id: str) -> dict | None:
         )
         row = await cursor.fetchone()
     return dict(row) if row else None
+
+
+# ── Startup cleanup ─────────────────────────────────────────────────
+
+
+async def cleanup_stale_duels() -> int:
+    """Expire pending/active duels left over from a previous bot session.
+
+    Refunds wagers for duels that were *active* (coins already deducted).
+    Pending duels never had coins taken, so they just get marked expired.
+    Returns the number of duels cleaned up.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    cleaned = 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        # Active duels need refunds
+        cursor = await db.execute(
+            "SELECT duel_id, challenger_id, opponent_id, wager "
+            "FROM duels WHERE status = 'active'",
+        )
+        active = [dict(r) for r in await cursor.fetchall()]
+        for d in active:
+            if d["wager"] > 0:
+                for uid in (d["challenger_id"], d["opponent_id"]):
+                    try:
+                        await db.execute(
+                            "UPDATE casino_wallets SET balance = balance + ? "
+                            "WHERE discord_user = ?",
+                            (d["wager"], uid),
+                        )
+                    except Exception:
+                        pass  # wallet may not exist; best-effort
+            await db.execute(
+                "UPDATE duels SET status = 'expired', finished_at = ? "
+                "WHERE duel_id = ?",
+                (now_iso, d["duel_id"]),
+            )
+            cleaned += 1
+        # Pending duels — no coins taken, just expire
+        cursor = await db.execute(
+            "UPDATE duels SET status = 'expired', finished_at = ? "
+            "WHERE status = 'pending'",
+            (now_iso,),
+        )
+        cleaned += cursor.rowcount
+        await db.commit()
+    return cleaned
+
+
+async def cleanup_stale_tournaments() -> int:
+    """Cancel registration/active tournaments from a previous session.
+
+    Refunds buy-ins to all entrants. Returns the number of tournaments cleaned up.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    cleaned = 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT tournament_id, buy_in FROM tournaments "
+            "WHERE status IN ('registration', 'active')",
+        )
+        stale = [dict(r) for r in await cursor.fetchall()]
+        for t in stale:
+            if t["buy_in"] > 0:
+                ecursor = await db.execute(
+                    "SELECT discord_user FROM tournament_entries "
+                    "WHERE tournament_id = ?",
+                    (t["tournament_id"],),
+                )
+                for entry in await ecursor.fetchall():
+                    try:
+                        await db.execute(
+                            "UPDATE casino_wallets SET balance = balance + ? "
+                            "WHERE discord_user = ?",
+                            (t["buy_in"], entry["discord_user"]),
+                        )
+                    except Exception:
+                        pass
+            await db.execute(
+                "UPDATE tournaments SET status = 'cancelled', finished_at = ? "
+                "WHERE tournament_id = ?",
+                (now_iso, t["tournament_id"]),
+            )
+            cleaned += 1
+        await db.commit()
+    return cleaned
+
+
+async def cleanup_stale_game_sessions() -> int:
+    """Cancel web game sessions stuck in 'waiting' from a previous session.
+
+    Refunds each player's wager via game_tokens. Returns sessions cleaned.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    cleaned = 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT room_id FROM game_sessions WHERE status = 'waiting'",
+        )
+        stale = [dict(r) for r in await cursor.fetchall()]
+        for s in stale:
+            tcursor = await db.execute(
+                "SELECT discord_user, wager FROM game_tokens "
+                "WHERE room_id = ?",
+                (s["room_id"],),
+            )
+            for tok in await tcursor.fetchall():
+                if tok["wager"] > 0:
+                    try:
+                        await db.execute(
+                            "UPDATE casino_wallets SET balance = balance + ? "
+                            "WHERE discord_user = ?",
+                            (tok["wager"], tok["discord_user"]),
+                        )
+                    except Exception:
+                        pass
+            await db.execute(
+                "UPDATE game_sessions SET status = 'finished', finished_at = ? "
+                "WHERE room_id = ?",
+                (now_iso, s["room_id"]),
+            )
+            cleaned += 1
+        await db.commit()
+    return cleaned
