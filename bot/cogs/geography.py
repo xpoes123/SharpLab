@@ -356,6 +356,7 @@ class GeoTable:
     round_start_time: float = 0.0
     round_winner: int | None = None
     race_task: asyncio.Task | None = field(default=None, repr=False)
+    thread: discord.Thread | None = field(default=None, repr=False)
     round_solved: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     total_rounds_played: int = 0
     # Tracks (q_type, key) pairs to avoid repeating questions within a game
@@ -837,9 +838,20 @@ class GeoTableView(ui.View):
             p.answer_time = None
 
         self._update_buttons()
-        await interaction.response.edit_message(
-            embed=_playing_embed(table), view=self,
+        in_progress = discord.Embed(
+            title="\U0001f30d Geography \u2014 In Progress",
+            description="Game running in the thread below! Type your answers there.",
+            colour=discord.Colour.blue(),
         )
+        players_text = ", ".join(p.display_name for p in table.players.values())
+        in_progress.add_field(name="Players", value=players_text or "\u2014", inline=False)
+        await interaction.response.edit_message(embed=in_progress, view=self)
+
+        msg = await interaction.original_response()
+        thread = await msg.create_thread(name=f"Geography \u2014 {table.host_name}")
+        table.thread = thread
+
+        table.message = await thread.send(embed=_playing_embed(table))
 
         # Launch the race loop
         table.race_task = asyncio.create_task(self._race_loop())
@@ -914,10 +926,10 @@ class GeoTableView(ui.View):
                         p.answer_time = None
 
                     self._update_buttons()
-                    if table.message:
+                    if table.thread:
                         try:
-                            await table.message.edit(
-                                embed=_playing_embed(table), view=self,
+                            table.message = await table.thread.send(
+                                embed=_playing_embed(table),
                             )
                         except discord.HTTPException:
                             pass
@@ -930,7 +942,7 @@ class GeoTableView(ui.View):
                     if table.message:
                         try:
                             await table.message.edit(
-                                embed=_round_result_embed(table), view=self,
+                                embed=_round_result_embed(table),
                             )
                         except discord.HTTPException:
                             pass
@@ -938,7 +950,7 @@ class GeoTableView(ui.View):
                     if table.message:
                         try:
                             await table.message.edit(
-                                embed=_timeout_embed(table), view=self,
+                                embed=_timeout_embed(table),
                             )
                         except discord.HTTPException:
                             pass
@@ -991,7 +1003,7 @@ class GeoTableView(ui.View):
 
         if table.message:
             try:
-                await table.message.edit(embed=embed, view=self)
+                await table.message.edit(embed=embed)
             except discord.HTTPException:
                 pass
 
@@ -1084,7 +1096,11 @@ class GeographyCog(commands.Cog):
         if message.author.bot:
             return
 
-        table = self.active_tables.get(message.channel.id)
+        table = None
+        for t in self.active_tables.values():
+            if t.thread is not None and t.thread.id == message.channel.id:
+                table = t
+                break
         if table is None or table.phase != "playing":
             return
 

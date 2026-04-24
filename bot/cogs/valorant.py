@@ -335,6 +335,7 @@ class ValTable:
     round_start_time: float = 0.0
     round_winner: int | None = None
     race_task: asyncio.Task | None = field(default=None, repr=False)
+    thread: discord.Thread | None = field(default=None, repr=False)
     round_solved: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     last_bets: dict[int, tuple[str, int]] = field(default_factory=dict)
     total_rounds_played: int = 0
@@ -1017,9 +1018,20 @@ class ValTableView(ui.View):
             p.answer_time = None
 
         self._update_buttons()
-        await interaction.response.edit_message(
-            embed=_playing_embed(table), view=self,
+        in_progress = discord.Embed(
+            title="\U0001f52b Valorant Trivia \u2014 In Progress",
+            description="Game running in the thread below! Type your answers there.",
+            colour=discord.Colour.red(),
         )
+        players_text = ", ".join(p.display_name for p in table.players.values())
+        in_progress.add_field(name="Players", value=players_text or "\u2014", inline=False)
+        await interaction.response.edit_message(embed=in_progress, view=self)
+
+        msg = await interaction.original_response()
+        thread = await msg.create_thread(name=f"Valorant Trivia \u2014 {table.host_name}")
+        table.thread = thread
+
+        table.message = await thread.send(embed=_playing_embed(table))
         table.race_task = asyncio.create_task(self._race_loop())
 
     async def _wait_for_solve_or_timeout(self) -> bool:
@@ -1097,10 +1109,10 @@ class ValTableView(ui.View):
                         p.answer_time = None
 
                     self._update_buttons()
-                    if table.message:
+                    if table.thread:
                         try:
-                            await table.message.edit(
-                                embed=_playing_embed(table), view=self,
+                            table.message = await table.thread.send(
+                                embed=_playing_embed(table),
                             )
                         except discord.HTTPException:
                             pass
@@ -1112,7 +1124,7 @@ class ValTableView(ui.View):
                     if table.message:
                         try:
                             await table.message.edit(
-                                embed=_round_result_embed(table), view=self,
+                                embed=_round_result_embed(table),
                             )
                         except discord.HTTPException:
                             pass
@@ -1120,7 +1132,7 @@ class ValTableView(ui.View):
                     if table.message:
                         try:
                             await table.message.edit(
-                                embed=_timeout_embed(table), view=self,
+                                embed=_timeout_embed(table),
                             )
                         except discord.HTTPException:
                             pass
@@ -1211,7 +1223,7 @@ class ValTableView(ui.View):
 
         if table.message:
             try:
-                await table.message.edit(embed=embed, view=self)
+                await table.message.edit(embed=embed)
             except discord.HTTPException:
                 pass
 
@@ -1486,8 +1498,12 @@ class ValorantCog(commands.Cog):
         uid = message.author.id
         guess = message.content.strip()
 
-        # ── Multiplayer table in this channel ──
-        table = self.active_tables.get(message.channel.id)
+        # ── Multiplayer table: find by thread ID ──
+        table = None
+        for t in self.active_tables.values():
+            if t.thread is not None and t.thread.id == message.channel.id:
+                table = t
+                break
         if table is not None and table.phase == "playing":
             if uid in table.players and table.round_winner is None:
                 if len(guess) < 2:
