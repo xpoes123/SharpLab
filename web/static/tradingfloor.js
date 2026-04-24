@@ -10,6 +10,7 @@ let isHost = false;
 let gamePhase = 'lobby';
 let selectedQty = 1;
 let selectedTicker = 'CHIP';
+let leverageMode = 1;  // 1x or 2x
 let lastStockPrices = {};  // for animating price changes
 
 // ── WebSocket ────────────────────────────────────────────────────────────
@@ -208,8 +209,9 @@ function onPortfolio(msg) {
     pnlEl.className = 'num ' + (pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : '');
 
     const posList = document.getElementById('positions-list');
+    const pv = msg.portfolio_value || 10000;
     if (!msg.positions || msg.positions.length === 0) {
-        posList.innerHTML = '<span style="color:var(--text-muted)">No positions</span>';
+        posList.innerHTML = '<span style="color:var(--text-muted)">No positions \u2014 100% cash</span>';
     } else {
         posList.innerHTML = '';
         msg.positions.forEach(p => {
@@ -218,9 +220,16 @@ function onPortfolio(msg) {
             const label = p.qty < 0 ? `SHORT ${Math.abs(p.qty)}` : `LONG ${p.qty}`;
             const pnlClass = p.pnl > 0 ? 'positive' : p.pnl < 0 ? 'negative' : '';
             const pnlStr = p.pnl > 0 ? `+${fmt(p.pnl)}` : fmt(p.pnl);
-            row.innerHTML = `<span class="pos-ticker">${p.emoji} ${p.ticker}</span><span class="pos-qty">${label} @ ${p.avg_entry} \u2192 ${p.price} <span class="${pnlClass}">(${pnlStr}c)</span></span>`;
+            const alloc = pv > 0 ? Math.abs(Math.round(p.value / pv * 100)) : 0;
+            row.innerHTML = `<span class="pos-ticker">${p.emoji} ${p.ticker} <span class="pos-alloc">${alloc}%</span></span><span class="pos-qty">${label} @ ${p.avg_entry} \u2192 ${p.price} <span class="${pnlClass}">(${pnlStr}c)</span></span>`;
             posList.appendChild(row);
         });
+        // Show cash allocation
+        const cashAlloc = pv > 0 ? Math.round(msg.cash / pv * 100) : 100;
+        const cashRow = document.createElement('div');
+        cashRow.className = 'position-row cash-row';
+        cashRow.innerHTML = `<span class="pos-ticker">\ud83d\udcb5 CASH <span class="pos-alloc">${cashAlloc}%</span></span><span class="pos-qty">${fmt(msg.cash)}c</span>`;
+        posList.appendChild(cashRow);
     }
 }
 
@@ -418,6 +427,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('start-btn').addEventListener('click', () => send({ type: 'start' }));
 
+    // Leverage toggle
+    document.getElementById('leverage-btn').addEventListener('click', () => {
+        leverageMode = leverageMode === 1 ? 2 : 1;
+        const btn = document.getElementById('leverage-btn');
+        btn.textContent = `\u26a1 ${leverageMode}x`;
+        btn.classList.toggle('active', leverageMode === 2);
+    });
+
     // Ticker selector (4 buttons)
     document.querySelectorAll('.ticker-btn').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -437,7 +454,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     document.getElementById('buy-btn').addEventListener('click', () => {
-        send({ type: 'buy', ticker: selectedTicker, qty: selectedQty });
+        send({ type: 'buy', ticker: selectedTicker, qty: selectedQty * leverageMode });
     });
 
     document.getElementById('sell-btn').addEventListener('click', () => {
@@ -445,7 +462,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     document.getElementById('short-btn').addEventListener('click', () => {
-        send({ type: 'short', ticker: selectedTicker, qty: selectedQty });
+        send({ type: 'short', ticker: selectedTicker, qty: selectedQty * leverageMode });
     });
 
     document.getElementById('sell-all-btn').addEventListener('click', () => {
@@ -456,7 +473,4 @@ document.addEventListener('DOMContentLoaded', () => {
         send({ type: 'cover', ticker: selectedTicker });
     });
 
-    document.getElementById('cancel-btn').addEventListener('click', () => {
-        send({ type: 'cancel_orders' });
-    });
 });

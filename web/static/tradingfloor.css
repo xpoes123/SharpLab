@@ -388,6 +388,41 @@
 .qty-btn:hover { color: var(--text); border-color: var(--text-muted); }
 .qty-btn.active { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
 
+/* ── Leverage Button ─────────────────────────────────────────────────────── */
+
+.leverage-btn {
+    padding: 8px 16px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    background: var(--card);
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: all 0.15s;
+    margin-left: auto;
+}
+
+.leverage-btn:hover { color: var(--text); border-color: var(--text-muted); }
+.leverage-btn.active { color: var(--red); border-color: var(--red); background: rgba(248, 81, 73, 0.15); }
+
+/* ── Portfolio Allocation ───────────────────────────────────────────────── */
+
+.pos-alloc {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--accent);
+    margin-left: 4px;
+}
+
+.cash-row {
+    border-top: 1px solid var(--border);
+    padding-top: 4px;
+    margin-top: 4px;
+    opacity: 0.7;
+}
+
 /* ── Trade Panel ────────────────────────────────────────────────────────── */
 
 .trade-panel { margin-bottom: 12px; }
