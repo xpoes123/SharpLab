@@ -37,6 +37,7 @@ ELO_GAME_LABELS: dict[str, str] = {
     "sudoku": "Sudoku Sprint",
     "figgie": "Figgie",
     "tradingfloor": "Trading Floor",
+    "bingo": "Bingo",
 }
 
 MIN_GAMES_FOR_LEADERBOARD = 5
