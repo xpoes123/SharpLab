@@ -224,6 +224,7 @@ class NbaGuessTable:
     round_solved: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     used_ids: set[int] = field(default_factory=set)
     round_messages: list[discord.Message] = field(default_factory=list)
+    stop_requested: bool = False
 
 
 # ── Embeds ───────────────────────────────────────────────────────────────────
@@ -401,6 +402,45 @@ _ROUNDS_OPTIONS = [
 # ── View ─────────────────────────────────────────────────────────────────────
 
 
+class NbaEndGameView(ui.View):
+    """Button posted in the thread so any player can stop the game early."""
+
+    def __init__(self, table: NbaGuessTable) -> None:
+        super().__init__(timeout=None)
+        self.table = table
+
+    @ui.button(
+        label="End Game", style=discord.ButtonStyle.danger,
+        emoji="\u23f9\ufe0f", row=0,
+    )
+    async def end_btn(
+        self, interaction: discord.Interaction, button: ui.Button,
+    ) -> None:
+        if self.table.phase == "closed":
+            await interaction.response.send_message(
+                "The game has already ended.", ephemeral=True,
+            )
+            return
+        if (
+            interaction.user.id != self.table.host_id
+            and interaction.user.id not in self.table.players
+        ):
+            await interaction.response.send_message(
+                "Only players can end the game!", ephemeral=True,
+            )
+            return
+        if self.table.stop_requested:
+            await interaction.response.send_message(
+                "Already ending\u2026", ephemeral=True,
+            )
+            return
+        self.table.stop_requested = True
+        self.table.round_solved.set()  # wake up the game loop immediately
+        button.disabled = True
+        button.label = "Ending\u2026"
+        await interaction.response.edit_message(view=self)
+
+
 class NbaGuessView(ui.View):
     def __init__(
         self, table: NbaGuessTable, active_tables: dict[int, NbaGuessTable],
@@ -561,6 +601,11 @@ class NbaGuessView(ui.View):
         thread = await msg.create_thread(name=f"NBA Player Guess \u2014 {table.host_name}")
         table.thread = thread
 
+        await thread.send(
+            "\U0001f3c1 **NBA Player Guess started!** Type your answers here.",
+            view=NbaEndGameView(table),
+        )
+
         table.message = await thread.send(embed=_playing_embed(table))
         table.race_task = asyncio.create_task(self._race_loop())
 
@@ -647,6 +692,9 @@ class NbaGuessView(ui.View):
 
                 solved = await self._wait_for_solve_or_timeout()
 
+                if table.stop_requested:
+                    break
+
                 if solved and table.round_winner is not None:
                     if table.message:
                         try:
@@ -672,7 +720,15 @@ class NbaGuessView(ui.View):
                 table.phase = "between_rounds"
                 await asyncio.sleep(ROUND_DELAY)
 
+                if table.stop_requested:
+                    break
+
             await self._clear_round_messages()
+            if table.stop_requested and table.thread:
+                try:
+                    await table.thread.send("\u23f9\ufe0f Game ended early.")
+                except discord.HTTPException:
+                    pass
             await self._end_game()
 
         except asyncio.CancelledError:

@@ -390,9 +390,17 @@ class EndGameView(ui.View):
     async def end_btn(
         self, interaction: discord.Interaction, button: ui.Button,
     ) -> None:
-        if interaction.user.id != self.table.host_id:
+        if self.table.phase == "closed":
             await interaction.response.send_message(
-                "Only the host can end the game!", ephemeral=True,
+                "The game has already ended.", ephemeral=True,
+            )
+            return
+        if (
+            interaction.user.id != self.table.host_id
+            and interaction.user.id not in self.table.players
+        ):
+            await interaction.response.send_message(
+                "Only players can end the game!", ephemeral=True,
             )
             return
         if self.table.stop_requested:
@@ -401,6 +409,7 @@ class EndGameView(ui.View):
             )
             return
         self.table.stop_requested = True
+        self.table.part_solved.set()  # wake up the game loop immediately
         button.disabled = True
         button.label = "Ending\u2026"
         await interaction.response.edit_message(view=self)
