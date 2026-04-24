@@ -38,6 +38,9 @@
             <!-- Stock Grid -->
             <div class="stock-grid" id="stock-grid"></div>
 
+            <!-- Analyst Picks (live) -->
+            <div id="analyst-picks" class="analyst-picks"></div>
+
             <!-- Portfolio -->
             <div class="portfolio-panel" id="portfolio-panel">
                 <div class="section-label">YOUR POSITIONS</div>
@@ -54,20 +57,18 @@
 
             <!-- Trade Panel -->
             <div class="trade-panel">
+                <div class="ticker-row">
+                    <button class="ticker-btn active" data-ticker="CHIP">💻 CHIP</button>
+                    <button class="ticker-btn" data-ticker="SOFT">📱 SOFT</button>
+                    <button class="ticker-btn" data-ticker="OIL">🛢️ OIL</button>
+                    <button class="ticker-btn" data-ticker="SOLAR">☀️ SOLAR</button>
+                </div>
                 <div class="trade-row">
-                    <select id="trade-ticker" class="trade-input">
-                        <option value="CHIP">💻 CHIP</option>
-                        <option value="SOFT">📱 SOFT</option>
-                        <option value="OIL">🛢️ OIL</option>
-                        <option value="SOLAR">☀️ SOLAR</option>
-                    </select>
                     <div class="qty-group">
                         <button class="qty-btn active" data-qty="1">×1</button>
                         <button class="qty-btn" data-qty="5">×5</button>
                         <button class="qty-btn" data-qty="10">×10</button>
                     </div>
-                </div>
-                <div class="trade-row">
                     <button id="buy-btn" class="trade-btn buy-btn">Buy</button>
                     <button id="sell-btn" class="trade-btn sell-btn">Sell</button>
                     <button id="short-btn" class="trade-btn short-btn">Short</button>

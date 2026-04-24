@@ -9,6 +9,7 @@ let myId = null;
 let isHost = false;
 let gamePhase = 'lobby';
 let selectedQty = 1;
+let selectedTicker = 'CHIP';
 
 // ── WebSocket ────────────────────────────────────────────────────────────
 
@@ -40,6 +41,7 @@ function handleMessage(msg) {
         case 'portfolio':       onPortfolio(msg); break;
         case 'tip':             onTip(msg); break;
         case 'trade_executed':  onTradeExecuted(msg); break;
+        case 'analyst_pick':    onAnalystPick(msg); break;
         case 'event_reveal':    onEventReveal(msg); break;
         case 'game_over':       onGameOver(msg); break;
         case 'error':           showToast(msg.message, 'error'); break;
@@ -95,6 +97,9 @@ function onRoundStart(msg) {
     document.getElementById('timer').textContent = msg.time_limit;
     document.getElementById('timer').classList.remove('urgent');
     document.getElementById('event-reveal').style.display = 'none';
+    // Clear analyst picks from previous round
+    const picks = document.getElementById('analyst-picks');
+    if (picks) picks.innerHTML = '';
     // Remove closed banner
     const banner = document.querySelector('.round-closed-banner');
     if (banner) banner.remove();
@@ -238,6 +243,21 @@ function onTradeExecuted(msg) {
     showToast(`${msg.player_name}: ${msg.action} ${msg.qty}× ${msg.ticker} @ ${msg.price}`, 'success');
 }
 
+function onAnalystPick(msg) {
+    // Show analyst picks as a prominent banner that stacks
+    const container = document.getElementById('analyst-picks');
+    if (!container) return;
+    const pick = document.createElement('div');
+    const isBuy = msg.pick.includes('BUY');
+    const isSell = msg.pick.includes('SELL');
+    const cls = isBuy ? 'pick-buy' : isSell ? 'pick-sell' : '';
+    pick.className = `analyst-pick-item ${cls}`;
+    pick.innerHTML = `<span class="pick-analyst">${msg.emoji} ${esc(msg.analyst)}</span><span class="pick-call">${esc(msg.pick)}</span><span class="pick-reason">${esc(msg.reason)}</span>`;
+    container.insertBefore(pick, container.firstChild);
+    // Keep max 4
+    while (container.children.length > 4) container.removeChild(container.lastChild);
+}
+
 // ── Event Reveal ──────────────────────────────────────────────────────────
 
 function onEventReveal(msg) {
@@ -356,6 +376,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('start-btn').addEventListener('click', () => send({ type: 'start' }));
 
+    // Ticker selector (4 buttons)
+    document.querySelectorAll('.ticker-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.ticker-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            selectedTicker = btn.dataset.ticker;
+        });
+    });
+
     // Quantity selector
     document.querySelectorAll('.qty-btn').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -366,28 +395,23 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     document.getElementById('buy-btn').addEventListener('click', () => {
-        const ticker = document.getElementById('trade-ticker').value;
-        send({ type: 'buy', ticker, qty: selectedQty });
+        send({ type: 'buy', ticker: selectedTicker, qty: selectedQty });
     });
 
     document.getElementById('sell-btn').addEventListener('click', () => {
-        const ticker = document.getElementById('trade-ticker').value;
-        send({ type: 'sell', ticker, qty: selectedQty });
+        send({ type: 'sell', ticker: selectedTicker, qty: selectedQty });
     });
 
     document.getElementById('short-btn').addEventListener('click', () => {
-        const ticker = document.getElementById('trade-ticker').value;
-        send({ type: 'short', ticker, qty: selectedQty });
+        send({ type: 'short', ticker: selectedTicker, qty: selectedQty });
     });
 
     document.getElementById('sell-all-btn').addEventListener('click', () => {
-        const ticker = document.getElementById('trade-ticker').value;
-        send({ type: 'sell_all', ticker });
+        send({ type: 'sell_all', ticker: selectedTicker });
     });
 
     document.getElementById('cover-btn').addEventListener('click', () => {
-        const ticker = document.getElementById('trade-ticker').value;
-        send({ type: 'cover', ticker });
+        send({ type: 'cover', ticker: selectedTicker });
     });
 
     document.getElementById('cancel-btn').addEventListener('click', () => {

@@ -22,7 +22,7 @@ ROUND_DELAY = 4
 
 # ── Constants ──────────────────────────────────────────────────────────────
 
-MIN_PLAYERS = 2
+MIN_PLAYERS = 1
 MAX_PLAYERS = 8
 NUM_ROUNDS = 8
 ROUND_SECONDS = 45
@@ -607,6 +607,98 @@ async def _run_npc_picks(room: TradingFloor) -> None:
 
         news_entry = f"[R{room.round_num}] {npc_emoji} {npc_name}: {pick} ({reason})"
         room.news_feed.insert(0, news_entry)
+        # Send as a distinct analyst_pick message so JS can show it prominently
+        await _broadcast(room, {
+            "type": "analyst_pick",
+            "analyst": npc_name,
+            "emoji": npc_emoji,
+            "pick": pick,
+            "reason": reason,
+        })
+        await _broadcast(room, _market_state_msg(room))
+
+
+async def _run_bot_trades(room: TradingFloor) -> None:
+    """Bot players trade during each round (only active in solo mode)."""
+    bot_players = [p for p in room.players.values() if p.discord_user.startswith("__bot_")]
+    if not bot_players:
+        return
+
+    num_actions = random.randint(4, 8)
+    interval = (ROUND_SECONDS - 6) / max(num_actions, 1)
+
+    for i in range(num_actions):
+        await asyncio.sleep(interval + random.uniform(-1, 1))
+        if not room.trade_open:
+            break
+
+        bot = random.choice(bot_players)
+        ticker = random.choice(TICKERS)
+        stock = room.stocks.get(ticker)
+        if not stock or stock.halted:
+            continue
+
+        # Bot strategy: mix of momentum + noise
+        if bot.discord_user == "__bot_1__":
+            # Trading Bot: momentum — buy winners, sell losers
+            if len(stock.history) >= 1:
+                move = stock.price - stock.history[-1]
+                if move > 1:
+                    action = "buy"
+                elif move < -1:
+                    action = "sell" if bot.positions.get(ticker, 0) > 0 else "short"
+                else:
+                    action = random.choice(["buy", "sell"])
+            else:
+                action = random.choice(["buy", "sell"])
+        else:
+            # Market Maker: mean reversion — buy cheap, sell expensive
+            if stock.price < 95:
+                action = "buy"
+            elif stock.price > 105 and bot.positions.get(ticker, 0) > 0:
+                action = "sell"
+            else:
+                action = random.choice(["buy", "sell", "buy"])  # slight buy bias
+
+        qty = random.randint(1, 4)
+        price = stock.price
+
+        # Execute the bot trade
+        if action == "buy":
+            cost = price * qty
+            if bot.cash < cost:
+                continue
+            bot.cash -= cost
+            bot.positions[ticker] = bot.positions.get(ticker, 0) + qty
+        elif action == "sell":
+            held = bot.positions.get(ticker, 0)
+            if held < qty:
+                qty = held
+            if qty <= 0:
+                continue
+            bot.cash += price * qty
+            bot.positions[ticker] = held - qty
+        elif action == "short":
+            if bot.positions.get(ticker, 0) - qty < -MAX_SHORT_PER_STOCK:
+                continue
+            bot.cash += price * qty
+            bot.positions[ticker] = bot.positions.get(ticker, 0) - qty
+
+        bot.trade_count += 1
+        direction = 1 if action == "buy" else -1
+        impact = MARKET_IMPACT_K * math.sqrt(qty) * direction
+        stock.price = round(max(1.0, stock.price + impact), 1)
+
+        trade = {
+            "player_id": bot.discord_user,
+            "player_name": bot.display_name,
+            "action": action,
+            "ticker": ticker,
+            "price": round(price, 1),
+            "qty": qty,
+        }
+        room.trades.append(trade)
+        await _broadcast(room, {"type": "trade_executed", **trade})
         await _broadcast(room, _market_state_msg(room))
 
 
@@ -672,6 +764,15 @@ async def _game_loop(room: TradingFloor) -> None:
         random.shuffle(deck)
         room.event_deck = deck[:NUM_ROUNDS]
 
+        # Add bot player if solo mode
+        if len(room.players) == 1:
+            for bot_id, bot_name in [("__bot_1__", "Trading Bot"), ("__bot_2__", "Market Maker")]:
+                room.players[bot_id] = TFPlayer(
+                    discord_user=bot_id,
+                    display_name=f"\U0001f916 {bot_name}",
+                    wager=0,  # bots don't wager
+                )
+
         # Reset players
         for p in room.players.values():
             p.cash = STARTING_CASH
@@ -702,8 +803,9 @@ async def _game_loop(room: TradingFloor) -> None:
             event = room.event_deck[rnd - 1]
             room.current_event = event
 
-            # Send tips to ALL players with varying confidence
-            all_tips = _generate_tips_for_all(event, list(room.players.keys()))
+            # Send tips to human players with varying confidence
+            human_ids = [uid for uid in room.players if not uid.startswith("__bot_")]
+            all_tips = _generate_tips_for_all(event, human_ids)
             for uid, (tip_text, confidence) in all_tips.items():
                 room.private_tips[uid] = tip_text
                 stars = "\u2b50" * confidence + "\u2606" * (5 - confidence)
@@ -724,8 +826,9 @@ async def _game_loop(room: TradingFloor) -> None:
             })
             await _broadcast(room, _market_state_msg(room))
 
-            # Run NPC analyst picks in background during the trading window
+            # Run NPC analyst picks + bot trades in background during the trading window
             npc_task = asyncio.create_task(_run_npc_picks(room))
+            bot_task = asyncio.create_task(_run_bot_trades(room))
 
             # Timer loop
             elapsed = 0
@@ -737,6 +840,7 @@ async def _game_loop(room: TradingFloor) -> None:
 
             room.trade_open = False
             npc_task.cancel()
+            bot_task.cancel()
             await _broadcast(room, {"type": "round_end", "round_num": rnd})
 
             # Settlement phase — apply noise + event (market impact is now real-time)
@@ -791,11 +895,14 @@ async def _end_game(room: TradingFloor) -> None:
 
     results = []
     for uid, player in room.players.items():
+        is_bot = uid.startswith("__bot_")
         payout = payouts.get(uid, 0)
-        if payout > 0:
+        if payout > 0 and not is_bot:
             await queries.update_casino_balance(uid, payout)
-        bal = await queries.get_casino_balance(uid) or 0
-        await queries.log_casino_result(uid, "tradingfloor", player.wager, payout)
+        bal = 0
+        if not is_bot:
+            bal = await queries.get_casino_balance(uid) or 0
+            await queries.log_casino_result(uid, "tradingfloor", player.wager, payout)
         pnl = round(player.cash - STARTING_CASH)
         results.append({
             "discord_user": uid,

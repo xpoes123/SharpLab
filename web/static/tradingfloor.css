@@ -129,6 +129,52 @@
 .stock-card .stock-book .bid { color: var(--green); }
 .stock-card .stock-book .ask { color: var(--red); }
 
+/* ── Analyst Picks ──────────────────────────────────────────────────────── */
+
+.analyst-picks {
+    margin-bottom: 10px;
+}
+
+.analyst-pick-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 4px;
+    font-size: 0.82rem;
+    animation: pickSlide 0.3s ease;
+}
+
+@keyframes pickSlide {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.analyst-pick-item.pick-buy { border-left: 3px solid var(--green); }
+.analyst-pick-item.pick-sell { border-left: 3px solid var(--red); }
+
+.pick-analyst {
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.pick-call {
+    font-weight: 700;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    white-space: nowrap;
+}
+
+.pick-buy .pick-call { color: var(--green); }
+.pick-sell .pick-call { color: var(--red); }
+
+.pick-reason {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+}
+
 /* ── Portfolio Panel ────────────────────────────────────────────────────── */
 
 .portfolio-panel {
@@ -167,6 +213,32 @@
 }
 
 .pnl-row:first-of-type { margin-top: 4px; }
+
+/* ── Ticker Selector ─────────────────────────────────────────────────────── */
+
+.ticker-row {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.ticker-btn {
+    flex: 1;
+    padding: 10px 8px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    font-family: inherit;
+    background: var(--card);
+    color: var(--text-muted);
+    border: 2px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: all 0.15s;
+    text-align: center;
+}
+
+.ticker-btn:hover { color: var(--text); border-color: var(--text-muted); }
+.ticker-btn.active { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
 
 /* ── Quantity Selector ───────────────────────────────────────────────────── */
 
