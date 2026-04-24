@@ -5,6 +5,7 @@ First to WINS_TO_WIN round wins wins!
 """
 
 import asyncio
+import logging
 import random
 import time
 import unicodedata
@@ -17,6 +18,8 @@ from discord.ext import commands
 from bot.cogs._elo_helpers import fmt_elo_change, update_elo_multiplayer
 from bot.cogs._landmarks import LANDMARKS, _LANDMARK_POOL
 from db.queries import record_geo_attempt, get_geo_stats_by_region, get_elo_rating
+
+log = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -1176,6 +1179,7 @@ class GeoTableView(ui.View):
         except asyncio.CancelledError:
             pass
         except Exception:
+            log.exception("_race_loop crashed for channel %s", table.channel_id)
             table.phase = "closed"
             self.active_tables.pop(table.channel_id, None)
 
