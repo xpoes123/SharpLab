@@ -28,6 +28,7 @@ if "db.queries" not in sys.modules:
 
 from bot.cogs.geography import (  # noqa: E402
     CAPITALS,
+    COUNTRY_ALIASES,
     COUNTRY_CODES,
     COUNTRY_REGIONS,
     US_STATE_CAPITALS,
@@ -35,6 +36,7 @@ from bot.cogs.geography import (  # noqa: E402
     GeoPlayer,
     GeoTable,
     GeoTableView,
+    _alias_answers,
     _normalize,
     check_answer,
 )
@@ -44,8 +46,10 @@ from bot.cogs._landmarks import LANDMARKS, _LANDMARK_POOL  # noqa: E402
 import pytest  # noqa: E402
 
 _normalize = geo._normalize
+_alias_answers = geo._alias_answers
 check_answer = geo.check_answer
 CAPITALS = geo.CAPITALS
+COUNTRY_ALIASES = geo.COUNTRY_ALIASES
 US_STATE_CAPITALS = geo.US_STATE_CAPITALS
 COUNTRY_CODES = geo.COUNTRY_CODES
 US_STATE_CODES = geo.US_STATE_CODES
@@ -113,6 +117,77 @@ class TestCheckAnswer:
         # "Sana'a" stripped to "sanaa"
         assert check_answer("Sanaa", ["Sanaa", "Sana'a"])
 
+
+
+# ── Country aliases ───────────────────────────────────────────────────────────
+
+class TestCountryAliases:
+    def test_usa_aliases(self):
+        answers = _alias_answers("United States")
+        assert check_answer("USA", answers)
+        assert check_answer("US", answers)
+        assert check_answer("United States of America", answers)
+        assert check_answer("America", answers)
+
+    def test_uk_aliases(self):
+        answers = _alias_answers("United Kingdom")
+        assert check_answer("UK", answers)
+        assert check_answer("Great Britain", answers)
+        assert check_answer("Britain", answers)
+        assert check_answer("England", answers)
+
+    def test_russia_aliases(self):
+        answers = _alias_answers("Russia")
+        assert check_answer("Russian Federation", answers)
+        assert check_answer("russia", answers)
+
+    def test_south_korea_aliases(self):
+        answers = _alias_answers("South Korea")
+        assert check_answer("Korea", answers)
+        assert check_answer("Republic of Korea", answers)
+        assert check_answer("ROK", answers)
+
+    def test_czech_republic_aliases(self):
+        answers = _alias_answers("Czech Republic")
+        assert check_answer("Czechia", answers)
+
+    def test_ivory_coast_aliases(self):
+        answers = _alias_answers("Ivory Coast")
+        assert check_answer("Cote d'Ivoire", answers)
+        assert check_answer("Côte d'Ivoire", answers)
+
+    def test_myanmar_aliases(self):
+        answers = _alias_answers("Myanmar")
+        assert check_answer("Burma", answers)
+
+    def test_uae_aliases(self):
+        answers = _alias_answers("United Arab Emirates")
+        assert check_answer("UAE", answers)
+
+    def test_canonical_always_first(self):
+        for canonical in COUNTRY_ALIASES:
+            answers = _alias_answers(canonical)
+            assert answers[0] == canonical, f"{canonical}: canonical not first in answers"
+
+    def test_alias_answers_canonical_always_accepted(self):
+        for canonical in COUNTRY_ALIASES:
+            answers = _alias_answers(canonical)
+            assert check_answer(canonical, answers), f"{canonical}: canonical not accepted"
+
+    def test_no_alias_country_returns_single_item(self):
+        # Country with no aliases should still return a one-item list
+        answers = _alias_answers("France")
+        assert answers == ["France"]
+
+    def test_wrong_country_not_accepted_via_alias(self):
+        answers = _alias_answers("United Kingdom")
+        assert not check_answer("Germany", answers)
+        assert not check_answer("France", answers)
+
+    def test_alias_case_insensitive(self):
+        answers = _alias_answers("United States")
+        assert check_answer("usa", answers)
+        assert check_answer("united states of america", answers)
 
 
 # ── Data completeness ─────────────────────────────────────────────────────────
@@ -193,7 +268,9 @@ class TestPickQuestion:
         q_type, subject, answers, image_url = view._pick_question()
         assert q_type == "country_flag"
         assert subject in COUNTRY_CODES
-        assert answers == [subject]
+        # canonical name is always first; may include aliases too
+        assert answers[0] == subject
+        assert subject in answers
         assert image_url is not None
         assert image_url.startswith("https://flagcdn.com/w320/")
         assert image_url.endswith(".png")
@@ -313,8 +390,8 @@ class TestLandmarks:
         assert q_type == "landmark"
         assert image_url is not None
         assert image_url.startswith("https")
-        # subject is the landmark name, answers is [country]
-        assert len(answers) == 1
+        # subject is the landmark name; answers[0] is the canonical country name
+        assert len(answers) >= 1
         assert answers[0] in COUNTRY_REGIONS
 
     def test_landmark_answer_matching(self):
