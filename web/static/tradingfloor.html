@@ -35,11 +35,23 @@
             <!-- Tip banner (hidden by default) -->
             <div id="tip-banner" class="tip-banner" style="display:none"></div>
 
+            <!-- Analyst Box (persistent, 2 analysts) -->
+            <div id="analyst-box" class="analyst-box">
+                <div class="analyst-slot" id="analyst-0">
+                    <div class="analyst-header">📺 <span class="analyst-name">Cramer</span> <span class="analyst-tag high-vol">HIGH VOL</span></div>
+                    <div class="analyst-call">—</div>
+                </div>
+                <div class="analyst-slot" id="analyst-1">
+                    <div class="analyst-header">🏛️ <span class="analyst-name">Pelosi</span> <span class="analyst-tag low-vol">LOW VOL</span></div>
+                    <div class="analyst-call">—</div>
+                </div>
+            </div>
+
             <!-- Stock Grid -->
             <div class="stock-grid" id="stock-grid"></div>
 
-            <!-- Analyst Picks (live) -->
-            <div id="analyst-picks" class="analyst-picks"></div>
+            <!-- Event Reveal (animates on stock cards) -->
+            <div id="event-reveal" class="event-reveal" style="display:none"></div>
 
             <!-- Portfolio -->
             <div class="portfolio-panel" id="portfolio-panel">
@@ -78,15 +90,6 @@
                     <button id="cover-btn" class="secondary-btn">Cover Short</button>
                     <button id="cancel-btn" class="secondary-btn">Cancel Orders</button>
                 </div>
-            </div>
-
-            <!-- Event Reveal -->
-            <div id="event-reveal" class="event-reveal" style="display:none"></div>
-
-            <!-- News Feed -->
-            <div class="news-feed">
-                <div class="section-label">NEWS FEED</div>
-                <div id="news-list" class="news-list"></div>
             </div>
 
             <!-- Recent Trades -->

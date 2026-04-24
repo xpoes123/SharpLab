@@ -533,89 +533,85 @@ def _generate_tips_for_all(event: dict, player_ids: list[str]) -> dict[str, tupl
 # ── NPC Analysts ───────────────────────────────────────────────────────────
 
 NPC_ANALYSTS = [
-    {"name": "Momentum Alpha", "style": "momentum", "emoji": "\U0001f4ca"},
-    {"name": "Value Capital", "style": "value", "emoji": "\U0001f3e6"},
-    {"name": "Degen Research", "style": "noise", "emoji": "\U0001f916"},
+    {"name": "Cramer", "style": "cramer"},
+    {"name": "Pelosi", "style": "pelosi"},
 ]
 
 
 async def _run_npc_picks(room: TradingFloor) -> None:
-    """NPC analysts post stock picks to the news feed during each round.
+    """2 NPC analysts each give a BUY and SELL pick once per round.
 
-    - Momentum Alpha: recommends stocks trending up, avoids stocks trending down
-    - Value Capital: recommends cheap stocks (mean reversion), sells expensive ones
-    - Degen Research: random picks (noise — sometimes right, often wrong)
+    Cramer (high vol): 50% chance his pick is correct, 50% it's inverted.
+    When right, he picks the biggest movers. When wrong, he's dead wrong.
+    High risk, high reward — following him is a coin flip but the payoff is big.
 
-    Players see these in the news feed and decide whether to follow them.
+    Pelosi (low vol): 80% chance her pick is correct, but she picks safer
+    stocks (closest to fair value / smallest moves). Low risk, consistent edge.
+
+    Both have the same expected value over many rounds, but different risk profiles.
     """
-    # 3-5 picks per round, staggered through the trading window
-    num_picks = random.randint(3, 5)
-    interval = (ROUND_SECONDS - 8) / num_picks
-
-    for i in range(num_picks):
-        await asyncio.sleep(interval + random.uniform(-2, 2))
+    # Stagger: Cramer at ~8s, Pelosi at ~22s
+    for idx, analyst in enumerate(NPC_ANALYSTS):
+        delay = 8 + idx * 14 + random.uniform(-2, 2)
+        await asyncio.sleep(delay)
         if not room.trade_open:
             break
 
-        analyst = random.choice(NPC_ANALYSTS)
         npc_name = analyst["name"]
-        npc_emoji = analyst["emoji"]
         style = analyst["style"]
 
-        if style == "momentum":
-            # Recommend the stock with the biggest recent uptrend
-            best_ticker, best_move = None, -999
-            for t, s in room.stocks.items():
-                if len(s.history) >= 1 and not s.halted:
-                    move = s.price - s.history[-1]
-                    if move > best_move:
-                        best_ticker, best_move = t, move
-            if not best_ticker:
-                continue
-            if best_move > 0:
-                pick = f"BUY {best_ticker}"
-                reason = f"momentum — up {best_move:+.1f}c"
-            else:
-                # Everything trending down — recommend selling the worst
-                worst_ticker = min(room.stocks, key=lambda t: room.stocks[t].price - (room.stocks[t].history[-1] if room.stocks[t].history else 100))
-                pick = f"SELL {worst_ticker}"
-                reason = "negative momentum across the board"
+        # Sort stocks by price change since last round
+        moves = {}
+        for t, s in room.stocks.items():
+            if s.history and not s.halted:
+                moves[t] = s.price - s.history[-1]
+        if len(moves) < 2:
+            continue
 
-        elif style == "value":
-            # Recommend the stock furthest below starting price (100)
-            cheapest = min(room.stocks, key=lambda t: room.stocks[t].price)
-            priciest = max(room.stocks, key=lambda t: room.stocks[t].price)
-            stock_c = room.stocks[cheapest]
-            stock_p = room.stocks[priciest]
-            if stock_c.price < 95:
-                pick = f"BUY {cheapest}"
-                reason = f"undervalued at {stock_c.price:.1f}c"
-            elif stock_p.price > 110:
-                pick = f"SELL {priciest}"
-                reason = f"overvalued at {stock_p.price:.1f}c"
+        sorted_by_move = sorted(moves.items(), key=lambda x: x[1])
+        # sorted_by_move[0] = worst performer, sorted_by_move[-1] = best performer
+
+        if style == "cramer":
+            # Cramer: goes for the biggest moves. 50% chance he's right.
+            is_right = random.random() < 0.50
+            if is_right:
+                # Correct: buy the winner, sell the loser
+                buy_ticker = sorted_by_move[-1][0]
+                sell_ticker = sorted_by_move[0][0]
+                buy_reason = f"this is going to the MOON"
+                sell_reason = f"SELL SELL SELL"
             else:
-                pick = f"HOLD"
-                reason = "fair value — no clear mispricing"
+                # Wrong: inverted — buy the loser, sell the winner
+                buy_ticker = sorted_by_move[0][0]
+                sell_ticker = sorted_by_move[-1][0]
+                buy_reason = f"buying the dip, trust me"
+                sell_reason = f"overextended, take profits"
 
         else:
-            # Noise — random pick, often wrong
-            ticker = random.choice(TICKERS)
-            action = random.choice(["BUY", "SELL", "STRONG BUY"])
-            pick = f"{action} {ticker}"
-            reasons = ["gut feeling", "chart looks good", "heard something", "vibes", "technical breakout", "oversold bounce"]
-            reason = random.choice(reasons)
+            # Pelosi: safer picks, closer to fundamentals. 80% correct.
+            is_right = random.random() < 0.80
+            # She picks the 2nd best/worst (not the extremes — safer)
+            mid_high = sorted_by_move[-2] if len(sorted_by_move) >= 3 else sorted_by_move[-1]
+            mid_low = sorted_by_move[1] if len(sorted_by_move) >= 3 else sorted_by_move[0]
+            if is_right:
+                buy_ticker = mid_high[0]
+                sell_ticker = mid_low[0]
+                buy_reason = f"steady growth, insider info"
+                sell_reason = f"quietly rotating out"
+            else:
+                buy_ticker = mid_low[0]
+                sell_ticker = mid_high[0]
+                buy_reason = f"undervalued opportunity"
+                sell_reason = f"taking profits early"
 
-        news_entry = f"[R{room.round_num}] {npc_emoji} {npc_name}: {pick} ({reason})"
-        room.news_feed.insert(0, news_entry)
-        # Send as a distinct analyst_pick message so JS can show it prominently
         await _broadcast(room, {
             "type": "analyst_pick",
             "analyst": npc_name,
-            "emoji": npc_emoji,
-            "pick": pick,
-            "reason": reason,
+            "buy_ticker": buy_ticker,
+            "buy_reason": buy_reason,
+            "sell_ticker": sell_ticker,
+            "sell_reason": sell_reason,
         })
-        await _broadcast(room, _market_state_msg(room))
 
 
 async def _run_bot_trades(room: TradingFloor) -> None:

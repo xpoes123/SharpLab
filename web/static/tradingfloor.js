@@ -10,6 +10,7 @@ let isHost = false;
 let gamePhase = 'lobby';
 let selectedQty = 1;
 let selectedTicker = 'CHIP';
+let lastStockPrices = {};  // for animating price changes
 
 // ── WebSocket ────────────────────────────────────────────────────────────
 
@@ -67,7 +68,7 @@ function onRoomState(msg) {
         list.innerHTML = '';
         msg.players.forEach(p => {
             const li = document.createElement('li');
-            const conn = p.connected ? '●' : '○';
+            const conn = p.connected ? '\u25cf' : '\u25cb';
             const cls = p.connected ? 'connected' : 'disconnected';
             li.innerHTML = `<span><span class="${cls}">${conn}</span> ${esc(p.name)}${p.is_host ? ' <span class="host-badge">HOST</span>' : ''}</span><span class="wager">${p.wager}c</span>`;
             list.appendChild(li);
@@ -84,9 +85,14 @@ function onRoomState(msg) {
 function onGameStart(msg) {
     showPhase('game');
     document.getElementById('my-cash').textContent = fmt(10000);
-    // Hide tip and event from previous
     document.getElementById('tip-banner').style.display = 'none';
     document.getElementById('event-reveal').style.display = 'none';
+    // Reset analyst slots
+    for (let i = 0; i < 2; i++) {
+        const slot = document.getElementById(`analyst-${i}`);
+        if (slot) slot.querySelector('.analyst-call').textContent = '\u2014';
+    }
+    lastStockPrices = {};
 }
 
 // ── Round Start/End ───────────────────────────────────────────────────────
@@ -97,12 +103,21 @@ function onRoundStart(msg) {
     document.getElementById('timer').textContent = msg.time_limit;
     document.getElementById('timer').classList.remove('urgent');
     document.getElementById('event-reveal').style.display = 'none';
-    // Clear analyst picks from previous round
-    const picks = document.getElementById('analyst-picks');
-    if (picks) picks.innerHTML = '';
+    // Reset analyst calls for new round
+    for (let i = 0; i < 2; i++) {
+        const slot = document.getElementById(`analyst-${i}`);
+        if (slot) {
+            slot.querySelector('.analyst-call').textContent = 'Analyzing...';
+            slot.className = 'analyst-slot';
+        }
+    }
     // Remove closed banner
     const banner = document.querySelector('.round-closed-banner');
     if (banner) banner.remove();
+    // Remove any price flash animations
+    document.querySelectorAll('.stock-card').forEach(c => {
+        c.classList.remove('flash-up', 'flash-down');
+    });
 }
 
 function onRoundEnd(msg) {
@@ -113,8 +128,8 @@ function onRoundEnd(msg) {
         const banner = document.createElement('div');
         banner.className = 'round-closed-banner';
         banner.textContent = msg.round_num < 8
-            ? 'Trading closed — settling round...'
-            : 'Trading closed — calculating final results...';
+            ? 'Trading closed \u2014 settling round...'
+            : 'Trading closed \u2014 calculating final results...';
         game.insertBefore(banner, game.querySelector('.trade-panel'));
     }
 }
@@ -128,36 +143,40 @@ function onTimer(msg) {
 // ── Market State ──────────────────────────────────────────────────────────
 
 function onMarketState(msg) {
-    renderStocks(msg.stocks);
+    renderStocks(msg.stocks, false);
     renderStandings(msg.standings);
-    renderNews(msg.news);
     renderRecentTrades(msg.recent_trades);
 }
 
-function renderStocks(stocks) {
+function renderStocks(stocks, animate) {
     const grid = document.getElementById('stock-grid');
     grid.innerHTML = '';
     for (const [ticker, s] of Object.entries(stocks)) {
         const card = document.createElement('div');
-        card.className = 'stock-card' + (s.halted ? ' halted' : '');
+        let extraClass = '';
+        if (s.halted) extraClass = ' halted';
+
+        // Flash animation on event reveal
+        if (animate && lastStockPrices[ticker] !== undefined) {
+            const diff = s.price - lastStockPrices[ticker];
+            if (diff > 0.5) extraClass += ' flash-up';
+            else if (diff < -0.5) extraClass += ' flash-down';
+        }
+
+        card.className = 'stock-card' + extraClass;
+        card.id = `stock-${ticker}`;
         const changeClass = s.change_pct > 0 ? 'positive' : s.change_pct < 0 ? 'negative' : '';
         const changeStr = s.change_pct > 0 ? `+${s.change_pct}%` : `${s.change_pct}%`;
-        let bookHtml = '';
-        if (s.best_bid != null || s.best_ask != null) {
-            const bid = s.best_bid != null ? s.best_bid : '-';
-            const ask = s.best_ask != null ? s.best_ask : '-';
-            bookHtml = `<div class="stock-book"><span class="bid">${bid}</span> / <span class="ask">${ask}</span></div>`;
-        }
         card.innerHTML = `
             <div class="stock-emoji">${s.emoji}</div>
             <div class="stock-ticker">${ticker}</div>
             <div class="stock-price">${s.price.toFixed(1)}</div>
             <div class="stock-change ${changeClass}">${changeStr}</div>
             <div class="stock-sparkline">${s.sparkline || ''}</div>
-            ${bookHtml}
             ${s.halted ? '<div style="color:var(--red);font-size:0.7rem;font-weight:600">HALTED</div>' : ''}
         `;
         grid.appendChild(card);
+        lastStockPrices[ticker] = s.price;
     }
 }
 
@@ -175,24 +194,13 @@ function renderStandings(standings) {
     });
 }
 
-function renderNews(news) {
-    const list = document.getElementById('news-list');
-    list.innerHTML = '';
-    (news || []).forEach(n => {
-        const item = document.createElement('div');
-        item.className = 'news-item';
-        item.textContent = n;
-        list.appendChild(item);
-    });
-}
-
 function renderRecentTrades(trades) {
     const list = document.getElementById('trade-log-list');
     list.innerHTML = '';
     (trades || []).slice(-8).reverse().forEach(t => {
         const entry = document.createElement('div');
         entry.className = 'trade-entry';
-        entry.innerHTML = `<span><span class="trade-action ${t.action}">${t.action.toUpperCase()}</span> ${t.ticker} ×${t.qty} by ${esc(t.player)}</span><span class="trade-price">${t.price}</span>`;
+        entry.innerHTML = `<span><span class="trade-action ${t.action}">${t.action.toUpperCase()}</span> ${t.ticker} \u00d7${t.qty} by ${esc(t.player)}</span><span class="trade-price">${t.price}</span>`;
         list.appendChild(entry);
     });
 }
@@ -218,7 +226,7 @@ function onPortfolio(msg) {
             const label = p.qty < 0 ? `SHORT ${Math.abs(p.qty)}` : `LONG ${p.qty}`;
             const pnlClass = p.pnl > 0 ? 'positive' : p.pnl < 0 ? 'negative' : '';
             const pnlStr = p.pnl > 0 ? `+${fmt(p.pnl)}` : fmt(p.pnl);
-            row.innerHTML = `<span class="pos-ticker">${p.emoji} ${p.ticker}</span><span class="pos-qty">${label} @ ${p.avg_entry} → ${p.price} <span class="${pnlClass}">(${pnlStr}c)</span></span>`;
+            row.innerHTML = `<span class="pos-ticker">${p.emoji} ${p.ticker}</span><span class="pos-qty">${label} @ ${p.avg_entry} \u2192 ${p.price} <span class="${pnlClass}">(${pnlStr}c)</span></span>`;
             posList.appendChild(row);
         });
     }
@@ -229,36 +237,43 @@ function onPortfolio(msg) {
 function onTip(msg) {
     const banner = document.getElementById('tip-banner');
     banner.style.display = 'block';
-    const stars = msg.stars || '⭐⭐⭐';
+    const stars = msg.stars || '\u2b50\u2b50\u2b50';
     const conf = msg.confidence || 3;
     const confLabel = conf >= 4 ? 'High confidence' : conf >= 3 ? 'Medium confidence' : 'Low confidence';
-    banner.innerHTML = `<div class="tip-label">🔒 Insider Tip — Round ${msg.round} — ${stars} ${confLabel}</div>${esc(msg.text)}`;
-    // Auto-hide after 35s
+    banner.innerHTML = `<div class="tip-label">\ud83d\udd12 Insider Tip \u2014 Round ${msg.round} \u2014 ${stars} ${confLabel}</div>${esc(msg.text)}`;
     setTimeout(() => { banner.style.display = 'none'; }, 35000);
 }
 
 // ── Trade Executed ────────────────────────────────────────────────────────
 
 function onTradeExecuted(msg) {
-    showToast(`${msg.player_name}: ${msg.action} ${msg.qty}× ${msg.ticker} @ ${msg.price}`, 'success');
+    showToast(`${msg.player_name}: ${msg.action} ${msg.qty}\u00d7 ${msg.ticker} @ ${msg.price}`, 'success');
 }
+
+// ── Analyst Picks (2 persistent slots) ───────────────────────────────────
+
+const analystSlotMap = {
+    'Cramer': 0,
+    'Pelosi': 1,
+};
 
 function onAnalystPick(msg) {
-    // Show analyst picks as a prominent banner that stacks
-    const container = document.getElementById('analyst-picks');
-    if (!container) return;
-    const pick = document.createElement('div');
-    const isBuy = msg.pick.includes('BUY');
-    const isSell = msg.pick.includes('SELL');
-    const cls = isBuy ? 'pick-buy' : isSell ? 'pick-sell' : '';
-    pick.className = `analyst-pick-item ${cls}`;
-    pick.innerHTML = `<span class="pick-analyst">${msg.emoji} ${esc(msg.analyst)}</span><span class="pick-call">${esc(msg.pick)}</span><span class="pick-reason">${esc(msg.reason)}</span>`;
-    container.insertBefore(pick, container.firstChild);
-    // Keep max 4
-    while (container.children.length > 4) container.removeChild(container.lastChild);
+    const slotIdx = analystSlotMap[msg.analyst];
+    if (slotIdx === undefined) return;
+    const slot = document.getElementById(`analyst-${slotIdx}`);
+    if (!slot) return;
+
+    const callEl = slot.querySelector('.analyst-call');
+    callEl.innerHTML = `
+        <div class="pick-row"><span class="pick-tag buy">BUY</span><span class="pick-ticker">${esc(msg.buy_ticker)}</span><span class="pick-reason">${esc(msg.buy_reason)}</span></div>
+        <div class="pick-row"><span class="pick-tag sell">SELL</span><span class="pick-ticker">${esc(msg.sell_ticker)}</span><span class="pick-reason">${esc(msg.sell_reason)}</span></div>
+    `;
+
+    slot.classList.add('pick-flash');
+    setTimeout(() => slot.classList.remove('pick-flash'), 600);
 }
 
-// ── Event Reveal ──────────────────────────────────────────────────────────
+// ── Event Reveal (animate on stock cards) ────────────────────────────────
 
 function onEventReveal(msg) {
     const el = document.getElementById('event-reveal');
@@ -277,8 +292,18 @@ function onEventReveal(msg) {
         <div class="event-desc">${esc(evt.desc)}</div>
         <div class="event-effects">${effectsHtml}</div>
     `;
-    // Hide tip banner now that event is revealed
     document.getElementById('tip-banner').style.display = 'none';
+
+    // Re-render stocks with animation (the market_state that follows will have new prices)
+    // We trigger the flash by setting animate=true on the next market_state render
+    // Override the next onMarketState to use animate
+    const origHandler = onMarketState;
+    onMarketState = function(m) {
+        renderStocks(m.stocks, true);
+        renderStandings(m.standings);
+        renderRecentTrades(m.recent_trades);
+        onMarketState = origHandler; // restore
+    };
 }
 
 // ── Game Over ─────────────────────────────────────────────────────────────
@@ -286,7 +311,6 @@ function onEventReveal(msg) {
 function onGameOver(msg) {
     showPhase('results');
 
-    // Stock performance cards
     const stockResults = document.getElementById('stock-results');
     stockResults.innerHTML = '';
     for (const [ticker, s] of Object.entries(msg.stocks)) {
@@ -294,7 +318,6 @@ function onGameOver(msg) {
         card.className = 'stock-result-card';
         const retClass = s.return > 0 ? 'positive' : s.return < 0 ? 'negative' : '';
         const retStr = s.return > 0 ? `+${s.return}%` : `${s.return}%`;
-        // Build sparkline from history
         const spark = sparkline(s.history);
         card.innerHTML = `
             <div>${s.emoji}</div>
@@ -306,10 +329,9 @@ function onGameOver(msg) {
         stockResults.appendChild(card);
     }
 
-    // Results table
     const tbody = document.getElementById('results-body');
     tbody.innerHTML = '';
-    const medals = ['🥇', '🥈', '🥉'];
+    const medals = ['\ud83e\udd47', '\ud83e\udd48', '\ud83e\udd49'];
     msg.results.forEach((r, i) => {
         const tr = document.createElement('tr');
         const badge = i < 3 ? medals[i] : (i + 1);
@@ -342,7 +364,7 @@ function fmt(n) {
 
 function sparkline(history) {
     if (!history || history.length < 2) return '';
-    const chars = '▁▂▃▄▅▆▇█';
+    const chars = '\u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588';
     const lo = Math.min(...history);
     const hi = Math.max(...history);
     const rng = hi - lo;

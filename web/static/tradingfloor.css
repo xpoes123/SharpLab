@@ -129,50 +129,120 @@
 .stock-card .stock-book .bid { color: var(--green); }
 .stock-card .stock-book .ask { color: var(--red); }
 
-/* ── Analyst Picks ──────────────────────────────────────────────────────── */
+/* ── Analyst Box (persistent, 2 slots) ──────────────────────────────────── */
 
-.analyst-picks {
-    margin-bottom: 10px;
+.analyst-box {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 12px;
 }
 
-.analyst-pick-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
+.analyst-slot {
     background: var(--card);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    margin-bottom: 4px;
-    font-size: 0.82rem;
-    animation: pickSlide 0.3s ease;
+    padding: 10px 14px;
+    transition: border-color 0.3s, background 0.3s;
 }
 
-@keyframes pickSlide {
-    from { opacity: 0; transform: translateY(-8px); }
-    to { opacity: 1; transform: translateY(0); }
+.analyst-slot.pick-flash {
+    animation: analystFlash 0.6s ease;
 }
 
-.analyst-pick-item.pick-buy { border-left: 3px solid var(--green); }
-.analyst-pick-item.pick-sell { border-left: 3px solid var(--red); }
-
-.pick-analyst {
-    font-weight: 600;
-    white-space: nowrap;
+@keyframes analystFlash {
+    0% { background: var(--card); }
+    30% { background: var(--accent-dim); }
+    100% { background: var(--card); }
 }
 
-.pick-call {
+.analyst-header {
+    font-size: 0.75rem;
     font-weight: 700;
-    font-family: 'SF Mono', 'Cascadia Code', monospace;
-    white-space: nowrap;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
 
-.pick-buy .pick-call { color: var(--green); }
-.pick-sell .pick-call { color: var(--red); }
+.analyst-tag {
+    font-size: 0.6rem;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+}
+
+.analyst-tag.high-vol {
+    background: rgba(248, 81, 73, 0.2);
+    color: var(--red);
+}
+
+.analyst-tag.low-vol {
+    background: rgba(63, 185, 80, 0.2);
+    color: var(--green);
+}
+
+.analyst-call {
+    font-size: 0.85rem;
+    min-height: 36px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.pick-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.pick-tag {
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+}
+
+.pick-tag.buy { background: var(--green); color: var(--bg); }
+.pick-tag.sell { background: var(--red); color: white; }
+
+.pick-ticker {
+    font-weight: 600;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    font-size: 0.85rem;
+}
 
 .pick-reason {
     color: var(--text-muted);
-    font-size: 0.78rem;
+    font-size: 0.72rem;
+    margin-left: auto;
+}
+
+/* ── Stock Price Flash Animations ───────────────────────────────────────── */
+
+.stock-card.flash-up {
+    animation: priceFlashUp 1.2s ease;
+}
+
+.stock-card.flash-down {
+    animation: priceFlashDown 1.2s ease;
+}
+
+@keyframes priceFlashUp {
+    0% { background: var(--card); }
+    20% { background: rgba(63, 185, 80, 0.25); border-color: var(--green); }
+    100% { background: var(--card); }
+}
+
+@keyframes priceFlashDown {
+    0% { background: var(--card); }
+    20% { background: rgba(248, 81, 73, 0.25); border-color: var(--red); }
+    100% { background: var(--card); }
 }
 
 /* ── Portfolio Panel ────────────────────────────────────────────────────── */
