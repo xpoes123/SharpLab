@@ -208,13 +208,11 @@ def _normalize(s: str) -> str:
 
 
 def _accepted_names(entry: tuple) -> list[str]:
-    """Build accepted answer list from entry (name + alt_names)."""
-    if len(entry) == 6:
-        # Agent or Weapon: (id, name, alts, ...)
-        _, name, alts, *_ = entry
-    else:
-        # Map: (id, name, alts, ...)
-        _, name, alts, *_ = entry
+    """Build accepted answer list from entry (name + alt_names).
+
+    Entry format after _pick_entry: (entry_type, id, name, alts, ...).
+    """
+    _type, _id, name, alts, *_ = entry
     return [name] + list(alts)
 
 
