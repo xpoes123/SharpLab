@@ -235,6 +235,8 @@ class SprintTable:
     phase: str = "betting"  # betting | playing | between | closed
     players: dict[int, SprintPlayer] = field(default_factory=dict)
     message: discord.Message | None = None
+    thread: discord.Thread | None = None
+    current_thread_msg: discord.Message | None = None
     round_num: int = 0
     problem: Problem | None = None
     round_start: float = 0.0
@@ -305,7 +307,7 @@ def _playing_embed(table: SprintTable, remaining: int | None = None) -> discord.
     embed.description = (
         f"### {prob.emoji} {prob.category}\n"
         f"# {prob.display}\n\n"
-        "Click **Answer** to submit!"
+        "Type your answer in this thread!"
     )
     embed.add_field(name="\u23f1\ufe0f Time", value=f"**{secs}s**", inline=True)
     pot = sum(p.bet for p in table.players.values())
@@ -446,74 +448,6 @@ class JoinSprintModal(ui.Modal):
         await interaction.response.edit_message(embed=_betting_embed(self.table), view=self.table_view)
 
 
-class AnswerModal(ui.Modal):
-    answer = ui.TextInput(
-        label="Your answer",
-        placeholder="Enter a number",
-        required=True,
-        max_length=20,
-        style=discord.TextStyle.short,
-    )
-
-    def __init__(self, table: SprintTable, view: "SprintTableView") -> None:
-        super().__init__(title="Math Sprint \u2014 Answer")
-        self.table = table
-        self.table_view = view
-        if table.problem:
-            self.answer.label = table.problem.display
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        uid = interaction.user.id
-        if uid not in self.table.players:
-            await interaction.response.send_message("You're not in this game!", ephemeral=True)
-            return
-        if self.table.phase != "playing":
-            await interaction.response.send_message("No problem active!", ephemeral=True)
-            return
-        if uid in self.table.solved_players:
-            await interaction.response.send_message("You already solved this one!", ephemeral=True)
-            return
-        if self.table.problem is None:
-            await interaction.response.send_message("No problem active!", ephemeral=True)
-            return
-
-        raw = self.answer.value.strip()
-        if check_answer(raw, self.table.problem.answer):
-            now = time.monotonic()
-            player = self.table.players[uid]
-            player.solved_this_round = True
-            player.answer_time = now
-            solve_time = now - self.table.round_start
-            player.total_time += solve_time
-
-            if self.table.round_winner is None:
-                self.table.round_winner = uid
-                player.points += 1
-
-            self.table.solved_players.add(uid)
-
-            if len(self.table.solved_players) >= len(self.table.players):
-                self.table.round_solved.set()
-
-            await interaction.response.send_message(
-                f"\u2705 Correct! ({solve_time:.1f}s)", ephemeral=True,
-            )
-
-            if self.table.message:
-                remaining = max(0, int(self.table.round_start + ROUND_SECONDS - time.monotonic()))
-                try:
-                    await self.table.message.edit(
-                        embed=_playing_embed(self.table, remaining=remaining),
-                        view=self.table_view,
-                    )
-                except discord.HTTPException:
-                    pass
-        else:
-            await interaction.response.send_message(
-                f"\u274c Wrong! `{raw}` is not correct. Try again!", ephemeral=True,
-            )
-
-
 # ── View ─────────────────────────────────────────────────────────────────────
 
 
@@ -527,15 +461,13 @@ class SprintTableView(ui.View):
     def _update_buttons(self) -> None:
         phase = self.table.phase
         betting = phase == "betting"
-        playing = phase == "playing"
-        racing = playing or phase == "between"
+        racing = phase in ("playing", "between")
 
         self.start_btn.disabled = not betting or len(self.table.players) < MIN_PLAYERS
         self.join_btn.disabled = not betting
         self.rebet_btn.disabled = not betting or not self.table.last_bets
         self.leave_btn.disabled = not betting
 
-        self.answer_btn.disabled = not playing
         self.close_btn.disabled = racing
 
     # ── Row 0: Betting ───────────────────────────────────────────────────
@@ -614,20 +546,6 @@ class SprintTableView(ui.View):
 
     # ── Row 1: Game controls ─────────────────────────────────────────────
 
-    @ui.button(label="Answer", style=discord.ButtonStyle.success, emoji="\u270d\ufe0f", row=1)
-    async def answer_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        if self.table.phase != "playing":
-            await interaction.response.send_message("No problem active!", ephemeral=True)
-            return
-        uid = interaction.user.id
-        if uid not in self.table.players:
-            await interaction.response.send_message("You're not in this game!", ephemeral=True)
-            return
-        if uid in self.table.solved_players:
-            await interaction.response.send_message("You already solved this one!", ephemeral=True)
-            return
-        await interaction.response.send_modal(AnswerModal(self.table, self))
-
     @ui.button(label="Close Table", style=discord.ButtonStyle.danger, emoji="\u2716\ufe0f", row=1)
     async def close_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
         if interaction.user.id != self.table.host_id:
@@ -651,14 +569,31 @@ class SprintTableView(ui.View):
         table.round_solved.clear()
         table.solved_players.clear()
         table.phase = "playing"
-        table.round_start = time.monotonic()
 
         for p in table.players.values():
             p.solved_this_round = False
             p.answer_time = None
 
         self._update_buttons()
-        await interaction.response.edit_message(embed=_playing_embed(table), view=self)
+
+        in_progress_embed = discord.Embed(
+            title="\U0001f9e0 Math Sprint \u2014 In Progress",
+            description="Game running! Check the thread below for problems.",
+            colour=discord.Colour.gold(),
+        )
+        in_progress_embed.set_footer(text=f"Host: {table.host_name}")
+        await interaction.response.edit_message(embed=in_progress_embed, view=self)
+
+        # Create thread from the lobby message, then start the clock
+        if table.message:
+            thread = await table.message.create_thread(name="Math Sprint")
+            table.thread = thread
+            await thread.send(
+                f"\U0001f9e0 **Math Sprint started!** Type your answer directly here. "
+                f"**{ROUND_SECONDS}s** per problem \u2014 fastest correct answer wins the point!"
+            )
+
+        table.round_start = time.monotonic()
         table.race_task = asyncio.create_task(self._sprint_loop())
 
     async def _wait_for_solve_or_timeout(self) -> bool:
@@ -677,10 +612,10 @@ class SprintTableView(ui.View):
                 if table.round_winner is not None:
                     return True
                 secs_left = max(0, int(deadline - time.monotonic()))
-                if secs_left > 0 and table.message:
+                if secs_left > 0 and table.current_thread_msg:
                     try:
-                        await table.message.edit(
-                            embed=_playing_embed(table, remaining=secs_left), view=self,
+                        await table.current_thread_msg.edit(
+                            embed=_playing_embed(table, remaining=secs_left),
                         )
                     except discord.HTTPException:
                         pass
@@ -702,25 +637,28 @@ class SprintTableView(ui.View):
                     for p in table.players.values():
                         p.solved_this_round = False
                         p.answer_time = None
-                    self._update_buttons()
-                    if table.message:
-                        try:
-                            await table.message.edit(embed=_playing_embed(table), view=self)
-                        except discord.HTTPException:
-                            pass
+
+                # Post problem to thread
+                if table.thread:
+                    try:
+                        table.current_thread_msg = await table.thread.send(
+                            embed=_playing_embed(table),
+                        )
+                    except discord.HTTPException:
+                        pass
 
                 solved = await self._wait_for_solve_or_timeout()
 
                 if solved and table.round_winner is not None:
-                    if table.message:
+                    if table.current_thread_msg:
                         try:
-                            await table.message.edit(embed=_round_result_embed(table), view=self)
+                            await table.current_thread_msg.edit(embed=_round_result_embed(table))
                         except discord.HTTPException:
                             pass
                 else:
-                    if table.message:
+                    if table.current_thread_msg:
                         try:
-                            await table.message.edit(embed=_timeout_embed(table), view=self)
+                            await table.current_thread_msg.edit(embed=_timeout_embed(table))
                         except discord.HTTPException:
                             pass
 
@@ -728,7 +666,6 @@ class SprintTableView(ui.View):
                     break
 
                 table.phase = "between"
-                self._update_buttons()
                 await asyncio.sleep(ROUND_DELAY)
 
             await self._end_game()
@@ -776,7 +713,7 @@ class SprintTableView(ui.View):
         payouts, balances = await self._compute_and_apply_payouts()
 
         if len(table.players) >= 2:
-            sorted_p = sorted(table.players.values(), key=lambda p: p.rounds_won, reverse=True)
+            sorted_p = sorted(table.players.values(), key=lambda p: (-p.points, p.total_time))
             finish_order = [p.user_id for p in sorted_p]
             try:
                 await update_elo_multiplayer(finish_order, "mathsprint", "mathsprint")
@@ -784,6 +721,18 @@ class SprintTableView(ui.View):
                 pass
 
         embed = _final_embed(table, payouts=payouts, balances=balances)
+
+        # Post final results to thread and archive it
+        if table.thread:
+            try:
+                await table.thread.send(embed=embed)
+            except discord.HTTPException:
+                pass
+            try:
+                await table.thread.edit(archived=True)
+            except discord.HTTPException:
+                pass
+
         for child in self.children:
             child.disabled = True  # type: ignore[union-attr]
         self.stop()
@@ -817,6 +766,17 @@ class SprintTableView(ui.View):
         table.phase = "closed"
         payouts, balances = await self._compute_and_apply_payouts()
         embed = _final_embed(table, payouts=payouts, balances=balances)
+
+        if table.thread:
+            try:
+                await table.thread.send(embed=embed)
+            except discord.HTTPException:
+                pass
+            try:
+                await table.thread.edit(archived=True)
+            except discord.HTTPException:
+                pass
+
         for child in self.children:
             child.disabled = True  # type: ignore[union-attr]
         self.stop()
@@ -857,6 +817,77 @@ class MathSprintCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.active_tables: dict[int, SprintTable] = {}
+
+    @commands.Cog.listener("on_message")
+    async def on_message(self, message: discord.Message) -> None:
+        """Listen for typed answers in Math Sprint threads."""
+        if message.author.bot:
+            return
+
+        # Find the table whose thread matches this channel
+        table: SprintTable | None = None
+        for t in self.active_tables.values():
+            if t.thread and t.thread.id == message.channel.id:
+                table = t
+                break
+
+        if table is None:
+            return
+
+        if table.phase != "playing":
+            return
+
+        uid = message.author.id
+        if uid not in table.players:
+            return
+
+        if uid in table.solved_players:
+            return
+
+        if table.problem is None:
+            return
+
+        # Snapshot mutable state before processing (no awaits before state write,
+        # but guard against concurrent messages resolving the same round)
+        captured_problem = table.problem
+        captured_round_num = table.round_num
+
+        raw = message.content.strip()
+        if not raw:
+            return
+
+        if check_answer(raw, captured_problem.answer):
+            # Re-validate: problem may have advanced between the phase check and now
+            if table.round_num != captured_round_num or table.problem is not captured_problem:
+                return
+            if uid in table.solved_players:
+                return
+
+            now = time.monotonic()
+            player = table.players[uid]
+            player.solved_this_round = True
+            player.answer_time = now
+            solve_time = now - table.round_start
+            player.total_time += solve_time
+
+            if table.round_winner is None:
+                table.round_winner = uid
+                player.points += 1
+
+            table.solved_players.add(uid)
+
+            try:
+                await message.add_reaction("\u2705")
+            except discord.HTTPException:
+                pass
+
+            if len(table.solved_players) >= len(table.players):
+                table.round_solved.set()
+        else:
+            try:
+                await message.add_reaction("\u274c")
+            except discord.HTTPException:
+                pass
 
     @app_commands.command(name="mathsprint", description="Mental Math Sprint \u2014 10 rapid-fire problems, fastest wins!")
     async def mathsprint(self, interaction: discord.Interaction) -> None:
