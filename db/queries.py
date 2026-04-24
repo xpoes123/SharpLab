@@ -2277,3 +2277,24 @@ async def get_recently_resolved_markets(hours: int = 24) -> list[dict]:
         )
         rows = await cursor.fetchall()
     return [dict(r) for r in rows]
+
+
+# ── Discord User Cache (for web leaderboard) ────────────────────────────────
+
+
+async def upsert_discord_user(
+    discord_user: str, username: str, avatar_url: str | None,
+) -> None:
+    """Cache a Discord user's display name and avatar for the web leaderboard."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO discord_users (discord_user, username, avatar_url, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(discord_user) DO UPDATE SET
+                   username = excluded.username,
+                   avatar_url = excluded.avatar_url,
+                   updated_at = excluded.updated_at""",
+            (discord_user, username, avatar_url, now_iso),
+        )
+        await db.commit()

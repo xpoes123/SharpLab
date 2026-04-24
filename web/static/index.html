@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SharpLab Leaderboard</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>SharpLab</h1>
+            <p>Casino &amp; Trading Leaderboard</p>
+        </header>
+
+        <div class="tabs" id="leaderboard-tabs">
+            <button class="tab active" data-tab="casino">Casino</button>
+            <button class="tab" data-tab="per-game">Per Game</button>
+            <button class="tab" data-tab="trading">Trading</button>
+        </div>
+
+        <div id="casino" class="tab-content active">
+            <div id="casino-table"></div>
+        </div>
+
+        <div id="per-game" class="tab-content">
+            <div class="game-filter">
+                <select id="game-select">
+                    <option value="" disabled selected>Select a game...</option>
+                </select>
+            </div>
+            <div id="game-table"></div>
+        </div>
+
+        <div id="trading" class="tab-content">
+            <div id="trading-table"></div>
+        </div>
+    </div>
+    <script src="/app.js"></script>
+</body>
+</html>

@@ -61,6 +61,10 @@ resolve sport="nba":
 bot:
     uv run python -m bot.main
 
+# Start the web leaderboard API (dev mode with auto-reload)
+web:
+    uv run uvicorn web.api:app --host 127.0.0.1 --port 8000 --reload
+
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
 # Run unit tests (fast, no Temporal server needed)

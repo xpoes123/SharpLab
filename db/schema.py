@@ -202,6 +202,13 @@ CREATE TABLE IF NOT EXISTS market_orders (
     placed_at      TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_market_orders_market ON market_orders(market_id, outcome_id, status);
+
+CREATE TABLE IF NOT EXISTS discord_users (
+    discord_user TEXT PRIMARY KEY,
+    username     TEXT NOT NULL,
+    avatar_url   TEXT,
+    updated_at   TEXT NOT NULL
+);
 """
 
 
@@ -240,6 +247,16 @@ async def init_db() -> None:
             await db.execute(
                 "CREATE TABLE IF NOT EXISTS user_settings "
                 "(discord_user TEXT PRIMARY KEY, craps_default_bet INTEGER)"
+            )
+            await db.commit()
+        except Exception:
+            pass
+        # Migration: add discord_users cache table for web leaderboard
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS discord_users "
+                "(discord_user TEXT PRIMARY KEY, username TEXT NOT NULL, "
+                "avatar_url TEXT, updated_at TEXT NOT NULL)"
             )
             await db.commit()
         except Exception:

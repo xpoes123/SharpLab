@@ -123,9 +123,11 @@ class ProgressionCog(commands.Cog):
 
     async def cog_load(self) -> None:
         self.check_achievements.start()
+        self.sync_discord_users.start()
 
     async def cog_unload(self) -> None:
         self.check_achievements.cancel()
+        self.sync_discord_users.cancel()
 
     # ── /player ──────────────────────────────────────────────────────────────
 
@@ -299,6 +301,39 @@ class ProgressionCog(commands.Cog):
             colour=_level_color(level),
         )
         await interaction.response.send_message(embed=embed)
+
+    # ── Background username sync (for web leaderboard) ──────────────────────
+
+    @tasks.loop(minutes=30)
+    async def sync_discord_users(self) -> None:
+        """Populate discord_users cache for the web leaderboard."""
+        from db.schema import DB_PATH
+        import aiosqlite
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            cursor = await db.execute(
+                """SELECT DISTINCT discord_user FROM (
+                    SELECT discord_user FROM casino_wallets
+                    UNION
+                    SELECT discord_user FROM user_xp
+                    UNION
+                    SELECT discord_user FROM paper_bets
+                )"""
+            )
+            all_users = [row[0] for row in await cursor.fetchall()]
+
+        for uid in all_users:
+            try:
+                user = await self.bot.fetch_user(int(uid))
+                await queries.upsert_discord_user(
+                    uid, user.display_name, str(user.display_avatar.url),
+                )
+            except Exception:
+                pass  # deleted account or API error
+
+    @sync_discord_users.before_loop
+    async def before_sync(self) -> None:
+        await self.bot.wait_until_ready()
 
     # ── Background achievement checker ───────────────────────────────────────
 
