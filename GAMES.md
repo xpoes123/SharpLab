@@ -2,6 +2,10 @@
 
 Practices and registration steps for adding a new casino game to SharpLab.
 
+Two skills exist:
+- `/new-game` — Discord-only games (buttons, modals, chat-based input)
+- `/new-web-game` — browser-based games (interactive grid, real-time WebSocket)
+
 ---
 
 ## 1. Registration (4 places to update)
@@ -133,7 +137,207 @@ The standard pattern: `active_tables: dict[int, Table]` keyed by `channel_id`. O
 
 ---
 
-## 8. Testing
+## 8. ELO integration (skill-based games only)
+
+If the game involves skill (not pure luck like roulette/slots), add ELO tracking:
+
+### a. Choose an `elo_key`
+
+A unique lowercase string (e.g. `"connect4"`, `"hex"`, `"wordle"`). Used as the DB key.
+
+### b. Import helpers
+
+```python
+from bot.cogs._elo_helpers import update_elo_multiplayer, update_elo_1v1, fmt_elo_change
+```
+
+- **Party games**: `update_elo_multiplayer(finish_order, game_key, context)` — `finish_order` is a list of user IDs from 1st to last place.
+- **Duo games**: `update_elo_1v1(winner_id, loser_id, game_key, context)` — returns `(w_old, w_new, l_old, l_new)`.
+- **Draws**: `update_elo_draw(p1_id, p2_id, game_key, context)`.
+
+### c. Register the label
+
+Add to `ELO_GAME_LABELS` in `bot/cogs/_elo_helpers.py`:
+
+```python
+"your_elo_key": "Display Name",
+```
+
+### d. Display in results
+
+Show ELO changes in the results embed:
+
+```python
+elo_text = fmt_elo_change(old_rating, new_rating)  # "1000 → 1016 (+16)"
+```
+
+### e. ELO system details
+
+- Start: 1000, floor: 100
+- K-factor: 32 (provisional, <10 games), 24 (developing, <30), 16 (established)
+- Multiplayer: pairwise comparison, delta normalized by (N-1)
+- ELO is updated per game, not per session — a 3-game duel produces 3 ELO updates
+- Free (wager=0) games still update ELO
+
+---
+
+## 9. Game data curation (trivia/guessing games)
+
+For games with a curated answer bank (trivia, guessing, identification):
+
+### Structure data as Python constants in the cog file
+
+```python
+# (id, name, [alt_names], category, metadata, hint_text)
+ITEMS: list[tuple[int, str, list[str], str, str, str]] = [
+    (1, "Answer Name", ["Alt1", "Alt2"], "Category", "Origin/Meta",
+     "Detailed hint text for progressive reveal (1-3 sentences)."),
+    ...
+]
+```
+
+### Guidelines
+- **Be comprehensive** — aim for 20+ items minimum. The game gets stale fast with fewer.
+- **Alt names** — include common abbreviations, nicknames, misspellings
+- **Hint text** — detailed enough to support 3-stage progressive reveal (category → clue → near-giveaway)
+- **Organize with comments** — group by section (e.g. `# -- Launch agents (10)`)
+- **Normalize answers** — use `unicodedata.normalize("NFKD", ...).lower().strip()` for comparison
+- **Section balance** — distribute items across categories/difficulty levels evenly
+
+### Progressive hint pattern (30s rounds)
+
+```python
+HINT2_AT = 10   # seconds — reveal clue
+HINT3_AT = 20   # seconds — reveal near-giveaway (e.g. first letter)
+```
+
+Used by: `pokemon.py`, `valorant.py`, `nba-trivia.py`
+
+---
+
+## 10. Sports sim games
+
+For simulated sports betting (player bets on AI-generated game outcomes):
+
+### Team ratings
+
+```python
+TEAMS: dict[str, tuple[float, float, float]] = {
+    "Team Name": (offense, defense, coaching),
+    ...
+}
+```
+
+- Calibrate to real-world performance (current season stats)
+- Include all teams in the league (30 NBA, 32 NFL, etc.)
+- Ratings should produce realistic score distributions
+
+### Simulation engine
+
+- Period-by-period scoring (quarters, innings, sets, halves)
+- Probability-based outcomes, not deterministic
+- Win probability from rating differential (sigmoid or logistic function)
+- Generate spread, moneyline, and total from the ratings
+
+### Live embed updates
+
+- Show score progression period by period
+- Use `asyncio.sleep()` between periods for suspense
+- Final embed shows full box score + bet resolution
+
+### Bet resolution
+
+- Compare final score to bet parameters (spread, ML, total)
+- Moneyline: did the picked team win?
+- Spread: home score - away score vs spread line
+- Total: combined score vs over/under line
+
+Reference: `bot/cogs/nbasim.py`, `bot/cogs/nflsim.py`
+
+---
+
+## 11. Web game architecture (browser-based games)
+
+For games that need interactive browser UI. See `/new-web-game` for the full scaffold.
+
+### Four-layer structure
+
+| Layer | File | Purpose |
+|-------|------|---------|
+| Shared logic | `shared/<game>_logic.py` | Pure game rules, no deps |
+| Web backend | `web/<game>.py` | FastAPI router + WebSocket engine |
+| Static frontend | `web/static/<game>.html` | Single HTML file, dark theme |
+| Discord cog | `bot/cogs/<game>.py` | Room creation, join/betting, result polling |
+
+### Key patterns
+
+- **Auth**: session-link tokens (unique URL per player, no Discord OAuth)
+- **Coin flow**: deduct in Discord cog on join → game plays in browser → web backend computes payouts and calls `queries.update_casino_balance()` + `queries.log_casino_result()`
+- **Result bridge**: cog polls `GET /api/v1/<game>/rooms/{id}/result` every 10s → posts result embed to Discord
+- **Room cleanup**: `cleanup_stale_<game>_rooms()` called on startup; rooms expire after 30min TTL
+
+### Extra registration (beyond the standard 4)
+
+5. `web/api.py` — import router, include router, add WebSocket endpoint
+6. Caddy config — SPA rewrite rule for `/<game>/*`
+
+---
+
+## 12. Mini-game engine integration
+
+If the game works well as a quick 1v1 format, consider adding it to the mini-game engine used by duels and tournaments.
+
+### Add to `bot/cogs/_minigames.py`
+
+```python
+class YourGame:
+    name = "Your Game"
+    emoji = "\U0001fxxx"
+    stakes = 300           # 200 for luck-based, 300 for skill-based
+    elo_key = "your_game"  # must match ELO_GAME_LABELS
+
+    async def play(self, message, p1_id, p1_name, p2_id, p2_name) -> int:
+        # Returns winner's user_id, or 0 for tie
+        ...
+```
+
+### Protocol requirements
+- Must implement the `MiniGame` protocol (name, emoji, stakes, elo_key, play method)
+- `play()` takes a Discord message and both players' IDs/names
+- Returns the winner's user_id (int), or 0 for a tie
+- Game plays within the same message channel
+- Should complete in <60 seconds
+
+### Add to ALL_GAMES
+
+```python
+ALL_GAMES: list[MiniGame] = [
+    ...,
+    YourGame(),
+]
+```
+
+This automatically makes it available in duels (`/duel`) and tournaments (`/tournament`).
+
+### Best-of-3 helper
+
+For games that work well in multiple rounds:
+
+```python
+async def play(self, message, p1_id, p1_name, p2_id, p2_name) -> int:
+    return await _play_best_of_3(
+        message, p1_id, p1_name, p2_id, p2_name,
+        self.emoji, self.name, self._play_round,
+    )
+```
+
+### Shared logic classes
+
+If game logic is needed by both the mini-game engine AND a standalone cog, put it in `_minigames.py` as a class (e.g. `TTTBoard`, `RPSLogic`) and import it from both places.
+
+---
+
+## 13. Testing
 
 Before shipping:
 
@@ -146,4 +350,6 @@ Before shipping:
 - [ ] `/random-game` can pick it (with and without mode filter)
 - [ ] `/casino-stats` shows correct game label after playing a round
 - [ ] Re-bet button works for returning players
+- [ ] ELO updates appear in results (if skill-based)
 - [ ] Edge cases: max players, min bet, zero balance join attempt
+- [ ] Web games: WebSocket connects, game plays in browser, results post to Discord
