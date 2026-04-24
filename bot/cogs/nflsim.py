@@ -287,6 +287,7 @@ class NflSimTable:
     quarter_scores: list[tuple[int, int]] = field(default_factory=list)
     ot_count: int = 0
     sim_task: asyncio.Task | None = field(default=None, repr=False)
+    thread: discord.Thread | None = field(default=None, repr=False)
 
 
 # ── Embeds ───────────────────────────────────────────────────────────────────
@@ -837,9 +838,24 @@ class NflSimTableView(ui.View):
         table.ot_count = 0
 
         self._update_buttons()
-        await interaction.response.edit_message(
-            embed=_playing_embed(table), view=self,
+        home_name, _ = table.home_team
+        away_name, _ = table.away_team
+        in_progress = discord.Embed(
+            title=f"\U0001f3c8 NFL Sim \u2014 {away_name} @ {home_name}",
+            description="Simulation running in the thread below! \U0001f4fa",
+            colour=discord.Colour.dark_green(),
         )
+        players_text = ", ".join(p.display_name for p in table.players.values())
+        in_progress.add_field(name="Bettors", value=players_text or "\u2014", inline=False)
+        await interaction.response.edit_message(embed=in_progress, view=self)
+
+        msg = await interaction.original_response()
+        thread = await msg.create_thread(
+            name=f"NFL Sim \u2014 {away_name} @ {home_name}"
+        )
+        table.thread = thread
+
+        table.message = await thread.send(embed=_playing_embed(table))
         table.sim_task = asyncio.create_task(self._sim_loop())
 
     async def _sim_loop(self) -> None:
@@ -859,7 +875,7 @@ class NflSimTableView(ui.View):
                 if table.message:
                     try:
                         await table.message.edit(
-                            embed=_playing_embed(table), view=self,
+                            embed=_playing_embed(table),
                         )
                     except discord.HTTPException:
                         pass
@@ -876,7 +892,7 @@ class NflSimTableView(ui.View):
                 if table.message:
                     try:
                         await table.message.edit(
-                            embed=_playing_embed(table), view=self,
+                            embed=_playing_embed(table),
                         )
                     except discord.HTTPException:
                         pass
@@ -942,7 +958,7 @@ class NflSimTableView(ui.View):
         if table.message:
             try:
                 await table.message.edit(
-                    embed=_finished_embed(table, balances=balances), view=self,
+                    embed=_finished_embed(table, balances=balances),
                 )
             except discord.HTTPException:
                 pass
