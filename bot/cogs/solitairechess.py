@@ -53,8 +53,6 @@ class SolChessCog(commands.Cog):
         interaction: discord.Interaction,
         difficulty: str = "medium",
     ) -> None:
-        await interaction.response.defer()
-
         uid = str(interaction.user.id)
         channel_id = str(interaction.channel_id)
         await queries.get_or_create_casino_wallet(uid)
@@ -64,7 +62,7 @@ class SolChessCog(commands.Cog):
 
         # Create room via web API
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=5) as client:
                 resp = await client.post(
                     f"{WEB_API_BASE}/api/v1/solitairechess/rooms",
                     json={
@@ -75,15 +73,23 @@ class SolChessCog(commands.Cog):
                     },
                     headers={"X-Api-Key": WEB_API_SECRET},
                 )
-        except Exception:
-            await interaction.followup.send(
-                "Failed to connect to game server.", ephemeral=True,
+        except Exception as exc:
+            await interaction.response.send_message(
+                f"Failed to connect to game server: {type(exc).__name__}",
+                ephemeral=True,
             )
             return
 
         if resp.status_code != 200:
-            await interaction.followup.send(
-                "Failed to create web game room.", ephemeral=True,
+            detail = ""
+            try:
+                detail = resp.json().get("detail", "")
+            except Exception:
+                pass
+            await interaction.response.send_message(
+                f"Failed to create game room (HTTP {resp.status_code})"
+                + (f": {detail}" if detail else ""),
+                ephemeral=True,
             )
             return
 
@@ -102,7 +108,7 @@ class SolChessCog(commands.Cog):
         embed.set_footer(text=f"Room {room_id} \u2022 First to 3 wins")
 
         view = WebSolChessLobbyView(room_id, self.bot)
-        await interaction.followup.send(embed=embed, view=view)
+        await interaction.response.send_message(embed=embed, view=view)
 
     # ── Result polling ─────────────────────────────────────────────────────
 
