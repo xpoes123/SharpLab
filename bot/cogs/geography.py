@@ -1303,10 +1303,11 @@ class GeographyCog(commands.Cog):
         # Track all guess messages for post-round cleanup
         table.round_messages.append(message)
 
+        player = table.players[uid]
+
         if check_answer(guess, table.current_answers):
             # Winner!
             now = time.monotonic()
-            player = table.players[uid]
             player.answer = guess
             player.answer_time = now
             player.rounds_won += 1
@@ -1321,8 +1322,10 @@ class GeographyCog(commands.Cog):
 
             table.round_solved.set()
         else:
+            # Only record a miss on the first wrong guess this round
+            if player.answer is None:
+                _fire_stat(str(uid), table, correct=False)
             player.answer = "__wrong__"
-            _fire_stat(str(uid), table, correct=False)
 
             try:
                 await message.add_reaction("\u274c")
