@@ -288,7 +288,6 @@ function onAnalystPick(msg) {
 // ── Price Update Animation ───────────────────────────────────────────────
 
 function onPricesUpdated(msg) {
-    // Show a big animated change overlay on each stock card
     for (const [ticker, data] of Object.entries(msg.stocks)) {
         const card = document.getElementById(`stock-${ticker}`);
         if (!card) continue;
@@ -297,17 +296,31 @@ function onPricesUpdated(msg) {
         const cls = change > 0 ? 'flash-up' : change < 0 ? 'flash-down' : '';
         if (cls) card.classList.add(cls);
 
-        // Add a floating change indicator
+        // Floating change indicator
         const overlay = document.createElement('div');
         overlay.className = `price-change-overlay ${change > 0 ? 'up' : 'down'}`;
         overlay.textContent = change > 0 ? `+${change.toFixed(1)}` : change.toFixed(1);
         card.appendChild(overlay);
 
-        // Update the price text
+        // Smooth count animation: price rolls from old to new over 1.5s
         const priceEl = card.querySelector('.stock-price');
-        if (priceEl) priceEl.textContent = data.price.toFixed(1);
+        if (priceEl) {
+            const startVal = data.prev;
+            const endVal = data.price;
+            const duration = 1500;
+            const startTime = performance.now();
+            function tick(now) {
+                const elapsed = now - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                // Ease out quad
+                const eased = 1 - (1 - progress) * (1 - progress);
+                const current = startVal + (endVal - startVal) * eased;
+                priceEl.textContent = current.toFixed(1);
+                if (progress < 1) requestAnimationFrame(tick);
+            }
+            requestAnimationFrame(tick);
+        }
 
-        // Remove overlay after animation
         setTimeout(() => {
             overlay.remove();
             card.classList.remove('flash-up', 'flash-down');
