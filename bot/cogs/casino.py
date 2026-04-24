@@ -1747,11 +1747,13 @@ GAME_RULES: dict[str, str] = {
     ),
     "geography": (
         "**Speed Geography**\n"
-        "Name the capital city of the given country.\n\n"
-        "**How to play:** A country is shown. Type the capital city as fast as you can. "
-        "First correct answer wins the round. Multiple rounds per game.\n\n"
+        "Test your world knowledge across multiple modes!\n\n"
+        "**Modes:** Country Capitals, US State Capitals, Country Flags, US State Flags, "
+        "Landmarks (guess the country from a photo), or Mixed.\n\n"
+        "**How to play:** A question is shown. Type your answer as fast as you can. "
+        "First correct answer wins the round. First to 3 round wins takes the game.\n\n"
         "**Scoring:** Points for speed. Spelling must be close (fuzzy matching).\n"
-        "**Tip:** Brush up on obscure capitals (Ouagadougou, Thimphu, Naypyidaw...)."
+        "**Tip:** Brush up on obscure capitals and world landmarks!"
     ),
     "wordle": (
         "**Wordle Race**\n"
@@ -1922,7 +1924,7 @@ CASINO_GAMES: list[tuple[str, str, str, str]] = [
     ("math24", "Make 24 from four numbers", "Brain Games", "party"),
     ("countdown", "Countdown numbers math game", "Brain Games", "party"),
     ("mastermind", "Code-breaking deduction game", "Brain Games", "duo"),
-    ("geography", "Speed Geography \u2014 name the capital first", "Brain Games", "party"),
+    ("geography", "Speed Geography \u2014 capitals, flags & landmarks", "Brain Games", "party"),
     ("wordle", "Wordle Race \u2014 guess the word first", "Brain Games", "party"),
     ("nba-trivia", "NBA Roster Trivia \u2014 name the team first", "Brain Games", "party"),
     ("nfl-trivia", "NFL Roster Trivia \u2014 name the team first", "Brain Games", "party"),
