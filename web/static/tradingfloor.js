@@ -41,6 +41,7 @@ function handleMessage(msg) {
         case 'market_state':    onMarketState(msg); break;
         case 'portfolio':       onPortfolio(msg); break;
         case 'tip':             onTip(msg); break;
+        case 'intel':           onIntel(msg); break;
         case 'trade_executed':  onTradeExecuted(msg); break;
         case 'analyst_pick':    onAnalystPick(msg); break;
         case 'event_reveal':    onEventReveal(msg); break;
@@ -235,13 +236,24 @@ function onPortfolio(msg) {
 // ── Tip ───────────────────────────────────────────────────────────────────
 
 function onTip(msg) {
+    // Legacy tip handler (kept for compatibility)
     const banner = document.getElementById('tip-banner');
     banner.style.display = 'block';
-    const stars = msg.stars || '\u2b50\u2b50\u2b50';
-    const conf = msg.confidence || 3;
-    const confLabel = conf >= 4 ? 'High confidence' : conf >= 3 ? 'Medium confidence' : 'Low confidence';
-    banner.innerHTML = `<div class="tip-label">\ud83d\udd12 Insider Tip \u2014 Round ${msg.round} \u2014 ${stars} ${confLabel}</div>${esc(msg.text)}`;
+    banner.innerHTML = `<div class="tip-label">\ud83d\udd12 Insider Tip \u2014 Round ${msg.round}</div>${esc(msg.text)}`;
     setTimeout(() => { banner.style.display = 'none'; }, 35000);
+}
+
+function onIntel(msg) {
+    // Partial intel: player sees 2 of 4 upcoming effects
+    const banner = document.getElementById('tip-banner');
+    banner.style.display = 'block';
+    let effectsHtml = '';
+    msg.effects.forEach(e => {
+        const cls = e.pct > 0 ? 'positive' : e.pct < 0 ? 'negative' : '';
+        const pctStr = e.pct > 0 ? `+${(e.pct * 100).toFixed(0)}%` : `${(e.pct * 100).toFixed(0)}%`;
+        effectsHtml += `<span class="intel-effect ${cls}"><strong>${e.ticker}</strong> ${pctStr}</span>`;
+    });
+    banner.innerHTML = `<div class="tip-label">\ud83d\udd0d Intel Report \u2014 Round ${msg.round}</div><div class="tip-sublabel">You see 2 of 4 effects. Others see different ones.</div><div class="intel-effects">${effectsHtml}</div>`;
 }
 
 // ── Trade Executed ────────────────────────────────────────────────────────

@@ -451,83 +451,33 @@ def _init_stocks() -> dict[str, TFStock]:
     }
 
 
-def _generate_accurate_tip(event: dict) -> str:
-    """Generate an accurate tip from the real event."""
-    biggest_ticker = max(event["effects"], key=lambda t: abs(event["effects"][t]))
-    biggest_pct = event["effects"][biggest_ticker]
-    direction = "surge" if biggest_pct > 0 else "decline"
-    tech_effect = event["effects"].get("CHIP", 0) + event["effects"].get("SOFT", 0)
-    energy_effect = event["effects"].get("OIL", 0) + event["effects"].get("SOLAR", 0)
-    if abs(tech_effect) > abs(energy_effect):
-        sector, sector_dir = "Tech", ("positively" if tech_effect > 0 else "negatively")
-    else:
-        sector, sector_dir = "Energy", ("positively" if energy_effect > 0 else "negatively")
-    templates = [
-        f"Insider: {sector} sector expected to move {sector_dir}. ({biggest_ticker} may {direction})",
-        f"Sources say {biggest_ticker} will {direction} — {event['desc'][:50]}",
-        f"Rumor: {event['name']} incoming. {sector} sector impact likely.",
-    ]
-    return random.choice(templates)
+def _distribute_partial_intel(
+    event: dict, player_ids: list[str],
+) -> dict[str, list[tuple[str, float]]]:
+    """Give each player exactly 2 of the 4 stock effects — symmetric info, different pieces.
 
+    Every player sees the same amount of information (2 effects), but different
+    tickers. The skill is trading on what you know and inferring the rest from
+    other players' behavior.
 
-def _generate_fake_tip() -> str:
-    """Generate a misleading tip that sounds real but is noise."""
-    fake_tickers = random.sample(TICKERS, 2)
-    fake_directions = random.choice([
-        (fake_tickers[0], "surge", "Tech", "positively"),
-        (fake_tickers[0], "decline", "Energy", "negatively"),
-        (fake_tickers[1], "rally", "Tech", "strongly upward"),
-        (fake_tickers[1], "crash", "Energy", "sharply downward"),
-    ])
-    ticker, direction, sector, sector_dir = fake_directions
-    templates = [
-        f"Insider: {sector} sector expected to move {sector_dir}. ({ticker} may {direction})",
-        f"Sources say {ticker} will {direction} — unconfirmed reports",
-        f"Rumor: Big move incoming. {sector} sector watch closely.",
-    ]
-    return random.choice(templates)
-
-
-def _generate_tips_for_all(event: dict, player_ids: list[str]) -> dict[str, tuple[str, int]]:
-    """Give every player a tip with a confidence score (1-5 stars).
-
-    Higher confidence = more likely to be accurate.
-    - 5 stars: 95% accurate (nearly guaranteed real info)
-    - 4 stars: 80% accurate
-    - 3 stars: 60% accurate
-    - 2 stars: 40% accurate (more likely noise than signal)
-    - 1 star:  20% accurate (almost certainly noise)
-
-    Returns {uid: (tip_text, confidence)}
+    For solo play (1 player): show 2 random effects.
+    For 2 players: each sees 2, with 1 overlapping ticker.
+    For 3+ players: random 2-ticker subsets, shuffled so no two players are guaranteed the same pair.
     """
-    tips: dict[str, tuple[str, int]] = {}
-    # Distribute confidence levels — one player gets the best tip, rest get varying quality
-    confidences = []
-    n = len(player_ids)
-    if n == 1:
-        confidences = [4]
-    elif n == 2:
-        confidences = [5, 2]
-    elif n == 3:
-        confidences = [5, 3, 1]
-    elif n == 4:
-        confidences = [5, 3, 2, 1]
-    else:
-        # 5+ players: one 5-star, one 4-star, rest distributed 1-3
-        confidences = [5, 4] + [random.randint(1, 3) for _ in range(n - 2)]
-    random.shuffle(confidences)
+    tickers_with_effects = [(t, pct) for t, pct in event["effects"].items() if t in TICKERS]
+    # Pad if event doesn't affect all 4 tickers (some events have 0 effects on a ticker)
+    for t in TICKERS:
+        if t not in event["effects"]:
+            tickers_with_effects.append((t, 0.0))
 
-    accuracy_map = {5: 0.95, 4: 0.80, 3: 0.60, 2: 0.40, 1: 0.20}
+    intel: dict[str, list[tuple[str, float]]] = {}
 
-    for uid, confidence in zip(player_ids, confidences):
-        is_accurate = random.random() < accuracy_map[confidence]
-        if is_accurate:
-            tip_text = _generate_accurate_tip(event)
-        else:
-            tip_text = _generate_fake_tip()
-        tips[uid] = (tip_text, confidence)
+    for uid in player_ids:
+        # Each player gets 2 random effects
+        chosen = random.sample(tickers_with_effects, 2)
+        intel[uid] = chosen
 
-    return tips
+    return intel
 
 
 # ── NPC Analysts ───────────────────────────────────────────────────────────
@@ -799,16 +749,16 @@ async def _game_loop(room: TradingFloor) -> None:
             event = room.event_deck[rnd - 1]
             room.current_event = event
 
-            # Send tips to human players with varying confidence
+            # Send partial intel to each human player (2 of 4 effects)
             human_ids = [uid for uid in room.players if not uid.startswith("__bot_")]
-            all_tips = _generate_tips_for_all(event, human_ids)
-            for uid, (tip_text, confidence) in all_tips.items():
-                room.private_tips[uid] = tip_text
-                stars = "\u2b50" * confidence + "\u2606" * (5 - confidence)
+            intel = _distribute_partial_intel(event, human_ids)
+            for uid, effects in intel.items():
+                room.private_tips[uid] = str(effects)
                 p = room.players[uid]
                 await _send(p.ws, {
-                    "type": "tip", "text": tip_text, "round": rnd,
-                    "confidence": confidence, "stars": stars,
+                    "type": "intel",
+                    "round": rnd,
+                    "effects": [{"ticker": t, "pct": pct} for t, pct in effects],
                 })
 
             # Open trading
