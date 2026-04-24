@@ -61,6 +61,7 @@ GAME_LABELS: dict[str, str] = {
     "tradingfloor": "Trading Floor",
     "quizbowl": "Quiz Bowl",
     "valorant": "Valorant Guess",
+    "solitaire-chess": "Solitaire Chess",
 }
 
 GAME_CATEGORIES: list[tuple[str, str]] = [
@@ -1863,6 +1864,19 @@ GAME_RULES: dict[str, str] = {
         "Payouts follow the paytable based on player count.\n\n"
         "**Tip:** You have 20 seconds per problem. Speed and accuracy both matter!"
     ),
+    "solitaire-chess": (
+        "**Solitaire Chess**\n"
+        "A 4\u00d74 board puzzle with chess pieces. Every move must be a capture.\n\n"
+        "**How to play:** Join the table, place your bet, and the host picks a difficulty. "
+        "A puzzle board is generated with chess pieces. Click **Move** and type coordinates "
+        "(e.g. `A1 C3`) to capture one piece with another. Every move must be a capture \u2014 "
+        "no non-capture moves allowed. Reduce the board to exactly **1 piece** to win.\n\n"
+        "**Pieces:** King (1 sq any dir) | Queen (any dist, any dir) | Rook (straight lines) | "
+        "Bishop (diagonals) | Knight (L-shape, jumps) | Pawn (1 sq diagonal, any direction)\n\n"
+        "**Difficulty:** Easy (4 pieces) | Medium (5) | Hard (6) | Expert (7)\n"
+        "**Tools:** Undo (take back moves) | Hint (suggested move) | Give Up\n"
+        "**Multiplayer:** Everyone races on the same puzzle. First to solve wins the pot!"
+    ),
     "valorant": (
         "**Valorant Guess**\n"
         "Guess the Valorant agent, weapon, or map from progressive hints!\n\n"
@@ -1917,6 +1931,7 @@ CASINO_GAMES: list[tuple[str, str, str, str]] = [
     ("pokemon", "Who's That Pokemon? \u2014 guess from hints", "Brain Games", "party"),
     ("quizbowl", "Quiz Bowl \u2014 3-part bonus trivia", "Brain Games", "party"),
     ("valorant", "Guess the Valorant agent, weapon, or map", "Brain Games", "party"),
+    ("solitaire-chess", "Solitaire Chess \u2014 capture until 1 remains", "Brain Games", "party"),
     # ── Sports Sim
     ("nbasim", "Simulated NBA game betting", "Sports Sim", "solo"),
     ("nflsim", "Simulated NFL game betting", "Sports Sim", "solo"),
