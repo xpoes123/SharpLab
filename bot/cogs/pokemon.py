@@ -13,7 +13,7 @@ import discord
 from discord import app_commands, ui
 from discord.ext import commands
 
-from bot.cogs._elo_helpers import update_elo_multiplayer
+from bot.cogs._elo_helpers import fmt_elo_change, update_elo_multiplayer
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -2373,7 +2373,7 @@ def _timeout_embed(table: PokeTable) -> discord.Embed:
     return embed
 
 
-def _final_embed(table: PokeTable) -> discord.Embed:
+def _final_embed(table: PokeTable, elo_changes: dict[int, tuple[float, float]] | None = None) -> discord.Embed:
     max_wins = max((p.rounds_won for p in table.players.values()), default=0)
     no_winner = max_wins == 0
 
@@ -2407,6 +2407,17 @@ def _final_embed(table: PokeTable) -> discord.Embed:
     embed.add_field(
         name="Rounds Played", value=str(table.total_rounds_played), inline=True,
     )
+
+    if elo_changes:
+        sorted_players = sorted(table.players.values(), key=lambda p: p.rounds_won, reverse=True)
+        elo_lines: list[str] = []
+        for p in sorted_players:
+            if p.user_id in elo_changes:
+                old, new = elo_changes[p.user_id]
+                elo_lines.append(f"**{p.display_name}**: {fmt_elo_change(old, new)}")
+        if elo_lines:
+            embed.add_field(name="\U0001f4c8 ELO", value="\n".join(elo_lines), inline=False)
+
     embed.set_footer(text=f"Host: {table.host_name}")
     return embed
 
@@ -2855,6 +2866,7 @@ class PokeTableView(ui.View):
         table.phase = "closed"
 
         # ELO update — rank by rounds_won (most wins = 1st)
+        elo_changes: dict[int, tuple[float, float]] = {}
         max_wins = max((p.rounds_won for p in table.players.values()), default=0)
         if max_wins > 0 and len(table.players) >= 2:
             sorted_players = sorted(
@@ -2864,11 +2876,11 @@ class PokeTableView(ui.View):
             )
             finish_order = [p.user_id for p in sorted_players]
             try:
-                await update_elo_multiplayer(finish_order, "pokemon", "pokemon")
+                elo_changes = await update_elo_multiplayer(finish_order, "pokemon", "pokemon")
             except Exception:
                 pass  # don't break game end over ELO errors
 
-        embed = _final_embed(table)
+        embed = _final_embed(table, elo_changes)
 
         for child in self.children:
             child.disabled = True  # type: ignore[union-attr]

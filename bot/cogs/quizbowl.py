@@ -17,7 +17,7 @@ import httpx
 from discord import app_commands, ui
 from discord.ext import commands
 
-from bot.cogs._elo_helpers import update_elo_multiplayer
+from bot.cogs._elo_helpers import fmt_elo_change, update_elo_multiplayer
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -325,7 +325,7 @@ def _bonus_summary_embed(table: QBTable) -> discord.Embed:
     return embed
 
 
-def _final_embed(table: QBTable) -> discord.Embed:
+def _final_embed(table: QBTable, elo_changes: dict[int, tuple[float, float]] | None = None) -> discord.Embed:
     max_score = max((p.score for p in table.players.values()), default=0)
     no_scores = max_score == 0
 
@@ -358,6 +358,17 @@ def _final_embed(table: QBTable) -> discord.Embed:
     embed.add_field(
         name="Bonuses Played", value=str(table.bonus_num), inline=True,
     )
+
+    if elo_changes:
+        sorted_players = sorted(table.players.values(), key=lambda p: p.score, reverse=True)
+        elo_lines: list[str] = []
+        for p in sorted_players:
+            if p.user_id in elo_changes:
+                old, new = elo_changes[p.user_id]
+                elo_lines.append(f"**{p.display_name}**: {fmt_elo_change(old, new)}")
+        if elo_lines:
+            embed.add_field(name="\U0001f4c8 ELO", value="\n".join(elo_lines), inline=False)
+
     embed.set_footer(text=f"Host: {table.host_name}")
     return embed
 
@@ -774,15 +785,16 @@ class QBLobbyView(ui.View):
         table = self.table
         table.phase = "closed"
 
+        elo_changes: dict[int, tuple[float, float]] = {}
         if len(table.players) >= 2:
             sorted_p = sorted(table.players.values(), key=lambda p: p.score, reverse=True)
             finish_order = [p.user_id for p in sorted_p]
             try:
-                await update_elo_multiplayer(finish_order, "quizbowl", "quizbowl")
+                elo_changes = await update_elo_multiplayer(finish_order, "quizbowl", "quizbowl")
             except Exception:
                 pass
 
-        embed = _final_embed(table)
+        embed = _final_embed(table, elo_changes)
 
         # Post final results in thread
         if table.thread:
