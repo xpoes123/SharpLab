@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solitaire Chess — SharpLab</title>
+    <link rel="stylesheet" href="/style.css">
+    <link rel="stylesheet" href="/solitairechess.css">
+</head>
+<body>
+    <div class="sc-container">
+        <div id="connection-status" class="status-bar"></div>
+
+        <!-- Lobby -->
+        <div id="lobby" class="phase active">
+            <h1>&#9822; Solitaire Chess</h1>
+            <p class="subtitle">Capture until 1 piece remains &mdash; First to 3 wins</p>
+            <div class="lobby-info">
+                <div class="diff-label" id="lobby-diff">Medium</div>
+                <div class="pot-label">Prize Pool</div>
+                <div class="pot" id="lobby-pot">0c</div>
+            </div>
+            <ul class="player-list" id="lobby-players"></ul>
+            <button id="start-btn" class="btn-primary" disabled>Start Game</button>
+            <p class="waiting-text" id="waiting-text">Waiting for players to connect...</p>
+        </div>
+
+        <!-- Playing -->
+        <div id="game" class="phase">
+            <div class="game-header">
+                <div class="round-info">Round <span id="round-num">1</span></div>
+                <div class="timer" id="timer">300</div>
+                <div class="pieces-info">Pieces: <span id="my-pieces">0</span></div>
+            </div>
+
+            <div class="board-area">
+                <div class="coord-row">
+                    <div class="coord-corner"></div>
+                    <div class="coord-col">A</div>
+                    <div class="coord-col">B</div>
+                    <div class="coord-col">C</div>
+                    <div class="coord-col">D</div>
+                </div>
+                <div class="board-with-rows">
+                    <div class="coord-col-nums">
+                        <div class="coord-row-num">1</div>
+                        <div class="coord-row-num">2</div>
+                        <div class="coord-row-num">3</div>
+                        <div class="coord-row-num">4</div>
+                    </div>
+                    <div id="board" class="chess-board"></div>
+                </div>
+            </div>
+
+            <div class="controls">
+                <button id="undo-btn" class="btn-secondary" disabled>&#8617; Undo</button>
+                <button id="hint-btn" class="btn-secondary">&#128161; Hint</button>
+                <button id="giveup-btn" class="btn-danger">Give Up</button>
+            </div>
+
+            <div class="legend">
+                <span>&#9818;K=King</span> <span>&#9819;Q=Queen</span> <span>&#9820;R=Rook</span>
+                <span>&#9821;B=Bishop</span> <span>&#9822;N=Knight</span> <span>&#9823;P=Pawn</span>
+            </div>
+
+            <div id="player-status" class="player-status-bar"></div>
+            <div id="scoreboard" class="scoreboard"></div>
+            <div id="hint-toast" class="hint-toast hidden"></div>
+        </div>
+
+        <!-- Round Result -->
+        <div id="round-result" class="phase">
+            <div class="round-result-card">
+                <h2 id="result-title"></h2>
+                <div id="result-scoreboard" class="scoreboard"></div>
+                <div class="next" id="result-next">Next round in 5s...</div>
+            </div>
+        </div>
+
+        <!-- Final Results -->
+        <div id="results" class="phase">
+            <h1>Game Over</h1>
+            <table class="results-table">
+                <thead><tr>
+                    <th>#</th><th>Player</th><th>Wins</th><th>Bet</th><th>Payout</th><th>Net</th>
+                </tr></thead>
+                <tbody id="results-body"></tbody>
+            </table>
+            <a href="/" class="back-link">&larr; Back to Leaderboard</a>
+        </div>
+    </div>
+    <script src="/solitairechess.js"></script>
+</body>
+</html>

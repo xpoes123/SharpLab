@@ -16,6 +16,7 @@ from web.sudoku import router as sudoku_router, sudoku_websocket, cleanup_stale_
 from web.figgie import router as figgie_router, figgie_websocket, cleanup_stale_figgie_rooms
 from web.bingo import router as bingo_router, bingo_websocket, cleanup_stale_bingo_rooms
 from web.trading_floor import router as tf_router, tf_websocket, cleanup_stale_tf_rooms
+from web.solitairechess import router as sc_router, solchess_websocket, cleanup_stale_solchess_rooms
 
 DB_PATH = os.environ.get("SHARPLAB_DB_PATH", "data/sharplab.db")
 
@@ -27,11 +28,13 @@ async def lifespan(app: FastAPI):
     figgie_cleanup_task = asyncio.create_task(cleanup_stale_figgie_rooms())
     bingo_cleanup_task = asyncio.create_task(cleanup_stale_bingo_rooms())
     tf_cleanup_task = asyncio.create_task(cleanup_stale_tf_rooms())
+    sc_cleanup_task = asyncio.create_task(cleanup_stale_solchess_rooms())
     yield
     cleanup_task.cancel()
     figgie_cleanup_task.cancel()
     bingo_cleanup_task.cancel()
     tf_cleanup_task.cancel()
+    sc_cleanup_task.cancel()
 
 
 app = FastAPI(title="SharpLab", docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -48,6 +51,7 @@ app.include_router(sudoku_router)
 app.include_router(figgie_router)
 app.include_router(bingo_router)
 app.include_router(tf_router)
+app.include_router(sc_router)
 
 
 # WebSocket endpoint (not on the API router — different path pattern)
@@ -69,6 +73,11 @@ async def ws_bingo(websocket: WebSocket, room_id: str):
 @app.websocket("/ws/tradingfloor/{room_id}")
 async def ws_tradingfloor(websocket: WebSocket, room_id: str):
     await tf_websocket(websocket, room_id)
+
+
+@app.websocket("/ws/solitairechess/{room_id}")
+async def ws_solitairechess(websocket: WebSocket, room_id: str):
+    await solchess_websocket(websocket, room_id)
 
 # ── Static data (replicated from bot cogs to avoid importing bot deps) ───────
 
@@ -110,6 +119,7 @@ GAME_LABELS: dict[str, str] = {
     "figgie": "Figgie",
     "mathsprint": "Math Sprint",
     "tradingfloor": "Trading Floor",
+    "solitaire-chess": "Solitaire Chess",
 }
 
 ALL_ACHIEVEMENTS = [
