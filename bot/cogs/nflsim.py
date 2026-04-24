@@ -519,7 +519,7 @@ class JoinNflSimModal(ui.Modal):
         max_length=6,
     )
     side_input = ui.TextInput(
-        label="Side (home/away for ml+spread; over/under for ou)",
+        label="Side (home/away or over/under)",
         placeholder="home / away / over / under",
         required=True,
         max_length=5,
