@@ -62,6 +62,7 @@ GAME_LABELS: dict[str, str] = {
     "quizbowl": "Quiz Bowl",
     "valorant": "Valorant Guess",
     "solitaire-chess": "Solitaire Chess",
+    "nba": "NBA Player Guess",
 }
 
 GAME_CATEGORIES: list[tuple[str, str]] = [
@@ -1932,6 +1933,7 @@ CASINO_GAMES: list[tuple[str, str, str, str]] = [
     ("quizbowl", "Quiz Bowl \u2014 3-part bonus trivia", "Brain Games", "party"),
     ("valorant", "Guess the Valorant agent, weapon, or map", "Brain Games", "party"),
     ("solitaire-chess", "Solitaire Chess \u2014 capture until 1 remains", "Brain Games", "party"),
+    ("nba", "NBA Player Guess \u2014 name the player from career teams", "Brain Games", "party"),
     # ── Sports Sim
     ("nbasim", "Simulated NBA game betting", "Sports Sim", "solo"),
     ("nflsim", "Simulated NFL game betting", "Sports Sim", "solo"),
