@@ -8,14 +8,12 @@ import asyncio
 import random
 import time
 from dataclasses import dataclass, field
-from itertools import groupby
 
 import discord
 from discord import app_commands, ui
 from discord.ext import commands
 
 from bot.cogs._elo_helpers import update_elo_multiplayer
-from db import queries
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -26,18 +24,6 @@ ROUND_DELAY = 5  # seconds between rounds
 WINS_TO_WIN = 3  # first to N wins
 MAX_ROUNDS = 15  # safety cap
 MAX_GUESSES = 6  # guesses per player per round
-
-# Paytable: fraction of prize pool by finishing position, keyed by player count
-PAYTABLE: dict[int, list[float]] = {
-    1: [1.0],
-    2: [1.0],
-    3: [0.70, 0.30],
-    4: [0.55, 0.30, 0.15],
-    5: [0.45, 0.25, 0.18, 0.12],
-    6: [0.40, 0.24, 0.16, 0.12, 0.08],
-    7: [0.36, 0.22, 0.16, 0.12, 0.08, 0.06],
-    8: [0.33, 0.21, 0.16, 0.12, 0.08, 0.06, 0.04],
-}
 
 MEDALS = ["\U0001f947", "\U0001f948", "\U0001f949"]
 
@@ -354,51 +340,6 @@ def format_grid(guesses: list[str], secret: str) -> str:
     return "\n".join(lines)
 
 
-# ── Payout helpers ──────────────────────────────────────────────────────────
-
-
-def _compute_payouts(
-    players: dict[int, "WordlePlayer"], prize_pool: int, n_players: int,
-) -> dict[int, int]:
-    """Compute per-player payouts using the paytable."""
-    pct_table = PAYTABLE.get(n_players, PAYTABLE[8])
-
-    in_money = sorted(
-        [p for p in players.values() if p.rounds_won > 0],
-        key=lambda p: p.rounds_won,
-        reverse=True,
-    )
-
-    payouts: dict[int, int] = {uid: 0 for uid in players}
-
-    if not in_money:
-        return payouts
-
-    paid_positions = len(pct_table)
-    pos = 0
-    for _wins, group_iter in groupby(in_money, key=lambda p: p.rounds_won):
-        group = list(group_iter)
-        if pos >= paid_positions:
-            break
-        end = min(pos + len(group), paid_positions)
-        combined_share = sum(pct_table[pos:end])
-        per_player = int(prize_pool * combined_share / len(group))
-        for p in group:
-            payouts[p.user_id] = per_player
-        pos += len(group)
-
-    total_paid = sum(payouts.values())
-    leftover = prize_pool - total_paid
-    if leftover > 0 and in_money:
-        top_wins = in_money[0].rounds_won
-        top_group = [p for p in in_money if p.rounds_won == top_wins]
-        extra = leftover // len(top_group)
-        for p in top_group:
-            payouts[p.user_id] += extra
-
-    return payouts
-
-
 # ── Dataclasses ─────────────────────────────────────────────────────────────
 
 
@@ -406,7 +347,6 @@ def _compute_payouts(
 class WordlePlayer:
     user_id: int
     display_name: str
-    bet: int
     rounds_won: int = 0
     guesses: list[str] = field(default_factory=list)
     solved: bool = False
@@ -428,7 +368,6 @@ class WordleTable:
     round_winner: int | None = None
     race_task: asyncio.Task | None = field(default=None, repr=False)
     round_solved: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
-    last_bets: dict[int, tuple[str, int]] = field(default_factory=dict)
     total_rounds_played: int = 0
     used_words: list[str] = field(default_factory=list)
 
@@ -465,13 +404,10 @@ def _guess_status(table: WordleTable) -> str:
 
 
 def _betting_embed(table: WordleTable) -> discord.Embed:
-    pot = sum(p.bet for p in table.players.values())
-    n = len(table.players)
-
     embed = discord.Embed(
         title="\U0001f1fc Wordle Race",
         description=(
-            f"Guess the 5-letter word! **First to {WINS_TO_WIN} wins** takes the pot.\n"
+            f"Guess the 5-letter word! **First to {WINS_TO_WIN} wins** takes the match.\n"
             "Click **Guess** to submit privately \u2014 "
             "**fewest guesses** wins each round!\n"
             "\U0001f525 **Hard mode** \u2014 you must use all revealed hints."
@@ -479,21 +415,11 @@ def _betting_embed(table: WordleTable) -> discord.Embed:
         colour=discord.Colour.blue(),
     )
 
-    if pot:
-        embed.add_field(name="Pot", value=f"{pot}c", inline=True)
     embed.add_field(name="Goal", value=f"First to {WINS_TO_WIN}", inline=True)
-
-    if n >= MIN_PLAYERS:
-        pt = PAYTABLE.get(n, PAYTABLE[8])
-        pt_parts = [
-            f"{MEDALS[i] if i < 3 else chr(0x25aa) + chr(0xfe0f)} {int(s * 100)}%"
-            for i, s in enumerate(pt)
-        ]
-        embed.add_field(name="Paytable", value=" | ".join(pt_parts), inline=True)
 
     if table.players:
         lines = [
-            f"\U0001f4dd **{p.display_name}** \u2014 {p.bet}c"
+            f"\U0001f4dd **{p.display_name}**"
             + (f" ({p.rounds_won}W)" if p.rounds_won > 0 else "")
             for p in table.players.values()
         ]
@@ -528,9 +454,6 @@ def _playing_embed(table: WordleTable, remaining: int | None = None) -> discord.
 
     secs = remaining if remaining is not None else ROUND_TIME
     embed.add_field(name="\u23f1\ufe0f Time", value=f"**{secs}s**", inline=True)
-
-    pot = sum(p.bet for p in table.players.values())
-    embed.add_field(name="Pot", value=f"{pot}c", inline=True)
 
     embed.add_field(name="Guesses", value=_guess_status(table), inline=False)
     embed.add_field(name="Scoreboard", value=_scoreboard(table), inline=False)
@@ -600,22 +523,16 @@ def _timeout_embed(table: WordleTable) -> discord.Embed:
     return embed
 
 
-def _final_embed(
-    table: WordleTable,
-    *,
-    payouts: dict[int, int],
-    balances: dict[int, int],
-) -> discord.Embed:
+def _final_embed(table: WordleTable) -> discord.Embed:
     max_wins = max((p.rounds_won for p in table.players.values()), default=0)
-    is_refund = max_wins == 0
 
     embed = discord.Embed(
         title="\U0001f1fc Wordle Race \u2014 Results",
-        colour=discord.Colour.gold() if not is_refund else discord.Colour.dark_grey(),
+        colour=discord.Colour.gold() if max_wins > 0 else discord.Colour.dark_grey(),
     )
 
-    if is_refund:
-        embed.description = "No rounds were won \u2014 all bets refunded!"
+    if max_wins == 0:
+        embed.description = "No rounds were won."
     else:
         sorted_p = sorted(
             table.players.values(), key=lambda p: p.rounds_won, reverse=True,
@@ -632,30 +549,9 @@ def _final_embed(
     )
     lines: list[str] = []
     for i, p in enumerate(sorted_players):
-        payout = payouts.get(p.user_id, 0)
-        bal = balances.get(p.user_id, 0)
-        net = payout - p.bet
-        sign = "+" if net >= 0 else ""
         medal = MEDALS[i] if i < len(MEDALS) and p.rounds_won > 0 else "\u25aa\ufe0f"
-        lines.append(
-            f"{medal} **{p.display_name}** ({p.rounds_won}W) \u2014 "
-            f"{p.bet}c \u2192 {payout}c "
-            f"(**{sign}{net}c**) \u2014 bal: {bal}c"
-        )
+        lines.append(f"{medal} **{p.display_name}** \u2014 {p.rounds_won}W")
     embed.add_field(name="Results", value="\n".join(lines), inline=False)
-
-    if not is_refund:
-        n = len(table.players)
-        pt = PAYTABLE.get(n, PAYTABLE[8])
-        pt_parts = [
-            f"{MEDALS[i] if i < 3 else chr(0x25aa) + chr(0xfe0f)} {int(s * 100)}%"
-            for i, s in enumerate(pt)
-        ]
-        embed.add_field(
-            name=f"Paytable ({n} players)",
-            value=" | ".join(pt_parts),
-            inline=True,
-        )
 
     embed.add_field(
         name="Rounds Played", value=str(table.total_rounds_played), inline=True,
@@ -665,63 +561,6 @@ def _final_embed(
 
 
 # ── Modals ──────────────────────────────────────────────────────────────────
-
-
-class JoinWordleModal(ui.Modal):
-    amount = ui.TextInput(
-        label="Bet amount (coins)",
-        placeholder="e.g. 100",
-        required=True,
-        max_length=10,
-    )
-
-    def __init__(
-        self, table: WordleTable, view: "WordleTableView", balance: int,
-    ) -> None:
-        super().__init__(title="Join Wordle Race")
-        self.table = table
-        self.table_view = view
-        self.amount.placeholder = f"e.g. 100 (bal: {balance}c)"
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            amt = int(self.amount.value)
-        except ValueError:
-            await interaction.response.send_message(
-                "Enter a whole number.", ephemeral=True,
-            )
-            return
-        if amt < 1:
-            await interaction.response.send_message(
-                "Must be at least 1 coin.", ephemeral=True,
-            )
-            return
-        uid = interaction.user.id
-        if uid in self.table.players:
-            await interaction.response.send_message(
-                "You're already in this game!", ephemeral=True,
-            )
-            return
-
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins! (have {bal}c)", ephemeral=True,
-            )
-            return
-
-        self.table.players[uid] = WordlePlayer(
-            user_id=uid,
-            display_name=interaction.user.display_name,
-            bet=amt,
-        )
-
-        self.table_view._update_buttons()
-        await interaction.response.edit_message(
-            embed=_betting_embed(self.table), view=self.table_view,
-        )
 
 
 class GuessModal(ui.Modal):
@@ -850,7 +689,6 @@ class WordleTableView(ui.View):
             not betting or len(self.table.players) < MIN_PLAYERS
         )
         self.join_btn.disabled = not betting
-        self.rebet_btn.disabled = not betting or not self.table.last_bets
         self.leave_btn.disabled = not betting
         self.guess_btn.disabled = not playing
         self.close_btn.disabled = racing
@@ -904,52 +742,9 @@ class WordleTableView(ui.View):
                 "Table is full!", ephemeral=True,
             )
             return
-        bal = await queries.get_or_create_casino_wallet(str(uid))
-        await interaction.response.send_modal(
-            JoinWordleModal(self.table, self, bal),
-        )
-
-    @ui.button(
-        label="Re-bet", style=discord.ButtonStyle.primary,
-        emoji="\U0001f504", row=0,
-    )
-    async def rebet_btn(
-        self, interaction: discord.Interaction, button: ui.Button,
-    ) -> None:
-        if self.table.phase != "betting":
-            await interaction.response.send_message(
-                "Race in progress!", ephemeral=True,
-            )
-            return
-        uid = interaction.user.id
-        if uid in self.table.players:
-            await interaction.response.send_message(
-                "You're already in!", ephemeral=True,
-            )
-            return
-        last = self.table.last_bets.get(uid)
-        if last is None:
-            await interaction.response.send_message(
-                "No previous bet \u2014 use Join instead.", ephemeral=True,
-            )
-            return
-        if len(self.table.players) >= MAX_PLAYERS:
-            await interaction.response.send_message(
-                "Table is full!", ephemeral=True,
-            )
-            return
-        name, amt = last
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins for {amt}c re-bet! (have {bal}c)",
-                ephemeral=True,
-            )
-            return
         self.table.players[uid] = WordlePlayer(
-            user_id=uid, display_name=name, bet=amt,
+            user_id=uid,
+            display_name=interaction.user.display_name,
         )
         self._update_buttons()
         await interaction.response.edit_message(
@@ -975,7 +770,6 @@ class WordleTableView(ui.View):
                 "Can't leave during a race!", ephemeral=True,
             )
             return
-        await queries.update_casino_balance(str(uid), player.bet)
         del self.table.players[uid]
         self._update_buttons()
         await interaction.response.edit_message(
@@ -1046,9 +840,6 @@ class WordleTableView(ui.View):
 
     async def _start_race(self, interaction: discord.Interaction) -> None:
         table = self.table
-
-        for uid, p in table.players.items():
-            table.last_bets[uid] = (p.display_name, p.bet)
 
         word = self._pick_word()
         table.secret_word = word
@@ -1184,46 +975,9 @@ class WordleTableView(ui.View):
             table.phase = "closed"
             self.active_tables.pop(table.channel_id, None)
 
-    async def _compute_and_apply_payouts(
-        self,
-    ) -> tuple[dict[int, int], dict[int, int]]:
-        table = self.table
-        n_players = len(table.players)
-        pot = sum(p.bet for p in table.players.values())
-        max_wins = max((p.rounds_won for p in table.players.values()), default=0)
-
-        if max_wins == 0:
-            payouts = {uid: p.bet for uid, p in table.players.items()}
-            for uid, refund in payouts.items():
-                try:
-                    await queries.update_casino_balance(str(uid), refund)
-                except Exception:
-                    pass
-        else:
-            payouts = _compute_payouts(table.players, pot, n_players)
-            for uid, payout in payouts.items():
-                if payout > 0:
-                    try:
-                        await queries.update_casino_balance(str(uid), payout)
-                    except Exception:
-                        pass
-
-        balances: dict[int, int] = {}
-        for uid in table.players:
-            bal = await queries.get_casino_balance(str(uid))
-            balances[uid] = bal or 0
-
-        for uid, p in table.players.items():
-            payout = payouts.get(uid, 0)
-            await queries.log_casino_result(str(uid), "wordle", p.bet, payout)
-
-        return payouts, balances
-
     async def _end_game(self) -> None:
         table = self.table
         table.phase = "closed"
-
-        payouts, balances = await self._compute_and_apply_payouts()
 
         if len(table.players) >= 2:
             sorted_p = sorted(table.players.values(), key=lambda p: p.rounds_won, reverse=True)
@@ -1233,7 +987,7 @@ class WordleTableView(ui.View):
             except Exception:
                 pass
 
-        embed = _final_embed(table, payouts=payouts, balances=balances)
+        embed = _final_embed(table)
 
         for child in self.children:
             child.disabled = True  # type: ignore[union-attr]
@@ -1250,14 +1004,9 @@ class WordleTableView(ui.View):
         table = self.table
 
         if table.total_rounds_played == 0:
-            for p in table.players.values():
-                try:
-                    await queries.update_casino_balance(str(p.user_id), p.bet)
-                except Exception:
-                    pass
             embed = discord.Embed(
                 title="\U0001f1fc Wordle Table \u2014 Closed",
-                description="Table closed. All bets refunded.",
+                description="Table closed.",
                 colour=discord.Colour.dark_grey(),
             )
             for child in self.children:
@@ -1268,8 +1017,7 @@ class WordleTableView(ui.View):
             return
 
         table.phase = "closed"
-        payouts, balances = await self._compute_and_apply_payouts()
-        embed = _final_embed(table, payouts=payouts, balances=balances)
+        embed = _final_embed(table)
 
         for child in self.children:
             child.disabled = True  # type: ignore[union-attr]
@@ -1286,12 +1034,6 @@ class WordleTableView(ui.View):
         if table.phase == "closed":
             return
 
-        for p in table.players.values():
-            try:
-                await queries.update_casino_balance(str(p.user_id), p.bet)
-            except Exception:
-                pass
-
         table.phase = "closed"
         self.active_tables.pop(table.channel_id, None)
 
@@ -1299,7 +1041,7 @@ class WordleTableView(ui.View):
             try:
                 embed = discord.Embed(
                     title="\U0001f1fc Wordle Table \u2014 Timed Out",
-                    description="Table timed out. All bets refunded.",
+                    description="Table timed out.",
                     colour=discord.Colour.dark_grey(),
                 )
                 await table.message.edit(embed=embed, view=None)
@@ -1327,8 +1069,6 @@ class WordleCog(commands.Cog):
                 ephemeral=True,
             )
             return
-
-        await queries.get_or_create_casino_wallet(str(interaction.user.id))
 
         table = WordleTable(
             channel_id=channel_id,
