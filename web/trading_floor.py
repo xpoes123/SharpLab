@@ -347,8 +347,12 @@ async def _handle_market_order(
     if action == "buy":
         cost = price * qty
         if player.cash < cost:
-            await _send_error(player, f"Not enough cash (need {cost:.0f}, have {player.cash:.0f})")
-            return
+            # Buy max affordable instead of rejecting
+            qty = int(player.cash // price)
+            if qty <= 0:
+                await _send_error(player, f"Not enough cash (have {player.cash:.0f})")
+                return
+            cost = price * qty
         player.cash -= cost
         old_qty = player.positions.get(ticker, 0)
         old_cost = player.cost_basis.get(ticker, 0.0)

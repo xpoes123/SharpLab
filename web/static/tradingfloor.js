@@ -253,7 +253,7 @@ function onIntel(msg) {
         const pctStr = e.pct > 0 ? `+${(e.pct * 100).toFixed(0)}%` : `${(e.pct * 100).toFixed(0)}%`;
         effectsHtml += `<span class="intel-effect ${cls}"><strong>${e.ticker}</strong> ${pctStr}</span>`;
     });
-    banner.innerHTML = `<div class="tip-label">\ud83d\udd0d Intel Report \u2014 Round ${msg.round}</div><div class="tip-sublabel">You see 2 of 4 effects. Others see different ones.</div><div class="intel-effects">${effectsHtml}</div>`;
+    banner.innerHTML = `<div class="tip-label">\ud83d\udd0d Intel Report \u2014 Round ${msg.round}</div><div class="intel-effects">${effectsHtml}</div>`;
 }
 
 // ── Trade Executed ────────────────────────────────────────────────────────
