@@ -52,6 +52,7 @@ function handleMessage(msg) {
         case 'analyst_pick':    onAnalystPick(msg); break;
         case 'prices_updated':  onPricesUpdated(msg); break;
         case 'event_reveal':    onEventReveal(msg); break;
+        case 'round_recap':     onRoundRecap(msg); break;
         case 'game_over':       onGameOver(msg); break;
         case 'error':           showToast(msg.message, 'error'); break;
     }
@@ -387,6 +388,36 @@ function onEventReveal(msg) {
         <div class="event-effects">${effectsHtml}</div>
     `;
     // Keep intel visible alongside event reveal (don't hide it)
+}
+
+// ── Round Recap ──────────────────────────────────────────────────────────
+
+function onRoundRecap(msg) {
+    // Update analyst slots with accuracy feedback
+    (msg.analyst_results || []).forEach(ar => {
+        const slotIdx = analystSlotMap[ar.analyst];
+        if (slotIdx === undefined) return;
+        const slot = document.getElementById(`analyst-${slotIdx}`);
+        if (!slot) return;
+        const callEl = slot.querySelector('.analyst-call');
+        const buyIcon = ar.buy_right ? '\u2705' : '\u274c';
+        const sellIcon = ar.sell_right ? '\u2705' : '\u274c';
+        callEl.innerHTML = `
+            <div class="pick-row"><span class="pick-tag buy">BUY</span><span class="pick-ticker">${esc(ar.buy_ticker)}</span><span>${buyIcon}</span></div>
+            <div class="pick-row"><span class="pick-tag sell">SELL</span><span class="pick-ticker">${esc(ar.sell_ticker)}</span><span>${sellIcon}</span></div>
+        `;
+    });
+
+    // Show lingering effects warning
+    if (msg.lingering && msg.lingering.length > 0) {
+        const banner = document.getElementById('tip-banner');
+        banner.style.display = 'block';
+        let html = '<div class="tip-label">\u26a0\ufe0f Lingering Effects</div>';
+        msg.lingering.forEach(l => {
+            html += `<div style="font-size:0.8rem;color:var(--text-muted)">${esc(l.name)} \u2014 ${l.rounds_left} round${l.rounds_left > 1 ? 's' : ''} remaining (half strength)</div>`;
+        });
+        banner.innerHTML = html;
+    }
 }
 
 // ── Game Over ─────────────────────────────────────────────────────────────

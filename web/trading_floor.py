@@ -40,35 +40,37 @@ TICKERS = [t for t, *_ in STOCKS_DEF]
 
 # ── Event cards ────────────────────────────────────────────────────────────
 
+# Events with optional "linger" field: effects apply at reduced strength for extra rounds
+# linger=2 means the event applies this round at full strength, next round at 50%
 EVENT_CARDS = [
     {"name": "Tech Boom", "emoji": "\U0001f4bb", "desc": "AI breakthrough drives tech stocks higher.",
      "effects": {"CHIP": 0.20, "SOFT": 0.15, "OIL": -0.05, "SOLAR": -0.05}},
-    {"name": "Energy Crisis", "emoji": "\u26a1", "desc": "Supply disruption sends energy soaring.",
-     "effects": {"OIL": 0.25, "SOLAR": 0.15, "CHIP": -0.10, "SOFT": -0.10}},
-    {"name": "Market Crash", "emoji": "\U0001f4c9", "desc": "Panic selling across all sectors.",
-     "effects": {"CHIP": -0.20, "SOFT": -0.20, "OIL": -0.15, "SOLAR": -0.15}},
+    {"name": "Energy Crisis", "emoji": "\u26a1", "desc": "Supply disruption sends energy soaring. (2-round effect)",
+     "effects": {"OIL": 0.25, "SOLAR": 0.15, "CHIP": -0.10, "SOFT": -0.10}, "linger": 2},
+    {"name": "Market Crash", "emoji": "\U0001f4c9", "desc": "Panic selling across all sectors. (2-round effect)",
+     "effects": {"CHIP": -0.20, "SOFT": -0.20, "OIL": -0.15, "SOLAR": -0.15}, "linger": 2},
     {"name": "Bull Run", "emoji": "\U0001f4c8", "desc": "Investor confidence is sky-high.",
      "effects": {"CHIP": 0.12, "SOFT": 0.12, "OIL": 0.10, "SOLAR": 0.10}},
-    {"name": "AI Revolution", "emoji": "\U0001f916", "desc": "Artificial intelligence changes everything.",
-     "effects": {"CHIP": 0.25, "SOFT": 0.20, "OIL": -0.05, "SOLAR": 0.05}},
-    {"name": "Oil Spill", "emoji": "\U0001f30a", "desc": "A tanker spill tanks OIL but boosts solar.",
-     "effects": {"OIL": -0.25, "SOLAR": 0.20, "CHIP": 0.05, "SOFT": 0.0}},
+    {"name": "AI Revolution", "emoji": "\U0001f916", "desc": "Artificial intelligence changes everything. (2-round effect)",
+     "effects": {"CHIP": 0.25, "SOFT": 0.20, "OIL": -0.05, "SOLAR": 0.05}, "linger": 2},
+    {"name": "Oil Spill", "emoji": "\U0001f30a", "desc": "A tanker spill tanks OIL but boosts solar. (2-round effect)",
+     "effects": {"OIL": -0.25, "SOLAR": 0.20, "CHIP": 0.05, "SOFT": 0.0}, "linger": 2},
     {"name": "Green Energy Boom", "emoji": "\u2600\ufe0f", "desc": "Renewable energy subsidies soar.",
      "effects": {"SOLAR": 0.25, "OIL": -0.10, "CHIP": 0.05, "SOFT": 0.05}},
     {"name": "Stimulus Package", "emoji": "\U0001f4b0", "desc": "Government pumps money into the economy.",
      "effects": {"CHIP": 0.10, "SOFT": 0.10, "OIL": 0.10, "SOLAR": 0.10}},
-    {"name": "Chip Shortage", "emoji": "\U0001f3ed", "desc": "Global chip shortage hits production.",
-     "effects": {"CHIP": -0.20, "SOFT": -0.10, "OIL": 0.05, "SOLAR": 0.05}},
+    {"name": "Chip Shortage", "emoji": "\U0001f3ed", "desc": "Global chip shortage hits production. (2-round effect)",
+     "effects": {"CHIP": -0.20, "SOFT": -0.10, "OIL": 0.05, "SOLAR": 0.05}, "linger": 2},
     {"name": "Cloud Boom", "emoji": "\u2601\ufe0f", "desc": "Enterprise cloud spending surges.",
      "effects": {"SOFT": 0.25, "CHIP": 0.10, "OIL": -0.05, "SOLAR": 0.0}},
-    {"name": "Interest Rate Hike", "emoji": "\U0001f3e6", "desc": "The Fed raises rates — growth stocks hit.",
+    {"name": "Interest Rate Hike", "emoji": "\U0001f3e6", "desc": "The Fed raises rates \u2014 growth stocks hit.",
      "effects": {"CHIP": -0.15, "SOFT": -0.15, "OIL": 0.10, "SOLAR": -0.05}},
-    {"name": "OPEC Cuts", "emoji": "\U0001f6e2\ufe0f", "desc": "OPEC slashes production. Oil rallies.",
-     "effects": {"OIL": 0.30, "SOLAR": -0.05, "CHIP": -0.05, "SOFT": -0.05}},
+    {"name": "OPEC Cuts", "emoji": "\U0001f6e2\ufe0f", "desc": "OPEC slashes production. Oil rallies. (2-round effect)",
+     "effects": {"OIL": 0.30, "SOLAR": -0.05, "CHIP": -0.05, "SOFT": -0.05}, "linger": 2},
     {"name": "Cybersecurity Breach", "emoji": "\U0001f525", "desc": "Major tech companies hacked.",
      "effects": {"SOFT": -0.20, "CHIP": -0.10, "OIL": 0.05, "SOLAR": 0.05}},
-    {"name": "Solar Mandate", "emoji": "\U0001f3e0", "desc": "New law requires solar on all new buildings.",
-     "effects": {"SOLAR": 0.30, "OIL": -0.15, "CHIP": 0.05, "SOFT": 0.0}},
+    {"name": "Solar Mandate", "emoji": "\U0001f3e0", "desc": "New law requires solar on all new buildings. (2-round effect)",
+     "effects": {"SOLAR": 0.30, "OIL": -0.15, "CHIP": 0.05, "SOFT": 0.0}, "linger": 2},
     {"name": "Tech Regulation", "emoji": "\u26d4", "desc": "Antitrust crackdown on big tech.",
      "effects": {"CHIP": -0.15, "SOFT": -0.20, "OIL": 0.05, "SOLAR": 0.10}},
     {"name": "Earnings Beat", "emoji": "\U0001f4b5", "desc": "Strong earnings across sectors.",
@@ -137,6 +139,7 @@ class TradingFloor:
     trade_open: bool = False
     round_end: float = 0.0
     news_feed: list[str] = field(default_factory=list)
+    lingering_effects: list[dict] = field(default_factory=list)  # [{effects, rounds_left, name}]
     private_tips: dict[str, str] = field(default_factory=dict)
     game_task: asyncio.Task | None = field(default=None, repr=False)
     result_data: dict | None = None
@@ -536,6 +539,7 @@ async def _run_npc_picks(room: TradingFloor) -> None:
 
     Both have the same expected value over many rounds, but different risk profiles.
     """
+    room._last_analyst_picks = []
     # Stagger: Cramer at ~5s, Pelosi at ~12s
     for idx, analyst in enumerate(NPC_ANALYSTS):
         delay = 5 + idx * 7 + random.uniform(-2, 2)
@@ -590,14 +594,15 @@ async def _run_npc_picks(room: TradingFloor) -> None:
                 buy_reason = f"undervalued opportunity"
                 sell_reason = f"taking profits early"
 
-        await _broadcast(room, {
-            "type": "analyst_pick",
+        pick_data = {
             "analyst": npc_name,
             "buy_ticker": buy_ticker,
             "buy_reason": buy_reason,
             "sell_ticker": sell_ticker,
             "sell_reason": sell_reason,
-        })
+        }
+        room._last_analyst_picks.append(pick_data)
+        await _broadcast(room, {"type": "analyst_pick", **pick_data})
 
 
 async def _run_bot_trades(room: TradingFloor) -> None:
@@ -694,7 +699,7 @@ def _apply_noise(room: TradingFloor) -> None:
 
 
 def _apply_event(room: TradingFloor, event: dict) -> None:
-    """Apply event effects to stock prices."""
+    """Apply event effects to stock prices and register lingering effects."""
     for ticker, pct in event["effects"].items():
         stock = room.stocks.get(ticker)
         if not stock or stock.halted:
@@ -707,6 +712,30 @@ def _apply_event(room: TradingFloor, event: dict) -> None:
             room.news_feed.insert(0,
                 f"[R{room.round_num}] {arrow} {stock.emoji} {ticker} {pct_actual:+.1f}%"
             )
+
+    # Register lingering effects (applied at half strength next round)
+    linger = event.get("linger", 0)
+    if linger > 1:
+        half_effects = {t: pct * 0.5 for t, pct in event["effects"].items()}
+        room.lingering_effects.append({
+            "effects": half_effects,
+            "rounds_left": linger - 1,
+            "name": event["name"],
+        })
+
+
+def _apply_lingering_effects(room: TradingFloor) -> None:
+    """Apply any lingering effects from previous rounds, then decrement."""
+    still_active = []
+    for ling in room.lingering_effects:
+        for ticker, pct in ling["effects"].items():
+            stock = room.stocks.get(ticker)
+            if stock and not stock.halted:
+                stock.price = max(1.0, stock.price * (1 + pct))
+        ling["rounds_left"] -= 1
+        if ling["rounds_left"] > 0:
+            still_active.append(ling)
+    room.lingering_effects = still_active
 
 
 def _check_circuit_breakers(room: TradingFloor) -> None:
@@ -844,8 +873,9 @@ async def _game_loop(room: TradingFloor) -> None:
             })
             await asyncio.sleep(3)
 
-            # Step 2: Apply effects + noise, then show price changes with animation
+            # Step 2: Apply effects + noise + lingering, then show price changes
             _apply_noise(room)
+            _apply_lingering_effects(room)
             _apply_event(room, event)
             _check_circuit_breakers(room)
             _record_prices(room)
@@ -864,10 +894,42 @@ async def _game_loop(room: TradingFloor) -> None:
             })
             await _broadcast(room, _market_state_msg(room))
 
-            # Step 3: Update portfolios
+            # Step 3: Update portfolios + send round recap
             await asyncio.sleep(2)
             for p in room.players.values():
                 await _send(p.ws, _portfolio_msg(p, room))
+
+            # Build analyst accuracy feedback
+            analyst_results = []
+            for pick_data in getattr(room, '_last_analyst_picks', []):
+                buy_t = pick_data.get("buy_ticker", "")
+                sell_t = pick_data.get("sell_ticker", "")
+                buy_change = event["effects"].get(buy_t, 0)
+                sell_change = event["effects"].get(sell_t, 0)
+                buy_right = buy_change > 0
+                sell_right = sell_change < 0
+                analyst_results.append({
+                    "analyst": pick_data["analyst"],
+                    "buy_ticker": buy_t,
+                    "buy_right": buy_right,
+                    "sell_ticker": sell_t,
+                    "sell_right": sell_right,
+                })
+
+            # Lingering effects info for UI
+            active_linger = []
+            for ling in room.lingering_effects:
+                active_linger.append({
+                    "name": ling["name"],
+                    "rounds_left": ling["rounds_left"],
+                })
+
+            await _broadcast(room, {
+                "type": "round_recap",
+                "round_num": rnd,
+                "analyst_results": analyst_results,
+                "lingering": active_linger,
+            })
 
             if rnd < num_rounds:
                 await asyncio.sleep(ROUND_DELAY)
