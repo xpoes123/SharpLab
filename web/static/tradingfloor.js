@@ -15,6 +15,7 @@ let lastStockPrices = {};
 let settingsRounds = 8;
 let settingsTime = 45;
 let totalRounds = 8;
+let myPositions = {};  // ticker -> qty, for sell/short button label
 
 // ── WebSocket ────────────────────────────────────────────────────────────
 
@@ -205,9 +206,20 @@ function renderRecentTrades(trades) {
 
 // ── Portfolio ─────────────────────────────────────────────────────────────
 
+function updateSellButtonLabel() {
+    const btn = document.getElementById('sell-btn');
+    if (!btn) return;
+    const qty = myPositions[selectedTicker] || 0;
+    btn.textContent = qty > 0 ? 'Sell' : 'Short';
+}
+
 function onPortfolio(msg) {
     document.getElementById('my-cash').textContent = fmt(msg.cash);
     document.getElementById('portfolio-value').textContent = fmt(msg.portfolio_value) + 'c';
+    // Track positions for sell/short button label
+    myPositions = {};
+    (msg.positions || []).forEach(p => { myPositions[p.ticker] = p.qty; });
+    updateSellButtonLabel();
     const pnl = msg.pnl;
     const pnlEl = document.getElementById('portfolio-pnl');
     pnlEl.textContent = (pnl > 0 ? '+' : '') + fmt(pnl) + 'c';
@@ -480,6 +492,7 @@ document.addEventListener('DOMContentLoaded', () => {
             document.querySelectorAll('.ticker-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             selectedTicker = btn.dataset.ticker;
+            updateSellButtonLabel();
         });
     });
 
