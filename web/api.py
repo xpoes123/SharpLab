@@ -12,6 +12,8 @@ from fastapi.responses import JSONResponse
 
 from db.schema import init_db
 from web.sudoku import router as sudoku_router, sudoku_websocket, cleanup_stale_rooms
+from web.figgie import router as figgie_router, figgie_websocket, cleanup_stale_figgie_rooms
+from web.bingo import router as bingo_router, bingo_websocket, cleanup_stale_bingo_rooms
 
 DB_PATH = os.environ.get("SHARPLAB_DB_PATH", "data/sharplab.db")
 
@@ -20,8 +22,12 @@ DB_PATH = os.environ.get("SHARPLAB_DB_PATH", "data/sharplab.db")
 async def lifespan(app: FastAPI):
     await init_db()
     cleanup_task = asyncio.create_task(cleanup_stale_rooms())
+    figgie_cleanup_task = asyncio.create_task(cleanup_stale_figgie_rooms())
+    bingo_cleanup_task = asyncio.create_task(cleanup_stale_bingo_rooms())
     yield
     cleanup_task.cancel()
+    figgie_cleanup_task.cancel()
+    bingo_cleanup_task.cancel()
 
 
 app = FastAPI(title="SharpLab", docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -35,12 +41,24 @@ app.add_middleware(
 
 # Mount game routers
 app.include_router(sudoku_router)
+app.include_router(figgie_router)
+app.include_router(bingo_router)
 
 
 # WebSocket endpoint (not on the API router — different path pattern)
 @app.websocket("/ws/sudoku/{room_id}")
 async def ws_sudoku(websocket: WebSocket, room_id: str):
     await sudoku_websocket(websocket, room_id)
+
+
+@app.websocket("/ws/figgie/{room_id}")
+async def ws_figgie(websocket: WebSocket, room_id: str):
+    await figgie_websocket(websocket, room_id)
+
+
+@app.websocket("/ws/bingo/{room_id}")
+async def ws_bingo(websocket: WebSocket, room_id: str):
+    await bingo_websocket(websocket, room_id)
 
 # ── Static data (replicated from bot cogs to avoid importing bot deps) ───────
 

@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Figgie — SharpLab</title>
+    <link rel="stylesheet" href="/style.css">
+    <link rel="stylesheet" href="/figgie.css">
+</head>
+<body>
+    <div class="figgie-container">
+        <div id="connection-status" class="status-bar"></div>
+
+        <!-- Lobby -->
+        <div id="lobby" class="phase active">
+            <h1>Figgie</h1>
+            <p class="subtitle">Jane Street's trading card game — 3-5 players</p>
+            <div class="lobby-info">
+                <div class="pot-label">Prize Pool</div>
+                <div class="pot" id="lobby-pot">0c</div>
+            </div>
+            <ul class="player-list" id="lobby-players"></ul>
+            <button id="start-btn" class="btn-primary" disabled>Start Game</button>
+            <p class="waiting-text" id="waiting-text">Waiting for players to connect...</p>
+        </div>
+
+        <!-- Trading Floor -->
+        <div id="game" class="phase">
+            <div class="game-header">
+                <div class="round-info">Round <span id="round-num">1</span>/6</div>
+                <div class="timer" id="timer">45</div>
+                <div class="chip-display">Chips: <span id="my-chips">200</span></div>
+            </div>
+
+            <!-- Hand -->
+            <div class="hand-panel" id="hand-panel"></div>
+
+            <!-- Order Book -->
+            <div class="market-grid" id="market-grid"></div>
+
+            <!-- Quick Trade -->
+            <div class="trade-panel">
+                <div class="trade-row">
+                    <select id="trade-suit" class="trade-input">
+                        <option value="s">♠ Spades</option>
+                        <option value="h">♥ Hearts</option>
+                        <option value="d">♦ Diamonds</option>
+                        <option value="c">♣ Clubs</option>
+                    </select>
+                    <input type="number" id="trade-price" class="trade-input" placeholder="Price" min="1" max="200">
+                    <button id="buy-btn" class="trade-btn buy-btn">Buy</button>
+                    <button id="sell-btn" class="trade-btn sell-btn">Sell</button>
+                </div>
+                <button id="cancel-btn" class="cancel-btn">Cancel All Orders</button>
+            </div>
+
+            <!-- Trade Log -->
+            <div class="trade-log">
+                <div class="log-title">Recent Trades</div>
+                <div id="trade-log-list"></div>
+            </div>
+
+            <!-- Player Standings -->
+            <div id="player-standings" class="standings"></div>
+        </div>
+
+        <!-- Results -->
+        <div id="results" class="phase">
+            <h1>Game Over</h1>
+            <div id="goal-reveal" class="goal-reveal"></div>
+            <table class="results-table">
+                <thead><tr>
+                    <th>#</th><th>Player</th><th>Hand</th><th>Chips</th><th>Goal</th><th>Score</th><th>Net</th>
+                </tr></thead>
+                <tbody id="results-body"></tbody>
+            </table>
+            <a href="/" class="back-link" style="display:block;text-align:center;margin-top:20px">&larr; Back to Leaderboard</a>
+        </div>
+    </div>
+    <script src="/figgie.js"></script>
+</body>
+</html>

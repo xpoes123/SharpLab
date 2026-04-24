@@ -1,0 +1,280 @@
+/* Figgie — Trading Floor Styles */
+
+.figgie-container {
+    max-width: 700px;
+    margin: 0 auto;
+    padding: 16px;
+    min-height: 100vh;
+}
+
+.figgie-container h1 {
+    text-align: center;
+    color: var(--accent);
+    font-size: 1.6rem;
+    margin-bottom: 4px;
+}
+
+.phase { display: none; }
+.phase.active { display: block; }
+
+/* ── Hand Panel ──────────────────────────────────────────────────────────── */
+
+.hand-panel {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    margin: 12px 0;
+}
+
+.hand-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 10px 16px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    min-width: 60px;
+}
+
+.hand-card .suit-icon {
+    font-size: 1.6rem;
+    line-height: 1;
+}
+
+.hand-card .count {
+    font-size: 1.4rem;
+    font-weight: 700;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    margin-top: 4px;
+}
+
+.hand-card.spades .suit-icon, .hand-card.clubs .suit-icon { color: var(--text); }
+.hand-card.hearts .suit-icon, .hand-card.diamonds .suit-icon { color: #e74c3c; }
+
+/* ── Market Grid ─────────────────────────────────────────────────────────── */
+
+.market-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin: 12px 0;
+}
+
+.market-col {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px;
+    text-align: center;
+}
+
+.market-col .suit-header {
+    font-size: 1.2rem;
+    font-weight: 600;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+}
+
+.market-col .bid-ask {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.85rem;
+    margin-top: 4px;
+}
+
+.market-col .bid {
+    color: var(--green);
+    font-weight: 600;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+}
+
+.market-col .ask {
+    color: var(--red);
+    font-weight: 600;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+}
+
+.market-col .label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+}
+
+/* ── Trade Panel ─────────────────────────────────────────────────────────── */
+
+.trade-panel {
+    margin: 12px 0;
+}
+
+.trade-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.trade-input {
+    background: var(--card);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    font-size: 0.9rem;
+    font-family: inherit;
+}
+
+.trade-input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+#trade-suit { flex: 1; }
+#trade-price { width: 80px; }
+
+.trade-btn {
+    padding: 10px 20px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    font-family: inherit;
+    border: none;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.trade-btn:hover { opacity: 0.9; }
+
+.buy-btn {
+    background: var(--green);
+    color: var(--bg);
+}
+
+.sell-btn {
+    background: var(--red);
+    color: white;
+}
+
+.cancel-btn {
+    display: block;
+    width: 100%;
+    margin-top: 8px;
+    padding: 8px;
+    font-size: 0.8rem;
+    font-family: inherit;
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+}
+
+.cancel-btn:hover { color: var(--text); border-color: var(--text-muted); }
+
+/* ── Trade Log ───────────────────────────────────────────────────────────── */
+
+.trade-log {
+    margin: 12px 0;
+}
+
+.log-title {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+}
+
+.trade-entry {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 8px;
+    font-size: 0.8rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.trade-entry .trade-suit { font-size: 1rem; }
+.trade-entry .trade-price {
+    font-weight: 600;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    color: var(--accent);
+}
+
+/* ── Standings ───────────────────────────────────────────────────────────── */
+
+.standings {
+    margin: 12px 0;
+}
+
+.standing-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 10px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 4px;
+    font-size: 0.85rem;
+}
+
+.standing-chips {
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    color: var(--accent);
+}
+
+.standing-cards {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+}
+
+/* ── Goal Reveal ─────────────────────────────────────────────────────────── */
+
+.goal-reveal {
+    text-align: center;
+    padding: 20px;
+    margin: 16px 0;
+    background: var(--card);
+    border: 1px solid var(--accent-dim);
+    border-radius: var(--radius);
+}
+
+.goal-reveal .goal-suit {
+    font-size: 2.5rem;
+    margin-bottom: 4px;
+}
+
+.goal-reveal .goal-label {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+}
+
+.goal-reveal .goal-name {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--accent);
+}
+
+/* ── Round End Overlay ───────────────────────────────────────────────────── */
+
+.round-closed-banner {
+    text-align: center;
+    padding: 12px;
+    background: rgba(248, 81, 73, 0.1);
+    border: 1px solid var(--red);
+    border-radius: var(--radius);
+    color: var(--red);
+    font-weight: 600;
+    margin: 8px 0;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+
+@media (max-width: 500px) {
+    .market-grid { grid-template-columns: repeat(2, 1fr); }
+    .hand-panel { gap: 8px; }
+    .hand-card { padding: 8px 12px; min-width: 50px; }
+    .trade-row { flex-wrap: wrap; }
+    #trade-suit { flex: 1 1 100%; }
+}

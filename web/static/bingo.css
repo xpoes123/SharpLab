@@ -1,0 +1,234 @@
+/* Bingo — Card & Board Styles */
+
+.bingo-container {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 16px;
+    min-height: 100vh;
+}
+
+.bingo-container h1 {
+    text-align: center;
+    color: var(--accent);
+    font-size: 1.6rem;
+    margin-bottom: 4px;
+}
+
+.phase { display: none; }
+.phase.active { display: block; }
+
+/* ── Called Number Display ────────────────────────────────────────────────── */
+
+.called-display {
+    text-align: center;
+    margin: 12px 0 20px;
+}
+
+.last-called {
+    font-size: 3rem;
+    font-weight: 800;
+    color: var(--accent);
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    animation: popIn 0.3s ease;
+}
+
+@keyframes popIn {
+    0% { transform: scale(0.5); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+}
+
+.called-count {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+/* ── Bingo Cards ─────────────────────────────────────────────────────────── */
+
+.bingo-cards {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    justify-content: center;
+    margin: 16px 0;
+}
+
+.bingo-card {
+    background: var(--card);
+    border: 2px solid var(--border);
+    border-radius: var(--radius);
+    padding: 8px;
+    min-width: 220px;
+}
+
+.bingo-card.winner {
+    border-color: var(--accent);
+    box-shadow: 0 0 12px var(--accent-dim);
+}
+
+.card-header {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 2px;
+    margin-bottom: 4px;
+}
+
+.card-header span {
+    text-align: center;
+    font-weight: 700;
+    font-size: 0.85rem;
+    color: var(--accent);
+    padding: 4px 0;
+}
+
+.card-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 2px;
+}
+
+.bingo-cell {
+    aspect-ratio: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.9rem;
+    font-weight: 600;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    background: var(--bg);
+    border-radius: 4px;
+    transition: all 0.3s ease;
+    min-width: 36px;
+    min-height: 36px;
+}
+
+.bingo-cell.free {
+    background: var(--accent-dim);
+    color: var(--accent);
+    font-size: 0.7rem;
+}
+
+.bingo-cell.marked {
+    background: var(--accent);
+    color: var(--bg);
+    font-weight: 800;
+    animation: markPop 0.3s ease;
+}
+
+@keyframes markPop {
+    0% { transform: scale(1.3); }
+    100% { transform: scale(1); }
+}
+
+.bingo-cell.target {
+    border: 2px dashed var(--text-muted);
+}
+
+.bingo-cell.marked.target {
+    background: var(--green);
+    border: 2px solid var(--green);
+    color: white;
+}
+
+.card-progress {
+    margin-top: 6px;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    text-align: center;
+}
+
+.card-progress .bar-bg {
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 4px;
+}
+
+.card-progress .bar-fill {
+    height: 100%;
+    background: var(--green);
+    border-radius: 3px;
+    transition: width 0.3s ease;
+}
+
+/* ── Progress Bars (all players) ─────────────────────────────────────────── */
+
+.progress-bar-list {
+    margin: 16px 0;
+}
+
+.progress-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 4px;
+    font-size: 0.85rem;
+}
+
+.progress-row .name { flex: 1; }
+
+.progress-row .bar-bg {
+    width: 80px;
+    height: 8px;
+    background: var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.progress-row .bar-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 4px;
+    transition: width 0.3s;
+}
+
+.progress-row .frac {
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    width: 30px;
+    text-align: right;
+}
+
+/* ── Called Board ────────────────────────────────────────────────────────── */
+
+.called-board {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    margin: 16px 0;
+}
+
+.called-row {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    margin-bottom: 4px;
+    font-size: 0.8rem;
+}
+
+.called-row .letter {
+    font-weight: 700;
+    color: var(--accent);
+    width: 16px;
+}
+
+.called-row .nums {
+    color: var(--text-muted);
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+
+@media (max-width: 500px) {
+    .bingo-cards { gap: 10px; }
+    .bingo-card { min-width: 160px; padding: 4px; }
+    .bingo-cell { font-size: 0.75rem; min-width: 28px; min-height: 28px; }
+    .last-called { font-size: 2rem; }
+}

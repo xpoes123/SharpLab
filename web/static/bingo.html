@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bingo — SharpLab</title>
+    <link rel="stylesheet" href="/style.css">
+    <link rel="stylesheet" href="/bingo.css">
+</head>
+<body>
+    <div class="bingo-container">
+        <div id="connection-status" class="status-bar"></div>
+
+        <!-- Lobby -->
+        <div id="lobby" class="phase active">
+            <h1>Bingo</h1>
+            <p class="subtitle" id="pattern-info">Loading...</p>
+            <div class="lobby-info">
+                <div class="pot-label">Prize Pool</div>
+                <div class="pot" id="lobby-pot">0c</div>
+            </div>
+            <ul class="player-list" id="lobby-players"></ul>
+            <button id="start-btn" class="btn-primary" disabled>Start Game</button>
+            <p class="waiting-text" id="waiting-text">Waiting for players to connect...</p>
+        </div>
+
+        <!-- Calling -->
+        <div id="game" class="phase">
+            <div class="called-display">
+                <div class="last-called" id="last-called">-</div>
+                <div class="called-count" id="called-count">0 called</div>
+            </div>
+
+            <div id="bingo-cards" class="bingo-cards"></div>
+
+            <div id="player-progress" class="progress-bar-list"></div>
+
+            <div class="called-board" id="called-board"></div>
+        </div>
+
+        <!-- Results -->
+        <div id="results" class="phase">
+            <h1 id="result-title">Game Over</h1>
+            <table class="results-table">
+                <thead><tr>
+                    <th>#</th><th>Player</th><th>Cards</th><th>Cost</th><th>Payout</th><th>Net</th>
+                </tr></thead>
+                <tbody id="results-body"></tbody>
+            </table>
+            <a href="/" class="back-link" style="display:block;text-align:center;margin-top:20px">&larr; Back to Leaderboard</a>
+        </div>
+    </div>
+    <script src="/bingo.js"></script>
+</body>
+</html>
