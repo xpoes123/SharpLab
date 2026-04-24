@@ -53,6 +53,8 @@ class SolChessCog(commands.Cog):
         interaction: discord.Interaction,
         difficulty: str = "medium",
     ) -> None:
+        await interaction.response.defer()
+
         uid = str(interaction.user.id)
         channel_id = str(interaction.channel_id)
         await queries.get_or_create_casino_wallet(uid)
@@ -74,13 +76,13 @@ class SolChessCog(commands.Cog):
                     headers={"X-Api-Key": WEB_API_SECRET},
                 )
         except Exception:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "Failed to connect to game server.", ephemeral=True,
             )
             return
 
         if resp.status_code != 200:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "Failed to create web game room.", ephemeral=True,
             )
             return
@@ -100,7 +102,7 @@ class SolChessCog(commands.Cog):
         embed.set_footer(text=f"Room {room_id} \u2022 First to 3 wins")
 
         view = WebSolChessLobbyView(room_id, self.bot)
-        await interaction.response.send_message(embed=embed, view=view)
+        await interaction.followup.send(embed=embed, view=view)
 
     # ── Result polling ─────────────────────────────────────────────────────
 
