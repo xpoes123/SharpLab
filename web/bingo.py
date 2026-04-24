@@ -137,7 +137,7 @@ async def create_token(room_id: str, body: CreateTokenRequest, x_api_key: str = 
         cards=cards,
     )
     await queries.create_game_token(token, room_id, body.discord_user, body.display_name, wager)
-    await _broadcast(room, _room_state_msg(room))
+    await _broadcast_room_state(room)
     base = os.environ.get("WEB_BASE_URL", "https://djiang.xyz")
     return {"token": token, "url": f"{base}/bingo/{room_id}?t={token}"}
 
@@ -181,8 +181,7 @@ async def bingo_websocket(websocket: WebSocket, room_id: str):
     await websocket.accept()
     player.ws = websocket
 
-    await _send(websocket, _room_state_msg(room, viewer=discord_user))
-    await _broadcast(room, _room_state_msg(room))
+    await _broadcast_room_state(room)
 
     # If game is in progress, send current cards
     if room.phase == "calling":
@@ -365,6 +364,12 @@ async def _send_error(player: WebBingoPlayer, message: str) -> None:
 async def _broadcast(room: BingoRoom, msg: dict) -> None:
     for p in room.players.values():
         await _send(p.ws, msg)
+
+
+async def _broadcast_room_state(room: BingoRoom) -> None:
+    """Send personalized room_state to each player (with correct 'you' field)."""
+    for uid, p in room.players.items():
+        await _send(p.ws, _room_state_msg(room, viewer=uid))
 
 
 def _room_state_msg(room: BingoRoom, viewer: str | None = None) -> dict:

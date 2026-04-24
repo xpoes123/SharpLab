@@ -125,7 +125,7 @@ async def create_token(
     await queries.create_game_token(
         token, room_id, body.discord_user, body.display_name, body.wager,
     )
-    await _broadcast(room, _room_state_msg(room))
+    await _broadcast_room_state(room)
     base = os.environ.get("WEB_BASE_URL", "https://djiang.xyz")
     url = f"{base}/sudoku/{room_id}?t={token}"
     return {"token": token, "url": url}
@@ -170,10 +170,8 @@ async def sudoku_websocket(websocket: WebSocket, room_id: str):
     await websocket.accept()
     player.ws = websocket
 
-    # Send initial state to this player, then broadcast updated state to all
-    # (so host sees new player as "connected" without refreshing)
-    await _send(websocket, _room_state_msg(room, viewer=discord_user))
-    await _broadcast(room, _room_state_msg(room))
+    # Send personalized state to every player (each gets their own "you" field)
+    await _broadcast_room_state(room)
 
     try:
         while True:
@@ -424,6 +422,12 @@ async def _send_error(player: WebPlayer, message: str) -> None:
 async def _broadcast(room: SudokuRoom, msg: dict) -> None:
     for p in room.players.values():
         await _send(p.ws, msg)
+
+
+async def _broadcast_room_state(room: SudokuRoom) -> None:
+    """Send personalized room_state to each player (with correct 'you' field)."""
+    for uid, p in room.players.items():
+        await _send(p.ws, _room_state_msg(room, viewer=uid))
 
 
 def _room_state_msg(room: SudokuRoom, viewer: str | None = None) -> dict:
