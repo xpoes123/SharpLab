@@ -76,24 +76,24 @@
                     <button class="ticker-btn" data-ticker="OIL">🛢️ OIL</button>
                     <button class="ticker-btn" data-ticker="SOLAR">☀️ SOLAR</button>
                 </div>
-                <div class="section-label">QUANTITY & LEVERAGE</div>
-                <div class="trade-row">
+                <div class="trade-controls-row">
                     <div class="qty-group">
                         <button class="qty-btn active" data-qty="1">×1</button>
                         <button class="qty-btn" data-qty="5">×5</button>
                         <button class="qty-btn" data-qty="10">×10</button>
                     </div>
-                    <button id="leverage-btn" class="leverage-btn">⚡ 1x</button>
+                    <div class="qty-group">
+                        <button class="leverage-btn active" data-lev="1">1x</button>
+                        <button class="leverage-btn" data-lev="2">2x</button>
+                        <button class="leverage-btn" data-lev="3">3x</button>
+                    </div>
                 </div>
-                <div class="section-label">TRADE</div>
-                <div class="trade-row">
+                <div class="trade-action-row">
                     <button id="buy-btn" class="trade-btn buy-btn">Buy</button>
                     <button id="sell-btn" class="trade-btn sell-btn">Sell</button>
-                    <button id="short-btn" class="trade-btn short-btn">Short</button>
                 </div>
                 <div class="trade-row-secondary">
-                    <button id="sell-all-btn" class="secondary-btn">Sell All</button>
-                    <button id="cover-btn" class="secondary-btn">Cover Short</button>
+                    <button id="sell-all-btn" class="secondary-btn">Close Position</button>
                 </div>
             </div>
 

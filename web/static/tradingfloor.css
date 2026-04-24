@@ -388,10 +388,10 @@
 .qty-btn:hover { color: var(--text); border-color: var(--text-muted); }
 .qty-btn.active { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
 
-/* ── Leverage Button ─────────────────────────────────────────────────────── */
+/* ── Leverage Buttons ────────────────────────────────────────────────────── */
 
 .leverage-btn {
-    padding: 8px 16px;
+    padding: 8px 14px;
     font-size: 0.85rem;
     font-weight: 700;
     font-family: 'SF Mono', 'Cascadia Code', monospace;
@@ -401,11 +401,29 @@
     border-radius: var(--radius);
     cursor: pointer;
     transition: all 0.15s;
-    margin-left: auto;
 }
 
 .leverage-btn:hover { color: var(--text); border-color: var(--text-muted); }
-.leverage-btn.active { color: var(--red); border-color: var(--red); background: rgba(248, 81, 73, 0.15); }
+.leverage-btn.active[data-lev="1"] { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+.leverage-btn.active[data-lev="2"] { color: #e67e22; border-color: #e67e22; background: rgba(230, 126, 34, 0.15); }
+.leverage-btn.active[data-lev="3"] { color: var(--red); border-color: var(--red); background: rgba(248, 81, 73, 0.15); }
+
+/* ── Trade Controls Row ─────────────────────────────────────────────────── */
+
+.trade-controls-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 10px;
+}
+
+.trade-action-row {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-bottom: 6px;
+}
 
 /* ── Portfolio Allocation ───────────────────────────────────────────────── */
 

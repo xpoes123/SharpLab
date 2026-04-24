@@ -293,6 +293,24 @@ async def _handle_message(room: TradingFloor, player: TFPlayer, data: dict) -> N
         qty = max(1, int(data.get("qty", 1)))
         await _handle_market_order(room, player, data.get("ticker", ""), qty, "short")
 
+    elif msg_type == "sell_or_short":
+        # Unified sell: sells if you have shares, shorts if you don't
+        qty = max(1, int(data.get("qty", 1)))
+        ticker = data.get("ticker", "").upper()
+        if ticker not in room.stocks:
+            await _send_error(player, "Invalid ticker")
+            return
+        held = player.positions.get(ticker, 0)
+        if held > 0:
+            # Sell what we have first, then short the rest
+            sell_qty = min(qty, held)
+            await _handle_market_order(room, player, ticker, sell_qty, "sell")
+            remaining = qty - sell_qty
+            if remaining > 0:
+                await _handle_market_order(room, player, ticker, remaining, "short")
+        else:
+            await _handle_market_order(room, player, ticker, qty, "short")
+
     elif msg_type == "sell_all":
         ticker = data.get("ticker", "").upper()
         if ticker not in room.stocks:
@@ -303,6 +321,20 @@ async def _handle_message(room: TradingFloor, player: TFPlayer, data: dict) -> N
             await _send_error(player, "No shares to sell")
             return
         await _handle_market_order(room, player, ticker, held, "sell")
+
+    elif msg_type == "close_position":
+        # Close any position: sell longs or cover shorts
+        ticker = data.get("ticker", "").upper()
+        if ticker not in room.stocks:
+            await _send_error(player, "Invalid ticker")
+            return
+        pos = player.positions.get(ticker, 0)
+        if pos > 0:
+            await _handle_market_order(room, player, ticker, pos, "sell")
+        elif pos < 0:
+            await _handle_market_order(room, player, ticker, abs(pos), "buy")
+        else:
+            await _send_error(player, "No position to close")
 
     elif msg_type == "cover":
         ticker = data.get("ticker", "").upper()
@@ -504,9 +536,9 @@ async def _run_npc_picks(room: TradingFloor) -> None:
 
     Both have the same expected value over many rounds, but different risk profiles.
     """
-    # Stagger: Cramer at ~8s, Pelosi at ~22s
+    # Stagger: Cramer at ~5s, Pelosi at ~12s
     for idx, analyst in enumerate(NPC_ANALYSTS):
-        delay = 8 + idx * 14 + random.uniform(-2, 2)
+        delay = 5 + idx * 7 + random.uniform(-2, 2)
         await asyncio.sleep(delay)
         if not room.trade_open:
             break

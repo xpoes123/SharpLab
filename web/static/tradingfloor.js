@@ -427,12 +427,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('start-btn').addEventListener('click', () => send({ type: 'start' }));
 
-    // Leverage toggle
-    document.getElementById('leverage-btn').addEventListener('click', () => {
-        leverageMode = leverageMode === 1 ? 2 : 1;
-        const btn = document.getElementById('leverage-btn');
-        btn.textContent = `\u26a1 ${leverageMode}x`;
-        btn.classList.toggle('active', leverageMode === 2);
+    // Leverage selector (3 buttons)
+    document.querySelectorAll('.leverage-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.leverage-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            leverageMode = parseInt(btn.dataset.lev);
+        });
     });
 
     // Ticker selector (4 buttons)
@@ -457,20 +458,14 @@ document.addEventListener('DOMContentLoaded', () => {
         send({ type: 'buy', ticker: selectedTicker, qty: selectedQty * leverageMode });
     });
 
+    // Sell button: sells if you have shares, shorts if you don't
     document.getElementById('sell-btn').addEventListener('click', () => {
-        send({ type: 'sell', ticker: selectedTicker, qty: selectedQty });
+        send({ type: 'sell_or_short', ticker: selectedTicker, qty: selectedQty * leverageMode });
     });
 
-    document.getElementById('short-btn').addEventListener('click', () => {
-        send({ type: 'short', ticker: selectedTicker, qty: selectedQty * leverageMode });
-    });
-
+    // Close position: sells all longs or covers all shorts
     document.getElementById('sell-all-btn').addEventListener('click', () => {
-        send({ type: 'sell_all', ticker: selectedTicker });
-    });
-
-    document.getElementById('cover-btn').addEventListener('click', () => {
-        send({ type: 'cover', ticker: selectedTicker });
+        send({ type: 'close_position', ticker: selectedTicker });
     });
 
 });
