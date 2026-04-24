@@ -57,6 +57,7 @@ GAME_LABELS: dict[str, str] = {
     "tournament": "Tournaments",
     "figgie": "Figgie",
     "mathsprint": "Math Sprint",
+    "pokemon": "Who's That Pokemon?",
 }
 
 GAME_CATEGORIES: list[tuple[str, str]] = [
@@ -1831,6 +1832,22 @@ GAME_RULES: dict[str, str] = {
         "Score = remaining chips + 10 \u00d7 goal-suit cards. Highest score wins the pot.\n\n"
         "**Key insight:** If you see lots of one suit, its same-colour partner is likely the goal!"
     ),
+    "pokemon": (
+        "**Who's That Pokemon?**\n"
+        "Guess the Pokemon from progressive hints!\n\n"
+        "**How to play:** Join the table and place your bet. Each round, hints about a "
+        "mystery Pokemon are revealed over 30 seconds:\n"
+        "\u2022 **0s:** Type(s) and generation\n"
+        "\u2022 **10s:** A descriptive clue\n"
+        "\u2022 **20s:** First letter and name length\n\n"
+        "Type the Pokemon's name in chat \u2014 first correct answer wins the round!\n\n"
+        "**Scoring:** First to 3 round wins takes the pot. "
+        "Payouts follow the paytable based on player count.\n\n"
+        "**Categories:** All Generations, Gen 1 (Kanto), Gen 2\u20134, Gen 5+, "
+        "or Legendary & Mythical only.\n"
+        "**Tip:** Earlier guesses are harder but more impressive. "
+        "The Pokemon's artwork is revealed after each round!"
+    ),
     "mathsprint": (
         "**Mental Math Sprint**\n"
         "10 rapid-fire arithmetic problems. Fastest correct answer wins each point.\n\n"
@@ -1880,6 +1897,7 @@ CASINO_GAMES: list[tuple[str, str, str, str]] = [
     ("sudoku", "Sudoku Sprint \u2014 fill the 4\u00d74 grid fastest", "Brain Games", "party"),
     ("stockguess", "Guess a stock's YTD % change \u2014 closest wins!", "Brain Games", "party"),
     ("mathsprint", "Mental Math Sprint \u2014 10 rapid-fire problems", "Brain Games", "party"),
+    ("pokemon", "Who's That Pokemon? \u2014 guess from hints", "Brain Games", "party"),
     # ── Sports Sim
     ("nbasim", "Simulated NBA game betting", "Sports Sim", "solo"),
     ("nflsim", "Simulated NFL game betting", "Sports Sim", "solo"),

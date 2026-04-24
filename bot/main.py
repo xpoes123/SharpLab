@@ -59,6 +59,7 @@ COGS = [
     "bot.cogs.figgie",
     "bot.cogs.predictions",
     "bot.cogs.mathsprint",
+    "bot.cogs.pokemon",
 ]
 
 GUILD_ID = int(os.environ["DISCORD_GUILD_ID"])
