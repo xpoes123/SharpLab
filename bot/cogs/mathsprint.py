@@ -246,6 +246,7 @@ class SprintTable:
     race_task: asyncio.Task | None = field(default=None, repr=False)
     last_bets: dict[int, tuple[str, int]] = field(default_factory=dict)
     game_num: int = 1
+    stop_requested: bool = False
 
 
 # ── Embeds ───────────────────────────────────────────────────────────────────
@@ -451,6 +452,45 @@ class JoinSprintModal(ui.Modal):
 # ── View ─────────────────────────────────────────────────────────────────────
 
 
+class SprintEndGameView(ui.View):
+    """Button posted in the thread so any player can stop the game early."""
+
+    def __init__(self, table: SprintTable) -> None:
+        super().__init__(timeout=None)
+        self.table = table
+
+    @ui.button(
+        label="End Game", style=discord.ButtonStyle.danger,
+        emoji="\u23f9\ufe0f", row=0,
+    )
+    async def end_btn(
+        self, interaction: discord.Interaction, button: ui.Button,
+    ) -> None:
+        if self.table.phase == "closed":
+            await interaction.response.send_message(
+                "The game has already ended.", ephemeral=True,
+            )
+            return
+        if (
+            interaction.user.id != self.table.host_id
+            and interaction.user.id not in self.table.players
+        ):
+            await interaction.response.send_message(
+                "Only players can end the game!", ephemeral=True,
+            )
+            return
+        if self.table.stop_requested:
+            await interaction.response.send_message(
+                "Already ending\u2026", ephemeral=True,
+            )
+            return
+        self.table.stop_requested = True
+        self.table.round_solved.set()  # wake up the game loop immediately
+        button.disabled = True
+        button.label = "Ending\u2026"
+        await interaction.response.edit_message(view=self)
+
+
 class SprintTableView(ui.View):
     def __init__(self, table: SprintTable, active_tables: dict[int, SprintTable]) -> None:
         super().__init__(timeout=600)
@@ -590,7 +630,8 @@ class SprintTableView(ui.View):
             table.thread = thread
             await thread.send(
                 f"\U0001f9e0 **Math Sprint started!** Type your answer directly here. "
-                f"**{ROUND_SECONDS}s** per problem \u2014 fastest correct answer wins the point!"
+                f"**{ROUND_SECONDS}s** per problem \u2014 fastest correct answer wins the point!",
+                view=SprintEndGameView(table),
             )
 
         table.round_start = time.monotonic()
@@ -649,6 +690,9 @@ class SprintTableView(ui.View):
 
                 solved = await self._wait_for_solve_or_timeout()
 
+                if table.stop_requested:
+                    break
+
                 if solved and table.round_winner is not None:
                     if table.current_thread_msg:
                         try:
@@ -668,6 +712,14 @@ class SprintTableView(ui.View):
                 table.phase = "between"
                 await asyncio.sleep(ROUND_DELAY)
 
+                if table.stop_requested:
+                    break
+
+            if table.stop_requested and table.thread:
+                try:
+                    await table.thread.send("\u23f9\ufe0f Game ended early.")
+                except discord.HTTPException:
+                    pass
             await self._end_game()
 
         except asyncio.CancelledError:
