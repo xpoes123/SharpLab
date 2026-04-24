@@ -244,7 +244,7 @@ class WebSolChessLobbyView(ui.View):
         self.room_id = room_id
         self.bot = bot
 
-    @ui.button(label="Join", style=discord.ButtonStyle.primary, emoji="\u265e")
+    @ui.button(label="Join", style=discord.ButtonStyle.primary, emoji="\U0001f9e9")
     async def join_btn(
         self, interaction: discord.Interaction, button: ui.Button,
     ) -> None:
