@@ -1,0 +1,416 @@
+/* Sudoku Sprint — Game Styles */
+
+.sudoku-container {
+    max-width: 500px;
+    margin: 0 auto;
+    padding: 24px 16px;
+    min-height: 100vh;
+}
+
+.sudoku-container h1 {
+    text-align: center;
+    color: var(--accent);
+    font-size: 1.6rem;
+    margin-bottom: 4px;
+}
+
+.subtitle {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    margin-bottom: 20px;
+}
+
+.phase { display: none; }
+.phase.active { display: block; }
+
+/* ── Lobby ───────────────────────────────────────────────────────────────── */
+
+.lobby-info {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-bottom: 16px;
+}
+
+.lobby-info .pot {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--accent);
+    text-align: center;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+}
+
+.lobby-info .pot-label {
+    text-align: center;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.player-list {
+    list-style: none;
+    margin: 16px 0;
+}
+
+.player-list li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 6px;
+    font-size: 0.9rem;
+}
+
+.player-list .host-badge {
+    background: var(--accent);
+    color: var(--bg);
+    font-size: 0.7rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 600;
+    margin-left: 8px;
+}
+
+.player-list .wager {
+    color: var(--text-muted);
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+}
+
+.player-list .connected {
+    color: var(--green);
+}
+
+.player-list .disconnected {
+    color: var(--text-muted);
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+
+.btn-primary {
+    display: block;
+    width: 100%;
+    padding: 14px;
+    font-size: 1rem;
+    font-weight: 600;
+    font-family: inherit;
+    background: var(--accent);
+    color: var(--bg);
+    border: none;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.btn-primary:hover { opacity: 0.9; }
+.btn-primary:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.waiting-text {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    margin-top: 12px;
+}
+
+/* ── Game Header ─────────────────────────────────────────────────────────── */
+
+.game-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    padding: 12px 16px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.round-info {
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.timer {
+    font-size: 1.8rem;
+    font-weight: 700;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    color: var(--accent);
+    min-width: 60px;
+    text-align: center;
+}
+
+.timer.urgent {
+    color: var(--red);
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse { 50% { opacity: 0.5; } }
+
+.pot-display {
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+/* ── Grid ────────────────────────────────────────────────────────────────── */
+
+.grid-container {
+    display: flex;
+    justify-content: center;
+    margin: 20px 0;
+}
+
+.sudoku-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 2px;
+    width: 280px;
+    height: 280px;
+    background: var(--border);
+    border: 3px solid var(--text-muted);
+    border-radius: 4px;
+}
+
+.cell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 2rem;
+    font-weight: 600;
+    background: var(--card);
+    cursor: pointer;
+    transition: all 0.1s;
+    user-select: none;
+}
+
+.cell.given {
+    color: var(--text);
+    background: var(--bg);
+    cursor: default;
+}
+
+.cell.blank {
+    color: var(--accent);
+}
+
+.cell.selected {
+    outline: 3px solid var(--accent);
+    outline-offset: -3px;
+    z-index: 1;
+}
+
+.cell.conflict {
+    background: rgba(248, 81, 73, 0.15);
+    color: var(--red);
+}
+
+/* 2x2 box borders */
+.cell:nth-child(2), .cell:nth-child(6),
+.cell:nth-child(10), .cell:nth-child(14) {
+    border-right: 3px solid var(--text-muted);
+}
+
+.cell:nth-child(5), .cell:nth-child(6),
+.cell:nth-child(7), .cell:nth-child(8) {
+    border-bottom: 3px solid var(--text-muted);
+}
+
+/* ── Number Pad ──────────────────────────────────────────────────────────── */
+
+.num-pad {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin: 16px 0;
+}
+
+.num-btn {
+    width: 56px;
+    height: 56px;
+    font-size: 1.4rem;
+    font-weight: 600;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--text);
+    cursor: pointer;
+    transition: all 0.1s;
+    font-family: inherit;
+}
+
+.num-btn:hover, .num-btn:active {
+    background: var(--accent);
+    color: var(--bg);
+}
+
+.erase-btn {
+    color: var(--red);
+}
+
+#submit-btn {
+    margin-top: 8px;
+}
+
+/* ── Player Status Bar ───────────────────────────────────────────────────── */
+
+.player-status-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+    margin: 16px 0;
+}
+
+.status-chip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    font-size: 0.8rem;
+}
+
+.status-chip.solved {
+    border-color: var(--green);
+    color: var(--green);
+}
+
+.status-chip .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-muted);
+}
+
+.status-chip.solving .dot { background: var(--accent); }
+.status-chip.solved .dot { background: var(--green); }
+
+/* ── Scoreboard ──────────────────────────────────────────────────────────── */
+
+.scoreboard {
+    margin: 16px 0;
+}
+
+.scoreboard-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 4px;
+    font-size: 0.85rem;
+}
+
+.score-wins {
+    font-weight: 600;
+    color: var(--accent);
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+}
+
+/* ── Round Result Overlay ────────────────────────────────────────────────── */
+
+.round-result {
+    text-align: center;
+    padding: 24px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin: 16px 0;
+}
+
+.round-result h2 {
+    font-size: 1.2rem;
+    margin-bottom: 8px;
+}
+
+.round-result .time {
+    color: var(--accent);
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    font-size: 1.1rem;
+}
+
+.round-result .next {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    margin-top: 8px;
+}
+
+/* ── Results ─────────────────────────────────────────────────────────────── */
+
+.results-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    margin: 16px 0;
+}
+
+.results-table th {
+    text-align: left;
+    padding: 8px 10px;
+    color: var(--text-muted);
+    font-weight: 500;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+}
+
+.results-table td {
+    padding: 10px;
+    border-bottom: 1px solid var(--border);
+}
+
+/* ── Toast ────────────────────────────────────────────────────────────────── */
+
+.toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 20px;
+    border-radius: var(--radius);
+    font-size: 0.85rem;
+    z-index: 100;
+    animation: fadeInUp 0.2s ease;
+}
+
+.toast.error { border-color: var(--red); color: var(--red); }
+.toast.success { border-color: var(--green); color: var(--green); }
+
+@keyframes fadeInUp {
+    from { opacity: 0; transform: translateX(-50%) translateY(10px); }
+    to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* ── Connection status ───────────────────────────────────────────────────── */
+
+.status-bar {
+    text-align: center;
+    font-size: 0.8rem;
+    padding: 6px;
+    margin-bottom: 12px;
+    border-radius: var(--radius);
+}
+
+.status-bar.connected { color: var(--green); }
+.status-bar.disconnected { color: var(--red); background: rgba(248,81,73,0.1); }
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+
+@media (max-width: 400px) {
+    .sudoku-grid { width: 240px; height: 240px; }
+    .cell { font-size: 1.6rem; }
+    .num-btn { width: 48px; height: 48px; font-size: 1.2rem; }
+    .timer { font-size: 1.4rem; }
+}

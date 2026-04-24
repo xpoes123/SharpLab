@@ -237,6 +237,28 @@ CREATE TABLE IF NOT EXISTS elo_match_history (
 );
 CREATE INDEX IF NOT EXISTS idx_elo_match_user ON elo_match_history(discord_user, game);
 CREATE INDEX IF NOT EXISTS idx_elo_match_time ON elo_match_history(played_at);
+
+CREATE TABLE IF NOT EXISTS game_sessions (
+    room_id         TEXT PRIMARY KEY,
+    game_type       TEXT NOT NULL DEFAULT 'sudoku',
+    host_discord_id TEXT NOT NULL,
+    channel_id      TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'waiting',
+    prize_pool      INTEGER NOT NULL DEFAULT 0,
+    result_json     TEXT,
+    created_at      TEXT NOT NULL,
+    finished_at     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS game_tokens (
+    token        TEXT PRIMARY KEY,
+    room_id      TEXT NOT NULL REFERENCES game_sessions(room_id),
+    discord_user TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    wager        INTEGER NOT NULL,
+    created_at   TEXT NOT NULL,
+    UNIQUE(room_id, discord_user)
+);
 """
 
 

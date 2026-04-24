@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sudoku Sprint — SharpLab</title>
+    <link rel="stylesheet" href="/style.css">
+    <link rel="stylesheet" href="/sudoku.css">
+</head>
+<body>
+    <div class="sudoku-container">
+        <div id="connection-status" class="status-bar"></div>
+
+        <!-- Lobby -->
+        <div id="lobby" class="phase active">
+            <h1>Sudoku Sprint</h1>
+            <p class="subtitle">First to 3 wins takes the pot</p>
+            <div class="lobby-info">
+                <div class="pot-label">Prize Pool</div>
+                <div class="pot" id="lobby-pot">0c</div>
+            </div>
+            <ul class="player-list" id="lobby-players"></ul>
+            <button id="start-btn" class="btn-primary" disabled>Start Game</button>
+            <p class="waiting-text" id="waiting-text">Waiting for players to connect...</p>
+        </div>
+
+        <!-- Playing -->
+        <div id="game" class="phase">
+            <div class="game-header">
+                <div class="round-info">Round <span id="round-num">1</span></div>
+                <div class="timer" id="timer">90</div>
+                <div class="pot-display" id="game-pot">0c</div>
+            </div>
+
+            <div class="grid-container">
+                <div id="sudoku-grid" class="sudoku-grid"></div>
+            </div>
+
+            <div class="num-pad">
+                <button class="num-btn" data-num="1">1</button>
+                <button class="num-btn" data-num="2">2</button>
+                <button class="num-btn" data-num="3">3</button>
+                <button class="num-btn" data-num="4">4</button>
+                <button class="num-btn erase-btn" data-num="0">X</button>
+            </div>
+
+            <button id="submit-btn" class="btn-primary">Submit</button>
+
+            <div id="player-status" class="player-status-bar"></div>
+            <div id="scoreboard" class="scoreboard"></div>
+        </div>
+
+        <!-- Round Result (overlay within game) -->
+        <div id="round-result" class="phase">
+            <div class="round-result">
+                <h2 id="result-title"></h2>
+                <div class="time" id="result-time"></div>
+                <div id="result-scoreboard" class="scoreboard"></div>
+                <div class="next" id="result-next">Next round in 5s...</div>
+            </div>
+        </div>
+
+        <!-- Final Results -->
+        <div id="results" class="phase">
+            <h1>Game Over</h1>
+            <table class="results-table">
+                <thead><tr>
+                    <th>#</th><th>Player</th><th>Wins</th><th>Bet</th><th>Payout</th><th>Net</th>
+                </tr></thead>
+                <tbody id="results-body"></tbody>
+            </table>
+            <a href="/" class="back-link" style="display:block;text-align:center;margin-top:20px">&larr; Back to Leaderboard</a>
+        </div>
+    </div>
+    <script src="/sudoku.js"></script>
+</body>
+</html>

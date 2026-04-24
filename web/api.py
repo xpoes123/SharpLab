@@ -1,23 +1,46 @@
-"""SharpLab Web Leaderboard API — read-only FastAPI backend."""
+"""SharpLab Web API — leaderboards + game engine."""
 
+import asyncio
 import os
+from contextlib import asynccontextmanager
 from math import isqrt
 
 import aiosqlite
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from db.schema import init_db
+from web.sudoku import router as sudoku_router, sudoku_websocket, cleanup_stale_rooms
+
 DB_PATH = os.environ.get("SHARPLAB_DB_PATH", "data/sharplab.db")
 
-app = FastAPI(title="SharpLab Leaderboard", docs_url=None, redoc_url=None)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    cleanup_task = asyncio.create_task(cleanup_stale_rooms())
+    yield
+    cleanup_task.cancel()
+
+
+app = FastAPI(title="SharpLab", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://djiang.xyz", "http://localhost:8000"],
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+# Mount game routers
+app.include_router(sudoku_router)
+
+
+# WebSocket endpoint (not on the API router — different path pattern)
+@app.websocket("/ws/sudoku/{room_id}")
+async def ws_sudoku(websocket: WebSocket, room_id: str):
+    await sudoku_websocket(websocket, room_id)
 
 # ── Static data (replicated from bot cogs to avoid importing bot deps) ───────
 

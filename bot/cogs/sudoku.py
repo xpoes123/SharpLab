@@ -6,200 +6,26 @@ Submissions via button modal (private).
 """
 
 import asyncio
-import random
+import os
 import time
 from dataclasses import dataclass, field
-from itertools import groupby
 
 import discord
+import httpx
 from discord import app_commands, ui
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from db import queries
-
-# ── Constants ────────────────────────────────────────────────────────────────
-
-MAX_PLAYERS = 8
-MIN_PLAYERS = 1
-ROUND_TIME = 90  # seconds per round
-ROUND_DELAY = 5  # seconds between rounds
-WINS_TO_WIN = 3  # first to N wins
-MAX_ROUNDS = 15  # safety cap
-BLANKS = 8  # cells to remove from the 4x4 grid (out of 16)
-
-# Paytable: fraction of prize pool by finishing position, keyed by player count
-PAYTABLE: dict[int, list[float]] = {
-    1: [1.0],
-    2: [1.0],
-    3: [0.70, 0.30],
-    4: [0.55, 0.30, 0.15],
-    5: [0.45, 0.25, 0.18, 0.12],
-    6: [0.40, 0.24, 0.16, 0.12, 0.08],
-    7: [0.36, 0.22, 0.16, 0.12, 0.08, 0.06],
-    8: [0.33, 0.21, 0.16, 0.12, 0.08, 0.06, 0.04],
-}
-
-MEDALS = ["\U0001f947", "\U0001f948", "\U0001f949"]
-
-# ── Sudoku logic (4x4) ──────────────────────────────────────────────────────
-
-Grid = list[list[int]]  # 4x4, 0 = blank
-
-
-def _generate_grid() -> Grid:
-    """Generate a random valid completed 4x4 Sudoku grid."""
-    grid: Grid = [[0] * 4 for _ in range(4)]
-
-    def _valid(g: Grid, r: int, c: int, num: int) -> bool:
-        if num in g[r]:
-            return False
-        if any(g[row][c] == num for row in range(4)):
-            return False
-        br, bc = (r // 2) * 2, (c // 2) * 2
-        for dr in range(2):
-            for dc in range(2):
-                if g[br + dr][bc + dc] == num:
-                    return False
-        return True
-
-    def _fill(g: Grid, pos: int = 0) -> bool:
-        if pos == 16:
-            return True
-        r, c = divmod(pos, 4)
-        nums = [1, 2, 3, 4]
-        random.shuffle(nums)
-        for n in nums:
-            if _valid(g, r, c, n):
-                g[r][c] = n
-                if _fill(g, pos + 1):
-                    return True
-                g[r][c] = 0
-        return False
-
-    _fill(grid)
-    return grid
-
-
-def _count_solutions(puzzle: Grid, limit: int = 2) -> int:
-    """Count solutions for a puzzle, stopping early at *limit*."""
-    count = 0
-
-    def _valid(g: Grid, r: int, c: int, num: int) -> bool:
-        if num in g[r]:
-            return False
-        if any(g[row][c] == num for row in range(4)):
-            return False
-        br, bc = (r // 2) * 2, (c // 2) * 2
-        for dr in range(2):
-            for dc in range(2):
-                if g[br + dr][bc + dc] == num:
-                    return False
-        return True
-
-    blanks = [(r, c) for r in range(4) for c in range(4) if puzzle[r][c] == 0]
-
-    def _solve(idx: int) -> None:
-        nonlocal count
-        if count >= limit:
-            return
-        if idx == len(blanks):
-            count += 1
-            return
-        r, c = blanks[idx]
-        for n in range(1, 5):
-            if _valid(puzzle, r, c, n):
-                puzzle[r][c] = n
-                _solve(idx + 1)
-                puzzle[r][c] = 0
-
-    _solve(0)
-    return count
-
-
-def _make_puzzle(solution: Grid, n_blanks: int = BLANKS) -> Grid:
-    """Remove *n_blanks* cells from a completed grid, ensuring unique solution."""
-    puzzle: Grid = [row[:] for row in solution]
-    cells = [(r, c) for r in range(4) for c in range(4)]
-    random.shuffle(cells)
-    removed = 0
-    for r, c in cells:
-        if removed >= n_blanks:
-            break
-        saved = puzzle[r][c]
-        puzzle[r][c] = 0
-        if _count_solutions([row[:] for row in puzzle]) == 1:
-            removed += 1
-        else:
-            puzzle[r][c] = saved
-    return puzzle
-
-
-def _format_grid(puzzle: Grid) -> str:
-    """Pretty-print a 4x4 Sudoku grid as a code block."""
-    lines: list[str] = []
-    lines.append("┌───────┬───────┐")
-    for r in range(4):
-        cells = []
-        for c in range(4):
-            v = puzzle[r][c]
-            cells.append(str(v) if v != 0 else "_")
-        row_str = f"│ {cells[0]}   {cells[1]} │ {cells[2]}   {cells[3]} │"
-        lines.append(row_str)
-        if r == 1:
-            lines.append("├───────┼───────┤")
-    lines.append("└───────┴───────┘")
-    return "```\n" + "\n".join(lines) + "\n```"
-
-
-def _row_display(puzzle: Grid, row: int) -> str:
-    """Display a single row with blanks as underscores, for modal placeholder."""
-    return "".join(str(puzzle[row][c]) if puzzle[row][c] != 0 else "_" for c in range(4))
-
-
-# ── Payout helpers ───────────────────────────────────────────────────────────
-
-
-def _compute_payouts(
-    players: dict[int, "SudokuPlayer"], prize_pool: int, n_players: int,
-) -> dict[int, int]:
-    """Compute per-player payouts using the paytable."""
-    pct_table = PAYTABLE.get(n_players, PAYTABLE[8])
-
-    in_money = sorted(
-        [p for p in players.values() if p.rounds_won > 0],
-        key=lambda p: p.rounds_won,
-        reverse=True,
-    )
-
-    payouts: dict[int, int] = {uid: 0 for uid in players}
-
-    if not in_money:
-        return payouts
-
-    paid_positions = len(pct_table)
-    pos = 0
-    for _wins, group_iter in groupby(in_money, key=lambda p: p.rounds_won):
-        group = list(group_iter)
-        if pos >= paid_positions:
-            break
-        end = min(pos + len(group), paid_positions)
-        combined_share = sum(pct_table[pos:end])
-        per_player = int(prize_pool * combined_share / len(group))
-        for p in group:
-            payouts[p.user_id] = per_player
-        pos += len(group)
-
-    total_paid = sum(payouts.values())
-    leftover = prize_pool - total_paid
-    if leftover > 0 and in_money:
-        top_wins = in_money[0].rounds_won
-        top_group = [p for p in in_money if p.rounds_won == top_wins]
-        extra = leftover // len(top_group)
-        for p in top_group:
-            payouts[p.user_id] += extra
-
-    return payouts
-
+from shared.sudoku_logic import (
+    Grid, MAX_PLAYERS, MIN_PLAYERS, ROUND_TIME, ROUND_DELAY,
+    WINS_TO_WIN, MAX_ROUNDS, BLANKS, PAYTABLE, MEDALS,
+    generate_grid as _generate_grid,
+    make_puzzle as _make_puzzle,
+    find_error as _find_error,
+    format_grid as _format_grid,
+    row_display as _row_display,
+    compute_payouts as _compute_payouts,
+)
 
 # ── Dataclasses ──────────────────────────────────────────────────────────────
 
@@ -619,29 +445,6 @@ class SolveModal(ui.Modal):
                     )
                 except discord.HTTPException:
                     pass
-
-
-def _find_error(grid: Grid) -> str:
-    """Return a brief hint about what's wrong with the submitted grid."""
-    # Check rows
-    for r in range(4):
-        if sorted(grid[r]) != [1, 2, 3, 4]:
-            return f"Row {r + 1} doesn't have 1\u20134 exactly once."
-    # Check columns
-    for c in range(4):
-        col = [grid[r][c] for r in range(4)]
-        if sorted(col) != [1, 2, 3, 4]:
-            return f"Column {c + 1} doesn't have 1\u20134 exactly once."
-    # Check 2x2 boxes
-    for br in (0, 2):
-        for bc in (0, 2):
-            box = [grid[br + dr][bc + dc] for dr in range(2) for dc in range(2)]
-            if sorted(box) != [1, 2, 3, 4]:
-                label = "top-left" if (br, bc) == (0, 0) else \
-                        "top-right" if (br, bc) == (0, 2) else \
-                        "bottom-left" if (br, bc) == (2, 0) else "bottom-right"
-                return f"The {label} box doesn't have 1\u20134 exactly once."
-    return "Something's off."
 
 
 # ── View ─────────────────────────────────────────────────────────────────────
@@ -1097,10 +900,21 @@ class SudokuTableView(ui.View):
 # ── Cog ──────────────────────────────────────────────────────────────────────
 
 
+WEB_API_BASE = os.environ.get("WEB_API_BASE", "https://djiang.xyz")
+WEB_API_SECRET = os.environ.get("WEB_API_SECRET", "dev-secret")
+
+
 class SudokuCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.active_tables: dict[int, SudokuTable] = {}
+        self._pending_web_rooms: dict[str, int] = {}  # room_id -> channel_id
+
+    async def cog_load(self) -> None:
+        self._poll_web_results.start()
+
+    async def cog_unload(self) -> None:
+        self._poll_web_results.cancel()
 
     @app_commands.command(
         name="sudoku",
@@ -1128,6 +942,180 @@ class SudokuCog(commands.Cog):
         embed = _betting_embed(table)
         await interaction.response.send_message(embed=embed, view=view)
         table.message = await interaction.original_response()
+
+    # ── Web Sudoku ─────────────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="sudoku-web",
+        description="Open a Sudoku Sprint game on the web (better UI)",
+    )
+    async def sudoku_web(self, interaction: discord.Interaction) -> None:
+        uid = str(interaction.user.id)
+        channel_id = str(interaction.channel_id)
+        await queries.get_or_create_casino_wallet(uid)
+
+        # Create room via web API
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{WEB_API_BASE}/api/v1/sudoku/rooms",
+                json={
+                    "host_discord_id": uid,
+                    "channel_id": channel_id,
+                    "host_display_name": interaction.user.display_name,
+                },
+                headers={"X-Api-Key": WEB_API_SECRET},
+            )
+        if resp.status_code != 200:
+            await interaction.response.send_message(
+                "Failed to create web game room.", ephemeral=True,
+            )
+            return
+
+        room_id = resp.json()["room_id"]
+        self._pending_web_rooms[room_id] = interaction.channel_id
+
+        embed = discord.Embed(
+            title="\U0001f9e9 Sudoku Sprint (Web)",
+            description=(
+                "Play in your browser with an interactive grid!\n\n"
+                "Click **Join** below to enter your bet and get your game link."
+            ),
+            colour=discord.Colour.gold(),
+        )
+        embed.set_footer(text=f"Room {room_id} \u2022 First to 3 wins")
+
+        view = WebSudokuLobbyView(room_id, self.bot)
+        await interaction.response.send_message(embed=embed, view=view)
+
+    # ── Result polling ─────────────────────────────────────────────────────
+
+    @tasks.loop(seconds=10)
+    async def _poll_web_results(self) -> None:
+        for room_id in list(self._pending_web_rooms):
+            try:
+                async with httpx.AsyncClient(timeout=5) as client:
+                    resp = await client.get(
+                        f"{WEB_API_BASE}/api/v1/sudoku/rooms/{room_id}/result",
+                    )
+                if resp.status_code != 200:
+                    continue
+
+                result = resp.json()
+                channel_id = self._pending_web_rooms.pop(room_id)
+                channel = self.bot.get_channel(channel_id)
+                if not channel:
+                    continue
+
+                embed = discord.Embed(
+                    title="\U0001f9e9 Sudoku Sprint — Results",
+                    colour=discord.Colour.green(),
+                )
+                lines = []
+                medals = ["\U0001f947", "\U0001f948", "\U0001f949"]
+                for i, r in enumerate(result.get("results", [])):
+                    badge = medals[i] if i < 3 else f"`{i+1}.`"
+                    net = r["net"]
+                    sign = "+" if net > 0 else ""
+                    lines.append(
+                        f"{badge} **{r['display_name']}** \u2014 "
+                        f"{r['rounds_won']}W \u2014 "
+                        f"{r['wager']}c \u2192 {r['payout']}c ({sign}{net}c)"
+                    )
+                embed.description = "\n".join(lines) if lines else "No results."
+                embed.set_footer(
+                    text=f"Room {room_id} \u2022 {result.get('total_rounds', 0)} rounds played"
+                )
+                await channel.send(embed=embed)
+            except Exception:
+                pass
+
+    @_poll_web_results.before_loop
+    async def _before_poll(self) -> None:
+        await self.bot.wait_until_ready()
+
+
+# ── Web Sudoku Lobby View ────────────────────────────────────────────────────
+
+
+class WebSudokuJoinModal(ui.Modal, title="Join Sudoku Sprint"):
+    amount = ui.TextInput(
+        label="Bet amount (coins)",
+        placeholder="e.g. 100",
+        min_length=1,
+        max_length=10,
+    )
+
+    def __init__(self, room_id: str) -> None:
+        super().__init__()
+        self.room_id = room_id
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        try:
+            amt = int(self.amount.value)
+        except ValueError:
+            await interaction.response.send_message("Invalid amount.", ephemeral=True)
+            return
+
+        if amt <= 0:
+            await interaction.response.send_message("Bet must be positive.", ephemeral=True)
+            return
+
+        uid = str(interaction.user.id)
+        bal = await queries.get_casino_balance(uid)
+        if bal is None or bal < amt:
+            await interaction.response.send_message(
+                f"Insufficient balance (you have {bal or 0}c).", ephemeral=True,
+            )
+            return
+
+        # Deduct coins
+        await queries.update_casino_balance(uid, -amt)
+
+        # Create token via web API
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    f"{WEB_API_BASE}/api/v1/sudoku/rooms/{self.room_id}/tokens",
+                    json={
+                        "discord_user": uid,
+                        "display_name": interaction.user.display_name,
+                        "wager": amt,
+                    },
+                    headers={"X-Api-Key": WEB_API_SECRET},
+                )
+            if resp.status_code != 200:
+                # Refund on failure
+                await queries.update_casino_balance(uid, amt)
+                detail = resp.json().get("detail", "Unknown error")
+                await interaction.response.send_message(
+                    f"Failed to join: {detail}", ephemeral=True,
+                )
+                return
+
+            url = resp.json()["url"]
+            await interaction.response.send_message(
+                f"\U0001f517 **[Click here to play]({url})**\n"
+                f"Your {amt}c bet is locked in. Open the link to connect.",
+                ephemeral=True,
+            )
+        except Exception:
+            await queries.update_casino_balance(uid, amt)
+            await interaction.response.send_message(
+                "Failed to connect to game server. Bet refunded.", ephemeral=True,
+            )
+
+
+class WebSudokuLobbyView(ui.View):
+    def __init__(self, room_id: str, bot: commands.Bot) -> None:
+        super().__init__(timeout=1800)
+        self.room_id = room_id
+        self.bot = bot
+
+    @ui.button(label="Join", style=discord.ButtonStyle.primary, emoji="\U0001f4dd")
+    async def join_btn(
+        self, interaction: discord.Interaction, button: ui.Button,
+    ) -> None:
+        await interaction.response.send_modal(WebSudokuJoinModal(self.room_id))
 
 
 async def setup(bot: commands.Bot) -> None:

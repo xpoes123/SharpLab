@@ -2431,3 +2431,67 @@ async def get_elo_history(
         )
         rows = await cursor.fetchall()
     return [dict(r) for r in rows]
+
+
+# ── Web Game Sessions ────────────────────────────────────────────────────────
+
+
+async def create_game_session(
+    room_id: str, game_type: str, host_discord_id: str, channel_id: str,
+) -> None:
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO game_sessions
+               (room_id, game_type, host_discord_id, channel_id, status, created_at)
+               VALUES (?, ?, ?, ?, 'waiting', ?)""",
+            (room_id, game_type, host_discord_id, channel_id, now_iso),
+        )
+        await db.commit()
+
+
+async def create_game_token(
+    token: str, room_id: str, discord_user: str, display_name: str, wager: int,
+) -> None:
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO game_tokens
+               (token, room_id, discord_user, display_name, wager, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (token, room_id, discord_user, display_name, wager, now_iso),
+        )
+        await db.commit()
+
+
+async def get_game_token(token: str) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM game_tokens WHERE token = ?", (token,),
+        )
+        row = await cursor.fetchone()
+    return dict(row) if row else None
+
+
+async def finish_game_session(
+    room_id: str, result_json: str, prize_pool: int,
+) -> None:
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """UPDATE game_sessions SET status = 'finished', result_json = ?,
+               prize_pool = ?, finished_at = ? WHERE room_id = ?""",
+            (result_json, prize_pool, now_iso, room_id),
+        )
+        await db.commit()
+
+
+async def get_game_session(room_id: str) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM game_sessions WHERE room_id = ?", (room_id,),
+        )
+        row = await cursor.fetchone()
+    return dict(row) if row else None
