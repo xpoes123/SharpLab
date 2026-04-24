@@ -74,7 +74,7 @@ function onRoomState(msg) {
         });
         const startBtn = document.getElementById('start-btn');
         startBtn.style.display = isHost ? 'block' : 'none';
-        startBtn.disabled = msg.players.filter(p => p.connected).length < 2;
+        startBtn.disabled = msg.players.filter(p => p.connected).length < 1;
         document.getElementById('waiting-text').style.display = isHost ? 'none' : 'block';
     }
 }
