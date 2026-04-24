@@ -1321,6 +1321,7 @@ class GeographyCog(commands.Cog):
 
             table.round_solved.set()
         else:
+            player.answer = "__wrong__"
             _fire_stat(str(uid), table, correct=False)
 
             try:
