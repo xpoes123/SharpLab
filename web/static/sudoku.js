@@ -114,11 +114,11 @@ function onRoundStart(msg) {
     currentPuzzle = msg.puzzle;
     playerGrid = msg.puzzle.map(row => [...row]);
     selectedCell = null;
+    solved = false;
 
     document.getElementById('round-num').textContent = msg.round_num;
     document.getElementById('timer').textContent = msg.time_limit;
     document.getElementById('timer').classList.remove('urgent');
-    document.getElementById('submit-btn').disabled = false;
 
     renderGrid();
     clearPlayerStatus();
@@ -177,6 +177,20 @@ function placeNumber(num) {
 
     playerGrid[r][c] = num;
     renderGrid();
+
+    // Auto-submit when all cells are filled
+    tryAutoSubmit();
+}
+
+function tryAutoSubmit() {
+    if (gamePhase !== 'game' || solved) return;
+    for (let r = 0; r < 4; r++) {
+        for (let c = 0; c < 4; c++) {
+            if (playerGrid[r][c] === 0) return;  // still has blanks
+        }
+    }
+    // All filled — send to server for validation
+    send({ type: 'submit', grid: playerGrid });
 }
 
 function highlightConflicts() {
@@ -294,10 +308,16 @@ function onGameOver(msg) {
 
 // ── Submit Result ───────────────────────────────────────────────────────────
 
+let solved = false;
+
 function onSubmitResult(msg) {
     if (msg.correct) {
+        solved = true;
         showToast(`Correct! ${msg.solve_time}s`, 'success');
-        document.getElementById('submit-btn').disabled = true;
+        // Lock the grid — no more edits
+        document.querySelectorAll('.cell.blank').forEach(c => {
+            c.style.pointerEvents = 'none';
+        });
     } else {
         showToast(msg.hint, 'error');
     }
@@ -360,20 +380,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // Start button
     document.getElementById('start-btn').addEventListener('click', () => {
         send({ type: 'start' });
-    });
-
-    // Submit button
-    document.getElementById('submit-btn').addEventListener('click', () => {
-        // Check all cells filled
-        for (let r = 0; r < 4; r++) {
-            for (let c = 0; c < 4; c++) {
-                if (playerGrid[r][c] === 0) {
-                    showToast('Fill all cells first!', 'error');
-                    return;
-                }
-            }
-        }
-        send({ type: 'submit', grid: playerGrid });
     });
 
     // Number pad

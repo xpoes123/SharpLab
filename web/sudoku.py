@@ -170,8 +170,10 @@ async def sudoku_websocket(websocket: WebSocket, room_id: str):
     await websocket.accept()
     player.ws = websocket
 
-    # Send initial state
+    # Send initial state to this player, then broadcast updated state to all
+    # (so host sees new player as "connected" without refreshing)
     await _send(websocket, _room_state_msg(room, viewer=discord_user))
+    await _broadcast(room, _room_state_msg(room))
 
     try:
         while True:
