@@ -12,16 +12,12 @@ import re
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from itertools import groupby
-
 import discord
 import httpx
 from discord import app_commands, ui
 from discord.ext import commands
 
 from bot.cogs._elo_helpers import update_elo_multiplayer
-
-from db import queries
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -34,18 +30,6 @@ BATCH_SIZE = 5  # bonuses fetched per API call
 QB_API = "https://www.qbreader.org/api"
 
 MEDALS = ["\U0001f947", "\U0001f948", "\U0001f949"]
-
-# Paytable: fraction of prize pool by finishing position, keyed by player count
-PAYTABLE: dict[int, list[float]] = {
-    1: [1.0],
-    2: [1.0],
-    3: [0.70, 0.30],
-    4: [0.55, 0.30, 0.15],
-    5: [0.45, 0.25, 0.18, 0.12],
-    6: [0.40, 0.24, 0.16, 0.12, 0.08],
-    7: [0.36, 0.22, 0.16, 0.12, 0.08, 0.06],
-    8: [0.33, 0.21, 0.16, 0.12, 0.08, 0.06, 0.04],
-}
 
 # qbreader category names (must be title-cased for the API)
 QB_CATEGORIES: list[tuple[str, str, str]] = [
@@ -176,55 +160,6 @@ def _local_check_answer(answerline: str, given: str) -> bool:
     return False
 
 
-# ── Payout helpers ───────────────────────────────────────────────────────────
-
-
-def _compute_payouts(
-    players: dict[int, "QBPlayer"], prize_pool: int, n_players: int,
-) -> dict[int, int]:
-    """Compute per-player payouts using the paytable.
-
-    Players ranked by score. Ties split combined shares for occupied positions.
-    Unused paid positions roll up to first place.
-    """
-    pct_table = PAYTABLE.get(n_players, PAYTABLE[8])
-
-    in_money = sorted(
-        [p for p in players.values() if p.score > 0],
-        key=lambda p: p.score,
-        reverse=True,
-    )
-
-    payouts: dict[int, int] = {uid: 0 for uid in players}
-
-    if not in_money:
-        return payouts
-
-    paid_positions = len(pct_table)
-    pos = 0
-    for _score, group_iter in groupby(in_money, key=lambda p: p.score):
-        group = list(group_iter)
-        if pos >= paid_positions:
-            break
-        end = min(pos + len(group), paid_positions)
-        combined_share = sum(pct_table[pos:end])
-        per_player = int(prize_pool * combined_share / len(group))
-        for p in group:
-            payouts[p.user_id] = per_player
-        pos += len(group)
-
-    total_paid = sum(payouts.values())
-    leftover = prize_pool - total_paid
-    if leftover > 0 and in_money:
-        top_score = in_money[0].score
-        top_group = [p for p in in_money if p.score == top_score]
-        extra = leftover // len(top_group)
-        for p in top_group:
-            payouts[p.user_id] += extra
-
-    return payouts
-
-
 # ── Dataclasses ──────────────────────────────────────────────────────────────
 
 
@@ -232,7 +167,6 @@ def _compute_payouts(
 class QBPlayer:
     user_id: int
     display_name: str
-    bet: int
     score: int = 0
 
 
@@ -259,7 +193,6 @@ class QBTable:
     bonus_part_results: dict[int, tuple[int, str]] = field(default_factory=dict)
     game_task: asyncio.Task | None = field(default=None, repr=False)
     stop_requested: bool = False
-    last_bets: dict[int, tuple[str, int]] = field(default_factory=dict)
     total_parts_played: int = 0
 
 
@@ -292,10 +225,7 @@ def _scoreboard(table: QBTable) -> str:
 
 
 def _betting_embed(table: QBTable) -> discord.Embed:
-    pot = sum(p.bet for p in table.players.values())
-    n = len(table.players)
     cat = _cat_label(table.category)
-
     diff = _diff_label(table.difficulty)
 
     embed = discord.Embed(
@@ -308,20 +238,9 @@ def _betting_embed(table: QBTable) -> discord.Embed:
         colour=discord.Colour.blue(),
     )
 
-    if pot:
-        embed.add_field(name="Pot", value=f"{pot}c", inline=True)
-
-    if n >= MIN_PLAYERS:
-        pt = PAYTABLE.get(n, PAYTABLE[8])
-        pt_parts = [
-            f"{MEDALS[i] if i < 3 else chr(0x25aa) + chr(0xfe0f)} {int(s * 100)}%"
-            for i, s in enumerate(pt)
-        ]
-        embed.add_field(name="Paytable", value=" | ".join(pt_parts), inline=True)
-
     if table.players:
         lines = [
-            f"\U0001f9e0 **{p.display_name}** \u2014 {p.bet}c"
+            f"\U0001f9e0 **{p.display_name}**"
             for p in table.players.values()
         ]
         embed.add_field(name="Players", value="\n".join(lines), inline=False)
@@ -406,22 +325,17 @@ def _bonus_summary_embed(table: QBTable) -> discord.Embed:
     return embed
 
 
-def _final_embed(
-    table: QBTable,
-    *,
-    payouts: dict[int, int],
-    balances: dict[int, int],
-) -> discord.Embed:
+def _final_embed(table: QBTable) -> discord.Embed:
     max_score = max((p.score for p in table.players.values()), default=0)
-    is_refund = max_score == 0
+    no_scores = max_score == 0
 
     embed = discord.Embed(
         title="\U0001f9e0 Quiz Bowl \u2014 Results",
-        colour=discord.Colour.gold() if not is_refund else discord.Colour.dark_grey(),
+        colour=discord.Colour.gold() if not no_scores else discord.Colour.dark_grey(),
     )
 
-    if is_refund:
-        embed.description = "No points scored \u2014 all bets refunded!"
+    if no_scores:
+        embed.description = "No points scored!"
     else:
         sorted_p = sorted(
             table.players.values(), key=lambda p: p.score, reverse=True,
@@ -437,96 +351,15 @@ def _final_embed(
     )
     lines: list[str] = []
     for i, p in enumerate(sorted_players):
-        payout = payouts.get(p.user_id, 0)
-        bal = balances.get(p.user_id, 0)
-        net = payout - p.bet
-        sign = "+" if net >= 0 else ""
         medal = MEDALS[i] if i < len(MEDALS) and p.score > 0 else "\u25aa\ufe0f"
-        lines.append(
-            f"{medal} **{p.display_name}** ({p.score} pts) \u2014 "
-            f"{p.bet}c \u2192 {payout}c "
-            f"(**{sign}{net}c**) \u2014 bal: {bal}c"
-        )
-    embed.add_field(name="Results", value="\n".join(lines), inline=False)
-
-    if not is_refund:
-        n = len(table.players)
-        pt = PAYTABLE.get(n, PAYTABLE[8])
-        pt_parts = [
-            f"{MEDALS[i] if i < 3 else chr(0x25aa) + chr(0xfe0f)} {int(s * 100)}%"
-            for i, s in enumerate(pt)
-        ]
-        embed.add_field(
-            name=f"Paytable ({n} players)",
-            value=" | ".join(pt_parts),
-            inline=True,
-        )
+        lines.append(f"{medal} **{p.display_name}** \u2014 {p.score} pts")
+    embed.add_field(name="Scores", value="\n".join(lines), inline=False)
 
     embed.add_field(
         name="Bonuses Played", value=str(table.bonus_num), inline=True,
     )
     embed.set_footer(text=f"Host: {table.host_name}")
     return embed
-
-
-# ── Modals ───────────────────────────────────────────────────────────────────
-
-
-class JoinQBModal(ui.Modal):
-    amount = ui.TextInput(
-        label="Bet amount (coins)",
-        placeholder="e.g. 100",
-        required=True,
-        max_length=10,
-    )
-
-    def __init__(
-        self, table: QBTable, view: "QBLobbyView", balance: int,
-    ) -> None:
-        super().__init__(title="Join Quiz Bowl")
-        self.table = table
-        self.lobby_view = view
-        self.amount.placeholder = f"e.g. 100 (bal: {balance}c)"
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            amt = int(self.amount.value)
-        except ValueError:
-            await interaction.response.send_message(
-                "Enter a whole number.", ephemeral=True,
-            )
-            return
-        if amt < 1:
-            await interaction.response.send_message(
-                "Must be at least 1 coin.", ephemeral=True,
-            )
-            return
-        uid = interaction.user.id
-        if uid in self.table.players:
-            await interaction.response.send_message(
-                "You're already in this game!", ephemeral=True,
-            )
-            return
-
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins! (have {bal}c)", ephemeral=True,
-            )
-            return
-
-        self.table.players[uid] = QBPlayer(
-            user_id=uid,
-            display_name=interaction.user.display_name,
-            bet=amt,
-        )
-
-        self.lobby_view._update_buttons()
-        await interaction.response.edit_message(
-            embed=_betting_embed(self.table), view=self.lobby_view,
-        )
 
 
 # ── "End Game" view posted inside the thread ─────────────────────────────────
@@ -622,7 +455,6 @@ class QBLobbyView(ui.View):
             not betting or len(self.table.players) < MIN_PLAYERS
         )
         self.join_btn.disabled = not betting
-        self.rebet_btn.disabled = not betting or not self.table.last_bets
         self.leave_btn.disabled = not betting
         self.close_btn.disabled = self.table.phase == "playing"
         self.category_select.disabled = not betting
@@ -677,52 +509,9 @@ class QBLobbyView(ui.View):
                 "Table is full!", ephemeral=True,
             )
             return
-        bal = await queries.get_or_create_casino_wallet(str(uid))
-        await interaction.response.send_modal(
-            JoinQBModal(self.table, self, bal),
-        )
-
-    @ui.button(
-        label="Re-bet", style=discord.ButtonStyle.primary,
-        emoji="\U0001f504", row=0,
-    )
-    async def rebet_btn(
-        self, interaction: discord.Interaction, button: ui.Button,
-    ) -> None:
-        if self.table.phase != "betting":
-            await interaction.response.send_message(
-                "Game in progress!", ephemeral=True,
-            )
-            return
-        uid = interaction.user.id
-        if uid in self.table.players:
-            await interaction.response.send_message(
-                "You're already in!", ephemeral=True,
-            )
-            return
-        last = self.table.last_bets.get(uid)
-        if last is None:
-            await interaction.response.send_message(
-                "No previous bet \u2014 use Join instead.", ephemeral=True,
-            )
-            return
-        if len(self.table.players) >= MAX_PLAYERS:
-            await interaction.response.send_message(
-                "Table is full!", ephemeral=True,
-            )
-            return
-        name, amt = last
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins for {amt}c re-bet! (have {bal}c)",
-                ephemeral=True,
-            )
-            return
         self.table.players[uid] = QBPlayer(
-            user_id=uid, display_name=name, bet=amt,
+            user_id=uid,
+            display_name=interaction.user.display_name,
         )
         self._update_buttons()
         await interaction.response.edit_message(
@@ -748,7 +537,6 @@ class QBLobbyView(ui.View):
                 "Can't leave during a game!", ephemeral=True,
             )
             return
-        await queries.update_casino_balance(str(uid), player.bet)
         del self.table.players[uid]
         self._update_buttons()
         await interaction.response.edit_message(
@@ -844,10 +632,6 @@ class QBLobbyView(ui.View):
     async def _start_game(self, interaction: discord.Interaction) -> None:
         table = self.table
 
-        # Save last bets for re-bet
-        for uid, p in table.players.items():
-            table.last_bets[uid] = (p.display_name, p.bet)
-
         table.phase = "playing"
         self._update_buttons()
 
@@ -859,8 +643,6 @@ class QBLobbyView(ui.View):
         )
         players_text = ", ".join(p.display_name for p in table.players.values())
         embed.add_field(name="Players", value=players_text, inline=False)
-        pot = sum(p.bet for p in table.players.values())
-        embed.add_field(name="Pot", value=f"{pot}c", inline=True)
         embed.add_field(name="Category", value=_cat_label(table.category), inline=True)
         await interaction.response.edit_message(embed=embed, view=self)
 
@@ -979,7 +761,7 @@ class QBLobbyView(ui.View):
                         await table.thread.send(embed=_bonus_summary_embed(table))
                         await asyncio.sleep(BETWEEN_BONUS_DELAY)
 
-            # Game ended — compute payouts
+            # Game ended
             await self._end_game()
 
         except asyncio.CancelledError:
@@ -988,46 +770,9 @@ class QBLobbyView(ui.View):
             table.phase = "closed"
             self.active_tables.pop(table.channel_id, None)
 
-    async def _compute_and_apply_payouts(
-        self,
-    ) -> tuple[dict[int, int], dict[int, int]]:
-        table = self.table
-        n_players = len(table.players)
-        pot = sum(p.bet for p in table.players.values())
-        max_score = max((p.score for p in table.players.values()), default=0)
-
-        if max_score == 0:
-            payouts = {uid: p.bet for uid, p in table.players.items()}
-            for uid, refund in payouts.items():
-                try:
-                    await queries.update_casino_balance(str(uid), refund)
-                except Exception:
-                    pass
-        else:
-            payouts = _compute_payouts(table.players, pot, n_players)
-            for uid, payout in payouts.items():
-                if payout > 0:
-                    try:
-                        await queries.update_casino_balance(str(uid), payout)
-                    except Exception:
-                        pass
-
-        balances: dict[int, int] = {}
-        for uid in table.players:
-            bal = await queries.get_casino_balance(str(uid))
-            balances[uid] = bal or 0
-
-        for uid, p in table.players.items():
-            payout = payouts.get(uid, 0)
-            await queries.log_casino_result(str(uid), "quizbowl", p.bet, payout)
-
-        return payouts, balances
-
     async def _end_game(self) -> None:
         table = self.table
         table.phase = "closed"
-
-        payouts, balances = await self._compute_and_apply_payouts()
 
         if len(table.players) >= 2:
             sorted_p = sorted(table.players.values(), key=lambda p: p.score, reverse=True)
@@ -1037,7 +782,7 @@ class QBLobbyView(ui.View):
             except Exception:
                 pass
 
-        embed = _final_embed(table, payouts=payouts, balances=balances)
+        embed = _final_embed(table)
 
         # Post final results in thread
         if table.thread:
@@ -1062,15 +807,9 @@ class QBLobbyView(ui.View):
     async def _close_table(self, interaction: discord.Interaction) -> None:
         table = self.table
 
-        for p in table.players.values():
-            try:
-                await queries.update_casino_balance(str(p.user_id), p.bet)
-            except Exception:
-                pass
-
         embed = discord.Embed(
             title="\U0001f9e0 Quiz Bowl \u2014 Closed",
-            description="Table closed. All bets refunded.",
+            description="Table closed.",
             colour=discord.Colour.dark_grey(),
         )
         for child in self.children:
@@ -1088,11 +827,10 @@ class QBLobbyView(ui.View):
         if table.phase == "closed":
             return
 
-        # If game was in progress with scores, pay out based on current scores
+        # If game was in progress with scores, show final results
         if table.total_parts_played > 0:
             table.phase = "closed"
-            payouts, balances = await self._compute_and_apply_payouts()
-            embed = _final_embed(table, payouts=payouts, balances=balances)
+            embed = _final_embed(table)
             embed.title = "\U0001f9e0 Quiz Bowl \u2014 Timed Out"
 
             if table.thread:
@@ -1100,13 +838,6 @@ class QBLobbyView(ui.View):
                     await table.thread.send(embed=embed)
                     await table.thread.edit(archived=True)
                 except discord.HTTPException:
-                    pass
-        else:
-            # No parts played — full refund
-            for p in table.players.values():
-                try:
-                    await queries.update_casino_balance(str(p.user_id), p.bet)
-                except Exception:
                     pass
 
         table.phase = "closed"
@@ -1116,9 +847,9 @@ class QBLobbyView(ui.View):
             try:
                 embed = discord.Embed(
                     title="\U0001f9e0 Quiz Bowl \u2014 Timed Out",
-                    description="Table timed out. All bets refunded."
-                    if table.total_parts_played == 0
-                    else "Table timed out. Scores settled.",
+                    description="Table timed out. Scores settled."
+                    if table.total_parts_played > 0
+                    else "Table timed out.",
                     colour=discord.Colour.dark_grey(),
                 )
                 await table.message.edit(embed=embed, view=None)
@@ -1150,8 +881,6 @@ class QuizBowlCog(commands.Cog):
                 ephemeral=True,
             )
             return
-
-        await queries.get_or_create_casino_wallet(str(interaction.user.id))
 
         table = QBTable(
             channel_id=channel_id,

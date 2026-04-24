@@ -30,7 +30,6 @@ from bot.cogs.geography import (  # noqa: E402
     GeoTableView,
     _normalize,
     check_answer,
-    _compute_payouts,
 )
 import bot.cogs.geography as geo  # noqa: E402
 
@@ -38,7 +37,6 @@ import pytest  # noqa: E402
 
 _normalize = geo._normalize
 check_answer = geo.check_answer
-_compute_payouts = geo._compute_payouts
 CAPITALS = geo.CAPITALS
 US_STATE_CAPITALS = geo.US_STATE_CAPITALS
 COUNTRY_CODES = geo.COUNTRY_CODES
@@ -107,54 +105,6 @@ class TestCheckAnswer:
         # "Sana'a" stripped to "sanaa"
         assert check_answer("Sanaa", ["Sanaa", "Sana'a"])
 
-
-# ── _compute_payouts ──────────────────────────────────────────────────────────
-
-class TestComputePayouts:
-    def _player(self, uid: int, won: int, bet: int = 100) -> GeoPlayer:
-        p = GeoPlayer(user_id=uid, display_name=f"P{uid}", bet=bet)
-        p.rounds_won = won
-        return p
-
-    def test_single_player_takes_all(self):
-        players = {1: self._player(1, 3)}
-        payouts = _compute_payouts(players, 100, 1)
-        assert payouts[1] == 100
-
-    def test_zero_rounds_no_payout(self):
-        players = {1: self._player(1, 0), 2: self._player(2, 0)}
-        payouts = _compute_payouts(players, 200, 2)
-        assert payouts[1] == 0
-        assert payouts[2] == 0
-
-    def test_two_player_winner_takes_all(self):
-        players = {1: self._player(1, 3), 2: self._player(2, 0)}
-        payouts = _compute_payouts(players, 200, 2)
-        assert payouts[1] == 200
-        assert payouts[2] == 0
-
-    def test_three_player_split(self):
-        players = {
-            1: self._player(1, 3),
-            2: self._player(2, 1),
-            3: self._player(3, 0),
-        }
-        pot = 300
-        payouts = _compute_payouts(players, pot, 3)
-        # 70% to first, 30% to second, 0 to third
-        assert payouts[1] == int(300 * 0.70)
-        assert payouts[2] == int(300 * 0.30)
-        assert payouts[3] == 0
-
-    def test_tie_splits_combined_share(self):
-        players = {
-            1: self._player(1, 3),
-            2: self._player(2, 3),
-        }
-        payouts = _compute_payouts(players, 200, 2)
-        # Two-player table: winner takes all → both tied at 1st get 100 each
-        assert payouts[1] == payouts[2]
-        assert payouts[1] + payouts[2] <= 200
 
 
 # ── Data completeness ─────────────────────────────────────────────────────────
