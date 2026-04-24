@@ -1,10 +1,9 @@
-"""Casino cog — /tennissim fake tennis match simulator.
+"""Cog — /tennissim fake tennis match simulator.
 
 Two random ATP or WTA players are drawn (same tour — no cross-gender
 matches). Each gets a win probability based on realistic player ratings.
-Players pick a side and bet coins. A set-by-set simulation runs with
-realistic tennis scoring (games, tiebreaks, best-of-3 sets), and
-winners are paid fixed odds based on the pre-match probability.
+Players join to watch a set-by-set simulation — no coins change hands.
+Best-of-3 sets with realistic tennis scoring (games, tiebreaks).
 """
 
 import asyncio
@@ -15,8 +14,6 @@ from dataclasses import dataclass, field
 import discord
 from discord import app_commands, ui
 from discord.ext import commands
-
-from db import queries
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -97,10 +94,6 @@ def _generate_win_prob(p1: TennisPlayerInfo, p2: TennisPlayerInfo) -> float:
     return max(0.15, min(0.85, raw))
 
 
-def _payout_multiplier(prob: float) -> float:
-    return 1 / prob
-
-
 def _prob_to_american(prob: float) -> str:
     if prob >= 0.5:
         odds = -round(prob / (1 - prob) * 100)
@@ -172,10 +165,6 @@ def _simulate_tiebreak(p1_prob: float) -> tuple[int, int]:
 class TennisSimPlayer:
     user_id: int
     display_name: str
-    bet: int
-    side: str  # "p1" or "p2"
-    payout: int = 0
-    won: bool = False
 
 
 @dataclass
@@ -183,7 +172,7 @@ class TennisSimTable:
     channel_id: int
     host_id: int
     host_name: str
-    phase: str = "betting"  # betting | playing | finished
+    phase: str = "waiting"  # waiting | playing | finished
     # Matchup — p1 listed first (like "home"), p2 second
     p1: TennisPlayerInfo | None = None
     p2: TennisPlayerInfo | None = None
@@ -192,7 +181,6 @@ class TennisSimTable:
     players: dict[int, TennisSimPlayer] = field(default_factory=dict)
     message: discord.Message | None = None
     round_num: int = 1
-    last_bets: dict[int, tuple[str, int, str]] = field(default_factory=dict)
     # Sim state
     current_set: int = 0
     p1_sets: int = 0
@@ -208,62 +196,47 @@ class TennisSimTable:
 # ── Embeds ───────────────────────────────────────────────────────────────────
 
 
-def _betting_embed(table: TennisSimTable) -> discord.Embed:
-    total_wagered = sum(p.bet for p in table.players.values())
-
+def _waiting_embed(table: TennisSimTable) -> discord.Embed:
     p1 = table.p1
     p2 = table.p2
     p2_prob = 1 - table.p1_prob
 
     p1_odds = _prob_to_american(table.p1_prob)
     p2_odds = _prob_to_american(p2_prob)
-    p1_mult = _payout_multiplier(table.p1_prob)
-    p2_mult = _payout_multiplier(p2_prob)
 
     tour_label = p1.tour.upper() if p1 else ""
 
     embed = discord.Embed(
-        title=f"\U0001f3be Tennis Sim \u2014 Place Your Bets (Round {table.round_num})",
+        title=f"\U0001f3be Tennis Sim \u2014 Watch the Match (Round {table.round_num})",
         description=(
-            f"**{tour_label}** match \u2014 pick a player and bet coins!\n"
-            f"Best of {SETS_TO_WIN * 2 - 1} sets."
+            f"**{tour_label}** match \u2014 join to watch!\n"
+            f"Best of {SETS_TO_WIN * 2 - 1} sets. No coins needed."
         ),
         colour=discord.Colour.teal(),
     )
 
     matchup_text = (
         f"**{p1.short}** {p1.name} (rating {p1.rating})\n"
-        f"\u2003Win: {table.p1_prob * 100:.0f}% ({p1_odds}) \u2014 **{p1_mult:.1f}x** payout\n\n"
+        f"\u2003Win probability: {table.p1_prob * 100:.0f}% ({p1_odds})\n\n"
         f"**{p2.short}** {p2.name} (rating {p2.rating})\n"
-        f"\u2003Win: {p2_prob * 100:.0f}% ({p2_odds}) \u2014 **{p2_mult:.1f}x** payout"
+        f"\u2003Win probability: {p2_prob * 100:.0f}% ({p2_odds})"
     )
     embed.add_field(
         name=f"{p1.short} vs {p2.short}", value=matchup_text, inline=False,
     )
 
-    if total_wagered:
-        embed.add_field(name="Total Wagered", value=f"{total_wagered}c", inline=True)
-
     if table.players:
-        player_lines = []
-        for p in table.players.values():
-            pick_short = p1.short if p.side == "p1" else p2.short
-            player_lines.append(
-                f"\U0001f3b0 **{p.display_name}** \u2014 {p.bet}c on **{pick_short}**"
-            )
-        embed.add_field(name="Players", value="\n".join(player_lines), inline=False)
+        viewer_lines = [f"\U0001f440 **{p.display_name}**" for p in table.players.values()]
+        embed.add_field(name="Viewers", value="\n".join(viewer_lines), inline=False)
     else:
         embed.add_field(
-            name="Players",
-            value="*No players yet \u2014 click Join!*",
+            name="Viewers",
+            value="*No one yet \u2014 click Join!*",
             inline=False,
         )
 
     embed.set_footer(
-        text=(
-            f"Host: {table.host_name} \u2502 Min {MIN_PLAYERS} player(s) "
-            f"\u2502 Enter \"{p1.short.lower()}\" or \"{p2.short.lower()}\" in modal"
-        ),
+        text=f"Host: {table.host_name} \u2502 Min {MIN_PLAYERS} player(s) to start",
     )
     return embed
 
@@ -323,20 +296,15 @@ def _playing_embed(table: TennisSimTable) -> discord.Embed:
     )
     embed.description = _scoreboard_text(table)
 
-    bet_lines: list[str] = []
-    for p in table.players.values():
-        pick_short = p1_short if p.side == "p1" else p2_short
-        bet_lines.append(f"**{p.display_name}** \u2014 {p.bet}c on {pick_short}")
-    if bet_lines:
-        embed.add_field(name="Bets", value="\n".join(bet_lines), inline=False)
+    if table.players:
+        viewer_lines = [f"**{p.display_name}**" for p in table.players.values()]
+        embed.add_field(name="Viewers", value="\n".join(viewer_lines), inline=False)
 
     embed.set_footer(text=f"Host: {table.host_name}")
     return embed
 
 
-def _finished_embed(
-    table: TennisSimTable, *, balances: dict[int, int] | None = None,
-) -> discord.Embed:
+def _finished_embed(table: TennisSimTable) -> discord.Embed:
     p1_short = table.p1.short
     p2_short = table.p2.short
 
@@ -345,9 +313,7 @@ def _finished_embed(
 
     embed = discord.Embed(
         title=f"\U0001f3be Tennis Sim \u2014 Final (Round {table.round_num})",
-        description=(
-            f"\U0001f3c6 **{winner_short}** wins {sets_text}! "
-        ),
+        description=f"\U0001f3c6 **{winner_short}** wins {sets_text}!",
         colour=discord.Colour.green(),
     )
 
@@ -357,112 +323,12 @@ def _finished_embed(
         inline=False,
     )
 
-    lines: list[str] = []
-    for p in table.players.values():
-        bal = balances.get(p.user_id, 0) if balances else 0
-        pick_short = p1_short if p.side == "p1" else p2_short
-        net = p.payout - p.bet
-        sign = "+" if net >= 0 else ""
-        if p.won:
-            lines.append(
-                f"\U0001f3c6 **{p.display_name}** ({pick_short}) \u2014 "
-                f"{p.bet}c \u2192 {p.payout}c (**{sign}{net}c**) \u2014 bal: {bal}c"
-            )
-        else:
-            lines.append(
-                f"\u274c **{p.display_name}** ({pick_short}) \u2014 "
-                f"{p.bet}c \u2192 0c (**-{p.bet}c**) \u2014 bal: {bal}c"
-            )
-    if lines:
-        embed.add_field(name="Results", value="\n".join(lines), inline=False)
+    if table.players:
+        viewer_lines = [f"**{p.display_name}**" for p in table.players.values()]
+        embed.add_field(name="Viewers", value="\n".join(viewer_lines), inline=False)
 
     embed.set_footer(text=f"Host: {table.host_name}")
     return embed
-
-
-# ── Modal ────────────────────────────────────────────────────────────────────
-
-
-class JoinTennisSimModal(ui.Modal):
-    amount = ui.TextInput(
-        label="Bet amount (coins)",
-        placeholder="e.g. 100",
-        required=True,
-        max_length=10,
-    )
-    side_input = ui.TextInput(
-        label="Pick a player",
-        placeholder="player name",
-        required=True,
-        max_length=20,
-    )
-
-    def __init__(
-        self, table: TennisSimTable, view: "TennisSimTableView", balance: int,
-    ) -> None:
-        p1_short = table.p1.short
-        p2_short = table.p2.short
-        super().__init__(title=f"Tennis Sim \u2014 {p1_short} vs {p2_short}")
-        self.table = table
-        self.table_view = view
-        self.amount.placeholder = f"e.g. 100 (bal: {balance}c)"
-        self.side_input.placeholder = f"{p1_short} / {p2_short}"
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            amt = int(self.amount.value)
-        except ValueError:
-            await interaction.response.send_message(
-                "Enter a whole number for bet.", ephemeral=True,
-            )
-            return
-        if amt < 1:
-            await interaction.response.send_message(
-                "Must be at least 1 coin.", ephemeral=True,
-            )
-            return
-
-        raw = self.side_input.value.strip().lower()
-        p1 = self.table.p1
-        p2 = self.table.p2
-        if raw in (p1.short.lower(), p1.name.lower(), "p1", "1"):
-            side = "p1"
-        elif raw in (p2.short.lower(), p2.name.lower(), "p2", "2"):
-            side = "p2"
-        else:
-            await interaction.response.send_message(
-                f"Enter **{p1.short}** or **{p2.short}**.",
-                ephemeral=True,
-            )
-            return
-
-        uid = interaction.user.id
-        if uid in self.table.players:
-            await interaction.response.send_message(
-                "You're already in this round!", ephemeral=True,
-            )
-            return
-
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins! (have {bal}c)", ephemeral=True,
-            )
-            return
-
-        self.table.players[uid] = TennisSimPlayer(
-            user_id=uid,
-            display_name=interaction.user.display_name,
-            bet=amt,
-            side=side,
-        )
-
-        self.table_view._update_buttons()
-        await interaction.response.edit_message(
-            embed=_betting_embed(self.table), view=self.table_view,
-        )
 
 
 # ── View ─────────────────────────────────────────────────────────────────────
@@ -479,15 +345,14 @@ class TennisSimTableView(ui.View):
 
     def _update_buttons(self) -> None:
         phase = self.table.phase
-        betting = phase == "betting"
+        waiting = phase == "waiting"
         playing = phase == "playing"
         finished = phase == "finished"
 
         self.start_btn.disabled = (
-            not betting or len(self.table.players) < MIN_PLAYERS
+            not waiting or len(self.table.players) < MIN_PLAYERS
         )
-        self.join_btn.disabled = not betting
-        self.rebet_btn.disabled = not betting or not self.table.last_bets
+        self.join_btn.disabled = not waiting
         self.leave_btn.disabled = playing
 
         self.new_round_btn.disabled = not finished
@@ -506,7 +371,7 @@ class TennisSimTableView(ui.View):
                 "Only the host can start!", ephemeral=True,
             )
             return
-        if self.table.phase != "betting":
+        if self.table.phase != "waiting":
             await interaction.response.send_message(
                 "Already started!", ephemeral=True,
             )
@@ -524,7 +389,7 @@ class TennisSimTableView(ui.View):
     async def join_btn(
         self, interaction: discord.Interaction, button: ui.Button,
     ) -> None:
-        if self.table.phase != "betting":
+        if self.table.phase != "waiting":
             await interaction.response.send_message(
                 "Match in progress! Wait for the next round.", ephemeral=True,
             )
@@ -540,55 +405,13 @@ class TennisSimTableView(ui.View):
                 "Table is full!", ephemeral=True,
             )
             return
-        bal = await queries.get_or_create_casino_wallet(str(uid))
-        await interaction.response.send_modal(
-            JoinTennisSimModal(self.table, self, bal),
-        )
-
-    @ui.button(
-        label="Re-bet", style=discord.ButtonStyle.primary, emoji="\U0001f504", row=0,
-    )
-    async def rebet_btn(
-        self, interaction: discord.Interaction, button: ui.Button,
-    ) -> None:
-        if self.table.phase != "betting":
-            await interaction.response.send_message(
-                "Match in progress!", ephemeral=True,
-            )
-            return
-        uid = interaction.user.id
-        if uid in self.table.players:
-            await interaction.response.send_message(
-                "You're already in!", ephemeral=True,
-            )
-            return
-        last = self.table.last_bets.get(uid)
-        if last is None:
-            await interaction.response.send_message(
-                "No previous bet \u2014 use Join instead.", ephemeral=True,
-            )
-            return
-        if len(self.table.players) >= MAX_PLAYERS:
-            await interaction.response.send_message(
-                "Table is full!", ephemeral=True,
-            )
-            return
-        name, amt, side = last
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins for {amt}c re-bet! (have {bal}c)",
-                ephemeral=True,
-            )
-            return
         self.table.players[uid] = TennisSimPlayer(
-            user_id=uid, display_name=name, bet=amt, side=side,
+            user_id=uid,
+            display_name=interaction.user.display_name,
         )
         self._update_buttons()
         await interaction.response.edit_message(
-            embed=_betting_embed(self.table), view=self,
+            embed=_waiting_embed(self.table), view=self,
         )
 
     @ui.button(
@@ -598,8 +421,7 @@ class TennisSimTableView(ui.View):
         self, interaction: discord.Interaction, button: ui.Button,
     ) -> None:
         uid = interaction.user.id
-        player = self.table.players.get(uid)
-        if player is None:
+        if uid not in self.table.players:
             await interaction.response.send_message(
                 "You're not at this table.", ephemeral=True,
             )
@@ -609,12 +431,11 @@ class TennisSimTableView(ui.View):
                 "Can't leave mid-match!", ephemeral=True,
             )
             return
-        if self.table.phase == "betting":
-            await queries.update_casino_balance(str(uid), player.bet)
+        if self.table.phase == "waiting":
             del self.table.players[uid]
             self._update_buttons()
             await interaction.response.edit_message(
-                embed=_betting_embed(self.table), view=self,
+                embed=_waiting_embed(self.table), view=self,
             )
             return
         await interaction.response.send_message(
@@ -643,7 +464,7 @@ class TennisSimTableView(ui.View):
         self._start_new_round()
         self._update_buttons()
         await interaction.response.edit_message(
-            embed=_betting_embed(self.table), view=self,
+            embed=_waiting_embed(self.table), view=self,
         )
 
     @ui.button(
@@ -663,12 +484,6 @@ class TennisSimTableView(ui.View):
                 "Can't close mid-match!", ephemeral=True,
             )
             return
-        if self.table.phase == "betting":
-            for p in self.table.players.values():
-                try:
-                    await queries.update_casino_balance(str(p.user_id), p.bet)
-                except Exception:
-                    pass
         await self._close(interaction, "Table closed by host.")
 
     # ── Game logic ───────────────────────────────────────────────────────────
@@ -773,43 +588,24 @@ class TennisSimTableView(ui.View):
         except Exception:
             if table.phase == "playing":
                 table.phase = "finished"
-                await self._refund_all()
+                self._update_buttons()
+                if table.message:
+                    try:
+                        await table.message.edit(
+                            embed=_finished_embed(table), view=self,
+                        )
+                    except Exception:
+                        pass
 
     async def _resolve(self) -> None:
         table = self.table
         table.phase = "finished"
 
-        p1_won = table.p1_sets > table.p2_sets
-
-        for p in table.players.values():
-            if (p.side == "p1" and p1_won) or (p.side == "p2" and not p1_won):
-                p.won = True
-                prob = table.p1_prob if p.side == "p1" else (1 - table.p1_prob)
-                p.payout = int(p.bet * _payout_multiplier(prob))
-
-        balances: dict[int, int] = {}
-        for uid, player in table.players.items():
-            if player.won and player.payout > 0:
-                balances[uid] = await queries.update_casino_balance(
-                    str(uid), player.payout,
-                )
-            else:
-                bal = await queries.get_casino_balance(str(uid))
-                balances[uid] = bal or 0
-            await queries.log_casino_result(
-                str(uid), "tennissim", player.bet, player.payout,
-            )
-
-        for uid, player in table.players.items():
-            table.last_bets[uid] = (
-                player.display_name, player.bet, player.side,
-            )
-
         self._update_buttons()
         if table.message:
             try:
                 await table.message.edit(
-                    embed=_finished_embed(table, balances=balances), view=self,
+                    embed=_finished_embed(table), view=self,
                 )
             except discord.HTTPException:
                 pass
@@ -819,7 +615,7 @@ class TennisSimTableView(ui.View):
     def _start_new_round(self) -> None:
         table = self.table
         table.players.clear()
-        table.phase = "betting"
+        table.phase = "waiting"
         table.round_num += 1
         p1, p2 = _pick_matchup()
         table.p1 = p1
@@ -833,13 +629,6 @@ class TennisSimTableView(ui.View):
         table.cur_p2_games = 0
         table.in_tiebreak = False
         table.sim_task = None
-
-    async def _refund_all(self) -> None:
-        for p in self.table.players.values():
-            try:
-                await queries.update_casino_balance(str(p.user_id), p.bet)
-            except Exception:
-                pass
 
     async def _close(
         self, interaction: discord.Interaction, reason: str,
@@ -861,27 +650,12 @@ class TennisSimTableView(ui.View):
         if table.sim_task and not table.sim_task.done():
             table.sim_task.cancel()
 
-        if table.phase == "finished":
-            self.active_tables.pop(table.channel_id, None)
-            if table.message:
-                try:
-                    embed = discord.Embed(
-                        title="\U0001f3be Tennis Sim Table \u2014 Timed Out",
-                        description="Table timed out between rounds.",
-                        colour=discord.Colour.dark_grey(),
-                    )
-                    await table.message.edit(embed=embed, view=None)
-                except Exception:
-                    pass
-            return
-
-        await self._refund_all()
         self.active_tables.pop(table.channel_id, None)
         if table.message:
             try:
                 embed = discord.Embed(
                     title="\U0001f3be Tennis Sim Table \u2014 Timed Out",
-                    description="Table timed out. All bets refunded.",
+                    description="Table timed out.",
                     colour=discord.Colour.dark_grey(),
                 )
                 await table.message.edit(embed=embed, view=None)
@@ -898,7 +672,7 @@ class TennisSimCog(commands.Cog):
         self.active_tables: dict[int, TennisSimTable] = {}
 
     @app_commands.command(
-        name="tennissim", description="Bet on a simulated tennis match (casino)",
+        name="tennissim", description="Watch a simulated tennis match",
     )
     async def tennissim(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
@@ -908,8 +682,6 @@ class TennisSimCog(commands.Cog):
                 ephemeral=True,
             )
             return
-
-        await queries.get_or_create_casino_wallet(str(interaction.user.id))
 
         p1, p2 = _pick_matchup()
         table = TennisSimTable(
@@ -923,7 +695,7 @@ class TennisSimCog(commands.Cog):
         self.active_tables[channel_id] = table
 
         view = TennisSimTableView(table, self.active_tables)
-        embed = _betting_embed(table)
+        embed = _waiting_embed(table)
         await interaction.response.send_message(embed=embed, view=view)
         table.message = await interaction.original_response()
 

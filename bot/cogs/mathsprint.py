@@ -1,4 +1,4 @@
-"""Casino cog — /mathsprint speed arithmetic game.
+"""Multiplayer /mathsprint speed arithmetic game.
 
 10 rapid-fire problems.  Fastest correct answer wins each problem.
 Problem types: multiplication, division, percentages, squares, cubes,
@@ -19,8 +19,6 @@ from discord.ext import commands
 
 from bot.cogs._elo_helpers import update_elo_multiplayer
 
-from db import queries
-
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 8
@@ -28,17 +26,6 @@ MIN_PLAYERS = 1
 NUM_PROBLEMS = 10
 ROUND_SECONDS = 20
 ROUND_DELAY = 4  # seconds between problems
-
-PAYTABLE: dict[int, list[float]] = {
-    1: [1.0],
-    2: [1.0],
-    3: [0.70, 0.30],
-    4: [0.55, 0.30, 0.15],
-    5: [0.45, 0.25, 0.18, 0.12],
-    6: [0.40, 0.24, 0.16, 0.12, 0.08],
-    7: [0.36, 0.22, 0.16, 0.12, 0.08, 0.06],
-    8: [0.33, 0.21, 0.16, 0.12, 0.08, 0.06, 0.04],
-}
 
 MEDALS = ["\U0001f947", "\U0001f948", "\U0001f949"]
 
@@ -170,49 +157,6 @@ def check_answer(raw: str, correct: int) -> bool:
         return False
 
 
-# ── Payout Logic ─────────────────────────────────────────────────────────────
-
-
-def _compute_payouts(
-    players: dict[int, "SprintPlayer"], prize_pool: int, n_players: int,
-) -> dict[int, int]:
-    """Paytable payouts.  Ties split combined shares for tied positions."""
-    pct_table = PAYTABLE.get(n_players, PAYTABLE[8])
-
-    in_money = sorted(
-        [p for p in players.values() if p.points > 0],
-        key=lambda p: (-p.points, p.total_time),
-    )
-
-    payouts: dict[int, int] = {uid: 0 for uid in players}
-    if not in_money:
-        return payouts
-
-    paid_positions = len(pct_table)
-    pos = 0
-    for _key, group_iter in groupby(in_money, key=lambda p: (-p.points, round(p.total_time, 2))):
-        group = list(group_iter)
-        if pos >= paid_positions:
-            break
-        end = min(pos + len(group), paid_positions)
-        combined_share = sum(pct_table[pos:end])
-        per_player = int(prize_pool * combined_share / len(group))
-        for p in group:
-            payouts[p.user_id] = per_player
-        pos += len(group)
-
-    total_paid = sum(payouts.values())
-    leftover = prize_pool - total_paid
-    if leftover > 0 and in_money:
-        top = in_money[0]
-        top_group = [p for p in in_money if p.points == top.points]
-        extra = leftover // len(top_group)
-        for p in top_group:
-            payouts[p.user_id] += extra
-
-    return payouts
-
-
 # ── Dataclasses ──────────────────────────────────────────────────────────────
 
 
@@ -220,7 +164,6 @@ def _compute_payouts(
 class SprintPlayer:
     user_id: int
     display_name: str
-    bet: int
     points: int = 0
     total_time: float = 0.0  # sum of solve times (tiebreaker)
     solved_this_round: bool = False
@@ -232,7 +175,7 @@ class SprintTable:
     channel_id: int
     host_id: int
     host_name: str
-    phase: str = "betting"  # betting | playing | between | closed
+    phase: str = "lobby"  # lobby | playing | between | closed
     players: dict[int, SprintPlayer] = field(default_factory=dict)
     message: discord.Message | None = None
     round_num: int = 0
@@ -242,7 +185,6 @@ class SprintTable:
     round_solved: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     solved_players: set[int] = field(default_factory=set)
     race_task: asyncio.Task | None = field(default=None, repr=False)
-    last_bets: dict[int, tuple[str, int]] = field(default_factory=dict)
     game_num: int = 1
 
 
@@ -264,8 +206,7 @@ def _scoreboard(table: SprintTable) -> str:
     return "\n".join(lines) if lines else "No scores yet"
 
 
-def _betting_embed(table: SprintTable) -> discord.Embed:
-    pot = sum(p.bet for p in table.players.values())
+def _lobby_embed(table: SprintTable) -> discord.Embed:
     n = len(table.players)
     embed = discord.Embed(
         title=f"\U0001f9e0 Math Sprint \u2014 Join (Game {table.game_num})",
@@ -273,21 +214,12 @@ def _betting_embed(table: SprintTable) -> discord.Embed:
             f"**{NUM_PROBLEMS} rapid-fire math problems!**\n"
             "Multiplication, percentages, powers, roots, combos & more.\n"
             f"**{ROUND_SECONDS}s** per problem \u2014 fastest correct answer wins the point.\n"
-            "Most points after 10 problems wins the pot!"
+            "Most points after 10 problems wins!"
         ),
         colour=discord.Colour.blue(),
     )
-    if pot:
-        embed.add_field(name="Pot", value=f"{pot}c", inline=True)
-    if n >= MIN_PLAYERS:
-        pt = PAYTABLE.get(n, PAYTABLE[8])
-        pt_parts = [
-            f"{MEDALS[i] if i < 3 else chr(0x25aa) + chr(0xfe0f)} {int(s * 100)}%"
-            for i, s in enumerate(pt)
-        ]
-        embed.add_field(name="Paytable", value=" | ".join(pt_parts), inline=True)
     if table.players:
-        lines = [f"\U0001f9ee **{p.display_name}** \u2014 {p.bet}c" for p in table.players.values()]
+        lines = [f"\U0001f9ee **{p.display_name}**" for p in table.players.values()]
         embed.add_field(name="Players", value="\n".join(lines), inline=False)
     else:
         embed.add_field(name="Players", value="*No players yet \u2014 click Join!*", inline=False)
@@ -308,8 +240,6 @@ def _playing_embed(table: SprintTable, remaining: int | None = None) -> discord.
         "Click **Answer** to submit!"
     )
     embed.add_field(name="\u23f1\ufe0f Time", value=f"**{secs}s**", inline=True)
-    pot = sum(p.bet for p in table.players.values())
-    embed.add_field(name="Pot", value=f"{pot}c", inline=True)
     solved = len(table.solved_players)
     total = len(table.players)
     if solved > 0:
@@ -369,19 +299,16 @@ def _timeout_embed(table: SprintTable) -> discord.Embed:
     return embed
 
 
-def _final_embed(
-    table: SprintTable, *, payouts: dict[int, int], balances: dict[int, int],
-) -> discord.Embed:
+def _final_embed(table: SprintTable) -> discord.Embed:
     max_pts = max((p.points for p in table.players.values()), default=0)
-    is_refund = max_pts == 0
 
     embed = discord.Embed(
         title=f"\U0001f9e0 Math Sprint \u2014 Results (Game {table.game_num})",
-        colour=discord.Colour.gold() if not is_refund else discord.Colour.dark_grey(),
+        colour=discord.Colour.gold() if max_pts > 0 else discord.Colour.dark_grey(),
     )
 
-    if is_refund:
-        embed.description = "No problems were solved \u2014 all bets refunded!"
+    if max_pts == 0:
+        embed.description = "No problems were solved \u2014 game over!"
     else:
         ranked = sorted(table.players.values(), key=lambda p: (-p.points, p.total_time))
         winner = ranked[0]
@@ -394,16 +321,10 @@ def _final_embed(
     ranked = sorted(table.players.values(), key=lambda p: (-p.points, p.total_time))
     lines: list[str] = []
     for i, p in enumerate(ranked):
-        payout = payouts.get(p.user_id, 0)
-        bal = balances.get(p.user_id, 0)
-        net = payout - p.bet
-        sign = "+" if net >= 0 else ""
         medal = MEDALS[i] if i < len(MEDALS) and p.points > 0 else "\u25aa\ufe0f"
         time_str = f" ({p.total_time:.1f}s)" if p.total_time > 0 else ""
         lines.append(
-            f"{medal} **{p.display_name}** ({p.points} pts{time_str}) \u2014 "
-            f"{p.bet}c \u2192 {payout}c "
-            f"(**{sign}{net}c**) \u2014 bal: {bal}c"
+            f"{medal} **{p.display_name}** \u2014 {p.points} pts{time_str}"
         )
     embed.add_field(name="Results", value="\n".join(lines), inline=False)
     embed.set_footer(text=f"Host: {table.host_name}")
@@ -411,39 +332,6 @@ def _final_embed(
 
 
 # ── Modals ───────────────────────────────────────────────────────────────────
-
-
-class JoinSprintModal(ui.Modal):
-    amount = ui.TextInput(label="Bet amount (coins)", placeholder="e.g. 100", required=True, max_length=10)
-
-    def __init__(self, table: SprintTable, view: "SprintTableView", balance: int) -> None:
-        super().__init__(title="Join Math Sprint")
-        self.table = table
-        self.table_view = view
-        self.amount.placeholder = f"e.g. 100 (bal: {balance}c)"
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            amt = int(self.amount.value)
-        except ValueError:
-            await interaction.response.send_message("Enter a whole number.", ephemeral=True)
-            return
-        if amt < 1:
-            await interaction.response.send_message("Must be at least 1 coin.", ephemeral=True)
-            return
-        uid = interaction.user.id
-        if uid in self.table.players:
-            await interaction.response.send_message("You're already in!", ephemeral=True)
-            return
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(f"Not enough coins! (have {bal}c)", ephemeral=True)
-            return
-        self.table.players[uid] = SprintPlayer(user_id=uid, display_name=interaction.user.display_name, bet=amt)
-        self.table_view._update_buttons()
-        await interaction.response.edit_message(embed=_betting_embed(self.table), view=self.table_view)
 
 
 class AnswerModal(ui.Modal):
@@ -526,26 +414,25 @@ class SprintTableView(ui.View):
 
     def _update_buttons(self) -> None:
         phase = self.table.phase
-        betting = phase == "betting"
+        lobby = phase == "lobby"
         playing = phase == "playing"
         racing = playing or phase == "between"
 
-        self.start_btn.disabled = not betting or len(self.table.players) < MIN_PLAYERS
-        self.join_btn.disabled = not betting
-        self.rebet_btn.disabled = not betting or not self.table.last_bets
-        self.leave_btn.disabled = not betting
+        self.start_btn.disabled = not lobby or len(self.table.players) < MIN_PLAYERS
+        self.join_btn.disabled = not lobby
+        self.leave_btn.disabled = not lobby
 
         self.answer_btn.disabled = not playing
         self.close_btn.disabled = racing
 
-    # ── Row 0: Betting ───────────────────────────────────────────────────
+    # ── Row 0: Lobby ─────────────────────────────────────────────────────
 
     @ui.button(label="Start", style=discord.ButtonStyle.success, emoji="\u25b6\ufe0f", row=0)
     async def start_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
         if interaction.user.id != self.table.host_id:
             await interaction.response.send_message("Only the host can start!", ephemeral=True)
             return
-        if self.table.phase != "betting":
+        if self.table.phase != "lobby":
             await interaction.response.send_message("Already started!", ephemeral=True)
             return
         if len(self.table.players) < MIN_PLAYERS:
@@ -555,7 +442,7 @@ class SprintTableView(ui.View):
 
     @ui.button(label="Join", style=discord.ButtonStyle.primary, emoji="\U0001f9ee", row=0)
     async def join_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        if self.table.phase != "betting":
+        if self.table.phase != "lobby":
             await interaction.response.send_message("Sprint in progress! Wait for the next game.", ephemeral=True)
             return
         uid = interaction.user.id
@@ -565,37 +452,9 @@ class SprintTableView(ui.View):
         if len(self.table.players) >= MAX_PLAYERS:
             await interaction.response.send_message("Table is full!", ephemeral=True)
             return
-        bal = await queries.get_or_create_casino_wallet(str(uid))
-        await interaction.response.send_modal(JoinSprintModal(self.table, self, bal))
-
-    @ui.button(label="Re-bet", style=discord.ButtonStyle.primary, emoji="\U0001f504", row=0)
-    async def rebet_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        if self.table.phase != "betting":
-            await interaction.response.send_message("Sprint in progress!", ephemeral=True)
-            return
-        uid = interaction.user.id
-        if uid in self.table.players:
-            await interaction.response.send_message("You're already in!", ephemeral=True)
-            return
-        last = self.table.last_bets.get(uid)
-        if last is None:
-            await interaction.response.send_message("No previous bet \u2014 use Join instead.", ephemeral=True)
-            return
-        if len(self.table.players) >= MAX_PLAYERS:
-            await interaction.response.send_message("Table is full!", ephemeral=True)
-            return
-        name, amt = last
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins for {amt}c re-bet! (have {bal}c)", ephemeral=True,
-            )
-            return
-        self.table.players[uid] = SprintPlayer(user_id=uid, display_name=name, bet=amt)
+        self.table.players[uid] = SprintPlayer(user_id=uid, display_name=interaction.user.display_name)
         self._update_buttons()
-        await interaction.response.edit_message(embed=_betting_embed(self.table), view=self)
+        await interaction.response.edit_message(embed=_lobby_embed(self.table), view=self)
 
     @ui.button(label="Leave", style=discord.ButtonStyle.secondary, emoji="\U0001f6aa", row=0)
     async def leave_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
@@ -604,13 +463,12 @@ class SprintTableView(ui.View):
         if player is None:
             await interaction.response.send_message("You're not at this table.", ephemeral=True)
             return
-        if self.table.phase != "betting":
+        if self.table.phase != "lobby":
             await interaction.response.send_message("Can't leave during a sprint!", ephemeral=True)
             return
-        await queries.update_casino_balance(str(uid), player.bet)
         del self.table.players[uid]
         self._update_buttons()
-        await interaction.response.edit_message(embed=_betting_embed(self.table), view=self)
+        await interaction.response.edit_message(embed=_lobby_embed(self.table), view=self)
 
     # ── Row 1: Game controls ─────────────────────────────────────────────
 
@@ -642,8 +500,6 @@ class SprintTableView(ui.View):
 
     async def _start_sprint(self, interaction: discord.Interaction) -> None:
         table = self.table
-        for uid, p in table.players.items():
-            table.last_bets[uid] = (p.display_name, p.bet)
 
         table.problem = generate_problem()
         table.round_num = 1
@@ -739,51 +595,19 @@ class SprintTableView(ui.View):
             table.phase = "closed"
             self.active_tables.pop(table.channel_id, None)
 
-    async def _compute_and_apply_payouts(self) -> tuple[dict[int, int], dict[int, int]]:
-        table = self.table
-        n_players = len(table.players)
-        pot = sum(p.bet for p in table.players.values())
-        max_pts = max((p.points for p in table.players.values()), default=0)
-
-        if max_pts == 0:
-            payouts = {uid: p.bet for uid, p in table.players.items()}
-            for uid, refund in payouts.items():
-                try:
-                    await queries.update_casino_balance(str(uid), refund)
-                except Exception:
-                    pass
-        else:
-            payouts = _compute_payouts(table.players, pot, n_players)
-            for uid, payout in payouts.items():
-                if payout > 0:
-                    try:
-                        await queries.update_casino_balance(str(uid), payout)
-                    except Exception:
-                        pass
-
-        balances: dict[int, int] = {}
-        for uid in table.players:
-            bal = await queries.get_casino_balance(str(uid))
-            balances[uid] = bal or 0
-        for uid, p in table.players.items():
-            await queries.log_casino_result(str(uid), "mathsprint", p.bet, payouts.get(uid, 0))
-
-        return payouts, balances
-
     async def _end_game(self) -> None:
         table = self.table
         table.phase = "closed"
-        payouts, balances = await self._compute_and_apply_payouts()
 
         if len(table.players) >= 2:
-            sorted_p = sorted(table.players.values(), key=lambda p: p.rounds_won, reverse=True)
+            sorted_p = sorted(table.players.values(), key=lambda p: (-p.points, p.total_time))
             finish_order = [p.user_id for p in sorted_p]
             try:
                 await update_elo_multiplayer(finish_order, "mathsprint", "mathsprint")
             except Exception:
                 pass
 
-        embed = _final_embed(table, payouts=payouts, balances=balances)
+        embed = _final_embed(table)
         for child in self.children:
             child.disabled = True  # type: ignore[union-attr]
         self.stop()
@@ -796,27 +620,12 @@ class SprintTableView(ui.View):
 
     async def _close_table(self, interaction: discord.Interaction) -> None:
         table = self.table
-        if table.round_num == 0:
-            for p in table.players.values():
-                try:
-                    await queries.update_casino_balance(str(p.user_id), p.bet)
-                except Exception:
-                    pass
-            embed = discord.Embed(
-                title="\U0001f9e0 Math Sprint \u2014 Closed",
-                description="Table closed. All bets refunded.",
-                colour=discord.Colour.dark_grey(),
-            )
-            for child in self.children:
-                child.disabled = True  # type: ignore[union-attr]
-            self.stop()
-            self.active_tables.pop(table.channel_id, None)
-            await interaction.response.edit_message(embed=embed, view=self)
-            return
-
         table.phase = "closed"
-        payouts, balances = await self._compute_and_apply_payouts()
-        embed = _final_embed(table, payouts=payouts, balances=balances)
+        embed = discord.Embed(
+            title="\U0001f9e0 Math Sprint \u2014 Closed",
+            description="Table closed.",
+            colour=discord.Colour.dark_grey(),
+        )
         for child in self.children:
             child.disabled = True  # type: ignore[union-attr]
         self.stop()
@@ -829,11 +638,6 @@ class SprintTableView(ui.View):
             table.race_task.cancel()
         if table.phase == "closed":
             return
-        for p in table.players.values():
-            try:
-                await queries.update_casino_balance(str(p.user_id), p.bet)
-            except Exception:
-                pass
         table.phase = "closed"
         self.active_tables.pop(table.channel_id, None)
         if table.message:
@@ -841,7 +645,7 @@ class SprintTableView(ui.View):
                 await table.message.edit(
                     embed=discord.Embed(
                         title="\U0001f9e0 Math Sprint \u2014 Timed Out",
-                        description="Table timed out. All bets refunded.",
+                        description="Table timed out.",
                         colour=discord.Colour.dark_grey(),
                     ),
                     view=None,
@@ -866,7 +670,6 @@ class MathSprintCog(commands.Cog):
                 "There's already a Math Sprint in this channel!", ephemeral=True,
             )
             return
-        await queries.get_or_create_casino_wallet(str(interaction.user.id))
         table = SprintTable(
             channel_id=channel_id,
             host_id=interaction.user.id,
@@ -874,7 +677,7 @@ class MathSprintCog(commands.Cog):
         )
         self.active_tables[channel_id] = table
         view = SprintTableView(table, self.active_tables)
-        await interaction.response.send_message(embed=_betting_embed(table), view=view)
+        await interaction.response.send_message(embed=_lobby_embed(table), view=view)
         table.message = await interaction.original_response()
 
 

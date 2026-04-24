@@ -8,8 +8,6 @@ from discord.ext import commands
 
 from bot.cogs._elo_helpers import update_elo_1v1, update_elo_draw
 from bot.cogs._minigames import TTTBoard
-from bot.cogs._pool import compute_side_pot_payouts
-from db import queries
 
 # ── Constants (derived from shared TTTBoard) ─────────────────────────────────
 
@@ -47,8 +45,7 @@ def _game_embed(game: "TTTGame") -> discord.Embed:
     embed = discord.Embed(
         title="\u2716\ufe0f Tic Tac Toe",
         description=(
-            f"**{game.challenger_name}** {X_EMOJI} vs {O_EMOJI} **{game.opponent_name}**\n"
-            f"Pot: **{game.bet * 2}c**\n\n"
+            f"**{game.challenger_name}** {X_EMOJI} vs {O_EMOJI} **{game.opponent_name}**\n\n"
             f"{board_str}\n\n"
             f"{turn_emoji} **{turn_name}**'s turn"
         ),
@@ -62,8 +59,7 @@ def _pending_embed(game: "TTTGame") -> discord.Embed:
         title="\u2716\ufe0f Tic Tac Toe — Challenge!",
         description=(
             f"**{game.challenger_name}** challenges **{game.opponent_name}** "
-            f"to Tic Tac Toe for **{game.bet}c**!\n\n"
-            f"Pot: **{game.bet * 2}c**\n"
+            f"to Tic Tac Toe!\n\n"
             f"{game.challenger_name} plays {X_EMOJI}, {game.opponent_name} plays {O_EMOJI}."
         ),
         colour=discord.Colour.green(),
@@ -82,35 +78,19 @@ def _result_embed(game: "TTTGame", winner_id: int) -> discord.Embed:
             title="\u2716\ufe0f Tic Tac Toe — Draw!",
             description=(
                 f"**{game.challenger_name}** {X_EMOJI} vs {O_EMOJI} **{game.opponent_name}**\n\n"
-                f"{board_str}\n\n"
-                f"It's a draw! Both players refunded **{game.bet}c**."
+                f"{board_str}\n\nIt's a draw!"
             ),
             colour=discord.Colour.greyple(),
         )
     else:
         winner_name = game.player_name(winner_id)
-        loser_id = game.opponent_id if winner_id == game.challenger_id else game.challenger_id
-        loser_name = game.player_name(loser_id)
-        payout = game.bet * 2
-
         embed = discord.Embed(
             title="\u2716\ufe0f Tic Tac Toe — Final Result",
             description=(
                 f"**{game.challenger_name}** {X_EMOJI} vs {O_EMOJI} **{game.opponent_name}**\n\n"
-                f"{board_str}\n\n"
-                f"\U0001f3c6 **{winner_name}** wins **{payout}c**!"
+                f"{board_str}\n\n\U0001f3c6 **{winner_name}** wins!"
             ),
             colour=discord.Colour.gold(),
-        )
-        embed.add_field(
-            name="Results",
-            value=(
-                f"\U0001f3c6 **{winner_name}** — {game.bet}c → {payout}c "
-                f"(**+{payout - game.bet}c**)\n"
-                f"\u274c **{loser_name}** — {game.bet}c → 0c "
-                f"(**-{game.bet}c**)"
-            ),
-            inline=False,
         )
 
     return embed
@@ -126,7 +106,6 @@ class TTTGame:
     opponent_id: int
     challenger_name: str
     opponent_name: str
-    bet: int
     phase: str = "pending"  # pending | playing | finished
     board: list[int] = field(default_factory=lambda: [0] * 9)  # 0=empty, 1=X, 2=O
     turn: int = 0  # user_id of whose turn it is
@@ -220,25 +199,6 @@ class TTTView(ui.View):
         else:
             winner_id = 0  # draw
 
-        # Compute payouts via side pot system
-        bets = {game.challenger_id: game.bet, game.opponent_id: game.bet}
-        if winner_id != 0:
-            winner_uids = [winner_id]
-        else:
-            winner_uids = []  # no winner — draw triggers refund path
-        payouts = compute_side_pot_payouts(bets, winner_uids)
-
-        # Credit payouts
-        for uid, payout in payouts.items():
-            if payout > 0:
-                await queries.update_casino_balance(str(uid), payout)
-
-        # Log results
-        for uid in (game.challenger_id, game.opponent_id):
-            await queries.log_casino_result(
-                str(uid), "tictactoe", game.bet, payouts.get(uid, 0),
-            )
-
         # ELO update
         try:
             if winner_id == game.challenger_id:
@@ -269,16 +229,6 @@ class TTTView(ui.View):
             await interaction.response.send_message("Already started!", ephemeral=True)
             return
 
-        # Deduct opponent's coins
-        try:
-            await queries.update_casino_balance(str(self.game.opponent_id), -self.game.bet)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(self.game.opponent_id))
-            await interaction.response.send_message(
-                f"Not enough coins! (have {bal}c)", ephemeral=True,
-            )
-            return
-
         # Start game — challenger (X) goes first
         self.game.phase = "playing"
         self.game.turn = self.game.challenger_id
@@ -294,8 +244,6 @@ class TTTView(ui.View):
             await interaction.response.send_message("Already started!", ephemeral=True)
             return
 
-        # Refund challenger
-        await queries.update_casino_balance(str(self.game.challenger_id), self.game.bet)
         embed = discord.Embed(
             title="\u2716\ufe0f Tic Tac Toe — Cancelled",
             description=f"{self.game.opponent_name} declined the challenge.",
@@ -331,16 +279,6 @@ class TTTView(ui.View):
         new_challenger_name = clicker_name
         new_opponent_name = other_name
 
-        # Deduct clicker's coins
-        try:
-            await queries.update_casino_balance(str(clicker), -game.bet)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(clicker))
-            await interaction.response.send_message(
-                f"Not enough coins! (have {bal}c)", ephemeral=True,
-            )
-            return
-
         # Disable old view
         for child in self.children:
             child.disabled = True  # type: ignore[union-attr]
@@ -353,7 +291,6 @@ class TTTView(ui.View):
             opponent_id=new_opponent_id,
             challenger_name=new_challenger_name,
             opponent_name=new_opponent_name,
-            bet=game.bet,
         )
         self.active_games[game.channel_id] = new_game
 
@@ -406,17 +343,12 @@ class TTTView(ui.View):
         game = self.game
 
         if game.phase == "pending":
-            # Refund challenger
-            try:
-                await queries.update_casino_balance(str(game.challenger_id), game.bet)
-            except Exception:
-                pass
             self.active_games.pop(game.channel_id, None)
             if game.message:
                 try:
                     embed = discord.Embed(
                         title="\u2716\ufe0f Tic Tac Toe — Expired",
-                        description=f"Challenge expired. {game.challenger_name}'s coins refunded.",
+                        description="Challenge expired.",
                         colour=discord.Colour.dark_grey(),
                     )
                     await game.message.edit(embed=embed, view=None)
@@ -424,20 +356,12 @@ class TTTView(ui.View):
                     pass
             return
 
-        if game.phase == "playing":
-            # Refund both players
-            try:
-                await queries.update_casino_balance(str(game.challenger_id), game.bet)
-                await queries.update_casino_balance(str(game.opponent_id), game.bet)
-            except Exception:
-                pass
-
         self.active_games.pop(game.channel_id, None)
         if game.message:
             try:
                 embed = discord.Embed(
                     title="\u2716\ufe0f Tic Tac Toe — Timed Out",
-                    description="Game timed out. All bets refunded.",
+                    description="Game timed out.",
                     colour=discord.Colour.dark_grey(),
                 )
                 await game.message.edit(embed=embed, view=None)
@@ -459,11 +383,10 @@ class TicTacToeCog(commands.Cog):
     )
     @app_commands.describe(
         opponent="Who to challenge",
-        bet="Coin amount to wager (1-500)",
     )
     async def tictactoe(
         self, interaction: discord.Interaction,
-        opponent: discord.User, bet: int,
+        opponent: discord.User,
     ) -> None:
         uid = interaction.user.id
         channel_id = interaction.channel_id
@@ -480,26 +403,6 @@ class TicTacToeCog(commands.Cog):
                 "There's already a Tic Tac Toe game in this channel!", ephemeral=True,
             )
             return
-        if bet < 1:
-            await interaction.response.send_message("Bet must be at least 1c.", ephemeral=True)
-            return
-        if bet > 500:
-            await interaction.response.send_message("Bet cannot exceed 500c.", ephemeral=True)
-            return
-
-        # Deduct challenger's coins
-        await queries.get_or_create_casino_wallet(str(uid))
-        try:
-            await queries.update_casino_balance(str(uid), -bet)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins! (have {bal}c)", ephemeral=True,
-            )
-            return
-
-        # Ensure opponent has a wallet
-        await queries.get_or_create_casino_wallet(str(opponent.id))
 
         game = TTTGame(
             channel_id=channel_id,
@@ -507,7 +410,6 @@ class TicTacToeCog(commands.Cog):
             opponent_id=opponent.id,
             challenger_name=interaction.user.display_name,
             opponent_name=opponent.display_name,
-            bet=bet,
         )
         self.active_games[channel_id] = game
 

@@ -12,7 +12,6 @@ from discord import app_commands, ui
 from discord.ext import commands, tasks
 
 from bot.cogs._elo_helpers import update_elo_multiplayer
-from db import queries
 
 WEB_API_BASE = os.environ.get("WEB_API_BASE", "https://djiang.xyz")
 WEB_API_SECRET = os.environ.get("WEB_API_SECRET", "dev-secret")
@@ -36,7 +35,6 @@ class TradingFloorCog(commands.Cog):
     async def tradingfloor(self, interaction: discord.Interaction) -> None:
         uid = str(interaction.user.id)
         channel_id = str(interaction.channel_id)
-        await queries.get_or_create_casino_wallet(uid)
 
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(
@@ -64,8 +62,8 @@ class TradingFloorCog(commands.Cog):
                 "\U0001f4bb **CHIP** & \U0001f4f1 **SOFT** (Tech sector)\n"
                 "\U0001f6e2\ufe0f **OIL** & \u2600\ufe0f **SOLAR** (Energy sector)\n\n"
                 "Your trades move prices. NPCs add noise. Insider tips give some players an edge.\n"
-                "Highest portfolio value at the end wins the pot.\n\n"
-                "Click **Join** below to enter your bet and get your game link."
+                "Highest portfolio value at the end wins.\n\n"
+                "Click **Join** below to get your game link."
             ),
             colour=discord.Colour.gold(),
         )
@@ -112,14 +110,11 @@ class TradingFloorCog(commands.Cog):
                 lines = []
                 for i, r in enumerate(result.get("results", [])):
                     badge = medals[i] if i < 3 else f"`{i+1}.`"
-                    net = r["net"]
-                    sign = "+" if net > 0 else ""
                     pnl = r["pnl"]
                     pnl_sign = "+" if pnl > 0 else ""
                     lines.append(
                         f"{badge} **{r['display_name']}** \u2014 "
-                        f"{r['final_cash']:,}c ({pnl_sign}{pnl:,} P&L) \u2014 "
-                        f"{r['wager']}c \u2192 {r['payout']}c ({sign}{net}c)"
+                        f"{r['final_cash']:,} final ({pnl_sign}{pnl:,} P&L)"
                     )
                 embed.add_field(name="Standings", value="\n".join(lines), inline=False)
 
@@ -142,62 +137,6 @@ class TradingFloorCog(commands.Cog):
         await self.bot.wait_until_ready()
 
 
-class TFJoinModal(ui.Modal, title="Join Trading Floor"):
-    amount = ui.TextInput(label="Bet amount (coins)", placeholder="e.g. 100", min_length=1, max_length=10)
-
-    def __init__(self, room_id: str) -> None:
-        super().__init__()
-        self.room_id = room_id
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            amt = int(self.amount.value)
-        except ValueError:
-            await interaction.response.send_message("Invalid amount.", ephemeral=True)
-            return
-        if amt <= 0:
-            await interaction.response.send_message("Bet must be positive.", ephemeral=True)
-            return
-
-        uid = str(interaction.user.id)
-        bal = await queries.get_casino_balance(uid)
-        if bal is None or bal < amt:
-            await interaction.response.send_message(
-                f"Insufficient balance (you have {bal or 0}c).", ephemeral=True,
-            )
-            return
-
-        await queries.update_casino_balance(uid, -amt)
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(
-                    f"{WEB_API_BASE}/api/v1/tradingfloor/rooms/{self.room_id}/tokens",
-                    json={
-                        "discord_user": uid,
-                        "display_name": interaction.user.display_name,
-                        "wager": amt,
-                    },
-                    headers={"X-Api-Key": WEB_API_SECRET},
-                )
-            if resp.status_code != 200:
-                await queries.update_casino_balance(uid, amt)
-                detail = resp.json().get("detail", "Unknown error")
-                await interaction.response.send_message(
-                    f"Failed to join: {detail}", ephemeral=True,
-                )
-                return
-            url = resp.json()["url"]
-            await interaction.response.send_message(
-                f"\U0001f517 **[Click here to play]({url})**\nYour {amt}c bet is locked in.",
-                ephemeral=True,
-            )
-        except Exception:
-            await queries.update_casino_balance(uid, amt)
-            await interaction.response.send_message(
-                "Failed to connect to game server. Bet refunded.", ephemeral=True,
-            )
-
-
 class TFWebLobbyView(ui.View):
     def __init__(self, room_id: str) -> None:
         super().__init__(timeout=1800)
@@ -205,7 +144,32 @@ class TFWebLobbyView(ui.View):
 
     @ui.button(label="Join", style=discord.ButtonStyle.primary, emoji="\U0001f4dd")
     async def join_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        await interaction.response.send_modal(TFJoinModal(self.room_id))
+        uid = str(interaction.user.id)
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    f"{WEB_API_BASE}/api/v1/tradingfloor/rooms/{self.room_id}/tokens",
+                    json={
+                        "discord_user": uid,
+                        "display_name": interaction.user.display_name,
+                    },
+                    headers={"X-Api-Key": WEB_API_SECRET},
+                )
+            if resp.status_code != 200:
+                detail = resp.json().get("detail", "Unknown error")
+                await interaction.response.send_message(
+                    f"Failed to join: {detail}", ephemeral=True,
+                )
+                return
+            url = resp.json()["url"]
+            await interaction.response.send_message(
+                f"\U0001f517 **[Click here to play]({url})**",
+                ephemeral=True,
+            )
+        except Exception:
+            await interaction.response.send_message(
+                "Failed to connect to game server.", ephemeral=True,
+            )
 
 
 async def setup(bot: commands.Bot) -> None:

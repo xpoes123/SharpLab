@@ -1,4 +1,4 @@
-"""Casino cog — multiplayer /mastermind code-breaking game."""
+"""Multiplayer /mastermind code-breaking game."""
 
 import asyncio
 import random
@@ -8,9 +8,7 @@ import discord
 from discord import app_commands, ui
 from discord.ext import commands
 
-from db import queries
 from bot.cogs._elo_helpers import update_elo_multiplayer
-from bot.cogs._pool import compute_side_pot_payouts
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -118,7 +116,6 @@ def _color_legend() -> str:
 class MastermindPlayer:
     user_id: int
     display_name: str
-    bet: int
     guesses: list[tuple[list[str], int, int]] = field(default_factory=list)
     solved: bool = False
     solve_count: int | None = None  # guess number that solved it
@@ -129,13 +126,12 @@ class MastermindTable:
     channel_id: int
     host_id: int
     host_name: str
-    phase: str = "betting"  # betting | playing | finished
+    phase: str = "lobby"  # lobby | playing | finished
     players: dict[int, MastermindPlayer] = field(default_factory=dict)
     message: discord.Message | None = None
     round_num: int = 1
     secret_code: list[str] = field(default_factory=list)
     round_task: asyncio.Task | None = field(default=None, repr=False)
-    last_bets: dict[int, tuple[str, int]] = field(default_factory=dict)
     max_guesses: int = MAX_GUESSES
     winners: list[int] = field(default_factory=list)  # user_ids of round winners
 
@@ -143,8 +139,7 @@ class MastermindTable:
 # ── Embeds ───────────────────────────────────────────────────────────────────
 
 
-def _betting_embed(table: MastermindTable) -> discord.Embed:
-    pot = sum(p.bet for p in table.players.values())
+def _lobby_embed(table: MastermindTable) -> discord.Embed:
     embed = discord.Embed(
         title=f"\U0001f9e0 Mastermind \u2014 Join the Table (Round {table.round_num})",
         description=(
@@ -153,11 +148,9 @@ def _betting_embed(table: MastermindTable) -> discord.Embed:
         ),
         colour=discord.Colour.purple(),
     )
-    if pot:
-        embed.add_field(name="Pot", value=f"{pot}c", inline=True)
     if table.players:
         lines = [
-            f"\U0001f9e0 **{p.display_name}** \u2014 {p.bet}c"
+            f"\U0001f9e0 **{p.display_name}**"
             for p in table.players.values()
         ]
         embed.add_field(name="Players", value="\n".join(lines), inline=False)
@@ -218,11 +211,7 @@ def _playing_embed(table: MastermindTable) -> discord.Embed:
     return embed
 
 
-def _solved_embed(
-    table: MastermindTable, *,
-    balances: dict[int, int] | None = None,
-    payouts: dict[int, int] | None = None,
-) -> discord.Embed:
+def _solved_embed(table: MastermindTable) -> discord.Embed:
     code_display = _code_to_emoji(table.secret_code)
 
     # Determine winner description
@@ -243,53 +232,32 @@ def _solved_embed(
         colour=discord.Colour.gold(),
     )
 
-    # Compute payouts if not provided (e.g. from _timeout_embed)
-    if payouts is None:
-        bets = {uid: p.bet for uid, p in table.players.items()}
-        payouts = compute_side_pot_payouts(bets, table.winners)
-
-    # Results per player
     winner_set = set(table.winners)
     lines: list[str] = []
     for p in table.players.values():
-        bal = balances.get(p.user_id, 0) if balances else 0
-        payout = payouts.get(p.user_id, 0)
-        net = payout - p.bet
-        sign = "+" if net >= 0 else ""
         if p.user_id in winner_set:
             if p.solved:
                 lines.append(
                     f"\U0001f3c6 **{p.display_name}** \u2014 "
-                    f"Solved in {p.solve_count} guesses \u2014 "
-                    f"{p.bet}c \u2192 {payout}c (**{sign}{net}c**) \u2014 bal: {bal}c"
+                    f"Solved in {p.solve_count} guesses"
                 )
             else:
                 best_b = max(g[1] for g in p.guesses) if p.guesses else 0
                 lines.append(
                     f"\U0001f3c6 **{p.display_name}** \u2014 "
-                    f"Closest ({best_b} black pegs) \u2014 "
-                    f"{p.bet}c \u2192 {payout}c (**{sign}{net}c**) \u2014 bal: {bal}c"
+                    f"Closest ({best_b} black pegs)"
                 )
-        elif payout > 0:
-            best_b = max(g[1] for g in p.guesses) if p.guesses else 0
-            lines.append(
-                f"\U0001f4b0 **{p.display_name}** \u2014 "
-                f"Best: {best_b} black pegs ({len(p.guesses)} guesses) \u2014 "
-                f"{p.bet}c \u2192 {payout}c (**{sign}{net}c**) \u2014 bal: {bal}c"
-            )
         else:
             if p.solved:
                 lines.append(
                     f"\u2705 **{p.display_name}** \u2014 "
-                    f"Solved in {p.solve_count} guesses \u2014 "
-                    f"{p.bet}c \u2192 0c (**-{p.bet}c**) \u2014 bal: {bal}c"
+                    f"Solved in {p.solve_count} guesses"
                 )
             else:
                 best_b = max(g[1] for g in p.guesses) if p.guesses else 0
                 lines.append(
                     f"\u274c **{p.display_name}** \u2014 "
-                    f"Best: {best_b} black pegs ({len(p.guesses)} guesses) \u2014 "
-                    f"{p.bet}c \u2192 0c (**-{p.bet}c**) \u2014 bal: {bal}c"
+                    f"Best: {best_b} black pegs ({len(p.guesses)} guesses)"
                 )
 
     embed.add_field(name="Results", value="\n".join(lines), inline=False)
@@ -329,64 +297,6 @@ def _timeout_embed(table: MastermindTable) -> discord.Embed:
 # ── Modals ───────────────────────────────────────────────────────────────────
 
 
-class JoinMastermindModal(ui.Modal):
-    amount = ui.TextInput(
-        label="Bet amount (coins)",
-        placeholder="e.g. 100",
-        required=True,
-        max_length=10,
-    )
-
-    def __init__(
-        self, table: MastermindTable, view: "MastermindTableView", balance: int,
-    ) -> None:
-        super().__init__(title="Join Mastermind")
-        self.table = table
-        self.table_view = view
-        self.amount.placeholder = f"e.g. 100 (bal: {balance}c)"
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            amt = int(self.amount.value)
-        except ValueError:
-            await interaction.response.send_message(
-                "Enter a whole number.", ephemeral=True,
-            )
-            return
-        if amt < 1:
-            await interaction.response.send_message(
-                "Must be at least 1 coin.", ephemeral=True,
-            )
-            return
-
-        uid = interaction.user.id
-        if uid in self.table.players:
-            await interaction.response.send_message(
-                "You're already in this round!", ephemeral=True,
-            )
-            return
-
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins! (have {bal}c)", ephemeral=True,
-            )
-            return
-
-        self.table.players[uid] = MastermindPlayer(
-            user_id=uid,
-            display_name=interaction.user.display_name,
-            bet=amt,
-        )
-
-        self.table_view._update_buttons()
-        await interaction.response.edit_message(
-            embed=_betting_embed(self.table), view=self.table_view,
-        )
-
-
 class GuessModal(ui.Modal):
     guess_input = ui.TextInput(
         label="Enter 4 colors (R/G/B/Y/O/P)",
@@ -400,8 +310,6 @@ class GuessModal(ui.Modal):
         super().__init__(title="Mastermind \u2014 Your Guess")
         self.table = table
         self.table_view = view
-        player = table.players.get(0)  # placeholder, set in view
-        self._user_id: int | None = None
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         uid = interaction.user.id
@@ -486,16 +394,15 @@ class MastermindTableView(ui.View):
 
     def _update_buttons(self) -> None:
         phase = self.table.phase
-        betting = phase == "betting"
+        lobby = phase == "lobby"
         playing = phase == "playing"
         finished = phase == "finished"
 
-        # Row 0: Start, Join, Re-bet, Leave
+        # Row 0: Start, Join, Leave
         self.start_btn.disabled = (
-            not betting or len(self.table.players) < MIN_PLAYERS
+            not lobby or len(self.table.players) < MIN_PLAYERS
         )
-        self.join_btn.disabled = not betting
-        self.rebet_btn.disabled = not betting or not self.table.last_bets
+        self.join_btn.disabled = not lobby
         self.leave_btn.disabled = playing
 
         # Row 1: Guess, My History, Rules
@@ -554,25 +461,6 @@ class MastermindTableView(ui.View):
         if table.round_task and not table.round_task.done():
             table.round_task.cancel()
 
-        # Side-pot payouts
-        bets = {uid: p.bet for uid, p in table.players.items()}
-        payouts = compute_side_pot_payouts(bets, winner_uids)
-
-        # Credit payouts and log results
-        balances: dict[int, int] = {}
-        for uid, player in table.players.items():
-            payout = payouts.get(uid, 0)
-            if payout > 0:
-                balances[uid] = await queries.update_casino_balance(
-                    str(uid), payout,
-                )
-            else:
-                bal = await queries.get_casino_balance(str(uid))
-                balances[uid] = bal or 0
-            await queries.log_casino_result(
-                str(uid), "mastermind", player.bet, payout,
-            )
-
         # ELO update — rank by solve_count (fewer = better), unsolved = last
         if len(table.players) >= 2:
             sorted_p = sorted(
@@ -585,15 +473,11 @@ class MastermindTableView(ui.View):
             except Exception:
                 pass
 
-        # Save last bets for re-bet
-        for uid, player in table.players.items():
-            table.last_bets[uid] = (player.display_name, player.bet)
-
         self._update_buttons()
         if table.message:
             try:
                 await table.message.edit(
-                    embed=_solved_embed(table, balances=balances, payouts=payouts),
+                    embed=_solved_embed(table),
                     view=self,
                 )
             except discord.HTTPException:
@@ -652,7 +536,7 @@ class MastermindTableView(ui.View):
                 "Only the host can start!", ephemeral=True,
             )
             return
-        if self.table.phase != "betting":
+        if self.table.phase != "lobby":
             await interaction.response.send_message(
                 "Already started!", ephemeral=True,
             )
@@ -670,7 +554,7 @@ class MastermindTableView(ui.View):
     async def join_btn(
         self, interaction: discord.Interaction, button: ui.Button,
     ) -> None:
-        if self.table.phase != "betting":
+        if self.table.phase != "lobby":
             await interaction.response.send_message(
                 "Game in progress! Wait for the next round.", ephemeral=True,
             )
@@ -686,55 +570,13 @@ class MastermindTableView(ui.View):
                 "Table is full!", ephemeral=True,
             )
             return
-        bal = await queries.get_or_create_casino_wallet(str(uid))
-        await interaction.response.send_modal(
-            JoinMastermindModal(self.table, self, bal),
-        )
-
-    @ui.button(
-        label="Re-bet", style=discord.ButtonStyle.primary, emoji="\U0001f504", row=0,
-    )
-    async def rebet_btn(
-        self, interaction: discord.Interaction, button: ui.Button,
-    ) -> None:
-        if self.table.phase != "betting":
-            await interaction.response.send_message(
-                "Game in progress!", ephemeral=True,
-            )
-            return
-        uid = interaction.user.id
-        if uid in self.table.players:
-            await interaction.response.send_message(
-                "You're already in!", ephemeral=True,
-            )
-            return
-        last = self.table.last_bets.get(uid)
-        if last is None:
-            await interaction.response.send_message(
-                "No previous bet \u2014 use Join instead.", ephemeral=True,
-            )
-            return
-        if len(self.table.players) >= MAX_PLAYERS:
-            await interaction.response.send_message(
-                "Table is full!", ephemeral=True,
-            )
-            return
-        name, amt = last
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins for {amt}c re-bet! (have {bal}c)",
-                ephemeral=True,
-            )
-            return
         self.table.players[uid] = MastermindPlayer(
-            user_id=uid, display_name=name, bet=amt,
+            user_id=uid,
+            display_name=interaction.user.display_name,
         )
         self._update_buttons()
         await interaction.response.edit_message(
-            embed=_betting_embed(self.table), view=self,
+            embed=_lobby_embed(self.table), view=self,
         )
 
     @ui.button(
@@ -755,12 +597,11 @@ class MastermindTableView(ui.View):
                 "Can't leave mid-game!", ephemeral=True,
             )
             return
-        if self.table.phase == "betting":
-            await queries.update_casino_balance(str(uid), player.bet)
+        if self.table.phase == "lobby":
             del self.table.players[uid]
             self._update_buttons()
             await interaction.response.edit_message(
-                embed=_betting_embed(self.table), view=self,
+                embed=_lobby_embed(self.table), view=self,
             )
             return
         await interaction.response.send_message(
@@ -883,7 +724,7 @@ class MastermindTableView(ui.View):
         self._start_new_round()
         self._update_buttons()
         await interaction.response.edit_message(
-            embed=_betting_embed(self.table), view=self,
+            embed=_lobby_embed(self.table), view=self,
         )
 
     @ui.button(
@@ -902,12 +743,6 @@ class MastermindTableView(ui.View):
                 "Can't close mid-game!", ephemeral=True,
             )
             return
-        if self.table.phase == "betting":
-            for p in self.table.players.values():
-                try:
-                    await queries.update_casino_balance(str(p.user_id), p.bet)
-                except Exception:
-                    pass
         await self._close(interaction, "Table closed by host.")
 
     # ── Game logic ───────────────────────────────────────────────────────────
@@ -937,20 +772,13 @@ class MastermindTableView(ui.View):
     def _start_new_round(self) -> None:
         table = self.table
         table.players.clear()
-        table.phase = "betting"
+        table.phase = "lobby"
         table.round_num += 1
         table.secret_code = []
         table.winners.clear()
         if table.round_task and not table.round_task.done():
             table.round_task.cancel()
         table.round_task = None
-
-    async def _refund_all(self) -> None:
-        for p in self.table.players.values():
-            try:
-                await queries.update_casino_balance(str(p.user_id), p.bet)
-            except Exception:
-                pass
 
     async def _close(
         self, interaction: discord.Interaction, reason: str,
@@ -974,28 +802,12 @@ class MastermindTableView(ui.View):
         if table.round_task and not table.round_task.done():
             table.round_task.cancel()
 
-        if table.phase == "finished":
-            self.active_tables.pop(table.channel_id, None)
-            if table.message:
-                try:
-                    embed = discord.Embed(
-                        title="\U0001f9e0 Mastermind Table \u2014 Timed Out",
-                        description="Table timed out between rounds.",
-                        colour=discord.Colour.dark_grey(),
-                    )
-                    await table.message.edit(embed=embed, view=None)
-                except Exception:
-                    pass
-            return
-
-        # Betting or playing — refund all
-        await self._refund_all()
         self.active_tables.pop(table.channel_id, None)
         if table.message:
             try:
                 embed = discord.Embed(
                     title="\U0001f9e0 Mastermind Table \u2014 Timed Out",
-                    description="Table timed out. All bets refunded.",
+                    description="Table timed out.",
                     colour=discord.Colour.dark_grey(),
                 )
                 await table.message.edit(embed=embed, view=None)
@@ -1024,8 +836,6 @@ class MastermindCog(commands.Cog):
             )
             return
 
-        await queries.get_or_create_casino_wallet(str(interaction.user.id))
-
         table = MastermindTable(
             channel_id=channel_id,
             host_id=interaction.user.id,
@@ -1034,7 +844,7 @@ class MastermindCog(commands.Cog):
         self.active_tables[channel_id] = table
 
         view = MastermindTableView(table, self.active_tables)
-        embed = _betting_embed(table)
+        embed = _lobby_embed(table)
         await interaction.response.send_message(embed=embed, view=view)
         table.message = await interaction.original_response()
 

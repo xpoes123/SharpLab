@@ -1,4 +1,4 @@
-"""Casino cog — multiplayer /stockmarket party game."""
+"""Party game cog — multiplayer /stockmarket simulation game."""
 
 import asyncio
 import random
@@ -8,8 +8,6 @@ import discord
 from discord import app_commands, ui
 from discord.ext import commands
 
-from db import queries
-from bot.cogs._pool import compute_side_pot_payouts
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -58,7 +56,6 @@ class EventCard:
 class StockPlayer:
     user_id: int
     display_name: str
-    bet: int  # buy-in amount (goes to pot)
     cash: int = STARTING_CASH  # in-game cash
     holdings: dict[str, int] = field(default_factory=dict)  # ticker -> shares
 
@@ -276,21 +273,18 @@ def _spark(history: list[int]) -> str:
 
 
 def _betting_embed(table: StockTable) -> discord.Embed:
-    pot = sum(p.bet for p in table.players.values())
     embed = discord.Embed(
         title=f"\U0001f4ca Stock Market \u2014 Join the Table (Game {table.game_num})",
         description=(
             "Invest in fictional stocks over 5 rounds. "
-            "Buy low, sell high \u2014 highest portfolio value wins the pot!\n"
-            f"Starting cash: **{STARTING_CASH}c** (in-game). Buy-in goes to the pot."
+            "Buy low, sell high \u2014 highest portfolio value wins!\n"
+            f"Starting in-game cash: **{STARTING_CASH}**"
         ),
         colour=discord.Colour.blurple(),
     )
-    if pot:
-        embed.add_field(name="Pot", value=f"{pot}c", inline=True)
     if table.players:
         lines = [
-            f"\U0001f4b5 **{p.display_name}** \u2014 {p.bet}c"
+            f"\U0001f4ca **{p.display_name}**"
             for p in table.players.values()
         ]
         embed.add_field(name="Players", value="\n".join(lines), inline=False)
@@ -375,9 +369,7 @@ def _round_embed(
     return embed
 
 
-def _final_embed(
-    table: StockTable, *, balances: dict[int, int] | None = None,
-) -> discord.Embed:
+def _final_embed(table: StockTable) -> discord.Embed:
     embed = discord.Embed(
         title=f"\U0001f4ca Stock Market \u2014 Final Results (Game {table.game_num})",
         colour=discord.Colour.gold(),
@@ -392,14 +384,14 @@ def _final_embed(
         stock = table.stocks[ticker]
         change = stock.price - 100
         if change > 0:
-            chg_str = f"+{change}c"
+            chg_str = f"+{change}"
         elif change < 0:
-            chg_str = f"{change}c"
+            chg_str = f"{change}"
         else:
-            chg_str = "0c"
+            chg_str = "0"
         spark = _spark(stock.history)
         stock_lines.append(
-            f"{emoji} {ticker:<6}{name:<12}{stock.price:>5}c{chg_str:>9}  {spark}"
+            f"{emoji} {ticker:<6}{name:<12}{stock.price:>5}{chg_str:>9}  {spark}"
         )
     stock_lines.append("```")
     embed.add_field(name="Final Prices", value="\n".join(stock_lines), inline=False)
@@ -414,8 +406,6 @@ def _final_embed(
     result_lines: list[str] = []
     for i, p in enumerate(ranked):
         val = p.portfolio_value(table.stocks)
-        bal = balances.get(p.user_id, 0) if balances else 0
-        net = p.payout - p.bet if hasattr(p, "payout") else 0
 
         # Holdings breakdown
         holdings_parts: list[str] = []
@@ -423,36 +413,19 @@ def _final_embed(
             shares = p.holdings.get(ticker, 0)
             if shares > 0:
                 stock_val = shares * table.stocks[ticker].price
-                holdings_parts.append(f"{emoji}{shares}x{table.stocks[ticker].price}c={stock_val}c")
+                holdings_parts.append(f"{emoji}{shares}x{table.stocks[ticker].price}={stock_val}")
 
         holdings_str = ", ".join(holdings_parts) if holdings_parts else "no stocks"
-        cash_str = f"cash: {p.cash}c"
+        cash_str = f"cash: {p.cash}"
 
-        payout = getattr(p, "payout", 0)
-        net = payout - p.bet
-        sign = "+" if net >= 0 else ""
         if p.user_id in table.winners:
             medal = "\U0001f3c6" if i == 0 else "\U0001f91d"
-            result_lines.append(
-                f"{medal} **{p.display_name}** \u2014 "
-                f"portfolio: **{val}c** ({cash_str}, {holdings_str})\n"
-                f"    {p.bet}c \u2192 {payout}c "
-                f"(**{sign}{net}c**) \u2014 bal: {bal}c"
-            )
-        elif payout > 0:
-            result_lines.append(
-                f"\U0001f4b0 **{p.display_name}** \u2014 "
-                f"portfolio: **{val}c** ({cash_str}, {holdings_str})\n"
-                f"    {p.bet}c \u2192 {payout}c "
-                f"(**{sign}{net}c**) \u2014 bal: {bal}c"
-            )
         else:
-            result_lines.append(
-                f"\u274c **{p.display_name}** \u2014 "
-                f"portfolio: **{val}c** ({cash_str}, {holdings_str})\n"
-                f"    {p.bet}c \u2192 0c "
-                f"(**-{p.bet}c**) \u2014 bal: {bal}c"
-            )
+            medal = "\u25aa\ufe0f"
+        result_lines.append(
+            f"{medal} **{p.display_name}** \u2014 "
+            f"portfolio: **{val}** ({cash_str}, {holdings_str})"
+        )
 
     embed.add_field(name="Results", value="\n".join(result_lines), inline=False)
 
@@ -461,20 +434,9 @@ def _final_embed(
         winner_names = [table.players[uid].display_name for uid in table.winners]
         if len(winner_names) == 1:
             p = table.players[table.winners[0]]
-            embed.description = f"**{p.display_name}** wins **{p.payout}c**!"
+            embed.description = f"\U0001f3c6 **{p.display_name}** wins!"
         else:
-            winner_pays = [table.players[uid].payout for uid in table.winners]
-            if len(set(winner_pays)) == 1:
-                embed.description = (
-                    f"**{' & '.join(winner_names)}** tie and split the pot! "
-                    f"({winner_pays[0]}c each)"
-                )
-            else:
-                parts = [
-                    f"**{table.players[uid].display_name}** {table.players[uid].payout}c"
-                    for uid in table.winners
-                ]
-                embed.description = f"{', '.join(parts)} split the pot!"
+            embed.description = f"\U0001f91d **{' & '.join(winner_names)}** tie!"
 
     embed.set_footer(text=f"Host: {table.host_name}")
     return embed
@@ -483,62 +445,7 @@ def _final_embed(
 # ── Modals ───────────────────────────────────────────────────────────────────
 
 
-class JoinStockModal(ui.Modal):
-    amount = ui.TextInput(
-        label="Buy-in amount (coins)",
-        placeholder="e.g. 100",
-        required=True,
-        max_length=10,
-    )
-
-    def __init__(
-        self, table: StockTable, view: "StockTableView", balance: int,
-    ) -> None:
-        super().__init__(title="Join Stock Market")
-        self.table = table
-        self.table_view = view
-        self.amount.placeholder = f"e.g. 100 (bal: {balance}c)"
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            amt = int(self.amount.value)
-        except ValueError:
-            await interaction.response.send_message(
-                "Enter a whole number.", ephemeral=True,
-            )
-            return
-        if amt < 1:
-            await interaction.response.send_message(
-                "Must be at least 1 coin.", ephemeral=True,
-            )
-            return
-
-        uid = interaction.user.id
-        if uid in self.table.players:
-            await interaction.response.send_message(
-                "You're already in this game!", ephemeral=True,
-            )
-            return
-
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins! (have {bal}c)", ephemeral=True,
-            )
-            return
-
-        self.table.players[uid] = StockPlayer(
-            user_id=uid,
-            display_name=interaction.user.display_name,
-            bet=amt,
-        )
-
-        self.table_view._update_buttons()
-        await interaction.response.edit_message(
-            embed=_betting_embed(self.table), view=self.table_view,
-        )
+    # JoinStockModal removed — Join button now directly adds player (no coins needed)
 
 
 class BuyModal(ui.Modal):
@@ -761,7 +668,7 @@ class StockTableView(ui.View):
 
     @ui.button(
         label="Join", style=discord.ButtonStyle.primary,
-        emoji="\U0001f4b5", row=0,
+        emoji="\U0001f4ca", row=0,
     )
     async def join_btn(
         self, interaction: discord.Interaction, button: ui.Button,
@@ -782,18 +689,17 @@ class StockTableView(ui.View):
                 "Table is full!", ephemeral=True,
             )
             return
-        bal = await queries.get_or_create_casino_wallet(str(uid))
-        if bal < 1:
-            await interaction.response.send_message(
-                "You have no coins!", ephemeral=True,
-            )
-            return
-        await interaction.response.send_modal(
-            JoinStockModal(self.table, self, bal),
+        self.table.players[uid] = StockPlayer(
+            user_id=uid,
+            display_name=interaction.user.display_name,
+        )
+        self._update_buttons()
+        await interaction.response.edit_message(
+            embed=_betting_embed(self.table), view=self,
         )
 
     @ui.button(
-        label="Re-bet", style=discord.ButtonStyle.primary,
+        label="Rejoin", style=discord.ButtonStyle.primary,
         emoji="\U0001f504", row=0,
     )
     async def rebet_btn(
@@ -813,7 +719,7 @@ class StockTableView(ui.View):
         last = self.table.last_bets.get(uid)
         if last is None:
             await interaction.response.send_message(
-                "No previous bet \u2014 use Join instead.", ephemeral=True,
+                "No previous game \u2014 use Join instead.", ephemeral=True,
             )
             return
         if len(self.table.players) >= MAX_PLAYERS:
@@ -821,18 +727,9 @@ class StockTableView(ui.View):
                 "Table is full!", ephemeral=True,
             )
             return
-        name, amt = last
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins for {amt}c re-bet! (have {bal}c)",
-                ephemeral=True,
-            )
-            return
+        name, _ = last
         self.table.players[uid] = StockPlayer(
-            user_id=uid, display_name=name, bet=amt,
+            user_id=uid, display_name=name,
         )
         self._update_buttons()
         await interaction.response.edit_message(
@@ -859,7 +756,6 @@ class StockTableView(ui.View):
             )
             return
         if self.table.phase == "betting":
-            await queries.update_casino_balance(str(uid), player.bet)
             del self.table.players[uid]
             self._update_buttons()
             await interaction.response.edit_message(
@@ -998,12 +894,6 @@ class StockTableView(ui.View):
                 "Can't close mid-game!", ephemeral=True,
             )
             return
-        if self.table.phase == "betting":
-            for p in self.table.players.values():
-                try:
-                    await queries.update_casino_balance(str(p.user_id), p.bet)
-                except Exception:
-                    pass
         await self._close(interaction, "Table closed by host.")
 
     # ── Game logic ───────────────────────────────────────────────────────────
@@ -1111,7 +1001,7 @@ class StockTableView(ui.View):
             await asyncio.sleep(3)
 
     async def _finalize(self) -> None:
-        """Compute final portfolios, determine winner, pay out."""
+        """Compute final portfolios and determine winner."""
         table = self.table
         table.phase = "finished"
 
@@ -1120,43 +1010,21 @@ class StockTableView(ui.View):
         for uid, player in table.players.items():
             values[uid] = player.portfolio_value(table.stocks)
 
-        # Find winner(s) — highest portfolio value
         if not values:
-            await self._refund_all()
             return
 
         max_val = max(values.values())
         table.winners = [uid for uid, val in values.items() if val == max_val]
 
-        # Side-pot payouts
-        bets = {uid: p.bet for uid, p in table.players.items()}
-        payouts = compute_side_pot_payouts(bets, table.winners)
+        # Save for rejoin
         for uid, player in table.players.items():
-            player.payout = payouts.get(uid, 0)
-
-        # Credit payouts and log results
-        balances: dict[int, int] = {}
-        for uid, player in table.players.items():
-            if player.payout > 0:
-                balances[uid] = await queries.update_casino_balance(
-                    str(uid), player.payout,
-                )
-            else:
-                bal = await queries.get_casino_balance(str(uid))
-                balances[uid] = bal or 0
-            await queries.log_casino_result(
-                str(uid), "stockmarket", player.bet, player.payout,
-            )
-
-        # Save last bets for re-bet
-        for uid, player in table.players.items():
-            table.last_bets[uid] = (player.display_name, player.bet)
+            table.last_bets[uid] = (player.display_name, 0)
 
         self._update_buttons()
         if table.message:
             try:
                 await table.message.edit(
-                    embed=_final_embed(table, balances=balances),
+                    embed=_final_embed(table),
                     view=self,
                 )
             except discord.HTTPException:
@@ -1178,11 +1046,7 @@ class StockTableView(ui.View):
         table.trade_locked = False
 
     async def _refund_all(self) -> None:
-        for p in self.table.players.values():
-            try:
-                await queries.update_casino_balance(str(p.user_id), p.bet)
-            except Exception:
-                pass
+        pass  # no coins to refund
 
     async def _close(
         self, interaction: discord.Interaction, reason: str,
@@ -1218,14 +1082,13 @@ class StockTableView(ui.View):
                     pass
             return
 
-        # Betting or playing — refund all
-        await self._refund_all()
+        # Betting or playing — clean up
         self.active_tables.pop(table.channel_id, None)
         if table.message:
             try:
                 embed = discord.Embed(
                     title="\U0001f4ca Stock Market Table \u2014 Timed Out",
-                    description="Table timed out. All buy-ins refunded.",
+                    description="Table timed out.",
                     colour=discord.Colour.dark_grey(),
                 )
                 await table.message.edit(embed=embed, view=None)
@@ -1253,8 +1116,6 @@ class StockMarketCog(commands.Cog):
                 ephemeral=True,
             )
             return
-
-        await queries.get_or_create_casino_wallet(str(interaction.user.id))
 
         table = StockTable(
             channel_id=channel_id,

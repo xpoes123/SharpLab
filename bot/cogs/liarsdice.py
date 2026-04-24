@@ -1,4 +1,4 @@
-"""Casino cog — multiplayer /liarsdice game."""
+"""Multiplayer /liarsdice game."""
 
 import asyncio
 import random
@@ -9,9 +9,7 @@ import discord
 from discord import app_commands, ui
 from discord.ext import commands
 
-from db import queries
 from bot.cogs._elo_helpers import update_elo_multiplayer
-from bot.cogs._pool import compute_side_pot_payouts
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -75,11 +73,9 @@ def _bid_is_higher(new_qty: int, new_face: int, old_qty: int, old_face: int) -> 
 class LiarPlayer:
     user_id: int
     display_name: str
-    bet: int
     dice: list[int] = field(default_factory=list)
     dice_count: int = STARTING_DICE
     eliminated: bool = False
-    payout: int = 0
 
 
 @dataclass
@@ -87,7 +83,7 @@ class LiarTable:
     channel_id: int
     host_id: int
     host_name: str
-    phase: str = "betting"  # betting | playing | finished
+    phase: str = "lobby"  # lobby | playing | finished
     players: dict[int, LiarPlayer] = field(default_factory=dict)
     turn_order: list[int] = field(default_factory=list)  # user_ids in seat order
     current_turn_idx: int = 0
@@ -95,7 +91,6 @@ class LiarTable:
     current_bidder: int | None = None
     message: discord.Message | None = None
     round_num: int = 1
-    last_bets: dict[int, tuple[str, int]] = field(default_factory=dict)
     winners: list[int] = field(default_factory=list)
     shot_clock_expires: float | None = None
 
@@ -103,21 +98,18 @@ class LiarTable:
 # ── Embeds ───────────────────────────────────────────────────────────────────
 
 
-def _betting_embed(table: LiarTable) -> discord.Embed:
-    pot = sum(p.bet for p in table.players.values())
+def _lobby_embed(table: LiarTable) -> discord.Embed:
     embed = discord.Embed(
         title=f"Liar's Dice \u2014 Join the Table (Round {table.round_num})",
         description=(
-            "Bluff, bid, and call out liars! Last player with dice wins the pot.\n"
+            "Bluff, bid, and call out liars! Last player with dice wins.\n"
             "Aces (1s) are **wild** and count toward any face."
         ),
         colour=discord.Colour.dark_orange(),
     )
-    if pot:
-        embed.add_field(name="Pot", value=f"{pot}c", inline=True)
     if table.players:
         lines = [
-            f"\U0001f3b2 **{p.display_name}** \u2014 {p.bet}c"
+            f"\U0001f3b2 **{p.display_name}**"
             for p in table.players.values()
         ]
         embed.add_field(name="Players", value="\n".join(lines), inline=False)
@@ -250,13 +242,11 @@ def _challenge_embed(
     return embed
 
 
-def _finished_embed(
-    table: LiarTable, *, balances: dict[int, int] | None = None,
-) -> discord.Embed:
+def _finished_embed(table: LiarTable) -> discord.Embed:
     winner = table.players[table.winners[0]]
     embed = discord.Embed(
         title=f"Liar's Dice \u2014 Winner! (Round {table.round_num})",
-        description=f"**{winner.display_name}** is the last player standing and wins **{winner.payout}c**!",
+        description=f"\U0001f3c6 **{winner.display_name}** is the last player standing!",
         colour=discord.Colour.gold(),
     )
 
@@ -264,25 +254,10 @@ def _finished_embed(
     winner_set = set(table.winners)
     for uid in table.turn_order:
         p = table.players[uid]
-        bal = balances.get(uid, 0) if balances else 0
-        net = p.payout - p.bet
-        sign = "+" if net >= 0 else ""
         if uid in winner_set:
-            lines.append(
-                f"\U0001f3c6 **{p.display_name}** \u2014 {p.bet}c \u2192 {p.payout}c "
-                f"(**{sign}{net}c**) \u2014 bal: {bal}c"
-            )
-        elif p.payout > 0:
-            # Partial refund from side pot (bet exceeded winner's bet)
-            lines.append(
-                f"\U0001f4b0 **{p.display_name}** \u2014 {p.bet}c \u2192 {p.payout}c "
-                f"(**{sign}{net}c**) \u2014 bal: {bal}c"
-            )
+            lines.append(f"\U0001f3c6 **{p.display_name}** \u2014 Winner!")
         else:
-            lines.append(
-                f"\u274c **{p.display_name}** \u2014 {p.bet}c \u2192 0c "
-                f"(**-{p.bet}c**) \u2014 bal: {bal}c"
-            )
+            lines.append(f"\u274c **{p.display_name}** \u2014 Eliminated")
     embed.add_field(name="Results", value="\n".join(lines), inline=False)
     embed.set_footer(text=f"Host: {table.host_name}")
     return embed
@@ -321,64 +296,6 @@ def _alive_players(table: LiarTable) -> list[int]:
 
 
 # ── Modals ───────────────────────────────────────────────────────────────────
-
-
-class JoinLiarModal(ui.Modal):
-    amount = ui.TextInput(
-        label="Bet amount (coins)",
-        placeholder="e.g. 100",
-        required=True,
-        max_length=10,
-    )
-
-    def __init__(
-        self, table: LiarTable, view: "LiarTableView", balance: int,
-    ) -> None:
-        super().__init__(title="Join Liar's Dice")
-        self.table = table
-        self.table_view = view
-        self.amount.placeholder = f"e.g. 100 (bal: {balance}c)"
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            amt = int(self.amount.value)
-        except ValueError:
-            await interaction.response.send_message(
-                "Enter a whole number.", ephemeral=True,
-            )
-            return
-        if amt < 1:
-            await interaction.response.send_message(
-                "Must be at least 1 coin.", ephemeral=True,
-            )
-            return
-
-        uid = interaction.user.id
-        if uid in self.table.players:
-            await interaction.response.send_message(
-                "You're already in this round!", ephemeral=True,
-            )
-            return
-
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins! (have {bal}c)", ephemeral=True,
-            )
-            return
-
-        self.table.players[uid] = LiarPlayer(
-            user_id=uid,
-            display_name=interaction.user.display_name,
-            bet=amt,
-        )
-
-        self.table_view._update_buttons()
-        await interaction.response.edit_message(
-            embed=_betting_embed(self.table), view=self.table_view,
-        )
 
 
 class BidModal(ui.Modal):
@@ -488,16 +405,15 @@ class LiarTableView(ui.View):
 
     def _update_buttons(self) -> None:
         phase = self.table.phase
-        betting = phase == "betting"
+        lobby = phase == "lobby"
         playing = phase == "playing"
         finished = phase == "finished"
 
-        # Row 0: Start, Join, Re-bet, Leave
+        # Row 0: Start, Join, Leave
         self.start_btn.disabled = (
-            not betting or len(self.table.players) < MIN_PLAYERS
+            not lobby or len(self.table.players) < MIN_PLAYERS
         )
-        self.join_btn.disabled = not betting
-        self.rebet_btn.disabled = not betting or not self.table.last_bets
+        self.join_btn.disabled = not lobby
         self.leave_btn.disabled = playing
 
         # Row 1: Bid, Liar!, My Dice
@@ -598,7 +514,7 @@ class LiarTableView(ui.View):
                 "Only the host can start!", ephemeral=True,
             )
             return
-        if self.table.phase != "betting":
+        if self.table.phase != "lobby":
             await interaction.response.send_message(
                 "Already started!", ephemeral=True,
             )
@@ -616,7 +532,7 @@ class LiarTableView(ui.View):
     async def join_btn(
         self, interaction: discord.Interaction, button: ui.Button,
     ) -> None:
-        if self.table.phase != "betting":
+        if self.table.phase != "lobby":
             await interaction.response.send_message(
                 "Game in progress! Wait for the next round.", ephemeral=True,
             )
@@ -632,55 +548,13 @@ class LiarTableView(ui.View):
                 "Table is full!", ephemeral=True,
             )
             return
-        bal = await queries.get_or_create_casino_wallet(str(uid))
-        await interaction.response.send_modal(
-            JoinLiarModal(self.table, self, bal),
-        )
-
-    @ui.button(
-        label="Re-bet", style=discord.ButtonStyle.primary, emoji="\U0001f504", row=0,
-    )
-    async def rebet_btn(
-        self, interaction: discord.Interaction, button: ui.Button,
-    ) -> None:
-        if self.table.phase != "betting":
-            await interaction.response.send_message(
-                "Game in progress!", ephemeral=True,
-            )
-            return
-        uid = interaction.user.id
-        if uid in self.table.players:
-            await interaction.response.send_message(
-                "You're already in!", ephemeral=True,
-            )
-            return
-        last = self.table.last_bets.get(uid)
-        if last is None:
-            await interaction.response.send_message(
-                "No previous bet \u2014 use Join instead.", ephemeral=True,
-            )
-            return
-        if len(self.table.players) >= MAX_PLAYERS:
-            await interaction.response.send_message(
-                "Table is full!", ephemeral=True,
-            )
-            return
-        name, amt = last
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins for {amt}c re-bet! (have {bal}c)",
-                ephemeral=True,
-            )
-            return
         self.table.players[uid] = LiarPlayer(
-            user_id=uid, display_name=name, bet=amt,
+            user_id=uid,
+            display_name=interaction.user.display_name,
         )
         self._update_buttons()
         await interaction.response.edit_message(
-            embed=_betting_embed(self.table), view=self,
+            embed=_lobby_embed(self.table), view=self,
         )
 
     @ui.button(
@@ -701,12 +575,11 @@ class LiarTableView(ui.View):
                 "Can't leave mid-game!", ephemeral=True,
             )
             return
-        if self.table.phase == "betting":
-            await queries.update_casino_balance(str(uid), player.bet)
+        if self.table.phase == "lobby":
             del self.table.players[uid]
             self._update_buttons()
             await interaction.response.edit_message(
-                embed=_betting_embed(self.table), view=self,
+                embed=_lobby_embed(self.table), view=self,
             )
             return
         await interaction.response.send_message(
@@ -810,7 +683,7 @@ class LiarTableView(ui.View):
         self._start_new_round()
         self._update_buttons()
         await interaction.response.edit_message(
-            embed=_betting_embed(self.table), view=self,
+            embed=_lobby_embed(self.table), view=self,
         )
 
     @ui.button(
@@ -829,12 +702,6 @@ class LiarTableView(ui.View):
                 "Can't close mid-game!", ephemeral=True,
             )
             return
-        if self.table.phase == "betting":
-            for p in self.table.players.values():
-                try:
-                    await queries.update_casino_balance(str(p.user_id), p.bet)
-                except Exception:
-                    pass
         await self._close(interaction, "Table closed by host.")
 
     # ── Game logic ───────────────────────────────────────────────────────────
@@ -850,7 +717,6 @@ class LiarTableView(ui.View):
             p.dice_count = STARTING_DICE
             p.dice = _roll_dice(STARTING_DICE)
             p.eliminated = False
-            p.payout = 0
 
         table.current_turn_idx = 0
         table.current_bid = None
@@ -900,7 +766,7 @@ class LiarTableView(ui.View):
         # Check if game is over
         alive = _alive_players(table)
         if len(alive) <= 1:
-            # Game over — resolve payouts
+            # Game over — resolve
             await self._resolve_game(interaction, challenge_embed, alive)
             return
 
@@ -957,26 +823,6 @@ class LiarTableView(ui.View):
 
         table.winners = [winner_uid]
 
-        # Side-pot payouts — winner only wins up to their bet from each opponent
-        bets = {uid: p.bet for uid, p in table.players.items()}
-        payouts = compute_side_pot_payouts(bets, [winner_uid])
-        for uid, payout in payouts.items():
-            table.players[uid].payout = payout
-
-        # Credit payouts and log results
-        balances: dict[int, int] = {}
-        for uid, player in table.players.items():
-            if player.payout > 0:
-                balances[uid] = await queries.update_casino_balance(
-                    str(uid), player.payout,
-                )
-            else:
-                bal = await queries.get_casino_balance(str(uid))
-                balances[uid] = bal or 0
-            await queries.log_casino_result(
-                str(uid), "liarsdice", player.bet, player.payout,
-            )
-
         # ELO update — winner first, rest in arbitrary order
         if len(table.players) >= 2:
             finish_order = [winner_uid] + [uid for uid in table.turn_order if uid != winner_uid]
@@ -985,22 +831,15 @@ class LiarTableView(ui.View):
             except Exception:
                 pass
 
-        # Save last bets for re-bet
-        for uid, player in table.players.items():
-            table.last_bets[uid] = (player.display_name, player.bet)
-
-        # Show the challenge result first, then update to finished embed
-        # We show the challenge embed with an added "Game Over" field, then the view
-        # updates to show finished state buttons
-        finished_embed = _finished_embed(table, balances=balances)
+        finished_embed = _finished_embed(table)
 
         self._update_buttons()
         if challenge_embed:
-            # Show challenge result first, then finished embed after delay
+            # Show challenge result first with game over note, then finished embed
             winner = table.players[winner_uid]
             challenge_embed.add_field(
                 name="\U0001f3c6 Game Over!",
-                value=f"**{winner.display_name}** wins **{winner.payout}c**!",
+                value=f"**{winner.display_name}** wins!",
                 inline=False,
             )
             await self._edit_msg(interaction, embed=challenge_embed, view=self)
@@ -1021,20 +860,13 @@ class LiarTableView(ui.View):
         self._cancel_shot_clock()
         table = self.table
         table.players.clear()
-        table.phase = "betting"
+        table.phase = "lobby"
         table.round_num += 1
         table.turn_order.clear()
         table.current_turn_idx = 0
         table.current_bid = None
         table.current_bidder = None
         table.winners.clear()
-
-    async def _refund_all(self) -> None:
-        for p in self.table.players.values():
-            try:
-                await queries.update_casino_balance(str(p.user_id), p.bet)
-            except Exception:
-                pass
 
     async def _close(
         self, interaction: discord.Interaction, reason: str,
@@ -1055,28 +887,12 @@ class LiarTableView(ui.View):
         self._cancel_shot_clock()
         table = self.table
 
-        if table.phase == "finished":
-            self.active_tables.pop(table.channel_id, None)
-            if table.message:
-                try:
-                    embed = discord.Embed(
-                        title="Liar's Dice Table \u2014 Timed Out",
-                        description="Table timed out between rounds.",
-                        colour=discord.Colour.dark_grey(),
-                    )
-                    await table.message.edit(embed=embed, view=None)
-                except Exception:
-                    pass
-            return
-
-        # Betting or playing — refund all
-        await self._refund_all()
         self.active_tables.pop(table.channel_id, None)
         if table.message:
             try:
                 embed = discord.Embed(
                     title="Liar's Dice Table \u2014 Timed Out",
-                    description="Table timed out. All bets refunded.",
+                    description="Table timed out.",
                     colour=discord.Colour.dark_grey(),
                 )
                 await table.message.edit(embed=embed, view=None)
@@ -1104,8 +920,6 @@ class LiarDiceCog(commands.Cog):
             )
             return
 
-        await queries.get_or_create_casino_wallet(str(interaction.user.id))
-
         table = LiarTable(
             channel_id=channel_id,
             host_id=interaction.user.id,
@@ -1114,7 +928,7 @@ class LiarDiceCog(commands.Cog):
         self.active_tables[channel_id] = table
 
         view = LiarTableView(table, self.active_tables)
-        embed = _betting_embed(table)
+        embed = _lobby_embed(table)
         await interaction.response.send_message(embed=embed, view=view)
         table.message = await interaction.original_response()
 

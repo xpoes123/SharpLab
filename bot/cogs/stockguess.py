@@ -1,7 +1,7 @@
-"""Casino cog — /stockguess party game.
+"""Party game cog — /stockguess.
 
 Players guess a stock's YTD percentage change across multiple rounds.
-Closest guess each round wins that round's pot.
+Closest guess each round wins that round.
 """
 
 import asyncio
@@ -13,7 +13,6 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from bot.cogs._elo_helpers import update_elo_multiplayer
-from db import queries
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -73,17 +72,6 @@ DEFAULT_ROUNDS = 5      # rounds per game when not specified
 ROUND_PAUSE = 5         # seconds between rounds
 COUNTDOWN_INTERVAL = 10  # how often to refresh the countdown display (seconds)
 
-PAYTABLE: dict[int, list[float]] = {
-    1: [1.0],
-    2: [1.0],
-    3: [0.70, 0.30],
-    4: [0.55, 0.30, 0.15],
-    5: [0.45, 0.25, 0.18, 0.12],
-    6: [0.40, 0.24, 0.16, 0.12, 0.08],
-    7: [0.36, 0.22, 0.16, 0.12, 0.08, 0.06],
-    8: [0.33, 0.21, 0.16, 0.12, 0.08, 0.06, 0.04],
-}
-
 MEDALS = ["\U0001f947", "\U0001f948", "\U0001f949"]  # gold, silver, bronze
 
 # ── Dataclasses ──────────────────────────────────────────────────────────────
@@ -93,7 +81,6 @@ MEDALS = ["\U0001f947", "\U0001f948", "\U0001f949"]  # gold, silver, bronze
 class StockGuessPlayer:
     user_id: int
     display_name: str
-    bet: int  # per-round bet
 
 
 @dataclass
@@ -178,29 +165,14 @@ def compute_rankings(
     return ranked
 
 
-def compute_payouts(
+def compute_round_winner(
     rankings: list[tuple[int, float, float]],
-    players: dict[int, StockGuessPlayer],
-) -> dict[int, int]:
-    """Distribute the prize pool based on rankings using the paytable."""
-    n = len(players)
-    prize_pool = sum(p.bet for p in players.values())
-    pct_table = PAYTABLE.get(n, PAYTABLE[8])
-    payouts: dict[int, int] = {uid: 0 for uid in players}
-
-    for i, (uid, _guess, _error) in enumerate(rankings):
-        if i < len(pct_table) and _error != float("inf"):
-            payouts[uid] = int(prize_pool * pct_table[i])
-
-    # Leftover from rounding goes to first place
-    total_paid = sum(payouts.values())
-    leftover = prize_pool - total_paid
-    if leftover > 0 and rankings:
-        first_uid = rankings[0][0]
-        if rankings[0][2] != float("inf"):
-            payouts[first_uid] += leftover
-
-    return payouts
+) -> int | None:
+    """Return the user_id of the closest guesser, or None if nobody guessed."""
+    for uid, _guess, error in rankings:
+        if error != float("inf"):
+            return uid
+    return None
 
 
 # ── Stock picker ─────────────────────────────────────────────────────────────
@@ -227,35 +199,23 @@ async def _pick_next_stock(table: StockGuessTable) -> tuple[str, str, float]:
 
 def _betting_embed(table: StockGuessTable) -> discord.Embed:
     n = len(table.players)
-    # Total pot = sum of (per-round bets × rounds) for all joined players
-    total_pot = sum(p.bet * table.total_rounds for p in table.players.values())
 
     embed = discord.Embed(
         title="\U0001f4c8 Stock Guess",
         description=(
             f"**{table.total_rounds} mystery stocks** \u2014 guess each one's YTD change!\n"
-            "Closest guess each round wins the pot.\n"
+            "Closest guess each round wins.\n"
             "Stocks are revealed when guessing begins."
         ),
         colour=0xF1C40F,
     )
 
     embed.add_field(name="Rounds", value=str(table.total_rounds), inline=True)
-    if total_pot:
-        embed.add_field(name="Total Pot", value=f"{total_pot}c", inline=True)
     embed.add_field(name="Players", value=f"{n}/{MAX_PLAYERS}", inline=True)
-
-    if n >= MIN_PLAYERS:
-        pt = PAYTABLE.get(n, PAYTABLE[8])
-        pt_parts = [
-            f"{MEDALS[i] if i < 3 else chr(0x25aa) + chr(0xfe0f)} {int(s * 100)}%"
-            for i, s in enumerate(pt)
-        ]
-        embed.add_field(name="Paytable (per round)", value=" | ".join(pt_parts), inline=False)
 
     if table.players:
         lines = [
-            f"\U0001f4b0 **{p.display_name}** \u2014 {p.bet}c/round ({p.bet * table.total_rounds}c total)"
+            f"\U0001f4c8 **{p.display_name}**"
             for p in table.players.values()
         ]
         embed.add_field(name="Joined", value="\n".join(lines), inline=False)
@@ -286,8 +246,6 @@ def _guessing_embed(table: StockGuessTable, remaining: int | None = None) -> dis
     )
 
     embed.add_field(name="\u23f1\ufe0f Time", value=f"**{secs}s**", inline=True)
-    pot = sum(p.bet for p in table.players.values())
-    embed.add_field(name="Round Pot", value=f"{pot}c", inline=True)
 
     guessed = [
         p.display_name for uid, p in table.players.items()
@@ -312,8 +270,7 @@ def _guessing_embed(table: StockGuessTable, remaining: int | None = None) -> dis
 def _round_reveal_embed(
     table: StockGuessTable,
     rankings: list[tuple[int, float, float]],
-    payouts: dict[int, int],
-    balances: dict[int, int],
+    winner_uid: int | None,
 ) -> discord.Embed:
     actual = table.ytd_pct
     sign = "+" if actual >= 0 else ""
@@ -332,23 +289,17 @@ def _round_reveal_embed(
     lines: list[str] = []
     for i, (uid, guess, error) in enumerate(rankings):
         p = table.players[uid]
-        payout = payouts.get(uid, 0)
-        bal = balances.get(uid, 0)
-        net = payout - p.bet
-        net_sign = "+" if net >= 0 else ""
         medal = MEDALS[i] if i < len(MEDALS) and error != float("inf") else "\u25aa\ufe0f"
+        is_winner = uid == winner_uid and error != float("inf")
 
         if error == float("inf"):
-            lines.append(
-                f"{medal} **{p.display_name}** \u2014 no guess \u2014 "
-                f"0c (**{net_sign}{net}c**) \u2014 bal: {bal}c"
-            )
+            lines.append(f"{medal} **{p.display_name}** \u2014 no guess")
         else:
             g_sign = "+" if guess >= 0 else ""
+            winner_tag = " \U0001f947" if is_winner else ""
             lines.append(
                 f"{medal} **{p.display_name}** \u2014 "
-                f"guessed {g_sign}{guess:.1f}% (off by {error:.1f}%) \u2014 "
-                f"{payout}c (**{net_sign}{net}c**) \u2014 bal: {bal}c"
+                f"guessed {g_sign}{guess:.1f}% (off by {error:.1f}%){winner_tag}"
             )
 
     embed.add_field(name="Round Results", value="\n".join(lines), inline=False)
@@ -362,11 +313,7 @@ def _final_embed(table: StockGuessTable) -> discord.Embed:
         colour=0xF1C40F,
     )
 
-    total_paid_per_player = {
-        uid: p.bet * table.total_rounds for uid, p in table.players.items()
-    }
-
-    # Sort by total winnings descending
+    # Sort by total rounds won descending
     sorted_players = sorted(
         table.players.items(),
         key=lambda kv: table.round_scores.get(kv[0], 0),
@@ -376,13 +323,9 @@ def _final_embed(table: StockGuessTable) -> discord.Embed:
     lines: list[str] = []
     for i, (uid, p) in enumerate(sorted_players):
         medal = MEDALS[i] if i < len(MEDALS) else "\u25aa\ufe0f"
-        total_won = table.round_scores.get(uid, 0)
-        paid = total_paid_per_player[uid]
-        net = total_won - paid
-        net_sign = "+" if net >= 0 else ""
+        rounds_won = table.round_scores.get(uid, 0)
         lines.append(
-            f"{medal} **{p.display_name}** \u2014 "
-            f"paid {paid}c \u2192 won {total_won}c (**{net_sign}{net}c**)"
+            f"{medal} **{p.display_name}** \u2014 {rounds_won} round(s) won"
         )
 
     embed.add_field(
@@ -397,67 +340,7 @@ def _final_embed(table: StockGuessTable) -> discord.Embed:
 # ── Modals ───────────────────────────────────────────────────────────────────
 
 
-class JoinStockGuessModal(ui.Modal):
-    amount = ui.TextInput(
-        label="Bet amount per round (coins)",
-        placeholder="e.g. 10",
-        required=True,
-        max_length=10,
-    )
-
-    def __init__(
-        self, table: StockGuessTable, view: "BettingView", balance: int,
-    ) -> None:
-        super().__init__(title="Join Stock Guess")
-        self.table = table
-        self.betting_view = view
-        total_needed = self.table.total_rounds
-        self.amount.placeholder = (
-            f"e.g. 10/round \u2192 {10 * total_needed}c total (bal: {balance}c)"
-        )
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            amt = int(self.amount.value)
-        except ValueError:
-            await interaction.response.send_message(
-                "Enter a whole number.", ephemeral=True,
-            )
-            return
-        if amt < 1:
-            await interaction.response.send_message(
-                "Must be at least 1 coin per round.", ephemeral=True,
-            )
-            return
-        uid = interaction.user.id
-        if uid in self.table.players:
-            await interaction.response.send_message(
-                "You're already in this game!", ephemeral=True,
-            )
-            return
-
-        total_cost = amt * self.table.total_rounds
-        try:
-            await queries.update_casino_balance(str(uid), -total_cost)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins! Need {total_cost}c for {self.table.total_rounds} rounds "
-                f"at {amt}c/round (have {bal}c)",
-                ephemeral=True,
-            )
-            return
-
-        self.table.players[uid] = StockGuessPlayer(
-            user_id=uid,
-            display_name=interaction.user.display_name,
-            bet=amt,
-        )
-
-        self.betting_view._update_buttons()
-        await interaction.response.edit_message(
-            embed=_betting_embed(self.table), view=self.betting_view,
-        )
+    # JoinStockGuessModal removed — Join button now directly adds player (no coins needed)
 
 
 class GuessModal(ui.Modal):
@@ -525,14 +408,9 @@ class BettingView(ui.View):
         self.join_btn.disabled = len(self.table.players) >= MAX_PLAYERS
 
     async def on_timeout(self) -> None:
-        # Refund total cost (per-round bet × total rounds) for each player
-        for p in self.table.players.values():
-            await queries.update_casino_balance(
-                str(p.user_id), p.bet * self.table.total_rounds
-            )
         self.active_tables.pop(self.table.channel_id, None)
 
-    @ui.button(label="Join", style=discord.ButtonStyle.success, emoji="\U0001f4b0", row=0)
+    @ui.button(label="Join", style=discord.ButtonStyle.success, emoji="\U0001f4c8", row=0)
     async def join_btn(
         self, interaction: discord.Interaction, button: ui.Button,
     ) -> None:
@@ -547,9 +425,13 @@ class BettingView(ui.View):
                 "Table is full!", ephemeral=True,
             )
             return
-        bal = await queries.get_or_create_casino_wallet(str(uid))
-        await interaction.response.send_modal(
-            JoinStockGuessModal(self.table, self, bal),
+        self.table.players[uid] = StockGuessPlayer(
+            user_id=uid,
+            display_name=interaction.user.display_name,
+        )
+        self._update_buttons()
+        await interaction.response.edit_message(
+            embed=_betting_embed(self.table), view=self,
         )
 
     @ui.button(label="Start", style=discord.ButtonStyle.primary, emoji="\u25b6\ufe0f", row=0)
@@ -694,33 +576,22 @@ async def _do_round_reveal(
     interaction: discord.Interaction,
     table: StockGuessTable,
 ) -> None:
-    """Reveal results for a single round and award per-round payouts."""
+    """Reveal results for a single round and track the winner."""
     rankings = compute_rankings(table.players, table.guesses, table.ytd_pct)
 
-    # If nobody guessed, refund this round's bets
+    # If nobody guessed, no winner this round
     all_no_guess = bool(rankings) and all(r[2] == float("inf") for r in rankings)
     if all_no_guess:
-        for uid, p in table.players.items():
-            await queries.update_casino_balance(str(uid), p.bet)
-            await queries.log_casino_result(str(uid), "stockguess", p.bet, p.bet)
-            table.round_scores[uid] = table.round_scores.get(uid, 0) + p.bet
         await interaction.followup.send(
-            f"Round {table.round_num}: Nobody guessed \u2014 all bets refunded for this round!"
+            f"Round {table.round_num}: Nobody guessed!"
         )
         return
 
-    payouts = compute_payouts(rankings, table.players)
+    winner_uid = compute_round_winner(rankings)
+    if winner_uid is not None:
+        table.round_scores[winner_uid] = table.round_scores.get(winner_uid, 0) + 1
 
-    balances: dict[int, int] = {}
-    for uid, p in table.players.items():
-        payout = payouts.get(uid, 0)
-        if payout > 0:
-            await queries.update_casino_balance(str(uid), payout)
-        await queries.log_casino_result(str(uid), "stockguess", p.bet, payout)
-        table.round_scores[uid] = table.round_scores.get(uid, 0) + payout
-        balances[uid] = await queries.get_or_create_casino_wallet(str(uid))
-
-    embed = _round_reveal_embed(table, rankings, payouts, balances)
+    embed = _round_reveal_embed(table, rankings, winner_uid)
     await interaction.followup.send(embed=embed)
 
 
@@ -761,13 +632,11 @@ class StockGuessCog(commands.Cog):
         description="Guess stocks' YTD performance across multiple rounds \u2014 closest wins!",
     )
     @app_commands.describe(
-        bet="Your bet amount in coins per round (default 10)",
         rounds=f"Number of rounds (default {DEFAULT_ROUNDS}, max 10)",
     )
     async def stockguess(
         self,
         interaction: discord.Interaction,
-        bet: int = 10,
         rounds: int = DEFAULT_ROUNDS,
     ) -> None:
         cid = interaction.channel_id
@@ -778,12 +647,6 @@ class StockGuessCog(commands.Cog):
             )
             return
 
-        if bet < 1:
-            await interaction.response.send_message(
-                "Bet must be at least 1 coin per round.", ephemeral=True,
-            )
-            return
-
         if not 1 <= rounds <= 10:
             await interaction.response.send_message(
                 "Rounds must be between 1 and 10.", ephemeral=True,
@@ -791,19 +654,6 @@ class StockGuessCog(commands.Cog):
             return
 
         uid = interaction.user.id
-        total_cost = bet * rounds
-
-        # Deduct total cost upfront (per-round bet × number of rounds)
-        try:
-            await queries.update_casino_balance(str(uid), -total_cost)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins! Need {total_cost}c for {rounds} rounds at {bet}c/round "
-                f"(have {bal}c)",
-                ephemeral=True,
-            )
-            return
 
         table = StockGuessTable(
             channel_id=cid,
@@ -814,7 +664,6 @@ class StockGuessCog(commands.Cog):
         table.players[uid] = StockGuessPlayer(
             user_id=uid,
             display_name=interaction.user.display_name,
-            bet=bet,
         )
 
         self.active_tables[cid] = table

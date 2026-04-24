@@ -11,8 +11,6 @@ from discord.ext import commands
 
 from bot.cogs._elo_helpers import update_elo_1v1
 from bot.cogs._minigames import RPSLogic
-from bot.cogs._pool import compute_side_pot_payouts
-from db import queries
 
 # ── Constants (derived from shared RPSLogic) ─────────────────────────────────
 
@@ -39,7 +37,6 @@ class RPSGame:
     opponent_id: int
     challenger_name: str
     opponent_name: str
-    bet: int
     phase: str = "pending"  # pending | playing | finished
     best_of: int = 3
     round_num: int = 1
@@ -65,9 +62,8 @@ def _pending_embed(game: RPSGame) -> discord.Embed:
         title="\u270a\u270b\u270c\ufe0f Rock Paper Scissors — Challenge!",
         description=(
             f"**{game.challenger_name}** challenges **{game.opponent_name}** "
-            f"to Rock Paper Scissors for **{game.bet}c**!\n\n"
-            f"Format: **{bo_label}** (first to {game.wins_needed})\n"
-            f"Pot: **{game.bet * 2}c**"
+            f"to Rock Paper Scissors!\n\n"
+            f"Format: **{bo_label}** (first to {game.wins_needed})"
         ),
         colour=discord.Colour.blurple(),
     )
@@ -104,17 +100,11 @@ def _playing_embed(game: RPSGame) -> discord.Embed:
     return embed
 
 
-def _result_embed(game: RPSGame, payouts: dict) -> discord.Embed:
+def _result_embed(game: RPSGame) -> discord.Embed:
     if game.challenger_score > game.opponent_score:
         winner_name = game.challenger_name
-        winner_id = game.challenger_id
-        loser_name = game.opponent_name
-        loser_id = game.opponent_id
     else:
         winner_name = game.opponent_name
-        winner_id = game.opponent_id
-        loser_name = game.challenger_name
-        loser_id = game.challenger_id
 
     history_lines = []
     for i, (cc, oc, result) in enumerate(game.round_history, 1):
@@ -122,29 +112,17 @@ def _result_embed(game: RPSGame, payouts: dict) -> discord.Embed:
         oe = CHOICE_EMOJI[oc]
         history_lines.append(f"R{i}: {ce} vs {oe} — {result}")
 
-    winner_payout = payouts.get(winner_id, 0)
-
     desc = (
         f"**{game.challenger_name}** vs **{game.opponent_name}**\n"
         f"Final Score: **{game.challenger_score}** - **{game.opponent_score}**\n\n"
         + "\n".join(history_lines)
-        + f"\n\n\U0001f3c6 **{winner_name}** wins **{winner_payout}c**!"
+        + f"\n\n\U0001f3c6 **{winner_name}** wins!"
     )
 
     embed = discord.Embed(
         title="\u270a\u270b\u270c\ufe0f Rock Paper Scissors — Result",
         description=desc,
         colour=discord.Colour.gold(),
-    )
-    embed.add_field(
-        name="Results",
-        value=(
-            f"\U0001f3c6 **{winner_name}** — {game.bet}c \u2192 {winner_payout}c "
-            f"(**+{winner_payout - game.bet}c**)\n"
-            f"\u274c **{loser_name}** — {game.bet}c \u2192 0c "
-            f"(**-{game.bet}c**)"
-        ),
-        inline=False,
     )
     return embed
 
@@ -255,33 +233,6 @@ class RPSView(ui.View):
         else:
             winner_id = game.opponent_id
 
-        if game.vs_bot:
-            # Bot games: simple payout, no side pot
-            if winner_id == game.challenger_id:
-                payout_amount = game.bet * 2
-                await queries.update_casino_balance(str(game.challenger_id), payout_amount)
-                payouts = {game.challenger_id: payout_amount, game.opponent_id: 0}
-            else:
-                payouts = {game.challenger_id: 0, game.opponent_id: game.bet * 2}
-
-            # Log result for human only
-            await queries.log_casino_result(
-                str(game.challenger_id), "rps", game.bet,
-                payouts.get(game.challenger_id, 0),
-            )
-        else:
-            bets = {game.challenger_id: game.bet, game.opponent_id: game.bet}
-            payouts = compute_side_pot_payouts(bets, [winner_id])
-
-            for uid, payout in payouts.items():
-                if payout > 0:
-                    await queries.update_casino_balance(str(uid), payout)
-
-            for uid in (game.challenger_id, game.opponent_id):
-                await queries.log_casino_result(
-                    str(uid), "rps", game.bet, payouts.get(uid, 0),
-                )
-
         # ELO update (human vs human only)
         if not game.vs_bot:
             loser_id = game.opponent_id if winner_id == game.challenger_id else game.challenger_id
@@ -290,7 +241,7 @@ class RPSView(ui.View):
             except Exception:
                 pass
 
-        embed = _result_embed(game, payouts)
+        embed = _result_embed(game)
         self._update_buttons()
         await interaction.response.edit_message(embed=embed, view=self)
         self.active_tables.pop(game.channel_id, None)
@@ -306,15 +257,6 @@ class RPSView(ui.View):
             await interaction.response.send_message("Already started!", ephemeral=True)
             return
 
-        try:
-            await queries.update_casino_balance(str(self.game.opponent_id), -self.game.bet)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(self.game.opponent_id))
-            await interaction.response.send_message(
-                f"Not enough coins! (have {bal}c)", ephemeral=True,
-            )
-            return
-
         self.game.phase = "playing"
         self._update_buttons()
         await interaction.response.edit_message(embed=_playing_embed(self.game), view=self)
@@ -328,7 +270,6 @@ class RPSView(ui.View):
             await interaction.response.send_message("Already started!", ephemeral=True)
             return
 
-        await queries.update_casino_balance(str(self.game.challenger_id), self.game.bet)
         embed = discord.Embed(
             title="\u270a\u270b\u270c\ufe0f Rock Paper Scissors — Cancelled",
             description=f"{self.game.opponent_name} declined the challenge.",
@@ -357,16 +298,6 @@ class RPSView(ui.View):
         other_name = game.opponent_name if clicker == game.challenger_id else game.challenger_name
         clicker_name = game.challenger_name if clicker == game.challenger_id else game.opponent_name
 
-        # Deduct clicker's coins
-        try:
-            await queries.update_casino_balance(str(clicker), -game.bet)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(clicker))
-            await interaction.response.send_message(
-                f"Not enough coins! (have {bal}c)", ephemeral=True,
-            )
-            return
-
         # Disable old view
         for child in self.children:
             child.disabled = True  # type: ignore[union-attr]
@@ -378,7 +309,6 @@ class RPSView(ui.View):
             opponent_id=other,
             challenger_name=clicker_name,
             opponent_name=other_name,
-            bet=game.bet,
             best_of=game.best_of,
             vs_bot=game.vs_bot,
         )
@@ -435,16 +365,12 @@ class RPSView(ui.View):
         game = self.game
 
         if game.phase == "pending":
-            try:
-                await queries.update_casino_balance(str(game.challenger_id), game.bet)
-            except Exception:
-                pass
             self.active_tables.pop(game.channel_id, None)
             if game.message:
                 try:
                     embed = discord.Embed(
                         title="\u270a\u270b\u270c\ufe0f Rock Paper Scissors — Expired",
-                        description=f"Challenge expired. {game.challenger_name}'s coins refunded.",
+                        description="Challenge expired.",
                         colour=discord.Colour.dark_grey(),
                     )
                     await game.message.edit(embed=embed, view=None)
@@ -452,20 +378,12 @@ class RPSView(ui.View):
                     pass
             return
 
-        if game.phase == "playing":
-            try:
-                await queries.update_casino_balance(str(game.challenger_id), game.bet)
-                if not game.vs_bot:
-                    await queries.update_casino_balance(str(game.opponent_id), game.bet)
-            except Exception:
-                pass
-
         self.active_tables.pop(game.channel_id, None)
         if game.message:
             try:
                 embed = discord.Embed(
                     title="\u270a\u270b\u270c\ufe0f Rock Paper Scissors — Timed Out",
-                    description="Game timed out. All bets refunded.",
+                    description="Game timed out.",
                     colour=discord.Colour.dark_grey(),
                 )
                 await game.message.edit(embed=embed, view=None)
@@ -487,7 +405,6 @@ class RPSCog(commands.Cog):
     )
     @app_commands.describe(
         opponent="Who to challenge (omit to play vs bot)",
-        bet="Coin amount to wager (1-500)",
         best_of="Best of 3 or 5 (default: 3)",
     )
     @app_commands.choices(best_of=[
@@ -498,7 +415,6 @@ class RPSCog(commands.Cog):
         self,
         interaction: discord.Interaction,
         opponent: discord.User | None = None,
-        bet: int = 10,
         best_of: app_commands.Choice[int] | None = None,
     ) -> None:
         uid = interaction.user.id
@@ -509,28 +425,11 @@ class RPSCog(commands.Cog):
                 "There's already an RPS game in this channel!", ephemeral=True,
             )
             return
-        if bet < 1:
-            await interaction.response.send_message("Bet must be at least 1c.", ephemeral=True)
-            return
-        if bet > 500:
-            await interaction.response.send_message("Bet cannot exceed 500c.", ephemeral=True)
-            return
         if opponent is not None and opponent.id == uid:
             await interaction.response.send_message("Can't challenge yourself!", ephemeral=True)
             return
 
         bo = best_of.value if best_of else 3
-
-        # Deduct challenger's coins
-        await queries.get_or_create_casino_wallet(str(uid))
-        try:
-            await queries.update_casino_balance(str(uid), -bet)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins! (have {bal}c)", ephemeral=True,
-            )
-            return
 
         vs_bot = opponent is None or opponent.id == self.bot.user.id
 
@@ -542,7 +441,6 @@ class RPSCog(commands.Cog):
                 opponent_id=bot_user.id,
                 challenger_name=interaction.user.display_name,
                 opponent_name=bot_user.display_name,
-                bet=bet,
                 best_of=bo,
                 vs_bot=True,
                 phase="playing",
@@ -553,14 +451,12 @@ class RPSCog(commands.Cog):
             await interaction.response.send_message(embed=embed, view=view)
             game.message = await interaction.original_response()
         else:
-            await queries.get_or_create_casino_wallet(str(opponent.id))
             game = RPSGame(
                 channel_id=channel_id,
                 challenger_id=uid,
                 opponent_id=opponent.id,
                 challenger_name=interaction.user.display_name,
                 opponent_name=opponent.display_name,
-                bet=bet,
                 best_of=bo,
             )
             self.active_tables[channel_id] = game

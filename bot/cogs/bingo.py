@@ -11,8 +11,7 @@ import httpx
 from discord import app_commands, ui
 from discord.ext import commands, tasks
 
-from db import queries
-from shared.bingo_logic import CARD_PRICE, MAX_CARDS
+from shared.bingo_logic import MAX_CARDS
 
 WEB_API_BASE = os.environ.get("WEB_API_BASE", "https://djiang.xyz")
 WEB_API_SECRET = os.environ.get("WEB_API_SECRET", "dev-secret")
@@ -36,7 +35,6 @@ class BingoCog(commands.Cog):
     async def bingo(self, interaction: discord.Interaction) -> None:
         uid = str(interaction.user.id)
         channel_id = str(interaction.channel_id)
-        await queries.get_or_create_casino_wallet(uid)
 
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(
@@ -61,8 +59,8 @@ class BingoCog(commands.Cog):
             title="\U0001f3b1 Bingo",
             description=(
                 f"Pattern: **{pattern}**\n"
-                f"Cards cost **{CARD_PRICE}c** each (max {MAX_CARDS})\n\n"
-                "Click **Join** below to buy cards and get your game link."
+                f"Up to {MAX_CARDS} cards per player.\n\n"
+                "Click **Join** below to get your cards and game link."
             ),
             colour=discord.Colour.blue(),
         )
@@ -103,12 +101,9 @@ class BingoCog(commands.Cog):
                 medals = ["\U0001f947", "\U0001f948", "\U0001f949"]
                 for i, r in enumerate(result.get("results", [])):
                     badge = medals[i] if i < 3 else f"`{i+1}.`"
-                    net = r["net"]
-                    sign = "+" if net > 0 else ""
                     embed.description += (
                         f"{badge} **{r['display_name']}** \u2014 "
-                        f"{r['num_cards']} cards \u2014 "
-                        f"{r['wager']}c \u2192 {r['payout']}c ({sign}{net}c)\n"
+                        f"{r['num_cards']} card{'s' if r['num_cards'] != 1 else ''}\n"
                     )
                 embed.set_footer(text=f"Room {room_id}")
                 await channel.send(embed=embed)
@@ -122,7 +117,7 @@ class BingoCog(commands.Cog):
 
 class BingoJoinModal(ui.Modal, title="Join Bingo"):
     cards = ui.TextInput(
-        label=f"Number of cards (1-{MAX_CARDS}, {CARD_PRICE}c each)",
+        label=f"Number of cards (1-{MAX_CARDS})",
         placeholder="e.g. 3",
         min_length=1,
         max_length=1,
@@ -143,13 +138,6 @@ class BingoJoinModal(ui.Modal, title="Join Bingo"):
             return
 
         uid = str(interaction.user.id)
-        cost = num * CARD_PRICE
-        bal = await queries.get_casino_balance(uid)
-        if bal is None or bal < cost:
-            await interaction.response.send_message(f"Insufficient balance (need {cost}c, have {bal or 0}c).", ephemeral=True)
-            return
-
-        await queries.update_casino_balance(uid, -cost)
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(
@@ -158,18 +146,16 @@ class BingoJoinModal(ui.Modal, title="Join Bingo"):
                     headers={"X-Api-Key": WEB_API_SECRET},
                 )
             if resp.status_code != 200:
-                await queries.update_casino_balance(uid, cost)
                 detail = resp.json().get("detail", "Unknown error")
                 await interaction.response.send_message(f"Failed to join: {detail}", ephemeral=True)
                 return
             url = resp.json()["url"]
             await interaction.response.send_message(
-                f"\U0001f517 **[Click here to play]({url})**\n{num} card{'s' if num > 1 else ''} ({cost}c) locked in.",
+                f"\U0001f517 **[Click here to play]({url})**\n{num} card{'s' if num > 1 else ''} locked in.",
                 ephemeral=True,
             )
         except Exception:
-            await queries.update_casino_balance(uid, cost)
-            await interaction.response.send_message("Failed to connect. Bet refunded.", ephemeral=True)
+            await interaction.response.send_message("Failed to connect.", ephemeral=True)
 
 
 class BingoWebLobbyView(ui.View):

@@ -9,8 +9,6 @@ import discord
 from discord import app_commands, ui
 from discord.ext import commands
 
-from db import queries
-
 # ── Constants ────────────────────────────────────────────────────────────────
 
 SHOT_CLOCK = 30  # seconds per pick
@@ -96,7 +94,6 @@ class PKDuel:
     opponent_id: int
     challenger_name: str
     opponent_name: str
-    bet: int
     phase: str = "pending"  # pending | playing | finished
     kicks: list[Kick] = field(default_factory=list)
     current_kick: int = 0
@@ -128,8 +125,7 @@ def _pending_embed(duel: PKDuel) -> discord.Embed:
         title="\u26bd Penalty Shootout \u2014 Challenge!",
         description=(
             f"**{duel.challenger_name}** challenges **{duel.opponent_name}** "
-            f"to a Penalty Shootout for **{duel.bet}c**!\n\n"
-            f"Pot: **{duel.bet * 2}c**\n"
+            f"to a Penalty Shootout!\n\n"
             f"5 rounds of alternating kicks. Tied? Sudden death."
         ),
         colour=discord.Colour.green(),
@@ -223,8 +219,7 @@ def _result_embed(duel: PKDuel, kick: Kick) -> discord.Embed:
     return embed
 
 
-def _finished_embed(duel: PKDuel, winner_id: int, payout: int,
-                    balances: dict[int, int]) -> discord.Embed:
+def _finished_embed(duel: PKDuel, winner_id: int) -> discord.Embed:
     s_c = duel.scores[duel.challenger_id]
     s_o = duel.scores[duel.opponent_id]
     winner_name = duel.player_name(winner_id)
@@ -233,7 +228,7 @@ def _finished_embed(duel: PKDuel, winner_id: int, payout: int,
         title="\u26bd Penalty Shootout \u2014 Final Result",
         description=(
             f"**{duel.challenger_name}** {s_c} - {s_o} **{duel.opponent_name}**\n\n"
-            f"\U0001f3c6 **{winner_name}** wins **{payout}c**!"
+            f"\U0001f3c6 **{winner_name}** wins!"
         ),
         colour=discord.Colour.gold(),
     )
@@ -248,17 +243,6 @@ def _finished_embed(duel: PKDuel, winner_id: int, payout: int,
         value=f"{c_line}  **{duel.challenger_name}**\n{o_line}  **{duel.opponent_name}**",
         inline=False,
     )
-
-    # Payouts
-    loser_id = duel.opponent_id if winner_id == duel.challenger_id else duel.challenger_id
-    loser_name = duel.player_name(loser_id)
-    lines = [
-        f"\U0001f3c6 **{winner_name}** \u2014 {duel.bet}c \u2192 {payout}c "
-        f"(**+{payout - duel.bet}c**) \u2014 bal: {balances.get(winner_id, 0)}c",
-        f"\u274c **{loser_name}** \u2014 {duel.bet}c \u2192 0c "
-        f"(**-{duel.bet}c**) \u2014 bal: {balances.get(loser_id, 0)}c",
-    ]
-    embed.add_field(name="Results", value="\n".join(lines), inline=False)
 
     if duel.sudden_death:
         embed.set_footer(text="Decided in sudden death!")
@@ -411,16 +395,6 @@ class PKDuelView(ui.View):
             await interaction.response.send_message("Already started!", ephemeral=True)
             return
 
-        # Deduct opponent's coins
-        try:
-            await queries.update_casino_balance(str(self.duel.opponent_id), -self.duel.bet)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(self.duel.opponent_id))
-            await interaction.response.send_message(
-                f"Not enough coins! (have {bal}c)", ephemeral=True,
-            )
-            return
-
         await self._start_game(interaction)
 
     @ui.button(label="Decline", style=discord.ButtonStyle.danger, emoji="\u274c", row=0)
@@ -432,8 +406,6 @@ class PKDuelView(ui.View):
             await interaction.response.send_message("Already started!", ephemeral=True)
             return
 
-        # Refund challenger
-        await queries.update_casino_balance(str(self.duel.challenger_id), self.duel.bet)
         await self._close(interaction, f"{self.duel.opponent_name} declined the challenge.")
 
     # ── Playing phase buttons ─────────────────────────────────────────────
@@ -624,14 +596,10 @@ class PKDuelView(ui.View):
         elif duel.scores[duel.opponent_id] > duel.scores[duel.challenger_id]:
             winner_id = duel.opponent_id
         else:
-            # True draw (shouldn't happen with SD, but safety: refund both)
-            await queries.update_casino_balance(str(duel.challenger_id), duel.bet)
-            await queries.update_casino_balance(str(duel.opponent_id), duel.bet)
-            await queries.log_casino_result(str(duel.challenger_id), "penalties", duel.bet, duel.bet)
-            await queries.log_casino_result(str(duel.opponent_id), "penalties", duel.bet, duel.bet)
+            # True draw (shouldn't happen with SD, but safety)
             embed = discord.Embed(
                 title="\u26bd Penalty Shootout \u2014 Draw!",
-                description="Somehow a draw! Both players refunded.",
+                description="Somehow a draw!",
                 colour=discord.Colour.greyple(),
             )
             self._update_buttons()
@@ -641,20 +609,7 @@ class PKDuelView(ui.View):
             self.stop()
             return
 
-        # Payout
-        total_pot = duel.bet * 2
-        payout = total_pot
-        loser_id = duel.opponent_id if winner_id == duel.challenger_id else duel.challenger_id
-
-        balances: dict[int, int] = {}
-        balances[winner_id] = await queries.update_casino_balance(str(winner_id), payout)
-        bal = await queries.get_casino_balance(str(loser_id))
-        balances[loser_id] = bal or 0
-
-        await queries.log_casino_result(str(winner_id), "penalties", duel.bet, payout)
-        await queries.log_casino_result(str(loser_id), "penalties", duel.bet, 0)
-
-        embed = _finished_embed(duel, winner_id, payout, balances)
+        embed = _finished_embed(duel, winner_id)
         self._update_buttons()
         self.active_duels.pop(duel.channel_id, None)
         if duel.message:
@@ -681,17 +636,12 @@ class PKDuelView(ui.View):
         duel = self.duel
 
         if duel.phase == "pending":
-            # Refund challenger
-            try:
-                await queries.update_casino_balance(str(duel.challenger_id), duel.bet)
-            except Exception:
-                pass
             self.active_duels.pop(duel.channel_id, None)
             if duel.message:
                 try:
                     embed = discord.Embed(
                         title="\u26bd Penalty Shootout \u2014 Expired",
-                        description=f"Challenge expired. {duel.challenger_name}'s coins refunded.",
+                        description="Challenge expired.",
                         colour=discord.Colour.dark_grey(),
                     )
                     await duel.message.edit(embed=embed, view=None)
@@ -699,20 +649,12 @@ class PKDuelView(ui.View):
                     pass
             return
 
-        if duel.phase == "playing":
-            # Refund both players (mid-game timeout shouldn't happen with shot clock, but safety)
-            try:
-                await queries.update_casino_balance(str(duel.challenger_id), duel.bet)
-                await queries.update_casino_balance(str(duel.opponent_id), duel.bet)
-            except Exception:
-                pass
-
         self.active_duels.pop(duel.channel_id, None)
         if duel.message:
             try:
                 embed = discord.Embed(
                     title="\u26bd Penalty Shootout \u2014 Timed Out",
-                    description="Game timed out. All bets refunded.",
+                    description="Game timed out.",
                     colour=discord.Colour.dark_grey(),
                 )
                 await duel.message.edit(embed=embed, view=None)
@@ -734,11 +676,10 @@ class PenaltiesCog(commands.Cog):
     )
     @app_commands.describe(
         opponent="Who to challenge",
-        bet="Coin amount to wager (1-500)",
     )
     async def penalties(
         self, interaction: discord.Interaction,
-        opponent: discord.User, bet: int,
+        opponent: discord.User,
     ) -> None:
         uid = interaction.user.id
         channel_id = interaction.channel_id
@@ -755,22 +696,6 @@ class PenaltiesCog(commands.Cog):
                 "There's already a Penalty Shootout in this channel!", ephemeral=True,
             )
             return
-        if bet < 1:
-            await interaction.response.send_message("Bet must be at least 1c.", ephemeral=True)
-            return
-        # Deduct challenger's coins
-        await queries.get_or_create_casino_wallet(str(uid))
-        try:
-            await queries.update_casino_balance(str(uid), -bet)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins! (have {bal}c)", ephemeral=True,
-            )
-            return
-
-        # Ensure opponent has a wallet
-        await queries.get_or_create_casino_wallet(str(opponent.id))
 
         duel = PKDuel(
             channel_id=channel_id,
@@ -778,7 +703,6 @@ class PenaltiesCog(commands.Cog):
             opponent_id=opponent.id,
             challenger_name=interaction.user.display_name,
             opponent_name=opponent.display_name,
-            bet=bet,
         )
         self.active_duels[channel_id] = duel
 

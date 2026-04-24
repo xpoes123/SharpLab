@@ -1,4 +1,4 @@
-"""Paper trading cog — wager coins on real games at real odds."""
+"""Paper trading cog — predict outcomes on real games at real odds."""
 from __future__ import annotations
 
 import json
@@ -20,8 +20,6 @@ from .odds import game_autocomplete, mlb_game_autocomplete
 log = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-
-MIN_BET = 1
 
 # ESPN public scoreboard endpoints (no API key required).
 # Used as a fallback to detect completed games when the Temporal pipeline
@@ -295,7 +293,7 @@ async def void_trade_autocomplete(
         market_str = pb["market"]
         if pb["line"] is not None and pb["market"] in ("spread", "total"):
             market_str += f" {pb['line']:+.1f}"
-        label = f"#{pb['paper_bet_id']} — {game_str} {market_str} {pb['side']} ({pb['wager']}c)"
+        label = f"#{pb['paper_bet_id']} — {game_str} {market_str} {pb['side']}"
         choices.append(app_commands.Choice(name=label[:100], value=str(pb["paper_bet_id"])))
     return choices
 
@@ -498,8 +496,6 @@ class TradingCog(commands.Cog):
             clv = await _compute_paper_clv(pb, game)
 
             await queries.resolve_paper_bet(pb["paper_bet_id"], outcome, payout, clv)
-            if payout > 0:
-                await queries.update_balance(pb["discord_user"], payout)
 
             log.info(
                 "[paper_resolution] bet #%d → %s, payout=%d, clv=%s (%s @ %s %d-%d)",
@@ -520,17 +516,8 @@ class TradingCog(commands.Cog):
         game: str,
         market: str,
         pick: str,
-        wager: int,
     ) -> None:
         await interaction.response.defer()
-
-        # Validate wager
-        if wager < MIN_BET:
-            await interaction.followup.send(
-                f"Wager must be at least {MIN_BET} coin.",
-                ephemeral=True,
-            )
-            return
 
         # Look up game
         target = await queries.get_game_by_id(game)
@@ -575,19 +562,9 @@ class TradingCog(commands.Cog):
             )
             return
 
-        potential_payout = _compute_payout(wager, odds)
-
-        # Deduct coins
         user_id = str(interaction.user.id)
-        try:
-            # Ensure wallet exists (auto-credits daily)
-            await queries.get_or_create_wallet(user_id)
-            new_balance = await queries.update_balance(user_id, -wager)
-        except ValueError as e:
-            await interaction.followup.send(str(e), ephemeral=True)
-            return
 
-        # Insert paper bet
+        # Insert paper bet (wager=0, potential_payout=0 — coin-free tracking)
         now_iso = datetime.now(timezone.utc).isoformat()
         paper_bet_id = await queries.insert_paper_bet(
             game_id=target.game_id,
@@ -597,8 +574,8 @@ class TradingCog(commands.Cog):
             side=side,
             line=pick_line,
             odds=odds,
-            wager=wager,
-            potential_payout=potential_payout,
+            wager=0,
+            potential_payout=0,
         )
 
         # Confirmation embed
@@ -612,9 +589,6 @@ class TradingCog(commands.Cog):
         embed.add_field(name="Market", value=f"{market}{line_str}", inline=True)
         embed.add_field(name="Pick", value=side, inline=True)
         embed.add_field(name="Odds", value=f"`{fmt_prob(odds)}`", inline=True)
-        embed.add_field(name="Wager", value=f"`{wager}` coins", inline=True)
-        embed.add_field(name="To Win", value=f"`{potential_payout - wager}` coins", inline=True)
-        embed.add_field(name="Balance", value=f"`{new_balance}` coins", inline=True)
         embed.set_footer(text=f"Trade #{paper_bet_id}")
         await interaction.followup.send(embed=embed)
 
@@ -622,28 +596,27 @@ class TradingCog(commands.Cog):
         game="Select a game",
         market="Market type",
         pick="Your pick — autocomplete shows live lines",
-        wager=f"Coins to risk (min {MIN_BET})",
     )
 
-    @app_commands.command(name="trade", description="Paper trade on an NBA game with coins")
+    @app_commands.command(name="trade", description="Paper trade on an NBA game")
     @app_commands.autocomplete(game=game_autocomplete, pick=trade_pick_autocomplete)
     @app_commands.describe(**_TRADE_DESCRIBE)
     @app_commands.choices(market=MARKET_CHOICES)
     async def trade(
         self, interaction: discord.Interaction,
-        game: str, market: str, pick: str, wager: int,
+        game: str, market: str, pick: str,
     ) -> None:
-        await self._trade_impl(interaction, game, market, pick, wager)
+        await self._trade_impl(interaction, game, market, pick)
 
-    @app_commands.command(name="mlb-trade", description="Paper trade on an MLB game with coins")
+    @app_commands.command(name="mlb-trade", description="Paper trade on an MLB game")
     @app_commands.autocomplete(game=mlb_game_autocomplete, pick=trade_pick_autocomplete)
     @app_commands.describe(**_TRADE_DESCRIBE)
     @app_commands.choices(market=MARKET_CHOICES)
     async def mlb_trade(
         self, interaction: discord.Interaction,
-        game: str, market: str, pick: str, wager: int,
+        game: str, market: str, pick: str,
     ) -> None:
-        await self._trade_impl(interaction, game, market, pick, wager)
+        await self._trade_impl(interaction, game, market, pick)
 
     # ── /portfolio ────────────────────────────────────────────────────────
 
@@ -659,8 +632,6 @@ class TradingCog(commands.Cog):
 
         open_bets = await queries.get_open_paper_bets_for_user(user_id)
         stats = await queries.get_paper_bet_stats(user_id)
-        balance_val = await queries.get_balance(user_id)
-        balance = balance_val if balance_val is not None else 0
 
         embed = discord.Embed(
             title=f"{target.display_name}'s Portfolio",
@@ -671,7 +642,6 @@ class TradingCog(commands.Cog):
             embed.description = "No open paper trades."
         else:
             lines = []
-            total_risk = 0
             for pb in open_bets:
                 game = await queries.get_game_by_id(pb["game_id"])
                 if game:
@@ -684,23 +654,15 @@ class TradingCog(commands.Cog):
                 lines.append(
                     f"`#{pb['paper_bet_id']}` {game_str} — "
                     f"{market_str} **{pb['side']}** "
-                    f"`{fmt_prob(pb['odds'])}` | "
-                    f"{pb['wager']}c \u2192 {pb['potential_payout']}c"
+                    f"`{fmt_prob(pb['odds'])}`"
                 )
-                total_risk += pb["wager"]
             embed.description = "\n".join(lines)
-            embed.add_field(name="At Risk", value=f"`{total_risk}` coins", inline=True)
-
-        embed.add_field(name="Balance", value=f"`{balance}` coins", inline=True)
 
         if stats["num_bets"] > 0:
-            roi = (stats["net_profit"] / stats["total_wagered"] * 100) if stats["total_wagered"] else 0
             embed.add_field(
                 name="Resolved",
                 value=(
-                    f"{stats['num_won']}W-{stats['num_lost']}L-{stats['num_push']}P | "
-                    f"Net: `{stats['net_profit']:+d}` coins | "
-                    f"ROI: `{roi:+.1f}%`"
+                    f"{stats['num_won']}W-{stats['num_lost']}L-{stats['num_push']}P"
                 ),
                 inline=False,
             )
@@ -726,15 +688,6 @@ class TradingCog(commands.Cog):
         recent = await queries.get_recent_paper_bets(user_id, limit=5)
         open_bets = await queries.get_open_paper_bets_for_user(user_id)
 
-        # Award daily coins to the invoker
-        if is_self:
-            balance_val, daily_credited = await queries.get_or_create_wallet(str(interaction.user.id))
-        else:
-            _, daily_credited = await queries.get_or_create_wallet(str(interaction.user.id))
-            balance_val = await queries.get_balance(user_id)
-        balance = balance_val if balance_val is not None else 0
-        daily_note = "**100 coins** credited (every 8h)! " if daily_credited else ""
-
         embed = discord.Embed(
             title=f"{target.display_name}'s Trading Profile",
             color=EMBED_COLOR,
@@ -743,16 +696,14 @@ class TradingCog(commands.Cog):
         # Overview
         if stats["num_bets"] == 0:
             embed.description = "No resolved trades yet."
-            embed.add_field(name="Balance", value=f"`{balance}` coins", inline=True)
             embed.add_field(name="Open Trades", value=f"`{len(open_bets)}`", inline=True)
-            await interaction.followup.send(content=daily_note or None, embed=embed)
+            await interaction.followup.send(embed=embed)
             return
 
         total_w = stats["num_won"] or 0
         total_l = stats["num_lost"] or 0
         total_p = stats["num_push"] or 0
         win_rate = (total_w / (total_w + total_l) * 100) if (total_w + total_l) > 0 else 0
-        roi = (stats["net_profit"] / stats["total_wagered"] * 100) if stats["total_wagered"] else 0
 
         embed.add_field(
             name="Record",
@@ -760,10 +711,6 @@ class TradingCog(commands.Cog):
             inline=False,
         )
         embed.add_field(name="Win Rate", value=f"`{win_rate:.1f}%`", inline=True)
-        embed.add_field(name="Net Profit", value=f"`{stats['net_profit']:+d}` coins", inline=True)
-        embed.add_field(name="ROI", value=f"`{roi:+.1f}%`", inline=True)
-        embed.add_field(name="Balance", value=f"`{balance}` coins", inline=True)
-        embed.add_field(name="Total Wagered", value=f"`{stats['total_wagered']}` coins", inline=True)
 
         # CLV
         if stats.get("avg_clv") is not None and stats.get("clv_count", 0) > 0:
@@ -815,11 +762,9 @@ class TradingCog(commands.Cog):
                 market_str = pb["market"]
                 if pb["line"] is not None and pb["market"] in ("spread", "total"):
                     market_str += f" {pb['line']:+.1f}"
-                pnl = pb["payout"] - pb["wager"]
                 clv_bit = f" ({pb['clv']:+.1f}pp)" if pb.get("clv") is not None else ""
                 recent_lines.append(
-                    f"{status_icon} {game_str} {market_str} {pb['side']} — "
-                    f"`{pnl:+d}`c{clv_bit}"
+                    f"{status_icon} {game_str} {market_str} {pb['side']}{clv_bit}"
                 )
             embed.add_field(
                 name="Recent Trades",
@@ -828,10 +773,9 @@ class TradingCog(commands.Cog):
             )
 
         if open_bets:
-            total_risk = sum(pb["wager"] for pb in open_bets)
-            embed.set_footer(text=f"{len(open_bets)} open trade(s), {total_risk}c at risk")
+            embed.set_footer(text=f"{len(open_bets)} open trade(s)")
 
-        await interaction.followup.send(content=daily_note or None, embed=embed)
+        await interaction.followup.send(embed=embed)
 
     # ── /leaderboard ──────────────────────────────────────────────────────
 
@@ -839,14 +783,9 @@ class TradingCog(commands.Cog):
     async def leaderboard(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer()
 
-        # Award daily coins to the invoker
-        _, daily_credited = await queries.get_or_create_wallet(str(interaction.user.id))
-        daily_note = "**100 coins** credited (every 8h)! " if daily_credited else ""
-
         rows = await queries.get_paper_leaderboard(limit=10)
         if not rows:
-            msg = f"{daily_note}No resolved paper trades yet." if daily_note else "No resolved paper trades yet."
-            await interaction.followup.send(msg)
+            await interaction.followup.send("No resolved paper trades yet.")
             return
 
         embed = discord.Embed(title="Paper Trading Leaderboard", color=EMBED_COLOR)
@@ -859,20 +798,17 @@ class TradingCog(commands.Cog):
                 name = f"User {row['discord_user'][:8]}"
 
             medal = {1: "\U0001f947", 2: "\U0001f948", 3: "\U0001f949"}.get(i, f"**{i}.**")
-            profit = row["net_profit"]
-            roi = row["roi"]
             nw = row["num_won"] or 0
             nl = row["num_lost"] or 0
             wr = (nw / (nw + nl) * 100) if (nw + nl) > 0 else 0
             clv_str = f" | CLV `{row['avg_clv']:+.1f}pp`" if row.get("avg_clv") is not None else ""
             lines.append(
-                f"{medal} **{name}** — `{profit:+.0f}` coins "
-                f"| {nw}W-{nl}L ({wr:.0f}%) | "
-                f"{roi:+.1f}% ROI{clv_str}"
+                f"{medal} **{name}** — "
+                f"{nw}W-{nl}L ({wr:.0f}%){clv_str}"
             )
 
         embed.description = "\n".join(lines)
-        await interaction.followup.send(content=daily_note or None, embed=embed)
+        await interaction.followup.send(embed=embed)
 
     # ── /cashout ──────────────────────────────────────────────────────────
 
@@ -921,32 +857,18 @@ class TradingCog(commands.Cog):
             )
             return
 
-        cashout_value = _compute_cashout(pb["wager"], pb["odds"], current_odds)
-
-        # Resolve as void with the cashout amount
-        await queries.resolve_paper_bet(pb["paper_bet_id"], "void", cashout_value)
-        if cashout_value > 0:
-            new_balance = await queries.update_balance(pb["discord_user"], cashout_value)
-        else:
-            bal = await queries.get_balance(pb["discord_user"])
-            new_balance = bal if bal is not None else 0
-
-        pnl = cashout_value - pb["wager"]
-        pnl_str = f"{pnl:+d}" if pnl != 0 else "0"
+        # Resolve as void (cashout = no coin transactions)
+        await queries.resolve_paper_bet(pb["paper_bet_id"], "void", 0)
 
         embed = discord.Embed(
             title="Trade Cashed Out",
-            color=0x57F287 if pnl >= 0 else 0xED4245,
+            color=0x57F287,
         )
-        embed.add_field(name="Wager", value=f"`{pb['wager']}` coins", inline=True)
-        embed.add_field(name="Cashout", value=f"`{cashout_value}` coins", inline=True)
-        embed.add_field(name="P&L", value=f"`{pnl_str}` coins", inline=True)
         embed.add_field(
             name="Odds",
             value=f"Locked `{fmt_prob(pb['odds'])}` \u2192 Current `{fmt_prob(current_odds)}`",
             inline=False,
         )
-        embed.add_field(name="Balance", value=f"`{new_balance}` coins", inline=True)
         embed.set_footer(text=f"Trade #{bet_id}")
         await interaction.followup.send(embed=embed, ephemeral=True)
 

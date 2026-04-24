@@ -1,7 +1,7 @@
-"""Casino cog — multiplayer /nba-trivia and /nfl-trivia speed games.
+"""Trivia cog — multiplayer /nba-trivia and /nfl-trivia speed games.
 
 Given a player name, pick the correct team from 4 multiple-choice buttons.
-First to WINS_TO_WIN round wins takes the pot.
+First to WINS_TO_WIN round wins takes the title.
 """
 
 import asyncio
@@ -9,7 +9,6 @@ import logging
 import random
 import time
 from dataclasses import dataclass, field
-from itertools import groupby
 
 import discord
 import httpx
@@ -29,17 +28,6 @@ ROUND_TIME = 15  # seconds per round (team names are short)
 ROUND_DELAY = 4  # seconds between rounds
 WINS_TO_WIN = 3  # first to N wins
 MAX_ROUNDS = 15  # safety cap
-
-PAYTABLE: dict[int, list[float]] = {
-    1: [1.0],
-    2: [1.0],
-    3: [0.70, 0.30],
-    4: [0.55, 0.30, 0.15],
-    5: [0.45, 0.25, 0.18, 0.12],
-    6: [0.40, 0.24, 0.16, 0.12, 0.08],
-    7: [0.36, 0.22, 0.16, 0.12, 0.08, 0.06],
-    8: [0.33, 0.21, 0.16, 0.12, 0.08, 0.06, 0.04],
-}
 
 MEDALS = ["\U0001f947", "\U0001f948", "\U0001f949"]  # gold, silver, bronze
 
@@ -364,48 +352,6 @@ NFL_CONFIG = SportConfig(
 )
 
 
-# ── Payout helpers ───────────────────────────────────────────────────────────
-
-
-def _compute_payouts(
-    players: dict[int, "RosterPlayer"], prize_pool: int, n_players: int,
-) -> dict[int, int]:
-    pct_table = PAYTABLE.get(n_players, PAYTABLE[8])
-
-    in_money = sorted(
-        [p for p in players.values() if p.rounds_won > 0],
-        key=lambda p: p.rounds_won,
-        reverse=True,
-    )
-
-    payouts: dict[int, int] = {uid: 0 for uid in players}
-
-    if not in_money:
-        return payouts
-
-    paid_positions = len(pct_table)
-    pos = 0
-    for _wins, group_iter in groupby(in_money, key=lambda p: p.rounds_won):
-        group = list(group_iter)
-        if pos >= paid_positions:
-            break
-        end = min(pos + len(group), paid_positions)
-        combined_share = sum(pct_table[pos:end])
-        per_player = int(prize_pool * combined_share / len(group))
-        for p in group:
-            payouts[p.user_id] = per_player
-        pos += len(group)
-
-    total_paid = sum(payouts.values())
-    leftover = prize_pool - total_paid
-    if leftover > 0 and in_money:
-        top_wins = in_money[0].rounds_won
-        top_group = [p for p in in_money if p.rounds_won == top_wins]
-        extra = leftover // len(top_group)
-        for p in top_group:
-            payouts[p.user_id] += extra
-
-    return payouts
 
 
 # ── Dataclasses ──────────────────────────────────────────────────────────────
@@ -415,7 +361,6 @@ def _compute_payouts(
 class RosterPlayer:
     user_id: int
     display_name: str
-    bet: int
     rounds_won: int = 0
     answer: str | None = None
     answer_time: float | None = None
@@ -440,7 +385,7 @@ class RosterTable:
     round_winner: int | None = None
     race_task: asyncio.Task | None = field(default=None, repr=False)
     round_solved: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
-    last_bets: dict[int, tuple[str, int]] = field(default_factory=dict)
+    last_bets: dict[int, str] = field(default_factory=dict)
     total_rounds_played: int = 0
     used_players: list[str] = field(default_factory=list)
 
@@ -464,33 +409,21 @@ def _scoreboard(table: RosterTable) -> str:
 
 def _betting_embed(table: RosterTable) -> discord.Embed:
     cfg = table.config
-    pot = sum(p.bet for p in table.players.values())
-    n = len(table.players)
 
     embed = discord.Embed(
         title=f"{cfg.emoji} {cfg.name} Roster Trivia",
         description=(
-            f"Name the team! **First to {WINS_TO_WIN} wins** takes the pot.\n"
+            f"Name the team! **First to {WINS_TO_WIN} wins**.\n"
             "Pick the correct team from the buttons below \u2014 fastest correct pick wins!"
         ),
         colour=discord.Colour(cfg.colour),
     )
 
-    if pot:
-        embed.add_field(name="Pot", value=f"{pot}c", inline=True)
     embed.add_field(name="Goal", value=f"First to {WINS_TO_WIN}", inline=True)
-
-    if n >= MIN_PLAYERS:
-        pt = PAYTABLE.get(n, PAYTABLE[8])
-        pt_parts = [
-            f"{MEDALS[i] if i < 3 else chr(0x25aa) + chr(0xfe0f)} {int(s * 100)}%"
-            for i, s in enumerate(pt)
-        ]
-        embed.add_field(name="Paytable", value=" | ".join(pt_parts), inline=True)
 
     if table.players:
         lines = [
-            f"{cfg.emoji} **{p.display_name}** \u2014 {p.bet}c"
+            f"{cfg.emoji} **{p.display_name}**"
             + (f" ({p.rounds_won}W)" if p.rounds_won > 0 else "")
             for p in table.players.values()
         ]
@@ -521,9 +454,6 @@ def _playing_embed(table: RosterTable, remaining: int | None = None) -> discord.
 
     secs = remaining if remaining is not None else ROUND_TIME
     embed.add_field(name="\u23f1\ufe0f Time", value=f"**{secs}s**", inline=True)
-
-    pot = sum(p.bet for p in table.players.values())
-    embed.add_field(name="Pot", value=f"{pot}c", inline=True)
 
     embed.add_field(name="Scoreboard", value=_scoreboard(table), inline=False)
     embed.set_footer(text=f"Host: {table.host_name}")
@@ -573,23 +503,17 @@ def _timeout_embed(table: RosterTable) -> discord.Embed:
     return embed
 
 
-def _final_embed(
-    table: RosterTable,
-    *,
-    payouts: dict[int, int],
-    balances: dict[int, int],
-) -> discord.Embed:
+def _final_embed(table: RosterTable) -> discord.Embed:
     cfg = table.config
     max_wins = max((p.rounds_won for p in table.players.values()), default=0)
-    is_refund = max_wins == 0
 
     embed = discord.Embed(
         title=f"{cfg.emoji} {cfg.name} Roster Trivia \u2014 Results",
-        colour=discord.Colour.gold() if not is_refund else discord.Colour.dark_grey(),
+        colour=discord.Colour.gold() if max_wins > 0 else discord.Colour.dark_grey(),
     )
 
-    if is_refund:
-        embed.description = "No rounds were won \u2014 all bets refunded!"
+    if max_wins == 0:
+        embed.description = "No rounds were won!"
     else:
         sorted_p = sorted(
             table.players.values(), key=lambda p: p.rounds_won, reverse=True,
@@ -606,30 +530,9 @@ def _final_embed(
     )
     lines: list[str] = []
     for i, p in enumerate(sorted_players):
-        payout = payouts.get(p.user_id, 0)
-        bal = balances.get(p.user_id, 0)
-        net = payout - p.bet
-        sign = "+" if net >= 0 else ""
         medal = MEDALS[i] if i < len(MEDALS) and p.rounds_won > 0 else "\u25aa\ufe0f"
-        lines.append(
-            f"{medal} **{p.display_name}** ({p.rounds_won}W) \u2014 "
-            f"{p.bet}c \u2192 {payout}c "
-            f"(**{sign}{net}c**) \u2014 bal: {bal}c"
-        )
+        lines.append(f"{medal} **{p.display_name}** ({p.rounds_won}W)")
     embed.add_field(name="Results", value="\n".join(lines), inline=False)
-
-    if not is_refund:
-        n = len(table.players)
-        pt = PAYTABLE.get(n, PAYTABLE[8])
-        pt_parts = [
-            f"{MEDALS[i] if i < 3 else chr(0x25aa) + chr(0xfe0f)} {int(s * 100)}%"
-            for i, s in enumerate(pt)
-        ]
-        embed.add_field(
-            name=f"Paytable ({n} players)",
-            value=" | ".join(pt_parts),
-            inline=True,
-        )
 
     embed.add_field(
         name="Rounds Played", value=str(table.total_rounds_played), inline=True,
@@ -641,61 +544,7 @@ def _final_embed(
 # ── Modals ───────────────────────────────────────────────────────────────────
 
 
-class JoinRosterModal(ui.Modal):
-    amount = ui.TextInput(
-        label="Bet amount (coins)",
-        placeholder="e.g. 100",
-        required=True,
-        max_length=10,
-    )
-
-    def __init__(
-        self, table: RosterTable, view: "RosterTableView", balance: int,
-    ) -> None:
-        super().__init__(title=f"Join {table.config.name} Roster Trivia")
-        self.table = table
-        self.table_view = view
-        self.amount.placeholder = f"e.g. 100 (bal: {balance}c)"
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            amt = int(self.amount.value)
-        except ValueError:
-            await interaction.response.send_message(
-                "Enter a whole number.", ephemeral=True,
-            )
-            return
-        if amt < 1:
-            await interaction.response.send_message(
-                "Must be at least 1 coin.", ephemeral=True,
-            )
-            return
-        uid = interaction.user.id
-        if uid in self.table.players:
-            await interaction.response.send_message(
-                "You're already in this game!", ephemeral=True,
-            )
-            return
-
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins! (have {bal}c)", ephemeral=True,
-            )
-            return
-
-        self.table.players[uid] = RosterPlayer(
-            user_id=uid,
-            display_name=interaction.user.display_name,
-            bet=amt,
-        )
-
-        self.table_view._update_buttons()
-        await interaction.response.edit_message(
-            embed=_betting_embed(self.table), view=self.table_view,
-        )
+    # JoinRosterModal removed — Join button now directly adds player (no coins needed)
 
 
 # ── Choice button ────────────────────────────────────────────────────────────
@@ -847,9 +696,13 @@ class RosterTableView(ui.View):
                 "Table is full!", ephemeral=True,
             )
             return
-        bal = await queries.get_or_create_casino_wallet(str(uid))
-        await interaction.response.send_modal(
-            JoinRosterModal(self.table, self, bal),
+        self.table.players[uid] = RosterPlayer(
+            user_id=uid,
+            display_name=interaction.user.display_name,
+        )
+        self._update_buttons()
+        await interaction.response.edit_message(
+            embed=_betting_embed(self.table), view=self,
         )
 
     @ui.button(
@@ -873,7 +726,7 @@ class RosterTableView(ui.View):
         last = self.table.last_bets.get(uid)
         if last is None:
             await interaction.response.send_message(
-                "No previous bet \u2014 use Join instead.", ephemeral=True,
+                "No previous session \u2014 use Join instead.", ephemeral=True,
             )
             return
         if len(self.table.players) >= MAX_PLAYERS:
@@ -881,18 +734,8 @@ class RosterTableView(ui.View):
                 "Table is full!", ephemeral=True,
             )
             return
-        name, amt = last
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins for {amt}c re-bet! (have {bal}c)",
-                ephemeral=True,
-            )
-            return
         self.table.players[uid] = RosterPlayer(
-            user_id=uid, display_name=name, bet=amt,
+            user_id=uid, display_name=last,
         )
         self._update_buttons()
         await interaction.response.edit_message(
@@ -918,7 +761,6 @@ class RosterTableView(ui.View):
                 "Can't leave during a game!", ephemeral=True,
             )
             return
-        await queries.update_casino_balance(str(uid), player.bet)
         del self.table.players[uid]
         self._update_buttons()
         await interaction.response.edit_message(
@@ -968,7 +810,7 @@ class RosterTableView(ui.View):
         table = self.table
 
         for uid, p in table.players.items():
-            table.last_bets[uid] = (p.display_name, p.bet)
+            table.last_bets[uid] = p.display_name
 
         name, pos, team = self._pick_player()
         table.current_player = name
@@ -1091,48 +933,9 @@ class RosterTableView(ui.View):
             table.phase = "closed"
             self.active_tables.pop(table.channel_id, None)
 
-    async def _compute_and_apply_payouts(
-        self,
-    ) -> tuple[dict[int, int], dict[int, int]]:
-        table = self.table
-        n_players = len(table.players)
-        pot = sum(p.bet for p in table.players.values())
-        max_wins = max((p.rounds_won for p in table.players.values()), default=0)
-
-        if max_wins == 0:
-            payouts = {uid: p.bet for uid, p in table.players.items()}
-            for uid, refund in payouts.items():
-                try:
-                    await queries.update_casino_balance(str(uid), refund)
-                except Exception:
-                    pass
-        else:
-            payouts = _compute_payouts(table.players, pot, n_players)
-            for uid, payout in payouts.items():
-                if payout > 0:
-                    try:
-                        await queries.update_casino_balance(str(uid), payout)
-                    except Exception:
-                        pass
-
-        balances: dict[int, int] = {}
-        for uid in table.players:
-            bal = await queries.get_casino_balance(str(uid))
-            balances[uid] = bal or 0
-
-        for uid, p in table.players.items():
-            payout = payouts.get(uid, 0)
-            await queries.log_casino_result(
-                str(uid), table.config.slug, p.bet, payout,
-            )
-
-        return payouts, balances
-
     async def _end_game(self) -> None:
         table = self.table
         table.phase = "closed"
-
-        payouts, balances = await self._compute_and_apply_payouts()
 
         if len(table.players) >= 2:
             sorted_p = sorted(table.players.values(), key=lambda p: p.rounds_won, reverse=True)
@@ -1142,7 +945,7 @@ class RosterTableView(ui.View):
             except Exception:
                 pass
 
-        embed = _final_embed(table, payouts=payouts, balances=balances)
+        embed = _final_embed(table)
 
         for child in self.children:
             child.disabled = True  # type: ignore[union-attr]
@@ -1159,14 +962,9 @@ class RosterTableView(ui.View):
         table = self.table
 
         if table.total_rounds_played == 0:
-            for p in table.players.values():
-                try:
-                    await queries.update_casino_balance(str(p.user_id), p.bet)
-                except Exception:
-                    pass
             embed = discord.Embed(
                 title=f"{table.config.emoji} {table.config.name} Trivia \u2014 Closed",
-                description="Table closed. All bets refunded.",
+                description="Table closed.",
                 colour=discord.Colour.dark_grey(),
             )
             for child in self.children:
@@ -1177,8 +975,7 @@ class RosterTableView(ui.View):
             return
 
         table.phase = "closed"
-        payouts, balances = await self._compute_and_apply_payouts()
-        embed = _final_embed(table, payouts=payouts, balances=balances)
+        embed = _final_embed(table)
 
         for child in self.children:
             child.disabled = True  # type: ignore[union-attr]
@@ -1195,12 +992,6 @@ class RosterTableView(ui.View):
         if table.phase == "closed":
             return
 
-        for p in table.players.values():
-            try:
-                await queries.update_casino_balance(str(p.user_id), p.bet)
-            except Exception:
-                pass
-
         table.phase = "closed"
         self.active_tables.pop(table.channel_id, None)
 
@@ -1208,7 +999,7 @@ class RosterTableView(ui.View):
             try:
                 embed = discord.Embed(
                     title=f"{table.config.emoji} {table.config.name} Trivia \u2014 Timed Out",
-                    description="Table timed out. All bets refunded.",
+                    description="Table timed out.",
                     colour=discord.Colour.dark_grey(),
                 )
                 await table.message.edit(embed=embed, view=None)
@@ -1237,8 +1028,6 @@ class RosterCog(commands.Cog):
                 ephemeral=True,
             )
             return
-
-        await queries.get_or_create_casino_wallet(str(interaction.user.id))
 
         table = RosterTable(
             channel_id=channel_id,

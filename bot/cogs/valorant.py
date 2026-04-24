@@ -1,7 +1,7 @@
-"""Casino cog — multiplayer /valorant guessing game.
+"""Valorant cog — multiplayer /valorant guessing game.
 
 Progressive hints about a Valorant agent, weapon, or map; first to type
-its name wins the round.  First to WINS_TO_WIN rounds takes the pot.
+its name wins the round.  First to WINS_TO_WIN rounds wins. ELO-ranked.
 """
 
 import asyncio
@@ -9,8 +9,6 @@ import random
 import time
 import unicodedata
 from dataclasses import dataclass, field
-from itertools import groupby
-
 import discord
 from discord import app_commands, ui
 from discord.ext import commands

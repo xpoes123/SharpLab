@@ -1,9 +1,8 @@
-"""Casino cog — /soccersim fake soccer match simulator.
+"""Cog — /soccersim fake soccer match simulator.
 
 Two random soccer teams are drawn. Each gets a win probability based on
-team ratings. Players pick a side and bet coins. A half-by-half simulation
-runs with match events (goals, cards, subs), and winners are paid fixed
-odds based on the pre-game probability.
+team ratings. Players join to watch a half-by-half simulation with match
+events (goals, cards, subs). No coins change hands.
 
 Also supports /soccersim-tournament — an 8-team mini-tournament with
 group stage + knockout rounds.
@@ -17,8 +16,6 @@ from dataclasses import dataclass, field
 import discord
 from discord import app_commands, ui
 from discord.ext import commands
-
-from db import queries
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -215,10 +212,6 @@ def _generate_win_prob(home: SoccerTeam, away: SoccerTeam) -> float:
     # Small home boost (+2% baseline)
     raw = 0.50 + 0.02 + diff / 100.0
     return max(0.15, min(0.85, raw))
-
-
-def _payout_multiplier(prob: float) -> float:
-    return 1.0 / prob
 
 
 def _prob_to_american(prob: float) -> str:
@@ -447,10 +440,6 @@ def _sim_group_match(
 class SoccerSimPlayer:
     user_id: int
     display_name: str
-    bet: int
-    side: str  # "home" or "away"
-    payout: int = 0
-    won: bool = False
 
 
 @dataclass
@@ -458,14 +447,13 @@ class SoccerSimTable:
     channel_id: int
     host_id: int
     host_name: str
-    phase: str = "betting"  # betting | playing | finished
+    phase: str = "waiting"  # waiting | playing | finished
     home_team: SoccerTeam | None = None
     away_team: SoccerTeam | None = None
     home_prob: float = 0.5
     players: dict[int, SoccerSimPlayer] = field(default_factory=dict)
     message: discord.Message | None = None
     round_num: int = 1
-    last_bets: dict[int, tuple[str, int, str]] = field(default_factory=dict)
     home_score: int = 0
     away_score: int = 0
     half: int = 0
@@ -482,54 +470,42 @@ def _ratings_bar(team: SoccerTeam) -> str:
     return f"ATK {team.attack} | MID {team.midfield} | DEF {team.defense} | GK {team.goalkeeper}"
 
 
-def _betting_embed(table: SoccerSimTable) -> discord.Embed:
+def _waiting_embed(table: SoccerSimTable) -> discord.Embed:
     home = table.home_team
     away = table.away_team
-    total_wagered = sum(p.bet for p in table.players.values())
     away_prob = 1 - table.home_prob
 
     home_odds = _prob_to_american(table.home_prob)
     away_odds = _prob_to_american(away_prob)
-    home_mult = _payout_multiplier(table.home_prob)
-    away_mult = _payout_multiplier(away_prob)
 
     embed = discord.Embed(
-        title=f"\u26bd Soccer Sim \u2014 Place Your Bets (Round {table.round_num})",
-        description=(
-            "Pick a side and bet coins on the outcome!\n"
-            "Odds are based on each team's simulated win probability."
-        ),
+        title=f"\u26bd Soccer Sim \u2014 Watch the Match (Round {table.round_num})",
+        description="Join to watch the simulated match — no coins needed!",
         colour=discord.Colour.dark_green(),
     )
 
     matchup_text = (
         f"**{away.abbr}** {away.name}  ({away.team_type})\n"
         f"\u2003{_ratings_bar(away)}\n"
-        f"\u2003Win: {away_prob * 100:.0f}% ({away_odds}) \u2014 **{away_mult:.1f}x** payout\n\n"
+        f"\u2003Win probability: {away_prob * 100:.0f}% ({away_odds})\n\n"
         f"**{home.abbr}** {home.name}  ({home.team_type})\n"
         f"\u2003{_ratings_bar(home)}\n"
-        f"\u2003Win: {table.home_prob * 100:.0f}% ({home_odds}) \u2014 **{home_mult:.1f}x** payout"
+        f"\u2003Win probability: {table.home_prob * 100:.0f}% ({home_odds})"
     )
     embed.add_field(name=f"{away.abbr} @ {home.abbr}", value=matchup_text, inline=False)
 
-    if total_wagered:
-        embed.add_field(name="Total Wagered", value=f"{total_wagered}c", inline=True)
-
     if table.players:
-        player_lines = []
-        for p in table.players.values():
-            side_abbr = home.abbr if p.side == "home" else away.abbr
-            player_lines.append(f"\U0001f3b0 **{p.display_name}** \u2014 {p.bet}c on **{side_abbr}**")
-        embed.add_field(name="Players", value="\n".join(player_lines), inline=False)
+        viewer_lines = [f"\U0001f440 **{p.display_name}**" for p in table.players.values()]
+        embed.add_field(name="Viewers", value="\n".join(viewer_lines), inline=False)
     else:
         embed.add_field(
-            name="Players",
-            value="*No players yet \u2014 click Join!*",
+            name="Viewers",
+            value="*No one yet \u2014 click Join!*",
             inline=False,
         )
 
     embed.set_footer(
-        text=f"Host: {table.host_name} \u2502 Min {MIN_PLAYERS} player(s) \u2502 Pick home or away in modal",
+        text=f"Host: {table.host_name} \u2502 Min {MIN_PLAYERS} player(s) to start",
     )
     return embed
 
@@ -566,20 +542,15 @@ def _playing_embed(table: SoccerSimTable) -> discord.Embed:
         event_text = "\n".join(_event_line(e) for e in table.events[-15:])
         embed.add_field(name="Match Events", value=event_text, inline=False)
 
-    bet_lines: list[str] = []
-    for p in table.players.values():
-        side_abbr = home.abbr if p.side == "home" else away.abbr
-        bet_lines.append(f"**{p.display_name}** \u2014 {p.bet}c on {side_abbr}")
-    if bet_lines:
-        embed.add_field(name="Bets", value="\n".join(bet_lines), inline=False)
+    if table.players:
+        viewer_lines = [f"**{p.display_name}**" for p in table.players.values()]
+        embed.add_field(name="Viewers", value="\n".join(viewer_lines), inline=False)
 
     embed.set_footer(text=f"Host: {table.host_name}")
     return embed
 
 
-def _finished_embed(
-    table: SoccerSimTable, *, balances: dict[int, int] | None = None,
-) -> discord.Embed:
+def _finished_embed(table: SoccerSimTable) -> discord.Embed:
     home = table.home_team
     away = table.away_team
 
@@ -630,24 +601,9 @@ def _finished_embed(
         event_text = "\n".join(_event_line(e) for e in table.events[-20:])
         embed.add_field(name="Match Events", value=event_text, inline=False)
 
-    lines: list[str] = []
-    for p in table.players.values():
-        bal = balances.get(p.user_id, 0) if balances else 0
-        side_abbr = home.abbr if p.side == "home" else away.abbr
-        net = p.payout - p.bet
-        sign = "+" if net >= 0 else ""
-        if p.won:
-            lines.append(
-                f"\U0001f3c6 **{p.display_name}** ({side_abbr}) \u2014 "
-                f"{p.bet}c \u2192 {p.payout}c (**{sign}{net}c**) \u2014 bal: {bal}c"
-            )
-        else:
-            lines.append(
-                f"\u274c **{p.display_name}** ({side_abbr}) \u2014 "
-                f"{p.bet}c \u2192 0c (**-{p.bet}c**) \u2014 bal: {bal}c"
-            )
-    if lines:
-        embed.add_field(name="Results", value="\n".join(lines), inline=False)
+    if table.players:
+        viewer_lines = [f"**{p.display_name}**" for p in table.players.values()]
+        embed.add_field(name="Viewers", value="\n".join(viewer_lines), inline=False)
 
     embed.set_footer(text=f"Host: {table.host_name}")
     return embed
@@ -660,10 +616,7 @@ def _finished_embed(
 class TournamentPlayer:
     user_id: int
     display_name: str
-    bet: int
-    team_name: str  # which team they bet on to win
-    payout: int = 0
-    won: bool = False
+    team_name: str  # which team they're rooting for
 
 
 @dataclass
@@ -671,7 +624,7 @@ class TournamentTable:
     channel_id: int
     host_id: int
     host_name: str
-    phase: str = "betting"  # betting | playing | finished
+    phase: str = "waiting"  # waiting | playing | finished
     team_pool: str = "mixed"  # clubs | national | mixed
     teams: list[SoccerTeam] = field(default_factory=list)
     groups: dict[str, list[SoccerTeam]] = field(default_factory=dict)
@@ -680,7 +633,6 @@ class TournamentTable:
     current_stage: str = "groups"  # groups | semis | final | finished
     players: dict[int, TournamentPlayer] = field(default_factory=dict)
     message: discord.Message | None = None
-    last_bets: dict[int, tuple[str, int, str]] = field(default_factory=dict)
     round_num: int = 1
     sim_task: asyncio.Task | None = field(default=None, repr=False)
 
@@ -785,18 +737,6 @@ def _group_standings_text(standings: list[dict]) -> str:
     return "```\n" + "\n".join(lines) + "\n```"
 
 
-def _tournament_team_win_prob(team: SoccerTeam, all_teams: list[SoccerTeam]) -> float:
-    """Estimate probability of a team winning the tournament from strength."""
-    strengths = [_team_strength(t) for t in all_teams]
-    total = sum(strengths)
-    if total == 0:
-        return 1.0 / len(all_teams)
-    my_str = _team_strength(team)
-    # Squaring to reward stronger teams more
-    sq_total = sum(s ** 2 for s in strengths)
-    return (my_str ** 2) / sq_total if sq_total > 0 else 1.0 / len(all_teams)
-
-
 def _tournament_group_embed(
     table: TournamentTable, *,
     match_log: list[str] | None = None,
@@ -830,10 +770,10 @@ def _tournament_group_embed(
     if table.players:
         lines = []
         for p in table.players.values():
-            lines.append(f"\U0001f3b0 **{p.display_name}** \u2014 {p.bet}c on **{p.team_name}**")
-        embed.add_field(name="Bets", value="\n".join(lines), inline=False)
+            lines.append(f"\U0001f440 **{p.display_name}** \u2014 rooting for **{p.team_name}**")
+        embed.add_field(name="Viewers", value="\n".join(lines), inline=False)
     else:
-        embed.add_field(name="Bets", value="*No players yet \u2014 click Join!*", inline=False)
+        embed.add_field(name="Viewers", value="*No one yet \u2014 click Join!*", inline=False)
 
     embed.set_footer(text=f"Host: {table.host_name}")
     return embed
@@ -892,8 +832,8 @@ def _tournament_knockout_embed(
     if table.players:
         lines = []
         for p in table.players.values():
-            lines.append(f"\U0001f3b0 **{p.display_name}** \u2014 {p.bet}c on **{p.team_name}**")
-        embed.add_field(name="Bets", value="\n".join(lines), inline=False)
+            lines.append(f"\U0001f440 **{p.display_name}** \u2014 rooting for **{p.team_name}**")
+        embed.add_field(name="Viewers", value="\n".join(lines), inline=False)
 
     embed.set_footer(text=f"Host: {table.host_name}")
     return embed
@@ -903,7 +843,6 @@ def _tournament_final_embed(
     table: TournamentTable, winner: SoccerTeam, *,
     semis: list[tuple[str, str, str]],
     final_result: tuple[str, str, str],
-    balances: dict[int, int] | None = None,
 ) -> discord.Embed:
     embed = discord.Embed(
         title=f"\u26bd Soccer Tournament \u2014 Complete (Round {table.round_num})",
@@ -922,23 +861,14 @@ def _tournament_final_embed(
     fm, fs, fw = final_result
     embed.add_field(name="Final", value=f"{fm} \u2014 {fs} \u2192 **{fw}**", inline=False)
 
-    lines: list[str] = []
-    for p in table.players.values():
-        bal = balances.get(p.user_id, 0) if balances else 0
-        net = p.payout - p.bet
-        sign = "+" if net >= 0 else ""
-        if p.won:
-            lines.append(
-                f"\U0001f3c6 **{p.display_name}** ({p.team_name}) \u2014 "
-                f"{p.bet}c \u2192 {p.payout}c (**{sign}{net}c**) \u2014 bal: {bal}c"
-            )
-        else:
-            lines.append(
-                f"\u274c **{p.display_name}** ({p.team_name}) \u2014 "
-                f"{p.bet}c \u2192 0c (**-{p.bet}c**) \u2014 bal: {bal}c"
-            )
-    if lines:
-        embed.add_field(name="Results", value="\n".join(lines), inline=False)
+    if table.players:
+        lines: list[str] = []
+        for p in table.players.values():
+            if p.team_name == winner.abbr:
+                lines.append(f"\U0001f3c6 **{p.display_name}** \u2014 called it! ({p.team_name})")
+            else:
+                lines.append(f"**{p.display_name}** \u2014 was rooting for {p.team_name}")
+        embed.add_field(name="Viewers", value="\n".join(lines), inline=False)
 
     embed.set_footer(text=f"Host: {table.host_name}")
     return embed
@@ -979,126 +909,24 @@ def _sim_knockout_match(
 # ── Modals ──────────────────────────────────────────────────────────────────
 
 
-class JoinSoccerSimModal(ui.Modal):
-    amount = ui.TextInput(
-        label="Bet amount (coins)",
-        placeholder="e.g. 100",
-        required=True,
-        max_length=10,
-    )
-    side_input = ui.TextInput(
-        label="Side (home or away)",
-        placeholder="home / away",
-        required=True,
-        max_length=4,
-    )
-
-    def __init__(
-        self, table: SoccerSimTable, view: "SoccerSimTableView", balance: int,
-    ) -> None:
-        home = table.home_team
-        away = table.away_team
-        super().__init__(title=f"Soccer Sim \u2014 {away.abbr} @ {home.abbr}")
-        self.table = table
-        self.table_view = view
-        self.amount.placeholder = f"e.g. 100 (bal: {balance}c)"
-        self.side_input.placeholder = f"home ({home.abbr}) / away ({away.abbr})"
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            amt = int(self.amount.value)
-        except ValueError:
-            await interaction.response.send_message(
-                "Enter a whole number for bet.", ephemeral=True,
-            )
-            return
-        if amt < 1:
-            await interaction.response.send_message(
-                "Must be at least 1 coin.", ephemeral=True,
-            )
-            return
-
-        raw = self.side_input.value.strip().lower()
-        home = self.table.home_team
-        away = self.table.away_team
-        if raw in ("home", "h", home.abbr.lower()):
-            side = "home"
-        elif raw in ("away", "a", away.abbr.lower()):
-            side = "away"
-        else:
-            await interaction.response.send_message(
-                f"Enter **home** ({home.abbr}) or **away** ({away.abbr}).",
-                ephemeral=True,
-            )
-            return
-
-        uid = interaction.user.id
-        if uid in self.table.players:
-            await interaction.response.send_message(
-                "You're already in this round!", ephemeral=True,
-            )
-            return
-
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins! (have {bal}c)", ephemeral=True,
-            )
-            return
-
-        self.table.players[uid] = SoccerSimPlayer(
-            user_id=uid,
-            display_name=interaction.user.display_name,
-            bet=amt,
-            side=side,
-        )
-
-        self.table_view._update_buttons()
-        await interaction.response.edit_message(
-            embed=_betting_embed(self.table), view=self.table_view,
-        )
-
-
 class JoinTournamentModal(ui.Modal):
-    amount = ui.TextInput(
-        label="Bet amount (coins)",
-        placeholder="e.g. 100",
-        required=True,
-        max_length=10,
-    )
     team_input = ui.TextInput(
-        label="Team to bet on (name or abbreviation)",
+        label="Team to root for (name or abbreviation)",
         placeholder="e.g. Brazil or BRA",
         required=True,
         max_length=20,
     )
 
     def __init__(
-        self, table: TournamentTable, view: "TournamentView", balance: int,
+        self, table: TournamentTable, view: "TournamentView",
     ) -> None:
-        super().__init__(title="Soccer Tournament \u2014 Pick a Winner")
+        super().__init__(title="Soccer Tournament \u2014 Pick a Team")
         self.table = table
         self.table_view = view
         team_names = ", ".join(t.abbr for t in table.teams)
-        self.amount.placeholder = f"e.g. 100 (bal: {balance}c)"
         self.team_input.placeholder = f"Pick from: {team_names}"[:100]
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            amt = int(self.amount.value)
-        except ValueError:
-            await interaction.response.send_message(
-                "Enter a whole number for bet.", ephemeral=True,
-            )
-            return
-        if amt < 1:
-            await interaction.response.send_message(
-                "Must be at least 1 coin.", ephemeral=True,
-            )
-            return
-
         raw = self.team_input.value.strip().lower()
         picked = None
         for t in self.table.teams:
@@ -1125,19 +953,9 @@ class JoinTournamentModal(ui.Modal):
             )
             return
 
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins! (have {bal}c)", ephemeral=True,
-            )
-            return
-
         self.table.players[uid] = TournamentPlayer(
             user_id=uid,
             display_name=interaction.user.display_name,
-            bet=amt,
             team_name=picked.abbr,
         )
 
@@ -1161,15 +979,14 @@ class SoccerSimTableView(ui.View):
 
     def _update_buttons(self) -> None:
         phase = self.table.phase
-        betting = phase == "betting"
+        waiting = phase == "waiting"
         playing = phase == "playing"
         finished = phase == "finished"
 
         self.start_btn.disabled = (
-            not betting or len(self.table.players) < MIN_PLAYERS
+            not waiting or len(self.table.players) < MIN_PLAYERS
         )
-        self.join_btn.disabled = not betting
-        self.rebet_btn.disabled = not betting or not self.table.last_bets
+        self.join_btn.disabled = not waiting
         self.leave_btn.disabled = playing
 
         self.new_round_btn.disabled = not finished
@@ -1188,7 +1005,7 @@ class SoccerSimTableView(ui.View):
                 "Only the host can start!", ephemeral=True,
             )
             return
-        if self.table.phase != "betting":
+        if self.table.phase != "waiting":
             await interaction.response.send_message(
                 "Already started!", ephemeral=True,
             )
@@ -1206,7 +1023,7 @@ class SoccerSimTableView(ui.View):
     async def join_btn(
         self, interaction: discord.Interaction, button: ui.Button,
     ) -> None:
-        if self.table.phase != "betting":
+        if self.table.phase != "waiting":
             await interaction.response.send_message(
                 "Game in progress! Wait for the next round.", ephemeral=True,
             )
@@ -1222,55 +1039,13 @@ class SoccerSimTableView(ui.View):
                 "Table is full!", ephemeral=True,
             )
             return
-        bal = await queries.get_or_create_casino_wallet(str(uid))
-        await interaction.response.send_modal(
-            JoinSoccerSimModal(self.table, self, bal),
-        )
-
-    @ui.button(
-        label="Re-bet", style=discord.ButtonStyle.primary, emoji="\U0001f504", row=0,
-    )
-    async def rebet_btn(
-        self, interaction: discord.Interaction, button: ui.Button,
-    ) -> None:
-        if self.table.phase != "betting":
-            await interaction.response.send_message(
-                "Game in progress!", ephemeral=True,
-            )
-            return
-        uid = interaction.user.id
-        if uid in self.table.players:
-            await interaction.response.send_message(
-                "You're already in!", ephemeral=True,
-            )
-            return
-        last = self.table.last_bets.get(uid)
-        if last is None:
-            await interaction.response.send_message(
-                "No previous bet \u2014 use Join instead.", ephemeral=True,
-            )
-            return
-        if len(self.table.players) >= MAX_PLAYERS:
-            await interaction.response.send_message(
-                "Table is full!", ephemeral=True,
-            )
-            return
-        name, amt, side = last
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins for {amt}c re-bet! (have {bal}c)",
-                ephemeral=True,
-            )
-            return
         self.table.players[uid] = SoccerSimPlayer(
-            user_id=uid, display_name=name, bet=amt, side=side,
+            user_id=uid,
+            display_name=interaction.user.display_name,
         )
         self._update_buttons()
         await interaction.response.edit_message(
-            embed=_betting_embed(self.table), view=self,
+            embed=_waiting_embed(self.table), view=self,
         )
 
     @ui.button(
@@ -1280,8 +1055,7 @@ class SoccerSimTableView(ui.View):
         self, interaction: discord.Interaction, button: ui.Button,
     ) -> None:
         uid = interaction.user.id
-        player = self.table.players.get(uid)
-        if player is None:
+        if uid not in self.table.players:
             await interaction.response.send_message(
                 "You're not at this table.", ephemeral=True,
             )
@@ -1291,12 +1065,11 @@ class SoccerSimTableView(ui.View):
                 "Can't leave mid-game!", ephemeral=True,
             )
             return
-        if self.table.phase == "betting":
-            await queries.update_casino_balance(str(uid), player.bet)
+        if self.table.phase == "waiting":
             del self.table.players[uid]
             self._update_buttons()
             await interaction.response.edit_message(
-                embed=_betting_embed(self.table), view=self,
+                embed=_waiting_embed(self.table), view=self,
             )
             return
         await interaction.response.send_message(
@@ -1325,7 +1098,7 @@ class SoccerSimTableView(ui.View):
         self._start_new_round()
         self._update_buttons()
         await interaction.response.edit_message(
-            embed=_betting_embed(self.table), view=self,
+            embed=_waiting_embed(self.table), view=self,
         )
 
     @ui.button(
@@ -1345,12 +1118,6 @@ class SoccerSimTableView(ui.View):
                 "Can't close mid-game!", ephemeral=True,
             )
             return
-        if self.table.phase == "betting":
-            for p in self.table.players.values():
-                try:
-                    await queries.update_casino_balance(str(p.user_id), p.bet)
-                except Exception:
-                    pass
         await self._close(interaction, "Table closed by host.")
 
     # ── Game logic ───────────────────────────────────────────────────────────
@@ -1411,7 +1178,6 @@ class SoccerSimTableView(ui.View):
                     pass
 
             # In a standard single match, draws are valid — no ET/pens needed
-            # Winner is determined; draws mean nobody wins their bet
             await asyncio.sleep(1.0)
             await self._resolve()
 
@@ -1420,54 +1186,24 @@ class SoccerSimTableView(ui.View):
         except Exception:
             if table.phase == "playing":
                 table.phase = "finished"
-                await self._refund_all()
+                self._update_buttons()
+                if table.message:
+                    try:
+                        await table.message.edit(
+                            embed=_finished_embed(table), view=self,
+                        )
+                    except Exception:
+                        pass
 
     async def _resolve(self) -> None:
         table = self.table
         table.phase = "finished"
 
-        h = table.home_score
-        a = table.away_score
-        pen = table.penalty_score
-
-        if pen:
-            ph, pa = pen
-            home_won = ph > pa
-        elif h != a:
-            home_won = h > a
-        else:
-            # Draw — nobody wins
-            home_won = None
-
-        balances: dict[int, int] = {}
-        for uid, player in table.players.items():
-            if home_won is not None:
-                if (player.side == "home" and home_won) or (player.side == "away" and not home_won):
-                    player.won = True
-                    prob = table.home_prob if player.side == "home" else (1 - table.home_prob)
-                    player.payout = int(player.bet * _payout_multiplier(prob))
-
-            if player.won and player.payout > 0:
-                balances[uid] = await queries.update_casino_balance(
-                    str(uid), player.payout,
-                )
-            else:
-                bal = await queries.get_casino_balance(str(uid))
-                balances[uid] = bal or 0
-            await queries.log_casino_result(
-                str(uid), "soccersim", player.bet, player.payout,
-            )
-
-        for uid, player in table.players.items():
-            table.last_bets[uid] = (
-                player.display_name, player.bet, player.side,
-            )
-
         self._update_buttons()
         if table.message:
             try:
                 await table.message.edit(
-                    embed=_finished_embed(table, balances=balances), view=self,
+                    embed=_finished_embed(table), view=self,
                 )
             except discord.HTTPException:
                 pass
@@ -1477,7 +1213,7 @@ class SoccerSimTableView(ui.View):
     def _start_new_round(self) -> None:
         table = self.table
         table.players.clear()
-        table.phase = "betting"
+        table.phase = "waiting"
         table.round_num += 1
         home, away = random.sample(ALL_TEAMS, 2)
         table.home_team = home
@@ -1490,13 +1226,6 @@ class SoccerSimTableView(ui.View):
         table.extra_time_played = False
         table.penalty_score = None
         table.sim_task = None
-
-    async def _refund_all(self) -> None:
-        for p in self.table.players.values():
-            try:
-                await queries.update_casino_balance(str(p.user_id), p.bet)
-            except Exception:
-                pass
 
     async def _close(
         self, interaction: discord.Interaction, reason: str,
@@ -1518,27 +1247,12 @@ class SoccerSimTableView(ui.View):
         if table.sim_task and not table.sim_task.done():
             table.sim_task.cancel()
 
-        if table.phase == "finished":
-            self.active_tables.pop(table.channel_id, None)
-            if table.message:
-                try:
-                    embed = discord.Embed(
-                        title="\u26bd Soccer Sim Table \u2014 Timed Out",
-                        description="Table timed out between rounds.",
-                        colour=discord.Colour.dark_grey(),
-                    )
-                    await table.message.edit(embed=embed, view=None)
-                except Exception:
-                    pass
-            return
-
-        await self._refund_all()
         self.active_tables.pop(table.channel_id, None)
         if table.message:
             try:
                 embed = discord.Embed(
                     title="\u26bd Soccer Sim Table \u2014 Timed Out",
-                    description="Table timed out. All bets refunded.",
+                    description="Table timed out.",
                     colour=discord.Colour.dark_grey(),
                 )
                 await table.message.edit(embed=embed, view=None)
@@ -1560,14 +1274,14 @@ class TournamentView(ui.View):
 
     def _update_buttons(self) -> None:
         phase = self.table.phase
-        betting = phase == "betting"
+        waiting = phase == "waiting"
         playing = phase == "playing"
         finished = phase == "finished"
 
         self.start_btn.disabled = (
-            not betting or len(self.table.players) < MIN_PLAYERS
+            not waiting or len(self.table.players) < MIN_PLAYERS
         )
-        self.join_btn.disabled = not betting
+        self.join_btn.disabled = not waiting
         self.leave_btn.disabled = playing
         self.close_btn.disabled = playing
 
@@ -1584,7 +1298,7 @@ class TournamentView(ui.View):
                 "Only the host can start!", ephemeral=True,
             )
             return
-        if self.table.phase != "betting":
+        if self.table.phase != "waiting":
             await interaction.response.send_message(
                 "Already started!", ephemeral=True,
             )
@@ -1607,7 +1321,7 @@ class TournamentView(ui.View):
     async def join_btn(
         self, interaction: discord.Interaction, button: ui.Button,
     ) -> None:
-        if self.table.phase != "betting":
+        if self.table.phase != "waiting":
             await interaction.response.send_message(
                 "Tournament in progress!", ephemeral=True,
             )
@@ -1623,9 +1337,8 @@ class TournamentView(ui.View):
                 "Table is full!", ephemeral=True,
             )
             return
-        bal = await queries.get_or_create_casino_wallet(str(uid))
         await interaction.response.send_modal(
-            JoinTournamentModal(self.table, self, bal),
+            JoinTournamentModal(self.table, self),
         )
 
     @ui.button(
@@ -1635,8 +1348,7 @@ class TournamentView(ui.View):
         self, interaction: discord.Interaction, button: ui.Button,
     ) -> None:
         uid = interaction.user.id
-        player = self.table.players.get(uid)
-        if player is None:
+        if uid not in self.table.players:
             await interaction.response.send_message(
                 "You're not in this tournament.", ephemeral=True,
             )
@@ -1646,8 +1358,7 @@ class TournamentView(ui.View):
                 "Can't leave mid-tournament!", ephemeral=True,
             )
             return
-        if self.table.phase == "betting":
-            await queries.update_casino_balance(str(uid), player.bet)
+        if self.table.phase == "waiting":
             del self.table.players[uid]
             self._update_buttons()
             await interaction.response.edit_message(
@@ -1674,12 +1385,6 @@ class TournamentView(ui.View):
                 "Can't close mid-tournament!", ephemeral=True,
             )
             return
-        if self.table.phase == "betting":
-            for p in self.table.players.values():
-                try:
-                    await queries.update_casino_balance(str(p.user_id), p.bet)
-                except Exception:
-                    pass
         await self._close(interaction, "Tournament closed by host.")
 
     # ── Tournament logic ─────────────────────────────────────────────────────
@@ -1853,36 +1558,12 @@ class TournamentView(ui.View):
                 final_winner.abbr,
             )
 
-            # ── Resolve bets ──────────────────────────────────────────────
+            # ── Finish ────────────────────────────────────────────────────
             table.phase = "finished"
-            balances: dict[int, int] = {}
-            for uid, player in table.players.items():
-                if player.team_name == final_winner.abbr:
-                    player.won = True
-                    win_prob = _tournament_team_win_prob(final_winner, table.teams)
-                    player.payout = int(player.bet * _payout_multiplier(win_prob))
-
-                if player.won and player.payout > 0:
-                    balances[uid] = await queries.update_casino_balance(
-                        str(uid), player.payout,
-                    )
-                else:
-                    bal = await queries.get_casino_balance(str(uid))
-                    balances[uid] = bal or 0
-                await queries.log_casino_result(
-                    str(uid), "soccersim", player.bet, player.payout,
-                )
-
-            for uid, player in table.players.items():
-                table.last_bets[uid] = (
-                    player.display_name, player.bet, player.team_name,
-                )
-
             self._update_buttons()
             await self._edit_msg(_tournament_final_embed(
                 table, final_winner,
                 semis=semis_results, final_result=final_result,
-                balances=balances,
             ))
 
         except asyncio.CancelledError:
@@ -1890,14 +1571,7 @@ class TournamentView(ui.View):
         except Exception:
             if table.phase == "playing":
                 table.phase = "finished"
-                await self._refund_all()
-
-    async def _refund_all(self) -> None:
-        for p in self.table.players.values():
-            try:
-                await queries.update_casino_balance(str(p.user_id), p.bet)
-            except Exception:
-                pass
+                self._update_buttons()
 
     async def _close(
         self, interaction: discord.Interaction, reason: str,
@@ -1919,27 +1593,12 @@ class TournamentView(ui.View):
         if table.sim_task and not table.sim_task.done():
             table.sim_task.cancel()
 
-        if table.phase == "finished":
-            self.active_tables.pop(table.channel_id, None)
-            if table.message:
-                try:
-                    embed = discord.Embed(
-                        title="\u26bd Soccer Tournament \u2014 Timed Out",
-                        description="Tournament timed out.",
-                        colour=discord.Colour.dark_grey(),
-                    )
-                    await table.message.edit(embed=embed, view=None)
-                except Exception:
-                    pass
-            return
-
-        await self._refund_all()
         self.active_tables.pop(table.channel_id, None)
         if table.message:
             try:
                 embed = discord.Embed(
                     title="\u26bd Soccer Tournament \u2014 Timed Out",
-                    description="Tournament timed out. All bets refunded.",
+                    description="Tournament timed out.",
                     colour=discord.Colour.dark_grey(),
                 )
                 await table.message.edit(embed=embed, view=None)
@@ -1956,7 +1615,7 @@ class SoccerSimCog(commands.Cog):
         self.active_tables: dict[int, SoccerSimTable | TournamentTable] = {}
 
     @app_commands.command(
-        name="soccersim", description="Bet on a simulated soccer match (casino)",
+        name="soccersim", description="Watch a simulated soccer match",
     )
     @app_commands.describe(
         team1="Home team name or abbreviation (random if omitted)",
@@ -1973,8 +1632,6 @@ class SoccerSimCog(commands.Cog):
                 ephemeral=True,
             )
             return
-
-        await queries.get_or_create_casino_wallet(str(interaction.user.id))
 
         if team1 and team2:
             home = _find_team(team1)
@@ -2021,13 +1678,13 @@ class SoccerSimCog(commands.Cog):
         self.active_tables[channel_id] = table
 
         view = SoccerSimTableView(table, self.active_tables)
-        embed = _betting_embed(table)
+        embed = _waiting_embed(table)
         await interaction.response.send_message(embed=embed, view=view)
         table.message = await interaction.original_response()
 
     @app_commands.command(
         name="soccersim-tournament",
-        description="Run an 8-team soccer tournament with group stage + knockout (casino)",
+        description="Run an 8-team soccer tournament with group stage + knockout",
     )
     @app_commands.describe(pool="Team pool: clubs, national, or mixed (default)")
     @app_commands.choices(pool=[
@@ -2046,8 +1703,6 @@ class SoccerSimCog(commands.Cog):
                 ephemeral=True,
             )
             return
-
-        await queries.get_or_create_casino_wallet(str(interaction.user.id))
 
         if pool == "clubs":
             source = CLUB_TEAMS

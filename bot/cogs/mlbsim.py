@@ -1,9 +1,7 @@
-"""Casino cog — /mlbsim fake MLB game simulator.
+"""Cog — /mlbsim fake MLB game simulator.
 
 Two random MLB teams are drawn. Each gets a win probability.
-Players pick a side and bet coins. An inning-by-inning simulation runs
-with baseball-style scoring (runs), and winners are paid fixed odds
-based on the pre-game probability.
+Players join to watch an inning-by-inning simulation — no coins change hands.
 """
 
 import asyncio
@@ -14,7 +12,6 @@ import discord
 from discord import app_commands, ui
 from discord.ext import commands
 
-from db import queries
 from shared.models import TEAM_ABBR_MLB
 
 # ── Constants ────────────────────────────────────────────────────────────────
@@ -43,11 +40,6 @@ def _pick_matchup() -> tuple[tuple[str, str], tuple[str, str]]:
 def _generate_win_prob() -> float:
     """Generate a win probability for the home team (0.25–0.75 range)."""
     return max(0.20, min(0.80, random.betavariate(3, 3)))
-
-
-def _payout_multiplier(prob: float) -> float:
-    """Return payout multiplier for a bet on a side with given win probability."""
-    return 1 / prob
 
 
 def _prob_to_american(prob: float) -> str:
@@ -128,10 +120,6 @@ def _simulate_extra_inning(home_prob: float) -> tuple[int, int]:
 class MlbSimPlayer:
     user_id: int
     display_name: str
-    bet: int
-    side: str  # "home" or "away"
-    payout: int = 0
-    won: bool = False
 
 
 @dataclass
@@ -139,7 +127,7 @@ class MlbSimTable:
     channel_id: int
     host_id: int
     host_name: str
-    phase: str = "betting"  # betting | playing | finished
+    phase: str = "waiting"  # waiting | playing | finished
     # Matchup
     home_team: tuple[str, str] = ("", "")  # (full_name, abbr)
     away_team: tuple[str, str] = ("", "")
@@ -148,7 +136,6 @@ class MlbSimTable:
     players: dict[int, MlbSimPlayer] = field(default_factory=dict)
     message: discord.Message | None = None
     round_num: int = 1
-    last_bets: dict[int, tuple[str, int, str]] = field(default_factory=dict)
     # Sim state
     inning: int = 0
     home_score: int = 0
@@ -161,53 +148,40 @@ class MlbSimTable:
 # ── Embeds ───────────────────────────────────────────────────────────────────
 
 
-def _betting_embed(table: MlbSimTable) -> discord.Embed:
-    total_wagered = sum(p.bet for p in table.players.values())
-
+def _waiting_embed(table: MlbSimTable) -> discord.Embed:
     home_name, home_abbr = table.home_team
     away_name, away_abbr = table.away_team
     away_prob = 1 - table.home_prob
 
     home_odds = _prob_to_american(table.home_prob)
     away_odds = _prob_to_american(away_prob)
-    home_mult = _payout_multiplier(table.home_prob)
-    away_mult = _payout_multiplier(away_prob)
 
     embed = discord.Embed(
-        title=f"\u26be MLB Sim \u2014 Place Your Bets (Round {table.round_num})",
-        description=(
-            "Pick a side and bet coins on the outcome!\n"
-            "Odds are based on each team's simulated win probability."
-        ),
+        title=f"\u26be MLB Sim \u2014 Watch the Game (Round {table.round_num})",
+        description="Join to watch the simulated game — no coins needed!",
         colour=discord.Colour.blue(),
     )
 
     matchup_text = (
         f"**{away_abbr}** {away_name}\n"
-        f"\u2003Win: {away_prob * 100:.0f}% ({away_odds}) \u2014 **{away_mult:.1f}x** payout\n\n"
+        f"\u2003Win probability: {away_prob * 100:.0f}% ({away_odds})\n\n"
         f"**{home_abbr}** {home_name}\n"
-        f"\u2003Win: {table.home_prob * 100:.0f}% ({home_odds}) \u2014 **{home_mult:.1f}x** payout"
+        f"\u2003Win probability: {table.home_prob * 100:.0f}% ({home_odds})"
     )
     embed.add_field(name=f"{away_abbr} @ {home_abbr}", value=matchup_text, inline=False)
 
-    if total_wagered:
-        embed.add_field(name="Total Wagered", value=f"{total_wagered}c", inline=True)
-
     if table.players:
-        player_lines = []
-        for p in table.players.values():
-            side_abbr = home_abbr if p.side == "home" else away_abbr
-            player_lines.append(f"\U0001f3b0 **{p.display_name}** \u2014 {p.bet}c on **{side_abbr}**")
-        embed.add_field(name="Players", value="\n".join(player_lines), inline=False)
+        viewer_lines = [f"\U0001f440 **{p.display_name}**" for p in table.players.values()]
+        embed.add_field(name="Viewers", value="\n".join(viewer_lines), inline=False)
     else:
         embed.add_field(
-            name="Players",
-            value="*No players yet \u2014 click Join!*",
+            name="Viewers",
+            value="*No one yet \u2014 click Join!*",
             inline=False,
         )
 
     embed.set_footer(
-        text=f"Host: {table.host_name} \u2502 Min {MIN_PLAYERS} player(s) \u2502 Pick home or away in modal",
+        text=f"Host: {table.host_name} \u2502 Min {MIN_PLAYERS} player(s) to start",
     )
     return embed
 
@@ -260,21 +234,15 @@ def _playing_embed(table: MlbSimTable) -> discord.Embed:
     )
     embed.description = _scoreboard_text(table)
 
-    # Show bets
-    bet_lines: list[str] = []
-    for p in table.players.values():
-        side_abbr = home_abbr if p.side == "home" else away_abbr
-        bet_lines.append(f"**{p.display_name}** \u2014 {p.bet}c on {side_abbr}")
-    if bet_lines:
-        embed.add_field(name="Bets", value="\n".join(bet_lines), inline=False)
+    if table.players:
+        viewer_lines = [f"**{p.display_name}**" for p in table.players.values()]
+        embed.add_field(name="Viewers", value="\n".join(viewer_lines), inline=False)
 
     embed.set_footer(text=f"Host: {table.host_name}")
     return embed
 
 
-def _finished_embed(
-    table: MlbSimTable, *, balances: dict[int, int] | None = None,
-) -> discord.Embed:
+def _finished_embed(table: MlbSimTable) -> discord.Embed:
     _, home_abbr = table.home_team
     _, away_abbr = table.away_team
 
@@ -302,115 +270,12 @@ def _finished_embed(
         inline=False,
     )
 
-    # Results per player
-    lines: list[str] = []
-    for p in table.players.values():
-        bal = balances.get(p.user_id, 0) if balances else 0
-        side_abbr = home_abbr if p.side == "home" else away_abbr
-        net = p.payout - p.bet
-        sign = "+" if net >= 0 else ""
-        if p.won:
-            lines.append(
-                f"\U0001f3c6 **{p.display_name}** ({side_abbr}) \u2014 "
-                f"{p.bet}c \u2192 {p.payout}c (**{sign}{net}c**) \u2014 bal: {bal}c"
-            )
-        else:
-            lines.append(
-                f"\u274c **{p.display_name}** ({side_abbr}) \u2014 "
-                f"{p.bet}c \u2192 0c (**-{p.bet}c**) \u2014 bal: {bal}c"
-            )
-    if lines:
-        embed.add_field(name="Results", value="\n".join(lines), inline=False)
+    if table.players:
+        viewer_lines = [f"**{p.display_name}**" for p in table.players.values()]
+        embed.add_field(name="Viewers", value="\n".join(viewer_lines), inline=False)
 
     embed.set_footer(text=f"Host: {table.host_name}")
     return embed
-
-
-# ── Modal ────────────────────────────────────────────────────────────────────
-
-
-class JoinMlbSimModal(ui.Modal):
-    amount = ui.TextInput(
-        label="Bet amount (coins)",
-        placeholder="e.g. 100",
-        required=True,
-        max_length=10,
-    )
-    side_input = ui.TextInput(
-        label="Side (home or away)",
-        placeholder="home / away",
-        required=True,
-        max_length=4,
-    )
-
-    def __init__(
-        self, table: MlbSimTable, view: "MlbSimTableView", balance: int,
-    ) -> None:
-        _, home_abbr = table.home_team
-        _, away_abbr = table.away_team
-        super().__init__(title=f"MLB Sim \u2014 {away_abbr} @ {home_abbr}")
-        self.table = table
-        self.table_view = view
-        self.amount.placeholder = f"e.g. 100 (bal: {balance}c)"
-        self.side_input.placeholder = f"home ({home_abbr}) / away ({away_abbr})"
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        # Validate bet
-        try:
-            amt = int(self.amount.value)
-        except ValueError:
-            await interaction.response.send_message(
-                "Enter a whole number for bet.", ephemeral=True,
-            )
-            return
-        if amt < 1:
-            await interaction.response.send_message(
-                "Must be at least 1 coin.", ephemeral=True,
-            )
-            return
-        # Validate side
-        raw = self.side_input.value.strip().lower()
-        _, home_abbr = self.table.home_team
-        _, away_abbr = self.table.away_team
-        if raw in ("home", "h", home_abbr.lower()):
-            side = "home"
-        elif raw in ("away", "a", away_abbr.lower()):
-            side = "away"
-        else:
-            await interaction.response.send_message(
-                f"Enter **home** ({home_abbr}) or **away** ({away_abbr}).",
-                ephemeral=True,
-            )
-            return
-
-        uid = interaction.user.id
-        if uid in self.table.players:
-            await interaction.response.send_message(
-                "You're already in this round!", ephemeral=True,
-            )
-            return
-
-        # Deduct coins
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins! (have {bal}c)", ephemeral=True,
-            )
-            return
-
-        self.table.players[uid] = MlbSimPlayer(
-            user_id=uid,
-            display_name=interaction.user.display_name,
-            bet=amt,
-            side=side,
-        )
-
-        self.table_view._update_buttons()
-        await interaction.response.edit_message(
-            embed=_betting_embed(self.table), view=self.table_view,
-        )
 
 
 # ── View ─────────────────────────────────────────────────────────────────────
@@ -427,15 +292,14 @@ class MlbSimTableView(ui.View):
 
     def _update_buttons(self) -> None:
         phase = self.table.phase
-        betting = phase == "betting"
+        waiting = phase == "waiting"
         playing = phase == "playing"
         finished = phase == "finished"
 
         self.start_btn.disabled = (
-            not betting or len(self.table.players) < MIN_PLAYERS
+            not waiting or len(self.table.players) < MIN_PLAYERS
         )
-        self.join_btn.disabled = not betting
-        self.rebet_btn.disabled = not betting or not self.table.last_bets
+        self.join_btn.disabled = not waiting
         self.leave_btn.disabled = playing
 
         self.new_round_btn.disabled = not finished
@@ -454,7 +318,7 @@ class MlbSimTableView(ui.View):
                 "Only the host can start!", ephemeral=True,
             )
             return
-        if self.table.phase != "betting":
+        if self.table.phase != "waiting":
             await interaction.response.send_message(
                 "Already started!", ephemeral=True,
             )
@@ -472,7 +336,7 @@ class MlbSimTableView(ui.View):
     async def join_btn(
         self, interaction: discord.Interaction, button: ui.Button,
     ) -> None:
-        if self.table.phase != "betting":
+        if self.table.phase != "waiting":
             await interaction.response.send_message(
                 "Game in progress! Wait for the next round.", ephemeral=True,
             )
@@ -488,55 +352,13 @@ class MlbSimTableView(ui.View):
                 "Table is full!", ephemeral=True,
             )
             return
-        bal = await queries.get_or_create_casino_wallet(str(uid))
-        await interaction.response.send_modal(
-            JoinMlbSimModal(self.table, self, bal),
-        )
-
-    @ui.button(
-        label="Re-bet", style=discord.ButtonStyle.primary, emoji="\U0001f504", row=0,
-    )
-    async def rebet_btn(
-        self, interaction: discord.Interaction, button: ui.Button,
-    ) -> None:
-        if self.table.phase != "betting":
-            await interaction.response.send_message(
-                "Game in progress!", ephemeral=True,
-            )
-            return
-        uid = interaction.user.id
-        if uid in self.table.players:
-            await interaction.response.send_message(
-                "You're already in!", ephemeral=True,
-            )
-            return
-        last = self.table.last_bets.get(uid)
-        if last is None:
-            await interaction.response.send_message(
-                "No previous bet \u2014 use Join instead.", ephemeral=True,
-            )
-            return
-        if len(self.table.players) >= MAX_PLAYERS:
-            await interaction.response.send_message(
-                "Table is full!", ephemeral=True,
-            )
-            return
-        name, amt, side = last
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins for {amt}c re-bet! (have {bal}c)",
-                ephemeral=True,
-            )
-            return
         self.table.players[uid] = MlbSimPlayer(
-            user_id=uid, display_name=name, bet=amt, side=side,
+            user_id=uid,
+            display_name=interaction.user.display_name,
         )
         self._update_buttons()
         await interaction.response.edit_message(
-            embed=_betting_embed(self.table), view=self,
+            embed=_waiting_embed(self.table), view=self,
         )
 
     @ui.button(
@@ -546,8 +368,7 @@ class MlbSimTableView(ui.View):
         self, interaction: discord.Interaction, button: ui.Button,
     ) -> None:
         uid = interaction.user.id
-        player = self.table.players.get(uid)
-        if player is None:
+        if uid not in self.table.players:
             await interaction.response.send_message(
                 "You're not at this table.", ephemeral=True,
             )
@@ -557,12 +378,11 @@ class MlbSimTableView(ui.View):
                 "Can't leave mid-game!", ephemeral=True,
             )
             return
-        if self.table.phase == "betting":
-            await queries.update_casino_balance(str(uid), player.bet)
+        if self.table.phase == "waiting":
             del self.table.players[uid]
             self._update_buttons()
             await interaction.response.edit_message(
-                embed=_betting_embed(self.table), view=self,
+                embed=_waiting_embed(self.table), view=self,
             )
             return
         await interaction.response.send_message(
@@ -591,7 +411,7 @@ class MlbSimTableView(ui.View):
         self._start_new_round()
         self._update_buttons()
         await interaction.response.edit_message(
-            embed=_betting_embed(self.table), view=self,
+            embed=_waiting_embed(self.table), view=self,
         )
 
     @ui.button(
@@ -611,12 +431,6 @@ class MlbSimTableView(ui.View):
                 "Can't close mid-game!", ephemeral=True,
             )
             return
-        if self.table.phase == "betting":
-            for p in self.table.players.values():
-                try:
-                    await queries.update_casino_balance(str(p.user_id), p.bet)
-                except Exception:
-                    pass
         await self._close(interaction, "Table closed by host.")
 
     # ── Game logic ───────────────────────────────────────────────────────────
@@ -682,45 +496,24 @@ class MlbSimTableView(ui.View):
         except Exception:
             if table.phase == "playing":
                 table.phase = "finished"
-                await self._refund_all()
+                self._update_buttons()
+                if table.message:
+                    try:
+                        await table.message.edit(
+                            embed=_finished_embed(table), view=self,
+                        )
+                    except Exception:
+                        pass
 
     async def _resolve(self) -> None:
         table = self.table
         table.phase = "finished"
 
-        home_won = table.home_score > table.away_score
-
-        for p in table.players.values():
-            if (p.side == "home" and home_won) or (p.side == "away" and not home_won):
-                p.won = True
-                prob = table.home_prob if p.side == "home" else (1 - table.home_prob)
-                p.payout = int(p.bet * _payout_multiplier(prob))
-
-        # Credit winners and log
-        balances: dict[int, int] = {}
-        for uid, player in table.players.items():
-            if player.won and player.payout > 0:
-                balances[uid] = await queries.update_casino_balance(
-                    str(uid), player.payout,
-                )
-            else:
-                bal = await queries.get_casino_balance(str(uid))
-                balances[uid] = bal or 0
-            await queries.log_casino_result(
-                str(uid), "mlbsim", player.bet, player.payout,
-            )
-
-        # Save last bets
-        for uid, player in table.players.items():
-            table.last_bets[uid] = (
-                player.display_name, player.bet, player.side,
-            )
-
         self._update_buttons()
         if table.message:
             try:
                 await table.message.edit(
-                    embed=_finished_embed(table, balances=balances), view=self,
+                    embed=_finished_embed(table), view=self,
                 )
             except discord.HTTPException:
                 pass
@@ -730,7 +523,7 @@ class MlbSimTableView(ui.View):
     def _start_new_round(self) -> None:
         table = self.table
         table.players.clear()
-        table.phase = "betting"
+        table.phase = "waiting"
         table.round_num += 1
         # New matchup + new probabilities each round
         home, away = _pick_matchup()
@@ -743,13 +536,6 @@ class MlbSimTableView(ui.View):
         table.inning_scores.clear()
         table.extra_innings = 0
         table.sim_task = None
-
-    async def _refund_all(self) -> None:
-        for p in self.table.players.values():
-            try:
-                await queries.update_casino_balance(str(p.user_id), p.bet)
-            except Exception:
-                pass
 
     async def _close(
         self, interaction: discord.Interaction, reason: str,
@@ -771,27 +557,12 @@ class MlbSimTableView(ui.View):
         if table.sim_task and not table.sim_task.done():
             table.sim_task.cancel()
 
-        if table.phase == "finished":
-            self.active_tables.pop(table.channel_id, None)
-            if table.message:
-                try:
-                    embed = discord.Embed(
-                        title="\u26be MLB Sim Table \u2014 Timed Out",
-                        description="Table timed out between rounds.",
-                        colour=discord.Colour.dark_grey(),
-                    )
-                    await table.message.edit(embed=embed, view=None)
-                except Exception:
-                    pass
-            return
-
-        await self._refund_all()
         self.active_tables.pop(table.channel_id, None)
         if table.message:
             try:
                 embed = discord.Embed(
                     title="\u26be MLB Sim Table \u2014 Timed Out",
-                    description="Table timed out. All bets refunded.",
+                    description="Table timed out.",
                     colour=discord.Colour.dark_grey(),
                 )
                 await table.message.edit(embed=embed, view=None)
@@ -808,7 +579,7 @@ class MlbSimCog(commands.Cog):
         self.active_tables: dict[int, MlbSimTable] = {}
 
     @app_commands.command(
-        name="mlbsim", description="Bet on a simulated MLB game (casino)",
+        name="mlbsim", description="Watch a simulated MLB game",
     )
     async def mlbsim(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
@@ -818,8 +589,6 @@ class MlbSimCog(commands.Cog):
                 ephemeral=True,
             )
             return
-
-        await queries.get_or_create_casino_wallet(str(interaction.user.id))
 
         home, away = _pick_matchup()
         table = MlbSimTable(
@@ -833,7 +602,7 @@ class MlbSimCog(commands.Cog):
         self.active_tables[channel_id] = table
 
         view = MlbSimTableView(table, self.active_tables)
-        embed = _betting_embed(table)
+        embed = _waiting_embed(table)
         await interaction.response.send_message(embed=embed, view=view)
         table.message = await interaction.original_response()
 

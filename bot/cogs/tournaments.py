@@ -197,27 +197,17 @@ def _prize_distribution(size: int) -> dict[int, float]:
 def _registration_embed(
     tournament_id: int,
     size: int,
-    buy_in: int,
     players: list[str],
     names: dict[str, str],
     host_name: str,
 ) -> discord.Embed:
     """Embed shown during the registration phase."""
-    pool = size * buy_in
-    if buy_in > 0:
-        title = f"Tournament #{tournament_id} ({len(players)}/{size}) -- {buy_in}c buy-in"
-        desc = (
-            f"**Prize pool:** {pool}c\n"
-            f"**Host:** {host_name}\n\n"
-            "Click **Join** to enter. Host clicks **Start** when full."
-        )
-    else:
-        title = f"Tournament #{tournament_id} ({len(players)}/{size}) -- Ranked"
-        desc = (
-            f"**Host:** {host_name}\n\n"
-            "Free entry! ELO ratings at stake.\n"
-            "Click **Join** to enter. Host clicks **Start** when full."
-        )
+    title = f"Tournament #{tournament_id} ({len(players)}/{size}) -- Ranked"
+    desc = (
+        f"**Host:** {host_name}\n\n"
+        "Free entry! ELO ratings at stake.\n"
+        "Click **Join** to enter. Host clicks **Start** when full."
+    )
     embed = discord.Embed(title=title, description=desc, colour=COLOUR_GOLD)
 
     if players:
@@ -225,24 +215,6 @@ def _registration_embed(
         embed.add_field(name="Entrants", value="\n".join(player_lines), inline=False)
     else:
         embed.add_field(name="Entrants", value="*No players yet*", inline=False)
-
-    if buy_in > 0:
-        prizes = _prize_distribution(size)
-        prize_lines = []
-        for place, frac in sorted(prizes.items()):
-            amount = int(pool * frac)
-            medal = {1: "\U0001f947", 2: "\U0001f948", 3: "\U0001f949"}.get(place, f"**{place}.**")
-            if place in (3, 4) and size == 8:
-                prize_lines.append(f"{medal} 3rd/4th -- {amount}c each")
-            else:
-                prize_lines.append(f"{medal} -- {amount}c")
-        seen = set()
-        deduped = []
-        for line in prize_lines:
-            if line not in seen:
-                seen.add(line)
-                deduped.append(line)
-        embed.add_field(name="Prizes", value="\n".join(deduped), inline=False)
 
     embed.set_footer(text=f"Registration closes in 5 minutes | Tournament #{tournament_id}")
     return embed
@@ -314,8 +286,6 @@ def _match_playing_embed(
 def _winner_embed(
     tournament_id: int,
     winner_name: str,
-    prize_pool: int,
-    payouts: dict[str, int],
     names: dict[str, str],
     places: dict[str, int],
 ) -> discord.Embed:
@@ -326,23 +296,15 @@ def _winner_embed(
         colour=COLOUR_GREEN,
     )
 
-    # Payout lines
     lines: list[str] = []
     sorted_places = sorted(places.items(), key=lambda x: x[1])
     for player_id, place in sorted_places:
         name = names.get(player_id, player_id)
-        payout = payouts.get(player_id, 0)
         medal = {1: "\U0001f947", 2: "\U0001f948", 3: "\U0001f949", 4: "\U0001f949"}.get(place, "")
-        if payout > 0:
-            lines.append(f"{medal} **{name}** -- +{payout}c")
-        else:
-            lines.append(f"{medal} **{name}**")
+        lines.append(f"{medal} **{name}**")
 
     embed.add_field(name="Results", value="\n".join(lines) if lines else "N/A", inline=False)
-    if prize_pool > 0:
-        embed.set_footer(text=f"Prize pool: {prize_pool}c")
-    else:
-        embed.set_footer(text="Ranked tournament -- ELO updated")
+    embed.set_footer(text="Ranked tournament -- ELO updated")
     return embed
 
 
@@ -380,18 +342,6 @@ class RegistrationView(ui.View):
             await interaction.response.send_message("Tournament is full!", ephemeral=True)
             return
 
-        # Deduct buy-in (skip for free tournaments)
-        if tourney["buy_in"] > 0:
-            await queries.get_or_create_casino_wallet(uid)
-            try:
-                await queries.update_casino_balance(uid, -tourney["buy_in"])
-            except ValueError:
-                bal = await queries.get_or_create_casino_wallet(uid)
-                await interaction.response.send_message(
-                    f"Not enough coins! (have {bal}c)", ephemeral=True,
-                )
-                return
-
         await queries.join_tournament(tid, uid)
 
         # Rebuild player list
@@ -407,7 +357,7 @@ class RegistrationView(ui.View):
             host_name = tourney["host_id"]
 
         embed = _registration_embed(
-            tid, tourney["size"], tourney["buy_in"],
+            tid, tourney["size"],
             player_ids, names, host_name,
         )
 
@@ -468,19 +418,9 @@ class RegistrationView(ui.View):
 
         tid = self.tournament_id
 
-        # Refund all joined players (only for paid tournaments)
         entries = await queries.get_tournament_entries(tid)
         tourney = await queries.get_tournament(tid)
         if tourney:
-            if tourney["buy_in"] > 0:
-                for entry in entries:
-                    try:
-                        await queries.update_casino_balance(
-                            entry["discord_user"], tourney["buy_in"],
-                        )
-                    except Exception:
-                        pass
-
             await queries.update_tournament(tid, status="cancelled")
 
         # Clean up in-memory state
@@ -494,9 +434,7 @@ class RegistrationView(ui.View):
             try:
                 cancel_embed = discord.Embed(
                     title=f"Tournament #{tid} -- Cancelled",
-                    description=(
-                        "Registration timed out. All buy-ins have been refunded."
-                    ),
+                    description="Registration timed out.",
                     colour=COLOUR_DARK,
                 )
                 await msg.edit(embed=cancel_embed, view=None)
@@ -593,17 +531,15 @@ class TournamentsCog(commands.Cog):
         # channel_id -> tournament_id
         self.active_tournaments: dict[int, int] = {}
 
-    @app_commands.command(name="tournament", description="Start a single-elimination tournament")
+    @app_commands.command(name="tournament", description="Start a free single-elimination tournament")
     @app_commands.describe(
         size="Number of players (4 or 8)",
-        buy_in="Entry fee in coins (0 = free ranked, 50-1000 for coins)",
     )
     @app_commands.choices(size=SIZE_CHOICES)
     async def tournament(
         self,
         interaction: discord.Interaction,
         size: app_commands.Choice[int],
-        buy_in: int = 0,
     ) -> None:
         channel_id = interaction.channel_id
 
@@ -611,24 +547,6 @@ class TournamentsCog(commands.Cog):
         if channel_id in self.active_tournaments:
             await interaction.response.send_message(
                 "There's already a tournament in this channel!", ephemeral=True,
-            )
-            return
-
-        if buy_in < 0:
-            await interaction.response.send_message(
-                "Buy-in can't be negative.", ephemeral=True,
-            )
-            return
-
-        if buy_in > 0 and buy_in < 50:
-            await interaction.response.send_message(
-                "Minimum buy-in is 50c (or 0 for a free tournament).", ephemeral=True,
-            )
-            return
-
-        if buy_in > 1000:
-            await interaction.response.send_message(
-                "Maximum buy-in is 1000c.", ephemeral=True,
             )
             return
 
@@ -641,18 +559,17 @@ class TournamentsCog(commands.Cog):
             return
 
         uid = str(interaction.user.id)
-        await queries.get_or_create_casino_wallet(uid)
 
-        # Create tournament in DB
+        # Create tournament in DB (buy_in=0 — always free)
         tid = await queries.create_tournament(
-            str(channel_id), uid, size.value, buy_in,
+            str(channel_id), uid, size.value, 0,
         )
         self.active_tournaments[channel_id] = tid
 
         # Resolve host name
         host_name = interaction.user.display_name
 
-        embed = _registration_embed(tid, size.value, buy_in, [], {}, host_name)
+        embed = _registration_embed(tid, size.value, [], {}, host_name)
         view = RegistrationView(self, tid)
 
         await interaction.response.send_message(embed=embed, view=view)
@@ -690,8 +607,6 @@ class TournamentsCog(commands.Cog):
         entries = await queries.get_tournament_entries(tournament_id)
         player_ids = [e["discord_user"] for e in entries]
         size = tourney["size"]
-        buy_in = tourney["buy_in"]
-        prize_pool = tourney["prize_pool"]
 
         # Assign seeds
         shuffled = list(player_ids)
@@ -855,9 +770,9 @@ class TournamentsCog(commands.Cog):
 
             await asyncio.sleep(MATCH_PAUSE)
 
-        # Tournament finished -- determine places and distribute prizes
+        # Tournament finished -- determine places
         await self._finish_tournament(
-            channel, tournament_id, bracket, names, size, buy_in, prize_pool,
+            channel, tournament_id, bracket, names, size,
         )
 
     async def _play_duel(
@@ -953,24 +868,9 @@ class TournamentsCog(commands.Cog):
         bracket: dict,
         names: dict[str, str],
         size: int,
-        buy_in: int,
-        prize_pool: int,
     ) -> None:
-        """Distribute prizes, award XP, log results, update DB."""
+        """Award XP, update DB, announce winner."""
         places = _determine_places(bracket, size)
-        prize_fracs = _prize_distribution(size)
-
-        # Calculate payouts
-        payouts: dict[str, int] = {}
-        for player_id, place in places.items():
-            frac = prize_fracs.get(place, 0.0)
-            payouts[player_id] = int(prize_pool * frac)
-
-        # Credit payouts to winners (only for paid tournaments)
-        if prize_pool > 0:
-            for player_id, payout in payouts.items():
-                if payout > 0:
-                    await queries.update_casino_balance(player_id, payout)
 
         # Award XP to all participants
         entries = await queries.get_tournament_entries(tournament_id)
@@ -982,16 +882,10 @@ class TournamentsCog(commands.Cog):
                 xp_amount += XP_WINNER_BONUS
             await queries.add_xp(pid, xp_amount)
 
-        # Log casino results for all participants
-        for pid in all_player_ids:
-            payout = payouts.get(pid, 0)
-            await queries.log_casino_result(pid, "tournament", buy_in, payout)
-
-        # Update tournament entries with final_place and payout
+        # Update tournament entries with final_place
         for pid in all_player_ids:
             place = places.get(pid)
-            payout = payouts.get(pid, 0)
-            update_kwargs: dict[str, object] = {"payout": payout}
+            update_kwargs: dict[str, object] = {"payout": 0}
             if place is not None:
                 update_kwargs["final_place"] = place
             if place is not None and place != 1:
@@ -1018,8 +912,7 @@ class TournamentsCog(commands.Cog):
 
         # Send winner announcement
         embed = _winner_embed(
-            tournament_id, winner_name, prize_pool,
-            payouts, names, places,
+            tournament_id, winner_name, names, places,
         )
         await channel.send(embed=embed)
 

@@ -16,8 +16,6 @@ log = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-MIN_WAGER = 50
-MAX_WAGER = 2000
 STARTING_DUEL_COINS = 1000
 NUM_ROUNDS = 3
 CHALLENGE_TIMEOUT = 60  # seconds to accept/decline
@@ -42,7 +40,6 @@ class DuelState:
     opponent_id: int
     challenger_name: str
     opponent_name: str
-    wager: int
     score_challenger: int = STARTING_DUEL_COINS
     score_opponent: int = STARTING_DUEL_COINS
     games: list[MiniGame] = field(default_factory=list)
@@ -55,18 +52,11 @@ class DuelState:
 
 
 def _challenge_embed(state: DuelState) -> discord.Embed:
-    if state.wager > 0:
-        desc = (
-            f"**{state.challenger_name}** challenges **{state.opponent_name}** "
-            f"for **{state.wager}c**!\n\n"
-            f"<@{state.opponent_id}>, do you accept?"
-        )
-    else:
-        desc = (
-            f"**{state.challenger_name}** challenges **{state.opponent_name}** "
-            f"to a ranked duel!\n\n"
-            f"<@{state.opponent_id}>, do you accept?"
-        )
+    desc = (
+        f"**{state.challenger_name}** challenges **{state.opponent_name}** "
+        f"to a ranked duel!\n\n"
+        f"<@{state.opponent_id}>, do you accept?"
+    )
     embed = discord.Embed(
         title="\u2694\ufe0f Duel Challenge!",
         description=desc,
@@ -113,8 +103,6 @@ def _results_embed(
     state: DuelState,
     winner_id: int | None,
     winner_name: str | None,
-    payout: int,
-    balances: dict[int, int],
     elo_summary: str = "",
 ) -> discord.Embed:
     score_line = (
@@ -122,42 +110,21 @@ def _results_embed(
         f"{state.score_opponent} **{state.opponent_name}**"
     )
     if winner_id is None:
-        if state.wager > 0:
-            outcome = f"It's a tie! Both players get their **{state.wager}c** back."
-        else:
-            outcome = "It's a tie!"
         embed = discord.Embed(
             title="\u2694\ufe0f Duel Complete \u2014 Draw!",
-            description=f"{score_line}\n\n{outcome}",
+            description=f"{score_line}\n\nIt's a tie!",
             colour=COLOR_NEUTRAL,
         )
     else:
-        loser_name = (
-            state.opponent_name if winner_id == state.challenger_id
-            else state.challenger_name
-        )
-        if state.wager > 0:
-            outcome = (
-                f"\U0001f3c6 **{winner_name}** takes the pot: **{payout}c**!\n"
-                f"{loser_name} walks away with nothing."
-            )
-        else:
-            outcome = f"\U0001f3c6 **{winner_name}** wins!"
         embed = discord.Embed(
             title=f"\u2694\ufe0f Duel Complete \u2014 {winner_name} Wins!",
-            description=f"{score_line}\n\n{outcome}",
+            description=f"{score_line}\n\n\U0001f3c6 **{winner_name}** wins!",
             colour=COLOR_WIN,
         )
 
     if elo_summary:
         embed.add_field(name="ELO Updates", value=elo_summary, inline=False)
 
-    if state.wager > 0:
-        bal_text = (
-            f"**{state.challenger_name}**: {balances.get(state.challenger_id, '?')}c | "
-            f"**{state.opponent_name}**: {balances.get(state.opponent_id, '?')}c"
-        )
-        embed.add_field(name="Balances", value=bal_text, inline=False)
     return embed
 
 
@@ -186,50 +153,6 @@ class DuelView(ui.View):
                 "This challenge is no longer pending.", ephemeral=True,
             )
             return
-
-        # Deduct coins (skip for free duels)
-        if self.state.wager > 0:
-            try:
-                await queries.update_casino_balance(
-                    str(self.state.opponent_id), -self.state.wager,
-                )
-            except ValueError:
-                bal = await queries.get_or_create_casino_wallet(
-                    str(self.state.opponent_id),
-                )
-                await interaction.response.send_message(
-                    f"You don't have enough coins! (have {bal}c, need {self.state.wager}c)",
-                    ephemeral=True,
-                )
-                return
-
-            try:
-                await queries.update_casino_balance(
-                    str(self.state.challenger_id), -self.state.wager,
-                )
-            except ValueError:
-                # Refund opponent since challenger can't cover
-                await queries.update_casino_balance(
-                    str(self.state.opponent_id), self.state.wager,
-                )
-                bal = await queries.get_or_create_casino_wallet(
-                    str(self.state.challenger_id),
-                )
-                for child in self.children:
-                    child.disabled = True  # type: ignore[union-attr]
-                self.stop()
-                self.active_duels.pop(self.state.channel_id, None)
-                embed = discord.Embed(
-                    title="\u2694\ufe0f Duel Cancelled",
-                    description=(
-                        f"{self.state.challenger_name} no longer has enough coins "
-                        f"({bal}c). Duel cancelled."
-                    ),
-                    colour=COLOR_LOSS,
-                )
-                await interaction.response.edit_message(embed=embed, view=self)
-                await queries.update_duel(self.state.duel_id, status="expired")
-                return
 
         # Start the duel
         self.state.phase = "active"
@@ -389,32 +312,12 @@ class DuelView(ui.View):
         if state.score_challenger > state.score_opponent:
             winner_id = state.challenger_id
             winner_name = state.challenger_name
-            loser_id = state.opponent_id
         elif state.score_opponent > state.score_challenger:
             winner_id = state.opponent_id
             winner_name = state.opponent_name
-            loser_id = state.challenger_id
         else:
             winner_id = None
             winner_name = None
-            loser_id = None
-
-        pot = state.wager * 2
-        payout = 0
-
-        # Coin payouts (only for wagered duels)
-        if state.wager > 0:
-            if winner_id is not None:
-                payout = pot
-                await queries.update_casino_balance(str(winner_id), payout)
-            else:
-                payout = state.wager
-                await queries.update_casino_balance(
-                    str(state.challenger_id), state.wager,
-                )
-                await queries.update_casino_balance(
-                    str(state.opponent_id), state.wager,
-                )
 
         await queries.update_duel(
             state.duel_id, status="finished",
@@ -427,30 +330,6 @@ class DuelView(ui.View):
         if winner_id is not None:
             await queries.add_xp(str(winner_id), XP_WIN_BONUS)
 
-        # Log casino results
-        if winner_id is not None:
-            await queries.log_casino_result(
-                str(winner_id), "duel", state.wager, payout,
-            )
-            assert loser_id is not None
-            await queries.log_casino_result(
-                str(loser_id), "duel", state.wager, 0,
-            )
-        else:
-            await queries.log_casino_result(
-                str(state.challenger_id), "duel", state.wager, state.wager,
-            )
-            await queries.log_casino_result(
-                str(state.opponent_id), "duel", state.wager, state.wager,
-            )
-
-        # Fetch final balances
-        balances: dict[int, int] = {}
-        if state.wager > 0:
-            bal_c = await queries.get_or_create_casino_wallet(str(state.challenger_id))
-            bal_o = await queries.get_or_create_casino_wallet(str(state.opponent_id))
-            balances = {state.challenger_id: bal_c, state.opponent_id: bal_o}
-
         # Clean up
         self.active_duels.pop(state.channel_id, None)
 
@@ -458,9 +337,7 @@ class DuelView(ui.View):
         elo_summary = "\n".join(self._elo_changes) if self._elo_changes else ""
 
         # Final embed
-        embed = _results_embed(
-            state, winner_id, winner_name, payout, balances, elo_summary,
-        )
+        embed = _results_embed(state, winner_id, winner_name, elo_summary)
 
         await asyncio.sleep(ROUND_PAUSE)
         if state.message:
@@ -495,21 +372,6 @@ class DuelView(ui.View):
             return
 
         if state.phase == "active":
-            # Mid-game timeout (shouldn't happen normally) — refund both
-            if state.wager > 0:
-                try:
-                    await queries.update_casino_balance(
-                        str(state.challenger_id), state.wager,
-                    )
-                except Exception:
-                    pass
-                try:
-                    await queries.update_casino_balance(
-                        str(state.opponent_id), state.wager,
-                    )
-                except Exception:
-                    pass
-
             self.active_duels.pop(state.channel_id, None)
             await queries.update_duel(state.duel_id, status="expired")
 
@@ -517,7 +379,7 @@ class DuelView(ui.View):
                 try:
                     embed = discord.Embed(
                         title="\u2694\ufe0f Duel Timed Out",
-                        description="Game timed out. All bets refunded.",
+                        description="Game timed out.",
                         colour=COLOR_NEUTRAL,
                     )
                     await state.message.edit(embed=embed, view=None)
@@ -536,13 +398,11 @@ class DuelsCog(commands.Cog):
     @app_commands.command(name="duel", description="Challenge someone to a duel")
     @app_commands.describe(
         opponent="Who to challenge",
-        amount="Optional coin wager (0 = free ranked duel, 50-2000 for coins)",
     )
     async def duel(
         self,
         interaction: discord.Interaction,
         opponent: discord.Member,
-        amount: int = 0,
     ) -> None:
         uid = interaction.user.id
         channel_id = interaction.channel_id
@@ -558,24 +418,6 @@ class DuelsCog(commands.Cog):
         if opponent.bot:
             await interaction.response.send_message(
                 "You can't duel a bot!", ephemeral=True,
-            )
-            return
-
-        if amount < 0:
-            await interaction.response.send_message(
-                "Wager can't be negative.", ephemeral=True,
-            )
-            return
-
-        if amount > 0 and amount < MIN_WAGER:
-            await interaction.response.send_message(
-                f"Minimum wager is {MIN_WAGER}c (or 0 for a free duel).", ephemeral=True,
-            )
-            return
-
-        if amount > MAX_WAGER:
-            await interaction.response.send_message(
-                f"Maximum wager is {MAX_WAGER}c.", ephemeral=True,
             )
             return
 
@@ -595,32 +437,13 @@ class DuelsCog(commands.Cog):
             )
             return
 
-        # Verify coins (only for wagered duels)
-        if amount > 0:
-            challenger_bal = await queries.get_or_create_casino_wallet(str(uid))
-            if challenger_bal < amount:
-                await interaction.response.send_message(
-                    f"You don't have enough coins! (have {challenger_bal}c, need {amount}c)",
-                    ephemeral=True,
-                )
-                return
-
-            opponent_bal = await queries.get_or_create_casino_wallet(str(opponent.id))
-            if opponent_bal < amount:
-                await interaction.response.send_message(
-                    f"{opponent.display_name} doesn't have enough coins! "
-                    f"(they have {opponent_bal}c, need {amount}c)",
-                    ephemeral=True,
-                )
-                return
-
         # ── Create duel ──────────────────────────────────────────────────
 
         duel_id = await queries.create_duel(
             channel_id=str(channel_id),
             challenger_id=str(uid),
             opponent_id=str(opponent.id),
-            wager=amount,
+            wager=0,
         )
 
         state = DuelState(
@@ -630,7 +453,6 @@ class DuelsCog(commands.Cog):
             opponent_id=opponent.id,
             challenger_name=interaction.user.display_name,
             opponent_name=opponent.display_name,
-            wager=amount,
         )
 
         self.active_duels[channel_id] = duel_id

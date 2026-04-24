@@ -1,4 +1,4 @@
-"""Casino cog — multiplayer /countdown (Countdown Numbers) game."""
+"""Multiplayer /countdown (Countdown Numbers) game."""
 
 import asyncio
 import random
@@ -9,9 +9,7 @@ import discord
 from discord import app_commands, ui
 from discord.ext import commands
 
-from db import queries
 from bot.cogs._elo_helpers import update_elo_multiplayer
-from bot.cogs._pool import compute_side_pot_payouts
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -195,7 +193,6 @@ def evaluate_expression(
 class CountdownPlayer:
     user_id: int
     display_name: str
-    bet: int
     total_points: int = 0
     submission: str | None = None
     result: int | None = None
@@ -208,14 +205,13 @@ class CountdownTable:
     channel_id: int
     host_id: int
     host_name: str
-    phase: str = "betting"  # betting | picking | playing | finished
+    phase: str = "lobby"  # lobby | picking | playing | finished
     players: dict[int, CountdownPlayer] = field(default_factory=dict)
     message: discord.Message | None = None
     round_num: int = 1
     numbers: list[int] = field(default_factory=list)
     target: int = 0
     round_task: asyncio.Task | None = field(default=None, repr=False)
-    last_bets: dict[int, tuple[str, int]] = field(default_factory=dict)
     num_large: int = 2
 
 
@@ -288,8 +284,7 @@ def _leaderboard_lines(
 # ── Embeds ───────────────────────────────────────────────────────────────────
 
 
-def _betting_embed(table: CountdownTable) -> discord.Embed:
-    pot = sum(p.bet for p in table.players.values())
+def _lobby_embed(table: CountdownTable) -> discord.Embed:
     embed = discord.Embed(
         title=f"\U0001f522 Countdown Numbers \u2014 Join the Table (Round {table.round_num})",
         description=(
@@ -299,11 +294,9 @@ def _betting_embed(table: CountdownTable) -> discord.Embed:
         ),
         colour=discord.Colour.teal(),
     )
-    if pot:
-        embed.add_field(name="Pot", value=f"{pot}c", inline=True)
     if table.players:
         lines = [
-            f"\U0001f3af **{p.display_name}** \u2014 {p.bet}c"
+            f"\U0001f3af **{p.display_name}**"
             + (f" ({p.total_points} pts)" if p.total_points > 0 else "")
             for p in table.players.values()
         ]
@@ -426,23 +419,14 @@ def _round_result_embed(table: CountdownTable) -> discord.Embed:
 def _final_embed(
     table: CountdownTable,
     winner_uids: list[int],
-    payouts: dict[int, int],
-    balances: dict[int, int],
 ) -> discord.Embed:
     if len(winner_uids) == 1:
         winner = table.players[winner_uids[0]]
-        desc = f"**{winner.display_name}** wins **{payouts.get(winner_uids[0], 0)}c**!"
+        desc = f"**{winner.display_name}** wins with **{winner.total_points}** pts!"
     else:
-        winner_pays = [payouts.get(uid, 0) for uid in winner_uids]
         names = [table.players[uid].display_name for uid in winner_uids]
-        if len(set(winner_pays)) == 1:
-            desc = f"**{' & '.join(names)}** tie and split the pot! ({winner_pays[0]}c each)"
-        else:
-            parts = [
-                f"**{table.players[uid].display_name}** {payouts.get(uid, 0)}c"
-                for uid in winner_uids
-            ]
-            desc = f"{', '.join(parts)} split the pot!"
+        pts = table.players[winner_uids[0]].total_points
+        desc = f"**{' & '.join(names)}** tie with **{pts}** pts!"
 
     embed = discord.Embed(
         title="\U0001f522 Countdown Numbers \u2014 Final Results",
@@ -450,32 +434,15 @@ def _final_embed(
         colour=discord.Colour.gold(),
     )
 
-    # Leaderboard with payouts
+    # Leaderboard
     ranked = sorted(
         table.players.values(), key=lambda p: p.total_points, reverse=True,
     )
     winner_set = set(winner_uids)
     lines: list[str] = []
-    for p in ranked:
-        payout = payouts.get(p.user_id, 0)
-        bal = balances.get(p.user_id, 0)
-        net = payout - p.bet
-        sign = "+" if net >= 0 else ""
-        if p.user_id in winner_set:
-            lines.append(
-                f"\U0001f3c6 **{p.display_name}** \u2014 {p.total_points} pts \u2014 "
-                f"{p.bet}c \u2192 {payout}c (**{sign}{net}c**) \u2014 bal: {bal}c"
-            )
-        elif payout > 0:
-            lines.append(
-                f"\U0001f4b0 **{p.display_name}** \u2014 {p.total_points} pts \u2014 "
-                f"{p.bet}c \u2192 {payout}c (**{sign}{net}c**) \u2014 bal: {bal}c"
-            )
-        else:
-            lines.append(
-                f"\u274c **{p.display_name}** \u2014 {p.total_points} pts \u2014 "
-                f"{p.bet}c \u2192 0c (**-{p.bet}c**) \u2014 bal: {bal}c"
-            )
+    for i, p in enumerate(ranked, 1):
+        medal = "\U0001f3c6" if p.user_id in winner_set else f"#{i}"
+        lines.append(f"{medal} **{p.display_name}** \u2014 {p.total_points} pts")
 
     embed.add_field(name="Final Standings", value="\n".join(lines), inline=False)
     embed.set_footer(text=f"Host: {table.host_name}")
@@ -483,64 +450,6 @@ def _final_embed(
 
 
 # ── Modals ───────────────────────────────────────────────────────────────────
-
-
-class JoinCountdownModal(ui.Modal):
-    amount = ui.TextInput(
-        label="Bet amount (coins)",
-        placeholder="e.g. 100",
-        required=True,
-        max_length=10,
-    )
-
-    def __init__(
-        self, table: CountdownTable, view: "CountdownTableView", balance: int,
-    ) -> None:
-        super().__init__(title="Join Countdown Numbers")
-        self.table = table
-        self.table_view = view
-        self.amount.placeholder = f"e.g. 100 (bal: {balance}c)"
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            amt = int(self.amount.value)
-        except ValueError:
-            await interaction.response.send_message(
-                "Enter a whole number.", ephemeral=True,
-            )
-            return
-        if amt < 1:
-            await interaction.response.send_message(
-                "Must be at least 1 coin.", ephemeral=True,
-            )
-            return
-
-        uid = interaction.user.id
-        if uid in self.table.players:
-            await interaction.response.send_message(
-                "You're already in this game!", ephemeral=True,
-            )
-            return
-
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins! (have {bal}c)", ephemeral=True,
-            )
-            return
-
-        self.table.players[uid] = CountdownPlayer(
-            user_id=uid,
-            display_name=interaction.user.display_name,
-            bet=amt,
-        )
-
-        self.table_view._update_buttons()
-        await interaction.response.edit_message(
-            embed=_betting_embed(self.table), view=self.table_view,
-        )
 
 
 class SubmitExpressionModal(ui.Modal):
@@ -631,17 +540,16 @@ class CountdownTableView(ui.View):
 
     def _update_buttons(self) -> None:
         phase = self.table.phase
-        betting = phase == "betting"
+        lobby = phase == "lobby"
         picking = phase == "picking"
         playing = phase == "playing"
         finished = phase == "finished"
 
-        # Row 0: Start, Join, Re-bet, Leave
+        # Row 0: Start, Join, Leave
         self.start_btn.disabled = (
-            not betting or len(self.table.players) < MIN_PLAYERS
+            not lobby or len(self.table.players) < MIN_PLAYERS
         )
-        self.join_btn.disabled = not betting
-        self.rebet_btn.disabled = not betting or not self.table.last_bets
+        self.join_btn.disabled = not lobby
         self.leave_btn.disabled = playing or picking
 
         # Row 1: Large number picker buttons (only active during picking phase)
@@ -673,7 +581,7 @@ class CountdownTableView(ui.View):
                 "Only the host can start!", ephemeral=True,
             )
             return
-        if self.table.phase != "betting":
+        if self.table.phase != "lobby":
             await interaction.response.send_message(
                 "Already started!", ephemeral=True,
             )
@@ -697,7 +605,7 @@ class CountdownTableView(ui.View):
     async def join_btn(
         self, interaction: discord.Interaction, button: ui.Button,
     ) -> None:
-        if self.table.phase != "betting":
+        if self.table.phase != "lobby":
             await interaction.response.send_message(
                 "Game in progress! Wait for the next round.", ephemeral=True,
             )
@@ -713,56 +621,13 @@ class CountdownTableView(ui.View):
                 "Table is full!", ephemeral=True,
             )
             return
-        bal = await queries.get_or_create_casino_wallet(str(uid))
-        await interaction.response.send_modal(
-            JoinCountdownModal(self.table, self, bal),
-        )
-
-    @ui.button(
-        label="Re-bet", style=discord.ButtonStyle.primary,
-        emoji="\U0001f504", row=0,
-    )
-    async def rebet_btn(
-        self, interaction: discord.Interaction, button: ui.Button,
-    ) -> None:
-        if self.table.phase != "betting":
-            await interaction.response.send_message(
-                "Game in progress!", ephemeral=True,
-            )
-            return
-        uid = interaction.user.id
-        if uid in self.table.players:
-            await interaction.response.send_message(
-                "You're already in!", ephemeral=True,
-            )
-            return
-        last = self.table.last_bets.get(uid)
-        if last is None:
-            await interaction.response.send_message(
-                "No previous bet \u2014 use Join instead.", ephemeral=True,
-            )
-            return
-        if len(self.table.players) >= MAX_PLAYERS:
-            await interaction.response.send_message(
-                "Table is full!", ephemeral=True,
-            )
-            return
-        name, amt = last
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins for {amt}c re-bet! (have {bal}c)",
-                ephemeral=True,
-            )
-            return
         self.table.players[uid] = CountdownPlayer(
-            user_id=uid, display_name=name, bet=amt,
+            user_id=uid,
+            display_name=interaction.user.display_name,
         )
         self._update_buttons()
         await interaction.response.edit_message(
-            embed=_betting_embed(self.table), view=self,
+            embed=_lobby_embed(self.table), view=self,
         )
 
     @ui.button(
@@ -784,12 +649,11 @@ class CountdownTableView(ui.View):
                 "Can't leave mid-game!", ephemeral=True,
             )
             return
-        if self.table.phase == "betting":
-            await queries.update_casino_balance(str(uid), player.bet)
+        if self.table.phase == "lobby":
             del self.table.players[uid]
             self._update_buttons()
             await interaction.response.edit_message(
-                embed=_betting_embed(self.table), view=self,
+                embed=_lobby_embed(self.table), view=self,
             )
             return
         await interaction.response.send_message(
@@ -942,19 +806,7 @@ class CountdownTableView(ui.View):
                 "Can't close mid-game!", ephemeral=True,
             )
             return
-
-        # If still betting, refund everyone
-        if self.table.phase == "betting":
-            for p in self.table.players.values():
-                try:
-                    await queries.update_casino_balance(str(p.user_id), p.bet)
-                except Exception:
-                    pass
-            await self._close(interaction, "Table closed by host. All bets refunded.")
-            return
-
-        # Finished phase — resolve and pay out
-        await self._resolve_final(interaction)
+        await self._close(interaction, "Table closed by host.")
 
     # ── Game logic ───────────────────────────────────────────────────────────
 
@@ -1042,10 +894,9 @@ class CountdownTableView(ui.View):
                 pass
 
     async def _resolve_final(self, interaction: discord.Interaction) -> None:
-        """Pay out based on total points and close the table."""
+        """Determine winner and close the table."""
         table = self.table
 
-        # Determine winner(s) — highest total points
         if not table.players:
             await self._close(interaction, "Table closed. No players.")
             return
@@ -1056,25 +907,6 @@ class CountdownTableView(ui.View):
             if p.total_points == max_points
         ]
 
-        # Side-pot payouts
-        bets = {uid: p.bet for uid, p in table.players.items()}
-        payouts = compute_side_pot_payouts(bets, winner_uids)
-
-        # Credit payouts, log results
-        balances: dict[int, int] = {}
-        for uid, player in table.players.items():
-            payout = payouts.get(uid, 0)
-            if payout > 0:
-                balances[uid] = await queries.update_casino_balance(
-                    str(uid), payout,
-                )
-            else:
-                bal = await queries.get_casino_balance(str(uid))
-                balances[uid] = bal or 0
-            await queries.log_casino_result(
-                str(uid), "countdown", player.bet, payout,
-            )
-
         if len(table.players) >= 2:
             sorted_p = sorted(table.players.values(), key=lambda p: p.total_points, reverse=True)
             finish_order = [p.user_id for p in sorted_p]
@@ -1083,7 +915,7 @@ class CountdownTableView(ui.View):
             except Exception:
                 pass
 
-        embed = _final_embed(table, winner_uids, payouts, balances)
+        embed = _final_embed(table, winner_uids)
 
         for child in self.children:
             child.disabled = True  # type: ignore[union-attr]
@@ -1102,23 +934,12 @@ class CountdownTableView(ui.View):
         table.target = 0
         table.round_task = None
 
-        # Save last bets
-        for uid, player in table.players.items():
-            table.last_bets[uid] = (player.display_name, player.bet)
-
-        # Reset per-round player state but keep total_points and bet
+        # Reset per-round player state but keep total_points
         for p in table.players.values():
             p.submission = None
             p.result = None
             p.distance = None
             p.round_points = 0
-
-    async def _refund_all(self) -> None:
-        for p in self.table.players.values():
-            try:
-                await queries.update_casino_balance(str(p.user_id), p.bet)
-            except Exception:
-                pass
 
     async def _close(
         self, interaction: discord.Interaction, reason: str,
@@ -1140,28 +961,12 @@ class CountdownTableView(ui.View):
         if table.round_task and not table.round_task.done():
             table.round_task.cancel()
 
-        if table.phase == "finished":
-            self.active_tables.pop(table.channel_id, None)
-            if table.message:
-                try:
-                    embed = discord.Embed(
-                        title="\U0001f522 Countdown Numbers \u2014 Timed Out",
-                        description="Table timed out between rounds.",
-                        colour=discord.Colour.dark_grey(),
-                    )
-                    await table.message.edit(embed=embed, view=None)
-                except Exception:
-                    pass
-            return
-
-        # Betting, picking, or playing — refund all
-        await self._refund_all()
         self.active_tables.pop(table.channel_id, None)
         if table.message:
             try:
                 embed = discord.Embed(
                     title="\U0001f522 Countdown Numbers \u2014 Timed Out",
-                    description="Table timed out. All bets refunded.",
+                    description="Table timed out.",
                     colour=discord.Colour.dark_grey(),
                 )
                 await table.message.edit(embed=embed, view=None)
@@ -1190,8 +995,6 @@ class CountdownCog(commands.Cog):
             )
             return
 
-        await queries.get_or_create_casino_wallet(str(interaction.user.id))
-
         table = CountdownTable(
             channel_id=channel_id,
             host_id=interaction.user.id,
@@ -1200,7 +1003,7 @@ class CountdownCog(commands.Cog):
         self.active_tables[channel_id] = table
 
         view = CountdownTableView(table, self.active_tables)
-        embed = _betting_embed(table)
+        embed = _lobby_embed(table)
         await interaction.response.send_message(embed=embed, view=view)
         table.message = await interaction.original_response()
 
