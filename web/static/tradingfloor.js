@@ -244,16 +244,16 @@ function onTip(msg) {
 }
 
 function onIntel(msg) {
-    // Partial intel: player sees 2 of 4 upcoming effects
+    // Range intel: 1 stock with a range estimate
     const banner = document.getElementById('tip-banner');
     banner.style.display = 'block';
-    let effectsHtml = '';
-    msg.effects.forEach(e => {
-        const cls = e.pct > 0 ? 'positive' : e.pct < 0 ? 'negative' : '';
-        const pctStr = e.pct > 0 ? `+${(e.pct * 100).toFixed(0)}%` : `${(e.pct * 100).toFixed(0)}%`;
-        effectsHtml += `<span class="intel-effect ${cls}"><strong>${e.ticker}</strong> ${pctStr}</span>`;
-    });
-    banner.innerHTML = `<div class="tip-label">\ud83d\udd0d Intel Report \u2014 Round ${msg.round}</div><div class="intel-effects">${effectsHtml}</div>`;
+    const low = msg.low;
+    const high = msg.high;
+    const midpoint = (low + high) / 2;
+    const cls = midpoint > 0 ? 'positive' : midpoint < 0 ? 'negative' : '';
+    const lowStr = low > 0 ? `+${low}%` : `${low}%`;
+    const highStr = high > 0 ? `+${high}%` : `${high}%`;
+    banner.innerHTML = `<div class="tip-label">\ud83d\udd0d Intel Report \u2014 Round ${msg.round}</div><div class="intel-effects"><span class="intel-effect ${cls}"><strong>${esc(msg.ticker)}</strong> ${lowStr} to ${highStr}</span></div>`;
 }
 
 // ── Trade Executed ────────────────────────────────────────────────────────

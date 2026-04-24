@@ -489,29 +489,47 @@ def _init_stocks() -> dict[str, TFStock]:
 
 def _distribute_partial_intel(
     event: dict, player_ids: list[str],
-) -> dict[str, list[tuple[str, float]]]:
-    """Give each player exactly 2 of the 4 stock effects — symmetric info, different pieces.
+) -> dict[str, dict]:
+    """Give each player 1 stock with a range estimate, not the exact effect.
 
-    Every player sees the same amount of information (2 effects), but different
-    tickers. The skill is trading on what you know and inferring the rest from
-    other players' behavior.
+    Each player sees one ticker and a range like "-5% to +15%" that contains
+    the true value. The range width varies — sometimes tight (good intel),
+    sometimes wide (noisy intel). You know the direction but not the magnitude.
 
-    For solo play (1 player): show 2 random effects.
-    For 2 players: each sees 2, with 1 overlapping ticker.
-    For 3+ players: random 2-ticker subsets, shuffled so no two players are guaranteed the same pair.
+    Returns {uid: {"ticker": str, "low": float, "high": float, "true": float}}
     """
-    tickers_with_effects = [(t, pct) for t, pct in event["effects"].items() if t in TICKERS]
-    # Pad if event doesn't affect all 4 tickers (some events have 0 effects on a ticker)
-    for t in TICKERS:
-        if t not in event["effects"]:
-            tickers_with_effects.append((t, 0.0))
+    tickers_with_effects = list(event["effects"].items())
+    # Only include tickers that have non-zero effects (more interesting)
+    nonzero = [(t, pct) for t, pct in tickers_with_effects if abs(pct) > 0.01 and t in TICKERS]
+    if not nonzero:
+        nonzero = [(t, event["effects"].get(t, 0)) for t in TICKERS]
 
-    intel: dict[str, list[tuple[str, float]]] = {}
+    intel: dict[str, dict] = {}
 
     for uid in player_ids:
-        # Each player gets 2 random effects
-        chosen = random.sample(tickers_with_effects, 2)
-        intel[uid] = chosen
+        # Pick one random stock to give intel on
+        ticker, true_pct = random.choice(nonzero)
+        true_pct_display = true_pct * 100  # e.g., 20.0 for +20%
+
+        # Generate a range that contains the true value
+        # Range width: 15-30 percentage points (wider = noisier)
+        range_width = random.uniform(15, 30)
+        # Offset the range so the true value isn't always centered
+        offset = random.uniform(-range_width * 0.3, range_width * 0.3)
+        low = true_pct_display - range_width / 2 + offset
+        high = true_pct_display + range_width / 2 + offset
+
+        # Round to nearest 5 for cleaner display
+        low = round(low / 5) * 5
+        high = round(high / 5) * 5
+        if low == high:
+            high = low + 5
+
+        intel[uid] = {
+            "ticker": ticker,
+            "low": low,
+            "high": high,
+        }
 
     return intel
 
@@ -785,16 +803,18 @@ async def _game_loop(room: TradingFloor) -> None:
             event = room.event_deck[rnd - 1]
             room.current_event = event
 
-            # Send partial intel to each human player (2 of 4 effects)
+            # Send partial intel to each human player (1 stock with range)
             human_ids = [uid for uid in room.players if not uid.startswith("__bot_")]
             intel = _distribute_partial_intel(event, human_ids)
-            for uid, effects in intel.items():
-                room.private_tips[uid] = str(effects)
+            for uid, info in intel.items():
+                room.private_tips[uid] = str(info)
                 p = room.players[uid]
                 await _send(p.ws, {
                     "type": "intel",
                     "round": rnd,
-                    "effects": [{"ticker": t, "pct": pct} for t, pct in effects],
+                    "ticker": info["ticker"],
+                    "low": info["low"],
+                    "high": info["high"],
                 })
 
             # Open trading
