@@ -106,7 +106,10 @@ def _compute_spread(home_prob: float) -> float:
 def _compute_total(
     home_off: float, home_def: float, away_off: float, away_def: float,
 ) -> float:
-    raw = 220 + (home_off + away_off - 130) / 5 - (home_def + away_def - 130) / 8
+    # Must match _simulate_quarter expected output:
+    # 4 quarters × (2 × 27.5 + (off_sum-130)/8 - (def_sum-130)/8)
+    # = 220 + (off_sum-130)/2 - (def_sum-130)/2
+    raw = 220 + (home_off + away_off - 130) / 2 - (home_def + away_def - 130) / 2
     return round(raw * 2) / 2
 
 
@@ -123,20 +126,20 @@ def _simulate_quarter(
     home_off: float, home_def: float, home_coa: float,
     away_off: float, away_def: float, away_coa: float,
 ) -> tuple[int, int]:
-    home_pts_avg = 25 + (home_off - 65) / 8 - (away_def - 65) / 8
-    away_pts_avg = 25 + (away_off - 65) / 8 - (home_def - 65) / 8
+    home_pts_avg = 27.5 + (home_off - 65) / 8 - (away_def - 65) / 8
+    away_pts_avg = 27.5 + (away_off - 65) / 8 - (home_def - 65) / 8
     home_std = max(3.0, 5.0 - (home_coa - 65) / 20)
     away_std = max(3.0, 5.0 - (away_coa - 65) / 20)
-    home_pts = max(14, int(random.gauss(home_pts_avg, home_std)))
-    away_pts = max(14, int(random.gauss(away_pts_avg, away_std)))
+    home_pts = max(14, round(random.gauss(home_pts_avg, home_std)))
+    away_pts = max(14, round(random.gauss(away_pts_avg, away_std)))
     return home_pts, away_pts
 
 
 def _simulate_ot(home_prob: float) -> tuple[int, int]:
     base = 8.0
     home_edge = (home_prob - 0.5) * 3
-    home_pts = max(2, int(random.gauss(base + home_edge, 3)))
-    away_pts = max(2, int(random.gauss(base - home_edge, 3)))
+    home_pts = max(2, round(random.gauss(base + home_edge, 3)))
+    away_pts = max(2, round(random.gauss(base - home_edge, 3)))
     if home_pts == away_pts:
         if random.random() < home_prob:
             home_pts += 1
