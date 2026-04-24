@@ -287,6 +287,57 @@ COUNTRY_CODES: dict[str, str] = {
 # ── US State → ISO 3166-2 code (for flag images) ────────────────────────────
 # Used to build flagcdn.com URLs: https://flagcdn.com/w320/us-{code}.png
 
+# ── Country name aliases ────────────────────────────────────────────────────
+# Maps each canonical country key → list of alternative accepted spellings.
+# The canonical name itself is always accepted; these are extras.
+# Used for flag and landmark questions where the answer IS the country name.
+
+COUNTRY_ALIASES: dict[str, list[str]] = {
+    # North America
+    "United States": ["USA", "US", "United States of America", "America", "U.S.", "U.S.A."],
+    "Canada": [],
+    "Mexico": [],
+    # Europe
+    "United Kingdom": ["UK", "Great Britain", "Britain", "England", "U.K."],
+    "Russia": ["Russian Federation"],
+    "Czech Republic": ["Czechia", "Czech"],
+    "Turkey": ["Türkiye"],
+    "North Macedonia": ["Macedonia"],
+    "Bosnia and Herzegovina": ["Bosnia", "Bosnia-Herzegovina"],
+    "Ivory Coast": ["Côte d'Ivoire", "Cote d'Ivoire", "Cote dIvoire"],
+    # Asia
+    "South Korea": ["Korea", "Republic of Korea", "ROK"],
+    "North Korea": ["DPRK", "Democratic People's Republic of Korea"],
+    "China": ["PRC", "People's Republic of China"],
+    "Taiwan": ["Chinese Taipei"],
+    "Myanmar": ["Burma"],
+    "Iran": ["Persia"],
+    "Laos": ["Lao", "Lao PDR"],
+    "Brunei": ["Brunei Darussalam"],
+    "Sri Lanka": ["Ceylon"],
+    "United Arab Emirates": ["UAE", "U.A.E."],
+    "Saudi Arabia": ["KSA"],
+    # Americas
+    "Trinidad and Tobago": ["Trinidad"],
+    "Dominican Republic": ["DR"],
+    "El Salvador": ["Salvador"],
+    # Africa
+    "Tanzania": ["United Republic of Tanzania"],
+    "Egypt": ["Arab Republic of Egypt"],
+    # Oceania
+    "Papua New Guinea": ["PNG"],
+}
+
+
+def _alias_answers(canonical: str) -> list[str]:
+    """Return accepted answer list for a country name question.
+
+    First element is always the canonical name (displayed after round ends).
+    Subsequent elements are aliases/synonyms accepted case-insensitively.
+    """
+    return [canonical] + COUNTRY_ALIASES.get(canonical, [])
+
+
 # ── Country/State → Region mapping (for accuracy stats) ───────────────────
 # Every country in CAPITALS/COUNTRY_CODES maps to one of five regions.
 # US states map to 'Americas'.
@@ -917,11 +968,11 @@ class GeoTableView(ui.View):
         elif q_type == "country_flag":
             code = COUNTRY_CODES[key]
             url = f"https://flagcdn.com/w320/{code}.png"
-            return q_type, key, [key], url
+            return q_type, key, _alias_answers(key), url
         elif q_type == "landmark":
             entry = next((n, c, u) for n, c, u in _LANDMARK_POOL if n == key)
             name, country, url = entry
-            return q_type, name, [country], url
+            return q_type, name, _alias_answers(country), url
         else:  # state_flag
             code = US_STATE_CODES[key]
             url = f"https://flagcdn.com/w320/us-{code}.png"
