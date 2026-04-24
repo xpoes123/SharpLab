@@ -53,62 +53,73 @@ class SolChessCog(commands.Cog):
         interaction: discord.Interaction,
         difficulty: str = "medium",
     ) -> None:
-        uid = str(interaction.user.id)
-        channel_id = str(interaction.channel_id)
-        await queries.get_or_create_casino_wallet(uid)
-
-        if difficulty not in DIFF_LABELS:
-            difficulty = "medium"
-
-        # Create room via web API
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                resp = await client.post(
-                    f"{WEB_API_BASE}/api/v1/solitairechess/rooms",
-                    json={
-                        "host_discord_id": uid,
-                        "channel_id": channel_id,
-                        "host_display_name": interaction.user.display_name,
-                        "difficulty": difficulty,
-                    },
-                    headers={"X-Api-Key": WEB_API_SECRET},
-                )
-        except Exception as exc:
-            await interaction.response.send_message(
-                f"Failed to connect to game server: {type(exc).__name__}",
-                ephemeral=True,
-            )
-            return
+            uid = str(interaction.user.id)
+            channel_id = str(interaction.channel_id)
+            await queries.get_or_create_casino_wallet(uid)
 
-        if resp.status_code != 200:
-            detail = ""
+            if difficulty not in DIFF_LABELS:
+                difficulty = "medium"
+
+            # Create room via web API
             try:
-                detail = resp.json().get("detail", "")
+                async with httpx.AsyncClient(timeout=5) as client:
+                    resp = await client.post(
+                        f"{WEB_API_BASE}/api/v1/solitairechess/rooms",
+                        json={
+                            "host_discord_id": uid,
+                            "channel_id": channel_id,
+                            "host_display_name": interaction.user.display_name,
+                            "difficulty": difficulty,
+                        },
+                        headers={"X-Api-Key": WEB_API_SECRET},
+                    )
+            except Exception as exc:
+                await interaction.response.send_message(
+                    f"Failed to connect to game server: {type(exc).__name__}",
+                    ephemeral=True,
+                )
+                return
+
+            if resp.status_code != 200:
+                detail = ""
+                try:
+                    detail = resp.json().get("detail", "")
+                except Exception:
+                    pass
+                await interaction.response.send_message(
+                    f"Failed to create game room (HTTP {resp.status_code})"
+                    + (f": {detail}" if detail else ""),
+                    ephemeral=True,
+                )
+                return
+
+            room_id = resp.json()["room_id"]
+            self._pending_web_rooms[room_id] = interaction.channel_id
+
+            embed = discord.Embed(
+                title="\u265e Solitaire Chess",
+                description=(
+                    "Play in your browser with a clickable board!\n"
+                    f"Difficulty: **{DIFF_LABELS[difficulty]}**\n\n"
+                    "Click **Join** below to enter your bet and get your game link."
+                ),
+                colour=discord.Colour.dark_teal(),
+            )
+            embed.set_footer(text=f"Room {room_id} \u2022 First to 3 wins")
+
+            view = WebSolChessLobbyView(room_id, self.bot)
+            await interaction.response.send_message(embed=embed, view=view)
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        f"Error: {type(exc).__name__}: {exc}", ephemeral=True,
+                    )
             except Exception:
                 pass
-            await interaction.response.send_message(
-                f"Failed to create game room (HTTP {resp.status_code})"
-                + (f": {detail}" if detail else ""),
-                ephemeral=True,
-            )
-            return
-
-        room_id = resp.json()["room_id"]
-        self._pending_web_rooms[room_id] = interaction.channel_id
-
-        embed = discord.Embed(
-            title="\u265e Solitaire Chess",
-            description=(
-                "Play in your browser with a clickable board!\n"
-                f"Difficulty: **{DIFF_LABELS[difficulty]}**\n\n"
-                "Click **Join** below to enter your bet and get your game link."
-            ),
-            colour=discord.Colour.dark_teal(),
-        )
-        embed.set_footer(text=f"Room {room_id} \u2022 First to 3 wins")
-
-        view = WebSolChessLobbyView(room_id, self.bot)
-        await interaction.response.send_message(embed=embed, view=view)
 
     # ── Result polling ─────────────────────────────────────────────────────
 
