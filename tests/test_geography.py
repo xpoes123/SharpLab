@@ -29,6 +29,7 @@ if "db.queries" not in sys.modules:
 from bot.cogs.geography import (  # noqa: E402
     CAPITALS,
     COUNTRY_CODES,
+    COUNTRY_REGIONS,
     US_STATE_CAPITALS,
     US_STATE_CODES,
     GeoPlayer,
@@ -38,6 +39,7 @@ from bot.cogs.geography import (  # noqa: E402
     check_answer,
 )
 import bot.cogs.geography as geo  # noqa: E402
+from bot.cogs._landmarks import LANDMARKS, _LANDMARK_POOL  # noqa: E402
 
 import pytest  # noqa: E402
 
@@ -208,12 +210,12 @@ class TestPickQuestion:
     def test_mixed_can_return_any_type(self):
         view = self._view("mixed")
         seen_types = set()
-        for _ in range(200):
+        for _ in range(500):
             q_type, *_ = view._pick_question()
             seen_types.add(q_type)
-            if len(seen_types) == 4:
+            if len(seen_types) == 5:
                 break
-        assert len(seen_types) == 4, f"Mixed mode only produced: {seen_types}"
+        assert len(seen_types) == 5, f"Mixed mode only produced: {seen_types}"
 
     def test_no_repeat_within_category_until_exhausted(self):
         view = self._view("state_capitals")
@@ -271,3 +273,72 @@ class TestQuestionText:
         view = self._view()
         text = view._question_text("state_flag", "Texas")
         assert "flag" in text.lower() or "state" in text.lower()
+
+    def test_landmark_text(self):
+        view = self._view()
+        text = view._question_text("landmark", "Eiffel Tower")
+        assert "country" in text.lower() or "landmark" in text.lower()
+
+
+# ── Landmarks ────────────────────────────────────────────────────────────────
+
+class TestLandmarks:
+    def test_landmark_pool_count(self):
+        """Dataset should have 60-80 landmarks."""
+        assert 60 <= len(_LANDMARK_POOL) <= 120
+
+    def test_all_urls_well_formed(self):
+        for name, country, url in _LANDMARK_POOL:
+            assert url.startswith("https"), f"{name} has non-https URL: {url}"
+
+    def test_all_countries_in_regions(self):
+        for name, country, _ in _LANDMARK_POOL:
+            assert country in COUNTRY_REGIONS, (
+                f"Landmark '{name}' references country '{country}' "
+                f"not in COUNTRY_REGIONS"
+            )
+
+    def test_pick_question_landmarks(self):
+        table = _make_table(category="landmarks")
+        view = _make_view(table)
+        q_type, subject, answers, image_url = view._pick_question()
+        assert q_type == "landmark"
+        assert image_url is not None
+        assert image_url.startswith("https")
+        # subject is the landmark name, answers is [country]
+        assert len(answers) == 1
+        assert answers[0] in COUNTRY_REGIONS
+
+    def test_landmark_answer_matching(self):
+        """Player types the country name to answer a landmark question."""
+        assert check_answer("France", ["France"])
+        assert check_answer("france", ["France"])
+        assert not check_answer("Eiffel Tower", ["France"])
+
+    def test_no_repeat_landmarks_until_exhausted(self):
+        table = _make_table(category="landmarks")
+        view = _make_view(table)
+        seen = set()
+        n = len(_LANDMARK_POOL)
+        for _ in range(n):
+            _, subject, _, _ = view._pick_question()
+            assert subject not in seen, f"{subject} repeated before pool exhaustion"
+            seen.add(subject)
+        # Next pick resets pool
+        _, subject, _, _ = view._pick_question()
+        assert subject in [name for name, _, _ in _LANDMARK_POOL]
+
+    def test_mixed_mode_includes_landmarks(self):
+        table = _make_table(category="mixed")
+        view = _make_view(table)
+        seen_types = set()
+        for _ in range(500):
+            q_type, *_ = view._pick_question()
+            seen_types.add(q_type)
+            if "landmark" in seen_types:
+                break
+        assert "landmark" in seen_types, "Mixed mode never produced a landmark question"
+
+    def test_unique_landmark_names(self):
+        names = [name for name, _, _ in _LANDMARK_POOL]
+        assert len(names) == len(set(names)), "Duplicate landmark names found"

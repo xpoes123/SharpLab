@@ -15,6 +15,7 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from bot.cogs._elo_helpers import fmt_elo_change, update_elo_multiplayer
+from bot.cogs._landmarks import LANDMARKS, _LANDMARK_POOL
 from db.queries import record_geo_attempt, get_geo_stats_by_region, get_elo_rating
 
 # ── Constants ────────────────────────────────────────────────────────────────
@@ -454,6 +455,7 @@ _CATEGORY_LABELS: dict[str, str] = {
     "state_capitals": "US State Capitals",
     "country_flags": "Country Flags",
     "state_flags": "US State Flags",
+    "landmarks": "Landmarks",
 }
 
 
@@ -647,6 +649,12 @@ _CATEGORY_OPTIONS = [
         description="Name the US state from its flag image",
         emoji="\U0001f3f3\ufe0f",
     ),
+    discord.SelectOption(
+        label="Landmarks",
+        value="landmarks",
+        description="Name the country from a famous landmark photo",
+        emoji="\U0001f3db\ufe0f",
+    ),
 ]
 
 
@@ -839,12 +847,16 @@ class GeoTableView(ui.View):
             pool = _available("country_flag", list(COUNTRY_CODES.keys()))
         elif cat == "state_flags":
             pool = _available("state_flag", list(US_STATE_CODES.keys()))
+        elif cat == "landmarks":
+            landmark_keys = [name for name, _, _ in _LANDMARK_POOL]
+            pool = _available("landmark", landmark_keys)
         else:  # mixed — combine all sub-pools
             country_cap_pool = _available("country_cap", list(CAPITALS.keys()))
             state_cap_pool = _available("state_cap", list(US_STATE_CAPITALS.keys()))
             country_flag_pool = _available("country_flag", list(COUNTRY_CODES.keys()))
             state_flag_pool = _available("state_flag", list(US_STATE_CODES.keys()))
-            pool = country_cap_pool + state_cap_pool + country_flag_pool + state_flag_pool
+            landmark_pool = _available("landmark", [n for n, _, _ in _LANDMARK_POOL])
+            pool = country_cap_pool + state_cap_pool + country_flag_pool + state_flag_pool + landmark_pool
             if not pool:
                 table.used_questions.clear()
                 pool = (
@@ -852,6 +864,7 @@ class GeoTableView(ui.View):
                     + [("state_cap", k) for k in US_STATE_CAPITALS]
                     + [("country_flag", k) for k in COUNTRY_CODES]
                     + [("state_flag", k) for k in US_STATE_CODES]
+                    + [("landmark", n) for n, _, _ in _LANDMARK_POOL]
                 )
 
         q_type, key = random.choice(pool)
@@ -865,6 +878,10 @@ class GeoTableView(ui.View):
             code = COUNTRY_CODES[key]
             url = f"https://flagcdn.com/w320/{code}.png"
             return q_type, key, [key], url
+        elif q_type == "landmark":
+            entry = next((n, c, u) for n, c, u in _LANDMARK_POOL if n == key)
+            name, country, url = entry
+            return q_type, name, [country], url
         else:  # state_flag
             code = US_STATE_CODES[key]
             url = f"https://flagcdn.com/w320/us-{code}.png"
@@ -878,6 +895,8 @@ class GeoTableView(ui.View):
             return f"What is the capital of the US state **{subject}**?"
         elif q_type == "country_flag":
             return "Which country does this flag belong to?"
+        elif q_type == "landmark":
+            return "Which country is this landmark in?"
         else:  # state_flag
             return "Which US state does this flag belong to?"
 
@@ -1137,6 +1156,7 @@ _QTYPE_TO_CATEGORY: dict[str, str] = {
     "state_cap": "state_cap",
     "country_flag": "country_flag",
     "state_flag": "state_flag",
+    "landmark": "landmark",
 }
 
 
@@ -1148,7 +1168,11 @@ def _stat_info(table: GeoTable) -> tuple[str, str, str]:
     if q_type in ("state_cap", "state_flag"):
         return "US", "Americas", category
 
-    country = table.current_subject
+    # For landmarks, subject is the landmark name; the country is the answer
+    if q_type == "landmark":
+        country = table.current_answers[0] if table.current_answers else "Unknown"
+    else:
+        country = table.current_subject
     region = COUNTRY_REGIONS.get(country, "Unknown")
     return country, region, category
 
