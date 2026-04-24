@@ -291,6 +291,14 @@ class TestLandmarks:
         for name, country, url in _LANDMARK_POOL:
             assert url.startswith("https"), f"{name} has non-https URL: {url}"
 
+    def test_no_thumb_urls(self):
+        # Wikimedia /thumb/ URLs return HTTP 400 from Discord's embed proxy.
+        # All landmark URLs must use the direct Wikimedia format instead.
+        for name, country, url in _LANDMARK_POOL:
+            assert "/thumb/" not in url, (
+                f"{name} uses a /thumb/ URL which fails in Discord embeds: {url}"
+            )
+
     def test_all_countries_in_regions(self):
         for name, country, _ in _LANDMARK_POOL:
             assert country in COUNTRY_REGIONS, (
