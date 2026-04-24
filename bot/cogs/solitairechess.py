@@ -173,8 +173,8 @@ class SolChessCog(commands.Cog):
 
 class WebSolChessJoinModal(ui.Modal, title="Join Solitaire Chess"):
     amount = ui.TextInput(
-        label="Bet amount (coins)",
-        placeholder="e.g. 100",
+        label="Bet amount (coins, 0 for free play)",
+        placeholder="e.g. 100 (or 0 for practice)",
         min_length=1,
         max_length=10,
     )
@@ -190,20 +190,19 @@ class WebSolChessJoinModal(ui.Modal, title="Join Solitaire Chess"):
             await interaction.response.send_message("Invalid amount.", ephemeral=True)
             return
 
-        if amt <= 0:
-            await interaction.response.send_message("Bet must be positive.", ephemeral=True)
+        if amt < 0:
+            await interaction.response.send_message("Bet can't be negative.", ephemeral=True)
             return
 
         uid = str(interaction.user.id)
-        bal = await queries.get_casino_balance(uid)
-        if bal is None or bal < amt:
-            await interaction.response.send_message(
-                f"Insufficient balance (you have {bal or 0}c).", ephemeral=True,
-            )
-            return
-
-        # Deduct coins
-        await queries.update_casino_balance(uid, -amt)
+        if amt > 0:
+            bal = await queries.get_casino_balance(uid)
+            if bal is None or bal < amt:
+                await interaction.response.send_message(
+                    f"Insufficient balance (you have {bal or 0}c).", ephemeral=True,
+                )
+                return
+            await queries.update_casino_balance(uid, -amt)
 
         # Create token via web API
         try:
@@ -218,7 +217,8 @@ class WebSolChessJoinModal(ui.Modal, title="Join Solitaire Chess"):
                     headers={"X-Api-Key": WEB_API_SECRET},
                 )
             if resp.status_code != 200:
-                await queries.update_casino_balance(uid, amt)
+                if amt > 0:
+                    await queries.update_casino_balance(uid, amt)
                 detail = resp.json().get("detail", "Unknown error")
                 await interaction.response.send_message(
                     f"Failed to join: {detail}", ephemeral=True,
@@ -226,15 +226,18 @@ class WebSolChessJoinModal(ui.Modal, title="Join Solitaire Chess"):
                 return
 
             url = resp.json()["url"]
+            bet_text = f"Your {amt}c bet is locked in." if amt > 0 else "Free play \u2014 no coins wagered."
             await interaction.response.send_message(
                 f"\U0001f517 **[Click here to play]({url})**\n"
-                f"Your {amt}c bet is locked in. Open the link to connect.",
+                f"{bet_text} Open the link to connect.",
                 ephemeral=True,
             )
         except Exception:
-            await queries.update_casino_balance(uid, amt)
+            if amt > 0:
+                await queries.update_casino_balance(uid, amt)
             await interaction.response.send_message(
-                "Failed to connect to game server. Bet refunded.", ephemeral=True,
+                "Failed to connect to game server." + (" Bet refunded." if amt > 0 else ""),
+                ephemeral=True,
             )
 
 
