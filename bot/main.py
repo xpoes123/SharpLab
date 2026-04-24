@@ -57,7 +57,6 @@ COGS = [
     "bot.cogs.duels",
     "bot.cogs.tournaments",
     "bot.cogs.figgie",
-    "bot.cogs.predictions",
     "bot.cogs.mathsprint",
     "bot.cogs.pokemon",
     "bot.cogs.ratings",
