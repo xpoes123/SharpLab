@@ -28,6 +28,7 @@ class MiniGame(Protocol):
     name: str
     emoji: str
     stakes: int
+    elo_key: str
 
     async def play(
         self,
@@ -302,6 +303,7 @@ class HigherCard:
     name = "Higher Card"
     emoji = "🃏"
     stakes = 200
+    elo_key = "higher_card"
 
     async def play(
         self,
@@ -496,6 +498,7 @@ class DiceRoll:
     name = "Dice Roll"
     emoji = "\U0001f3b2"
     stakes = 200
+    elo_key = "dice_roll"
 
     async def play(
         self,
@@ -675,6 +678,7 @@ class SpeedMath:
     name = "Speed Math"
     emoji = "🧮"
     stakes = 300
+    elo_key = "speed_math"
 
     async def play(
         self,
@@ -866,6 +870,7 @@ class Trivia:
     name = "Trivia"
     emoji = "🧠"
     stakes = 300
+    elo_key = "trivia"
 
     async def play(
         self,
@@ -1082,6 +1087,7 @@ class GuessTheNumber:
     name = "Guess the Number"
     emoji = "🔢"
     stakes = 300
+    elo_key = "guess_number"
 
     async def play(
         self,
@@ -1224,6 +1230,7 @@ class CoinFlip:
     name = "Coin Flip"
     emoji = "\U0001fa99"
     stakes = 200
+    elo_key = "coin_flip"
 
     async def play(
         self,
@@ -1463,6 +1470,7 @@ class TicTacToe:
     name = "Tic Tac Toe"
     emoji = "\u274c"
     stakes = 300
+    elo_key = "tictactoe"
 
     async def play(
         self,
@@ -1622,6 +1630,7 @@ class BlackjackShowdown:
     name = "Blackjack"
     emoji = "\U0001f0cf"
     stakes = 300
+    elo_key = "blackjack_showdown"
 
     async def play(
         self,
@@ -1844,6 +1853,7 @@ class WordScramble:
     name = "Word Scramble"
     emoji = "\U0001f524"
     stakes = 300
+    elo_key = "word_scramble"
 
     async def play(
         self,
@@ -2085,6 +2095,7 @@ class Nim:
     name = "Nim"
     emoji = "\U0001f9e0"
     stakes = 300
+    elo_key = "nim"
 
     async def play(
         self,
@@ -2230,6 +2241,7 @@ class PushYourLuck:
     name = "Push Your Luck"
     emoji = "\U0001f3b0"
     stakes = 300
+    elo_key = "push_your_luck"
 
     async def play(
         self,
@@ -2401,6 +2413,7 @@ class Chicken:
     name = "Chicken"
     emoji = "\U0001f414"
     stakes = 300
+    elo_key = "chicken"
 
     async def play(
         self,
@@ -2609,6 +2622,7 @@ class Battleship:
     name = "Battleship"
     emoji = "\U0001f6a2"
     stakes = 300
+    elo_key = "battleship"
 
     async def play(
         self,

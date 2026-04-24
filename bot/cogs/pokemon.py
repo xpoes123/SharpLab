@@ -16,6 +16,7 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
+from bot.cogs._elo_helpers import update_elo_multiplayer
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -864,6 +865,7 @@ class PokeTableView(ui.View):
 
         self.start_btn.disabled = not betting or len(self.table.players) < MIN_PLAYERS
         self.join_btn.disabled = not betting
+        self.bet_join_btn.disabled = not betting
         self.rebet_btn.disabled = not betting or not self.table.last_bets
         self.leave_btn.disabled = not betting
         self.close_btn.disabled = racing
@@ -926,6 +928,34 @@ class PokeTableView(ui.View):
     async def join_btn(
         self, interaction: discord.Interaction, button: ui.Button,
     ) -> None:
+        """Free join — no bet required, ELO only."""
+        if self.table.phase != "betting":
+            await interaction.response.send_message(
+                "Game in progress! Wait for the next one.", ephemeral=True,
+            )
+            return
+        uid = interaction.user.id
+        if uid in self.table.players:
+            await interaction.response.send_message("You're already in!", ephemeral=True)
+            return
+        if len(self.table.players) >= MAX_PLAYERS:
+            await interaction.response.send_message("Table is full!", ephemeral=True)
+            return
+        self.table.players[uid] = PokePlayer(
+            user_id=uid, display_name=interaction.user.display_name, bet=0,
+        )
+        self._update_buttons()
+        await interaction.response.edit_message(
+            embed=_betting_embed(self.table), view=self,
+        )
+
+    @ui.button(
+        label="Bet", style=discord.ButtonStyle.primary, emoji="\U0001fa99", row=0,
+    )
+    async def bet_join_btn(
+        self, interaction: discord.Interaction, button: ui.Button,
+    ) -> None:
+        """Join with a coin wager on top of ELO."""
         if self.table.phase != "betting":
             await interaction.response.send_message(
                 "Game in progress! Wait for the next one.", ephemeral=True,
@@ -964,14 +994,15 @@ class PokeTableView(ui.View):
             await interaction.response.send_message("Table is full!", ephemeral=True)
             return
         name, amt = last
-        try:
-            await queries.update_casino_balance(str(uid), -amt)
-        except ValueError:
-            bal = await queries.get_or_create_casino_wallet(str(uid))
-            await interaction.response.send_message(
-                f"Not enough coins for {amt}c re-bet! (have {bal}c)", ephemeral=True,
-            )
-            return
+        if amt > 0:
+            try:
+                await queries.update_casino_balance(str(uid), -amt)
+            except ValueError:
+                bal = await queries.get_or_create_casino_wallet(str(uid))
+                await interaction.response.send_message(
+                    f"Not enough coins for {amt}c re-bet! (have {bal}c)", ephemeral=True,
+                )
+                return
         self.table.players[uid] = PokePlayer(
             user_id=uid, display_name=name, bet=amt,
         )
@@ -998,7 +1029,8 @@ class PokeTableView(ui.View):
                 "Can't leave during a game!", ephemeral=True,
             )
             return
-        await queries.update_casino_balance(str(uid), player.bet)
+        if player.bet > 0:
+            await queries.update_casino_balance(str(uid), player.bet)
         del self.table.players[uid]
         self._update_buttons()
         await interaction.response.edit_message(
@@ -1217,21 +1249,25 @@ class PokeTableView(ui.View):
         pot = sum(p.bet for p in table.players.values())
         max_wins = max((p.rounds_won for p in table.players.values()), default=0)
 
-        if max_wins == 0:
-            payouts = {uid: p.bet for uid, p in table.players.items()}
-            for uid, refund in payouts.items():
-                try:
-                    await queries.update_casino_balance(str(uid), refund)
-                except Exception:
-                    pass
+        if pot > 0:
+            if max_wins == 0:
+                payouts = {uid: p.bet for uid, p in table.players.items()}
+                for uid, refund in payouts.items():
+                    if refund > 0:
+                        try:
+                            await queries.update_casino_balance(str(uid), refund)
+                        except Exception:
+                            pass
+            else:
+                payouts = _compute_payouts(table.players, pot, n_players)
+                for uid, payout in payouts.items():
+                    if payout > 0:
+                        try:
+                            await queries.update_casino_balance(str(uid), payout)
+                        except Exception:
+                            pass
         else:
-            payouts = _compute_payouts(table.players, pot, n_players)
-            for uid, payout in payouts.items():
-                if payout > 0:
-                    try:
-                        await queries.update_casino_balance(str(uid), payout)
-                    except Exception:
-                        pass
+            payouts = {uid: 0 for uid in table.players}
 
         balances: dict[int, int] = {}
         for uid in table.players:
@@ -1249,6 +1285,21 @@ class PokeTableView(ui.View):
         table.phase = "closed"
 
         payouts, balances = await self._compute_and_apply_payouts()
+
+        # ELO update — rank by rounds_won (most wins = 1st)
+        max_wins = max((p.rounds_won for p in table.players.values()), default=0)
+        if max_wins > 0 and len(table.players) >= 2:
+            sorted_players = sorted(
+                table.players.values(),
+                key=lambda p: p.rounds_won,
+                reverse=True,
+            )
+            finish_order = [p.user_id for p in sorted_players]
+            try:
+                await update_elo_multiplayer(finish_order, "pokemon", "pokemon")
+            except Exception:
+                pass  # don't break game end over ELO errors
+
         embed = _final_embed(table, payouts=payouts, balances=balances)
 
         for child in self.children:
@@ -1267,10 +1318,11 @@ class PokeTableView(ui.View):
 
         if table.total_rounds_played == 0:
             for p in table.players.values():
-                try:
-                    await queries.update_casino_balance(str(p.user_id), p.bet)
-                except Exception:
-                    pass
+                if p.bet > 0:
+                    try:
+                        await queries.update_casino_balance(str(p.user_id), p.bet)
+                    except Exception:
+                        pass
             embed = discord.Embed(
                 title="\u2753 Pokemon Table \u2014 Closed",
                 description="Table closed. All bets refunded.",
@@ -1303,10 +1355,11 @@ class PokeTableView(ui.View):
             return
 
         for p in table.players.values():
-            try:
-                await queries.update_casino_balance(str(p.user_id), p.bet)
-            except Exception:
-                pass
+            if p.bet > 0:
+                try:
+                    await queries.update_casino_balance(str(p.user_id), p.bet)
+                except Exception:
+                    pass
 
         table.phase = "closed"
         self.active_tables.pop(table.channel_id, None)

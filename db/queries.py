@@ -2298,3 +2298,136 @@ async def upsert_discord_user(
             (discord_user, username, avatar_url, now_iso),
         )
         await db.commit()
+
+
+# ── ELO Ratings ──────────────────────────────────────────────────────────────
+
+
+async def get_elo_rating(discord_user: str, game: str) -> dict:
+    """Return ELO row for a user+game, creating a default 1000 row if none."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM elo_ratings WHERE discord_user = ? AND game = ?",
+            (discord_user, game),
+        )
+        row = await cursor.fetchone()
+        if row:
+            return dict(row)
+        await db.execute(
+            "INSERT INTO elo_ratings (discord_user, game) VALUES (?, ?)",
+            (discord_user, game),
+        )
+        await db.commit()
+    return {
+        "discord_user": discord_user, "game": game,
+        "rating": 1000.0, "games_played": 0,
+        "wins": 0, "losses": 0, "draws": 0,
+        "peak_rating": 1000.0, "last_played": None,
+    }
+
+
+async def update_elo_rating(
+    discord_user: str, game: str, new_rating: float,
+    result: str, peak: float,
+) -> None:
+    """Update rating, increment counters, update peak and last_played."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    col = {"win": "wins", "loss": "losses", "draw": "draws"}.get(result, "draws")
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            f"""UPDATE elo_ratings
+                SET rating = ?, games_played = games_played + 1,
+                    {col} = {col} + 1,
+                    peak_rating = ?, last_played = ?
+                WHERE discord_user = ? AND game = ?""",
+            (new_rating, peak, now_iso, discord_user, game),
+        )
+        await db.commit()
+
+
+async def log_elo_match(
+    discord_user: str, opponent_user: str | None,
+    game: str, result: float,
+    rating_before: float, rating_after: float,
+    context: str,
+) -> None:
+    """Insert a row into elo_match_history."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO elo_match_history
+               (discord_user, opponent_user, game, result,
+                rating_before, rating_after, rating_change, context, played_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (discord_user, opponent_user, game, result,
+             rating_before, rating_after, rating_after - rating_before,
+             context, now_iso),
+        )
+        await db.commit()
+
+
+async def get_elo_ratings_for_user(discord_user: str) -> list[dict]:
+    """All rated games for a user, ordered by rating descending."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM elo_ratings WHERE discord_user = ? ORDER BY rating DESC",
+            (discord_user,),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_elo_leaderboard(
+    game: str, min_games: int = 5, limit: int = 25,
+) -> list[dict]:
+    """Top players for a game, filtered by min games played."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT * FROM elo_ratings
+               WHERE game = ? AND games_played >= ?
+               ORDER BY rating DESC
+               LIMIT ?""",
+            (game, min_games, limit),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_all_elo_leaderboards(
+    min_games: int = 5,
+) -> dict[str, list[dict]]:
+    """All games' leaderboards keyed by game name. For F1 points calc."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT * FROM elo_ratings
+               WHERE games_played >= ?
+               ORDER BY game, rating DESC""",
+            (min_games,),
+        )
+        rows = await cursor.fetchall()
+    result: dict[str, list[dict]] = {}
+    for r in rows:
+        d = dict(r)
+        result.setdefault(d["game"], []).append(d)
+    return result
+
+
+async def get_elo_history(
+    discord_user: str, game: str, limit: int = 10,
+) -> list[dict]:
+    """Recent match history for a user in a game."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT * FROM elo_match_history
+               WHERE discord_user = ? AND game = ?
+               ORDER BY played_at DESC
+               LIMIT ?""",
+            (discord_user, game, limit),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]

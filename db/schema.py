@@ -209,6 +209,34 @@ CREATE TABLE IF NOT EXISTS discord_users (
     avatar_url   TEXT,
     updated_at   TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS elo_ratings (
+    discord_user  TEXT NOT NULL,
+    game          TEXT NOT NULL,
+    rating        REAL NOT NULL DEFAULT 1000.0,
+    games_played  INTEGER NOT NULL DEFAULT 0,
+    wins          INTEGER NOT NULL DEFAULT 0,
+    losses        INTEGER NOT NULL DEFAULT 0,
+    draws         INTEGER NOT NULL DEFAULT 0,
+    peak_rating   REAL NOT NULL DEFAULT 1000.0,
+    last_played   TEXT,
+    PRIMARY KEY (discord_user, game)
+);
+
+CREATE TABLE IF NOT EXISTS elo_match_history (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    discord_user   TEXT NOT NULL,
+    opponent_user  TEXT,
+    game           TEXT NOT NULL,
+    result         REAL NOT NULL,
+    rating_before  REAL NOT NULL,
+    rating_after   REAL NOT NULL,
+    rating_change  REAL NOT NULL,
+    context        TEXT,
+    played_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_elo_match_user ON elo_match_history(discord_user, game);
+CREATE INDEX IF NOT EXISTS idx_elo_match_time ON elo_match_history(played_at);
 """
 
 
