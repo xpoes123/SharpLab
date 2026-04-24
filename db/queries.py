@@ -2049,6 +2049,59 @@ async def get_game_session(room_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+# ── Geo Accuracy Stats ─────────────────────────────────────────────────
+
+
+async def record_geo_attempt(
+    discord_user: str, country: str, region: str, category: str, correct: bool,
+) -> None:
+    """Upsert a geography attempt into geo_accuracy, incrementing totals."""
+    correct_inc = 1 if correct else 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO geo_accuracy (discord_user, country, region, category, correct, total)
+            VALUES (?, ?, ?, ?, ?, 1)
+            ON CONFLICT(discord_user, country, category) DO UPDATE SET
+                correct = correct + ?,
+                total = total + 1
+            """,
+            (discord_user, country, region, category, correct_inc, correct_inc),
+        )
+        await db.commit()
+
+
+async def get_geo_stats(discord_user: str) -> list[dict]:
+    """Return all geo_accuracy rows for a user."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT country, region, category, correct, total "
+            "FROM geo_accuracy WHERE discord_user = ? ORDER BY country, category",
+            (discord_user,),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_geo_stats_by_region(discord_user: str) -> list[dict]:
+    """Return aggregated geo accuracy stats grouped by region."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT region, SUM(correct) AS correct, SUM(total) AS total
+            FROM geo_accuracy
+            WHERE discord_user = ?
+            GROUP BY region
+            ORDER BY region
+            """,
+            (discord_user,),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
 # ── Startup cleanup ─────────────────────────────────────────────────
 
 
