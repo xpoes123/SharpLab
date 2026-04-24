@@ -60,6 +60,7 @@ GAME_LABELS: dict[str, str] = {
     "pokemon": "Who's That Pokemon?",
     "tradingfloor": "Trading Floor",
     "quizbowl": "Quiz Bowl",
+    "valorant": "Valorant Guess",
 }
 
 GAME_CATEGORIES: list[tuple[str, str]] = [
@@ -1862,6 +1863,20 @@ GAME_RULES: dict[str, str] = {
         "Payouts follow the paytable based on player count.\n\n"
         "**Tip:** You have 20 seconds per problem. Speed and accuracy both matter!"
     ),
+    "valorant": (
+        "**Valorant Guess**\n"
+        "Guess the Valorant agent, weapon, or map from progressive hints!\n\n"
+        "**How to play:** Join the table and place your bet. Each round, hints about a "
+        "mystery Valorant item are revealed over 30 seconds:\n"
+        "\u2022 **0s:** Type (agent/weapon/map) + role/class/location\n"
+        "\u2022 **10s:** A descriptive clue\n"
+        "\u2022 **20s:** First letter and name length\n\n"
+        "Type your answer in chat \u2014 first correct answer wins the round!\n\n"
+        "**Scoring:** First to 3 round wins takes the pot. "
+        "Payouts follow the paytable based on player count.\n\n"
+        "**Categories:** Agents, Weapons, Maps, or Everything mixed.\n"
+        "**Tip:** Pay attention to the role and origin \u2014 they narrow it down fast!"
+    ),
 }
 
 CASINO_GAMES: list[tuple[str, str, str, str]] = [
@@ -1901,6 +1916,7 @@ CASINO_GAMES: list[tuple[str, str, str, str]] = [
     ("mathsprint", "Mental Math Sprint \u2014 10 rapid-fire problems", "Brain Games", "party"),
     ("pokemon", "Who's That Pokemon? \u2014 guess from hints", "Brain Games", "party"),
     ("quizbowl", "Quiz Bowl \u2014 3-part bonus trivia", "Brain Games", "party"),
+    ("valorant", "Guess the Valorant agent, weapon, or map", "Brain Games", "party"),
     # ── Sports Sim
     ("nbasim", "Simulated NBA game betting", "Sports Sim", "solo"),
     ("nflsim", "Simulated NFL game betting", "Sports Sim", "solo"),

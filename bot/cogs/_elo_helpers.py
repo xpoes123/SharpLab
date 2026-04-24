@@ -24,6 +24,7 @@ ELO_GAME_LABELS: dict[str, str] = {
     "chicken": "Chicken",
     "battleship": "Battleship",
     "pokemon": "Pokemon",
+    "valorant": "Valorant Guess",
 }
 
 MIN_GAMES_FOR_LEADERBOARD = 5
