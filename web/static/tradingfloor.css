@@ -168,6 +168,29 @@
 
 .pnl-row:first-of-type { margin-top: 4px; }
 
+/* ── Quantity Selector ───────────────────────────────────────────────────── */
+
+.qty-group {
+    display: flex;
+    gap: 4px;
+}
+
+.qty-btn {
+    padding: 8px 14px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    background: var(--card);
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.qty-btn:hover { color: var(--text); border-color: var(--text-muted); }
+.qty-btn.active { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+
 /* ── Trade Panel ────────────────────────────────────────────────────────── */
 
 .trade-panel { margin-bottom: 12px; }
@@ -176,6 +199,7 @@
     display: flex;
     gap: 8px;
     align-items: center;
+    margin-bottom: 6px;
 }
 
 .trade-row-secondary {

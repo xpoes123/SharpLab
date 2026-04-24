@@ -8,6 +8,7 @@ let ws;
 let myId = null;
 let isHost = false;
 let gamePhase = 'lobby';
+let selectedQty = 1;
 
 // ── WebSocket ────────────────────────────────────────────────────────────
 
@@ -351,19 +352,33 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('start-btn').addEventListener('click', () => send({ type: 'start' }));
 
+    // Quantity selector
+    document.querySelectorAll('.qty-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.qty-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            selectedQty = parseInt(btn.dataset.qty);
+        });
+    });
+
     document.getElementById('buy-btn').addEventListener('click', () => {
         const ticker = document.getElementById('trade-ticker').value;
-        send({ type: 'buy', ticker });
+        send({ type: 'buy', ticker, qty: selectedQty });
     });
 
     document.getElementById('sell-btn').addEventListener('click', () => {
         const ticker = document.getElementById('trade-ticker').value;
-        send({ type: 'sell', ticker });
+        send({ type: 'sell', ticker, qty: selectedQty });
     });
 
     document.getElementById('short-btn').addEventListener('click', () => {
         const ticker = document.getElementById('trade-ticker').value;
-        send({ type: 'short', ticker });
+        send({ type: 'short', ticker, qty: selectedQty });
+    });
+
+    document.getElementById('sell-all-btn').addEventListener('click', () => {
+        const ticker = document.getElementById('trade-ticker').value;
+        send({ type: 'sell_all', ticker });
     });
 
     document.getElementById('cover-btn').addEventListener('click', () => {

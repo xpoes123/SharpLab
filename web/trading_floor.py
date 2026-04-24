@@ -143,7 +143,6 @@ class TradingFloor:
     round_end: float = 0.0
     news_feed: list[str] = field(default_factory=list)
     private_tips: dict[str, str] = field(default_factory=dict)
-    net_volume: dict[str, int] = field(default_factory=lambda: {t: 0 for t in TICKERS})
     game_task: asyncio.Task | None = field(default=None, repr=False)
     result_data: dict | None = None
     created_at: float = field(default_factory=time.time)
@@ -282,13 +281,27 @@ async def _handle_message(room: TradingFloor, player: TFPlayer, data: dict) -> N
         room.game_task = asyncio.create_task(_game_loop(room))
 
     elif msg_type == "buy":
-        await _handle_market_order(room, player, data.get("ticker", ""), 1, "buy")
+        qty = max(1, int(data.get("qty", 1)))
+        await _handle_market_order(room, player, data.get("ticker", ""), qty, "buy")
 
     elif msg_type == "sell":
-        await _handle_market_order(room, player, data.get("ticker", ""), 1, "sell")
+        qty = max(1, int(data.get("qty", 1)))
+        await _handle_market_order(room, player, data.get("ticker", ""), qty, "sell")
 
     elif msg_type == "short":
-        await _handle_market_order(room, player, data.get("ticker", ""), 1, "short")
+        qty = max(1, int(data.get("qty", 1)))
+        await _handle_market_order(room, player, data.get("ticker", ""), qty, "short")
+
+    elif msg_type == "sell_all":
+        ticker = data.get("ticker", "").upper()
+        if ticker not in room.stocks:
+            await _send_error(player, "Invalid ticker")
+            return
+        held = player.positions.get(ticker, 0)
+        if held <= 0:
+            await _send_error(player, "No shares to sell")
+            return
+        await _handle_market_order(room, player, ticker, held, "sell")
 
     elif msg_type == "cover":
         ticker = data.get("ticker", "").upper()
@@ -337,7 +350,6 @@ async def _handle_market_order(
             return
         player.cash -= cost
         player.positions[ticker] = player.positions.get(ticker, 0) + qty
-        room.net_volume[ticker] = room.net_volume.get(ticker, 0) + qty
 
     elif action == "sell":
         held = player.positions.get(ticker, 0)
@@ -346,7 +358,6 @@ async def _handle_market_order(
             return
         player.cash += price * qty
         player.positions[ticker] = held - qty
-        room.net_volume[ticker] = room.net_volume.get(ticker, 0) - qty
 
     elif action == "short":
         current_short = player.positions.get(ticker, 0)
@@ -355,9 +366,14 @@ async def _handle_market_order(
             return
         player.cash += price * qty
         player.positions[ticker] = current_short - qty
-        room.net_volume[ticker] = room.net_volume.get(ticker, 0) - qty
 
     player.trade_count += 1
+
+    # Real-time market impact: price moves immediately on each trade
+    direction = 1 if action == "buy" else -1
+    impact = MARKET_IMPACT_K * math.sqrt(qty) * direction
+    stock.price = round(max(1.0, stock.price + impact), 1)
+
     trade = {
         "player_id": player.discord_user,
         "player_name": player.display_name,
@@ -445,41 +461,43 @@ def _generate_tip(event: dict) -> str:
     return random.choice(templates)
 
 
-def _npc_trades(room: TradingFloor) -> list[dict]:
-    """Noise trader: random buys/sells each round."""
-    trades = []
-    num_trades = random.randint(2, 4)
-    chosen_tickers = random.sample(TICKERS, min(num_trades, len(TICKERS)))
-    total_shares = 0
-    for ticker in chosen_tickers:
-        stock = room.stocks[ticker]
-        if stock.halted:
+NPC_NAMES = ["Algo Fund", "Retail Bot", "Quant Desk"]
+
+
+async def _run_npc_trades(room: TradingFloor) -> None:
+    """NPCs trade during the round at random intervals, visible in the trade log."""
+    num_trades = random.randint(3, 6)
+    # Spread NPC trades across the trading window
+    for i in range(num_trades):
+        delay = random.uniform(3, ROUND_SECONDS - 5)
+        await asyncio.sleep(delay / num_trades)  # stagger evenly-ish
+        if not room.trade_open:
+            break
+        ticker = random.choice(TICKERS)
+        stock = room.stocks.get(ticker)
+        if not stock or stock.halted:
             continue
         action = random.choice(["buy", "sell"])
-        qty = random.randint(1, 2)
-        total_shares += qty
-        if action == "buy":
-            room.net_volume[ticker] = room.net_volume.get(ticker, 0) + qty
-        else:
-            room.net_volume[ticker] = room.net_volume.get(ticker, 0) - qty
-        trades.append({"ticker": ticker, "action": action, "qty": qty})
-    if total_shares > 0:
-        room.news_feed.insert(0,
-            f"[R{room.round_num}] \U0001f916 Algo activity: {total_shares} shares across {len(chosen_tickers)} stocks"
-        )
-    return trades
+        qty = random.randint(1, 3)
+        npc_name = random.choice(NPC_NAMES)
 
+        # Apply price impact
+        direction = 1 if action == "buy" else -1
+        impact = MARKET_IMPACT_K * math.sqrt(qty) * direction
+        price_before = stock.price
+        stock.price = round(max(1.0, stock.price + impact), 1)
 
-def _apply_market_impact(room: TradingFloor) -> None:
-    """Apply market impact from net volume."""
-    for ticker, net_vol in room.net_volume.items():
-        if net_vol == 0:
-            continue
-        stock = room.stocks[ticker]
-        if stock.halted:
-            continue
-        delta = MARKET_IMPACT_K * math.sqrt(abs(net_vol)) * (1 if net_vol > 0 else -1)
-        stock.price = max(1.0, stock.price + delta)
+        trade = {
+            "player_id": "__npc__",
+            "player_name": f"\U0001f916 {npc_name}",
+            "action": action,
+            "ticker": ticker,
+            "price": round(price_before, 1),
+            "qty": qty,
+        }
+        room.trades.append(trade)
+        await _broadcast(room, {"type": "trade_executed", **trade})
+        await _broadcast(room, _market_state_msg(room))
 
 
 def _apply_noise(room: TradingFloor) -> None:
@@ -524,12 +542,11 @@ def _check_circuit_breakers(room: TradingFloor) -> None:
 
 
 def _record_prices(room: TradingFloor) -> None:
-    """Snapshot current prices into history, reset halts and volumes."""
+    """Snapshot current prices into history, reset halts."""
     for stock in room.stocks.values():
         stock.price = round(stock.price, 1)
         stock.history.append(stock.price)
         stock.halted = False
-    room.net_volume = {t: 0 for t in TICKERS}
 
 
 async def _game_loop(room: TradingFloor) -> None:
@@ -568,7 +585,6 @@ async def _game_loop(room: TradingFloor) -> None:
         for rnd in range(1, NUM_ROUNDS + 1):
             room.round_num = rnd
             room.orders.clear()
-            room.net_volume = {t: 0 for t in TICKERS}
             room.private_tips.clear()
 
             # Draw event (hidden for now)
@@ -596,6 +612,9 @@ async def _game_loop(room: TradingFloor) -> None:
             })
             await _broadcast(room, _market_state_msg(room))
 
+            # Run NPC trades in background during the trading window
+            npc_task = asyncio.create_task(_run_npc_trades(room))
+
             # Timer loop
             elapsed = 0
             while elapsed < ROUND_SECONDS:
@@ -605,11 +624,10 @@ async def _game_loop(room: TradingFloor) -> None:
                 await _broadcast(room, {"type": "timer", "remaining": remaining})
 
             room.trade_open = False
+            npc_task.cancel()
             await _broadcast(room, {"type": "round_end", "round_num": rnd})
 
-            # Settlement phase
-            _npc_trades(room)
-            _apply_market_impact(room)
+            # Settlement phase — apply noise + event (market impact is now real-time)
             _apply_noise(room)
             _apply_event(room, event)
             _check_circuit_breakers(room)
