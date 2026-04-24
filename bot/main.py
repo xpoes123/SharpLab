@@ -62,6 +62,7 @@ COGS = [
     "bot.cogs.pokemon",
     "bot.cogs.ratings",
     "bot.cogs.tradingfloor",
+    "bot.cogs.quizbowl",
 ]
 
 GUILD_ID = int(os.environ["DISCORD_GUILD_ID"])
