@@ -143,18 +143,12 @@ ALL_ACHIEVEMENTS = [
 ACHIEVEMENTS_BY_ID = {a["id"]: a for a in ALL_ACHIEVEMENTS}
 
 ELO_GAME_LABELS: dict[str, str] = {
-    "higher_card": "Higher Card",
-    "dice_roll": "Dice Roll",
     "speed_math": "Speed Math",
     "trivia": "Trivia",
     "guess_number": "Guess the Number",
-    "coin_flip": "Coin Flip",
     "tictactoe": "Tic Tac Toe",
-    "blackjack_showdown": "Blackjack",
     "word_scramble": "Word Scramble",
     "nim": "Nim",
-    "push_your_luck": "Push Your Luck",
-    "chicken": "Chicken",
     "battleship": "Battleship",
     "pokemon": "Pokemon",
     "valorant": "Valorant Guess",

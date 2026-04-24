@@ -11,7 +11,7 @@ from discord.ext import commands
 
 from db import queries
 from bot.cogs._minigames import pick_games
-from bot.cogs._elo_helpers import update_elo_1v1, update_elo_draw
+from bot.cogs._elo_helpers import update_elo_1v1, update_elo_draw, ELO_GAME_LABELS
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -904,16 +904,17 @@ class TournamentsCog(commands.Cog):
                 p1_coins -= game.stakes
             # tie = no change
 
-            # ELO update for this mini-game
-            try:
-                if winner_uid == int(p1_id):
-                    await update_elo_1v1(p1_id, p2_id, game.elo_key, "tournament")
-                elif winner_uid == int(p2_id):
-                    await update_elo_1v1(p2_id, p1_id, game.elo_key, "tournament")
-                else:
-                    await update_elo_draw(p1_id, p2_id, game.elo_key, "tournament")
-            except Exception:
-                pass  # don't break the tournament over ELO errors
+            # ELO update for skill games only
+            if game.elo_key in ELO_GAME_LABELS:
+                try:
+                    if winner_uid == int(p1_id):
+                        await update_elo_1v1(p1_id, p2_id, game.elo_key, "tournament")
+                    elif winner_uid == int(p2_id):
+                        await update_elo_1v1(p2_id, p1_id, game.elo_key, "tournament")
+                    else:
+                        await update_elo_draw(p1_id, p2_id, game.elo_key, "tournament")
+                except Exception:
+                    pass  # don't break the tournament over ELO errors
 
             await asyncio.sleep(1)  # pause between games
 

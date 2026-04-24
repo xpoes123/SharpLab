@@ -10,18 +10,12 @@ log = logging.getLogger(__name__)
 # ── Label mapping ────────────────────────────────────────────────────────────
 
 ELO_GAME_LABELS: dict[str, str] = {
-    "higher_card": "Higher Card",
-    "dice_roll": "Dice Roll",
     "speed_math": "Speed Math",
     "trivia": "Trivia",
     "guess_number": "Guess the Number",
-    "coin_flip": "Coin Flip",
     "tictactoe": "Tic Tac Toe",
-    "blackjack_showdown": "Blackjack",
     "word_scramble": "Word Scramble",
     "nim": "Nim",
-    "push_your_luck": "Push Your Luck",
-    "chicken": "Chicken",
     "battleship": "Battleship",
     "pokemon": "Pokemon",
     "valorant": "Valorant Guess",

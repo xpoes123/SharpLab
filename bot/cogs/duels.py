@@ -10,7 +10,7 @@ from discord.ext import commands
 
 from db import queries
 from bot.cogs._minigames import pick_games, MiniGame
-from bot.cogs._elo_helpers import update_elo_1v1, update_elo_draw, fmt_elo_change
+from bot.cogs._elo_helpers import update_elo_1v1, update_elo_draw, fmt_elo_change, ELO_GAME_LABELS
 
 log = logging.getLogger(__name__)
 
@@ -332,40 +332,41 @@ class DuelView(ui.View):
                 score_opponent=state.score_opponent,
             )
 
-            # ELO update for this mini-game
-            try:
-                if winner_uid == state.challenger_id:
-                    w_old, w_new, l_old, l_new = await update_elo_1v1(
-                        str(state.challenger_id), str(state.opponent_id),
-                        game.elo_key, "duel",
-                    )
-                    self._elo_changes.append(
-                        f"{game.emoji} {game.name}: "
-                        f"**{state.challenger_name}** {fmt_elo_change(w_old, w_new)} | "
-                        f"**{state.opponent_name}** {fmt_elo_change(l_old, l_new)}"
-                    )
-                elif winner_uid == state.opponent_id:
-                    w_old, w_new, l_old, l_new = await update_elo_1v1(
-                        str(state.opponent_id), str(state.challenger_id),
-                        game.elo_key, "duel",
-                    )
-                    self._elo_changes.append(
-                        f"{game.emoji} {game.name}: "
-                        f"**{state.opponent_name}** {fmt_elo_change(w_old, w_new)} | "
-                        f"**{state.challenger_name}** {fmt_elo_change(l_old, l_new)}"
-                    )
-                else:
-                    p1_old, p1_new, p2_old, p2_new = await update_elo_draw(
-                        str(state.challenger_id), str(state.opponent_id),
-                        game.elo_key, "duel",
-                    )
-                    self._elo_changes.append(
-                        f"{game.emoji} {game.name}: "
-                        f"**{state.challenger_name}** {fmt_elo_change(p1_old, p1_new)} | "
-                        f"**{state.opponent_name}** {fmt_elo_change(p2_old, p2_new)}"
-                    )
-            except Exception:
-                log.exception("ELO update failed for %s", game.elo_key)
+            # ELO update for skill games only
+            if game.elo_key in ELO_GAME_LABELS:
+                try:
+                    if winner_uid == state.challenger_id:
+                        w_old, w_new, l_old, l_new = await update_elo_1v1(
+                            str(state.challenger_id), str(state.opponent_id),
+                            game.elo_key, "duel",
+                        )
+                        self._elo_changes.append(
+                            f"{game.emoji} {game.name}: "
+                            f"**{state.challenger_name}** {fmt_elo_change(w_old, w_new)} | "
+                            f"**{state.opponent_name}** {fmt_elo_change(l_old, l_new)}"
+                        )
+                    elif winner_uid == state.opponent_id:
+                        w_old, w_new, l_old, l_new = await update_elo_1v1(
+                            str(state.opponent_id), str(state.challenger_id),
+                            game.elo_key, "duel",
+                        )
+                        self._elo_changes.append(
+                            f"{game.emoji} {game.name}: "
+                            f"**{state.opponent_name}** {fmt_elo_change(w_old, w_new)} | "
+                            f"**{state.challenger_name}** {fmt_elo_change(l_old, l_new)}"
+                        )
+                    else:
+                        p1_old, p1_new, p2_old, p2_new = await update_elo_draw(
+                            str(state.challenger_id), str(state.opponent_id),
+                            game.elo_key, "duel",
+                        )
+                        self._elo_changes.append(
+                            f"{game.emoji} {game.name}: "
+                            f"**{state.challenger_name}** {fmt_elo_change(p1_old, p1_new)} | "
+                            f"**{state.opponent_name}** {fmt_elo_change(p2_old, p2_new)}"
+                        )
+                except Exception:
+                    log.exception("ELO update failed for %s", game.elo_key)
 
             # Updated scoreboard
             await asyncio.sleep(1)
