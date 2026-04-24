@@ -861,6 +861,12 @@ class SprintTableView(ui.View):
             except Exception:
                 pass
 
+        if table.thread:
+            try:
+                await table.thread.edit(archived=True)
+            except Exception:
+                pass
+
 
 # ── Cog ──────────────────────────────────────────────────────────────────────
 

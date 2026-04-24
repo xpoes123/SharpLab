@@ -1032,6 +1032,11 @@ class NflSimTableView(ui.View):
                     await table.message.edit(embed=embed, view=None)
                 except Exception:
                     pass
+            if table.thread:
+                try:
+                    await table.thread.edit(archived=True)
+                except Exception:
+                    pass
             return
 
         await self._refund_all()
@@ -1044,6 +1049,12 @@ class NflSimTableView(ui.View):
                     colour=discord.Colour.dark_grey(),
                 )
                 await table.message.edit(embed=embed, view=None)
+            except Exception:
+                pass
+
+        if table.thread:
+            try:
+                await table.thread.edit(archived=True)
             except Exception:
                 pass
 

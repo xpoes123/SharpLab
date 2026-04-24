@@ -1283,6 +1283,12 @@ class ValTableView(ui.View):
             except discord.HTTPException:
                 pass
 
+        if table.thread:
+            try:
+                await table.thread.edit(archived=True)
+            except discord.HTTPException:
+                pass
+
     async def _close_table(self, interaction: discord.Interaction) -> None:
         table = self.table
 
@@ -1342,6 +1348,12 @@ class ValTableView(ui.View):
                     colour=discord.Colour.dark_grey(),
                 )
                 await table.message.edit(embed=embed, view=None)
+            except Exception:
+                pass
+
+        if table.thread:
+            try:
+                await table.thread.edit(archived=True)
             except Exception:
                 pass
 
