@@ -228,6 +228,17 @@ CREATE TABLE IF NOT EXISTS game_tokens (
     created_at   TEXT NOT NULL,
     UNIQUE(room_id, discord_user)
 );
+
+CREATE TABLE IF NOT EXISTS geo_accuracy (
+    discord_user  TEXT NOT NULL,
+    country       TEXT NOT NULL,
+    region        TEXT NOT NULL,
+    category      TEXT NOT NULL,
+    correct       INTEGER NOT NULL DEFAULT 0,
+    total         INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (discord_user, country, category)
+);
+CREATE INDEX IF NOT EXISTS idx_geo_accuracy_user ON geo_accuracy(discord_user);
 """
 
 

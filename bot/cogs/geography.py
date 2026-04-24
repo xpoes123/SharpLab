@@ -15,6 +15,7 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from bot.cogs._elo_helpers import fmt_elo_change, update_elo_multiplayer
+from db.queries import record_geo_attempt, get_geo_stats_by_region, get_elo_rating
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -285,6 +286,69 @@ COUNTRY_CODES: dict[str, str] = {
 # ── US State → ISO 3166-2 code (for flag images) ────────────────────────────
 # Used to build flagcdn.com URLs: https://flagcdn.com/w320/us-{code}.png
 
+# ── Country/State → Region mapping (for accuracy stats) ───────────────────
+# Every country in CAPITALS/COUNTRY_CODES maps to one of five regions.
+# US states map to 'Americas'.
+
+COUNTRY_REGIONS: dict[str, str] = {
+    # ── Europe ──
+    "France": "Europe", "Italy": "Europe", "Germany": "Europe", "Spain": "Europe",
+    "United Kingdom": "Europe", "Greece": "Europe", "Sweden": "Europe",
+    "Norway": "Europe", "Denmark": "Europe", "Finland": "Europe",
+    "Portugal": "Europe", "Netherlands": "Europe", "Belgium": "Europe",
+    "Switzerland": "Europe", "Austria": "Europe", "Ireland": "Europe",
+    "Poland": "Europe", "Czech Republic": "Europe", "Hungary": "Europe",
+    "Romania": "Europe", "Ukraine": "Europe", "Croatia": "Europe",
+    "Serbia": "Europe", "Bulgaria": "Europe", "Slovakia": "Europe",
+    "Slovenia": "Europe", "Estonia": "Europe", "Latvia": "Europe",
+    "Lithuania": "Europe", "Iceland": "Europe", "Malta": "Europe",
+    "Luxembourg": "Europe", "Cyprus": "Europe", "Montenegro": "Europe",
+    "North Macedonia": "Europe", "Albania": "Europe",
+    "Bosnia and Herzegovina": "Europe", "Moldova": "Europe",
+    "Belarus": "Europe", "Liechtenstein": "Europe", "Monaco": "Europe",
+    "Andorra": "Europe", "San Marino": "Europe", "Russia": "Europe",
+    "Turkey": "Europe",
+    # ── Asia ──
+    "Japan": "Asia", "China": "Asia", "India": "Asia", "South Korea": "Asia",
+    "Thailand": "Asia", "Indonesia": "Asia", "Philippines": "Asia",
+    "Vietnam": "Asia", "Malaysia": "Asia", "Iraq": "Asia", "Iran": "Asia",
+    "Pakistan": "Asia", "Afghanistan": "Asia", "Bangladesh": "Asia",
+    "Nepal": "Asia", "Cambodia": "Asia", "Singapore": "Asia",
+    "Taiwan": "Asia", "Mongolia": "Asia", "North Korea": "Asia",
+    "Myanmar": "Asia", "Kazakhstan": "Asia", "Uzbekistan": "Asia",
+    "Turkmenistan": "Asia", "Kyrgyzstan": "Asia", "Tajikistan": "Asia",
+    "Azerbaijan": "Asia", "Georgia": "Asia", "Armenia": "Asia",
+    "Sri Lanka": "Asia", "Laos": "Asia", "Brunei": "Asia",
+    "Bhutan": "Asia", "Maldives": "Asia", "Israel": "Asia",
+    "Saudi Arabia": "Asia", "Lebanon": "Asia", "Jordan": "Asia",
+    "Syria": "Asia", "Yemen": "Asia", "Oman": "Asia", "Qatar": "Asia",
+    "Bahrain": "Asia", "Kuwait": "Asia", "United Arab Emirates": "Asia",
+    # ── Africa ──
+    "Egypt": "Africa", "South Africa": "Africa", "Morocco": "Africa",
+    "Nigeria": "Africa", "Kenya": "Africa", "Ethiopia": "Africa",
+    "Ghana": "Africa", "Tanzania": "Africa", "Uganda": "Africa",
+    "Algeria": "Africa", "Tunisia": "Africa", "Libya": "Africa",
+    "Madagascar": "Africa", "Mozambique": "Africa", "Zimbabwe": "Africa",
+    "Zambia": "Africa", "Botswana": "Africa", "Namibia": "Africa",
+    "Senegal": "Africa", "Ivory Coast": "Africa", "Cameroon": "Africa",
+    "Angola": "Africa", "Sudan": "Africa", "Somalia": "Africa",
+    "Eritrea": "Africa", "Rwanda": "Africa",
+    # ── Americas ──
+    "Brazil": "Americas", "Canada": "Americas", "Mexico": "Americas",
+    "United States": "Americas", "Argentina": "Americas", "Cuba": "Americas",
+    "Jamaica": "Americas", "Peru": "Americas", "Chile": "Americas",
+    "Colombia": "Americas", "Venezuela": "Americas", "Ecuador": "Americas",
+    "Bolivia": "Americas", "Paraguay": "Americas", "Uruguay": "Americas",
+    "Panama": "Americas", "Costa Rica": "Americas", "Guatemala": "Americas",
+    "Honduras": "Americas", "El Salvador": "Americas",
+    "Dominican Republic": "Americas", "Haiti": "Americas",
+    "Trinidad and Tobago": "Americas", "Belize": "Americas",
+    "Suriname": "Americas", "Guyana": "Americas",
+    # ── Oceania ──
+    "Australia": "Oceania", "New Zealand": "Oceania",
+    "Papua New Guinea": "Oceania", "Fiji": "Oceania",
+}
+
 US_STATE_CODES: dict[str, str] = {
     "Alabama": "al", "Alaska": "ak", "Arizona": "az", "Arkansas": "ar",
     "California": "ca", "Colorado": "co", "Connecticut": "ct", "Delaware": "de",
@@ -352,6 +416,7 @@ class GeoTable:
     current_subject: str = ""      # display name (country/state) shown in result embeds
     current_question_text: str = ""  # full question string shown during round
     current_answers: list[str] = field(default_factory=list)
+    current_q_type: str = ""               # 'country_cap' | 'state_cap' | 'country_flag' | 'state_flag'
     current_image_url: str | None = None  # flag image URL, or None for text-only rounds
     round_start_time: float = 0.0
     round_winner: int | None = None
@@ -823,6 +888,7 @@ class GeoTableView(ui.View):
         # Set up round 1
         q_type, subject, answers, image_url = self._pick_question()
         table.current_subject = subject
+        table.current_q_type = q_type
         table.current_question_text = self._question_text(q_type, subject)
         table.current_answers = answers
         table.current_image_url = image_url
@@ -911,6 +977,7 @@ class GeoTableView(ui.View):
                 if rnd > 1:
                     q_type, subject, answers, image_url = self._pick_question()
                     table.current_subject = subject
+                    table.current_q_type = q_type
                     table.current_question_text = self._question_text(q_type, subject)
                     table.current_answers = answers
                     table.current_image_url = image_url
@@ -954,6 +1021,11 @@ class GeoTableView(ui.View):
                             )
                         except discord.HTTPException:
                             pass
+
+                # Record a miss for players who didn't answer this round
+                for p in table.players.values():
+                    if p.answer is None:
+                        _fire_stat(str(p.user_id), table, correct=False)
 
                 # Check if someone hit the win target or safety cap
                 if any(p.rounds_won >= WINS_TO_WIN for p in table.players.values()):
@@ -1057,6 +1129,38 @@ class GeoTableView(ui.View):
                 pass
 
 
+# ── Accuracy stat helpers ──────────────────────────────────────────────────
+
+# Map q_type to the DB category column
+_QTYPE_TO_CATEGORY: dict[str, str] = {
+    "country_cap": "country_cap",
+    "state_cap": "state_cap",
+    "country_flag": "country_flag",
+    "state_flag": "state_flag",
+}
+
+
+def _stat_info(table: GeoTable) -> tuple[str, str, str]:
+    """Return (country, region, category) for the current round's question."""
+    q_type = table.current_q_type
+    category = _QTYPE_TO_CATEGORY.get(q_type, q_type)
+
+    if q_type in ("state_cap", "state_flag"):
+        return "US", "Americas", category
+
+    country = table.current_subject
+    region = COUNTRY_REGIONS.get(country, "Unknown")
+    return country, region, category
+
+
+def _fire_stat(discord_user: str, table: GeoTable, correct: bool) -> None:
+    """Fire-and-forget a geo accuracy DB write."""
+    country, region, category = _stat_info(table)
+    asyncio.create_task(
+        record_geo_attempt(discord_user, country, region, category, correct)
+    )
+
+
 # ── Cog ─────────────────────────────────────────────────────────────────────
 
 
@@ -1089,6 +1193,81 @@ class GeographyCog(commands.Cog):
         embed = _betting_embed(table)
         await interaction.response.send_message(embed=embed, view=view)
         table.message = await interaction.original_response()
+
+    @app_commands.command(
+        name="geo-stats",
+        description="Your geography accuracy stats by region",
+    )
+    async def geo_stats(
+        self, interaction: discord.Interaction, user: discord.Member | None = None,
+    ) -> None:
+        target = user or interaction.user
+        user_id = str(target.id)
+
+        region_stats = await get_geo_stats_by_region(user_id)
+        elo_data = await get_elo_rating(user_id, "geography")
+
+        total_correct = sum(r["correct"] for r in region_stats)
+        total_attempts = sum(r["total"] for r in region_stats)
+        overall_pct = (total_correct / total_attempts * 100) if total_attempts > 0 else 0.0
+
+        embed = discord.Embed(
+            title=f"\U0001f30d Geography Stats — {target.display_name}",
+            colour=discord.Colour.blue(),
+        )
+
+        if total_attempts == 0:
+            embed.description = "No geography attempts recorded yet."
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        embed.description = f"**Overall Accuracy:** {total_correct}/{total_attempts} ({overall_pct:.1f}%)"
+
+        region_emojis = {
+            "Europe": "\U0001f1ea\U0001f1fa",
+            "Asia": "\U0001f30f",
+            "Africa": "\U0001f30d",
+            "Americas": "\U0001f30e",
+            "Oceania": "\U0001f3dd\ufe0f",
+        }
+
+        weakest_region = None
+        weakest_pct = 101.0
+
+        lines: list[str] = []
+        for r in region_stats:
+            pct = r["correct"] / r["total"] * 100 if r["total"] > 0 else 0.0
+            if r["total"] > 0 and pct < weakest_pct:
+                weakest_pct = pct
+                weakest_region = r["region"]
+
+            if pct >= 70:
+                indicator = "\U0001f7e2"
+            elif pct >= 40:
+                indicator = "\U0001f7e1"
+            else:
+                indicator = "\U0001f534"
+
+            emoji = region_emojis.get(r["region"], "\U0001f30d")
+            lines.append(
+                f"{indicator} {emoji} **{r['region']}** — "
+                f"{r['correct']}/{r['total']} ({pct:.1f}%)"
+            )
+
+        embed.add_field(name="By Region", value="\n".join(lines), inline=False)
+
+        if weakest_region:
+            emoji = region_emojis.get(weakest_region, "\U0001f30d")
+            embed.add_field(
+                name="\U0001f4aa Weakest Region",
+                value=f"{emoji} {weakest_region} ({weakest_pct:.1f}%)",
+                inline=True,
+            )
+
+        games_played = elo_data.get("games_played", 0)
+        embed.add_field(name="Games Played", value=str(games_played), inline=True)
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @commands.Cog.listener("on_message")
     async def on_message(self, message: discord.Message) -> None:
@@ -1133,6 +1312,8 @@ class GeographyCog(commands.Cog):
             player.rounds_won += 1
             table.round_winner = uid
 
+            _fire_stat(str(uid), table, correct=True)
+
             try:
                 await message.add_reaction("\u2705")
             except discord.HTTPException:
@@ -1140,6 +1321,8 @@ class GeographyCog(commands.Cog):
 
             table.round_solved.set()
         else:
+            _fire_stat(str(uid), table, correct=False)
+
             try:
                 await message.add_reaction("\u274c")
             except discord.HTTPException:

@@ -14,6 +14,12 @@ import sys
 import types
 
 _queries_stub = types.ModuleType("db.queries")
+# Stub out functions the geography module imports at module level
+async def _noop(*a, **kw):
+    pass
+_queries_stub.record_geo_attempt = _noop
+_queries_stub.get_geo_stats_by_region = _noop
+_queries_stub.get_elo_rating = _noop
 if "db.queries" not in sys.modules:
     _db_stub = types.ModuleType("db")
     _db_stub.queries = _queries_stub
