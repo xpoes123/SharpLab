@@ -25,7 +25,7 @@ LANDMARKS: dict[str, list[tuple[str, str]]] = {
         ("Alhambra", "https://upload.wikimedia.org/wikipedia/commons/thumb/d/de/Dawn_Charles_V_702702.jpg/800px-Dawn_Charles_V_702702.jpg"),
     ],
     "Greece": [
-        ("Acropolis", "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/Camponotus_lateralis_ant.jpg/800px-Camponotus_lateralis_ant.jpg"),
+        ("Acropolis", "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d4/The_Parthenon_in_Athens.jpg/800px-The_Parthenon_in_Athens.jpg"),
         ("Santorini", "https://upload.wikimedia.org/wikipedia/commons/thumb/3/37/Ia_Santorini-2009-1.jpg/800px-Ia_Santorini-2009-1.jpg"),
     ],
     "Germany": [
