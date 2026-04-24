@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Floor — SharpLab</title>
+    <link rel="stylesheet" href="/style.css">
+    <link rel="stylesheet" href="/tradingfloor.css">
+</head>
+<body>
+    <div class="tf-container">
+        <div id="connection-status" class="status-bar"></div>
+
+        <!-- Lobby -->
+        <div id="lobby" class="phase active">
+            <h1>📈 Trading Floor</h1>
+            <p class="subtitle">Trade 4 correlated stocks over 8 rounds. Player trades move prices. Insider tips. NPC noise. Highest portfolio wins.</p>
+            <div class="lobby-info">
+                <div class="pot-label">Prize Pool</div>
+                <div class="pot" id="lobby-pot">0c</div>
+            </div>
+            <ul class="player-list" id="lobby-players"></ul>
+            <button id="start-btn" class="btn-primary" disabled>Start Game</button>
+            <p class="waiting-text" id="waiting-text">Waiting for players to connect...</p>
+        </div>
+
+        <!-- Game -->
+        <div id="game" class="phase">
+            <div class="game-header">
+                <div class="round-info">Round <span id="round-num">1</span>/8</div>
+                <div class="timer" id="timer">45</div>
+                <div class="cash-display">Cash: <span id="my-cash">10,000</span>c</div>
+            </div>
+
+            <!-- Tip banner (hidden by default) -->
+            <div id="tip-banner" class="tip-banner" style="display:none"></div>
+
+            <!-- Stock Grid -->
+            <div class="stock-grid" id="stock-grid"></div>
+
+            <!-- Portfolio -->
+            <div class="portfolio-panel" id="portfolio-panel">
+                <div class="section-label">YOUR POSITIONS</div>
+                <div id="positions-list" class="positions-list">No positions</div>
+                <div class="pnl-row">
+                    <span>Portfolio Value</span>
+                    <span id="portfolio-value" class="num">10,000c</span>
+                </div>
+                <div class="pnl-row">
+                    <span>P&L</span>
+                    <span id="portfolio-pnl" class="num">0c</span>
+                </div>
+            </div>
+
+            <!-- Trade Panel -->
+            <div class="trade-panel">
+                <div class="trade-row">
+                    <select id="trade-ticker" class="trade-input">
+                        <option value="CHIP">💻 CHIP</option>
+                        <option value="SOFT">📱 SOFT</option>
+                        <option value="OIL">🛢️ OIL</option>
+                        <option value="SOLAR">☀️ SOLAR</option>
+                    </select>
+                    <button id="buy-btn" class="trade-btn buy-btn">Buy</button>
+                    <button id="sell-btn" class="trade-btn sell-btn">Sell</button>
+                    <button id="short-btn" class="trade-btn short-btn">Short</button>
+                </div>
+                <div class="trade-row-secondary">
+                    <button id="cover-btn" class="secondary-btn">Cover Short</button>
+                    <button id="cancel-btn" class="secondary-btn">Cancel Orders</button>
+                </div>
+            </div>
+
+            <!-- Event Reveal -->
+            <div id="event-reveal" class="event-reveal" style="display:none"></div>
+
+            <!-- News Feed -->
+            <div class="news-feed">
+                <div class="section-label">NEWS FEED</div>
+                <div id="news-list" class="news-list"></div>
+            </div>
+
+            <!-- Recent Trades -->
+            <div class="trade-log">
+                <div class="section-label">RECENT TRADES</div>
+                <div id="trade-log-list"></div>
+            </div>
+
+            <!-- Standings -->
+            <div class="section-label">STANDINGS</div>
+            <div id="standings" class="standings"></div>
+        </div>
+
+        <!-- Results -->
+        <div id="results" class="phase">
+            <h1>Game Over</h1>
+            <div class="section-label" style="margin-top:16px">STOCK PERFORMANCE</div>
+            <div id="stock-results" class="stock-results"></div>
+            <div class="section-label">FINAL STANDINGS</div>
+            <table class="results-table">
+                <thead><tr>
+                    <th>#</th><th>Player</th><th>Portfolio</th><th>P&L</th><th>Trades</th><th>Net</th>
+                </tr></thead>
+                <tbody id="results-body"></tbody>
+            </table>
+            <a href="/" class="back-link" style="display:block;text-align:center;margin-top:20px">&larr; Back to Leaderboard</a>
+        </div>
+    </div>
+    <script src="/tradingfloor.js"></script>
+</body>
+</html>

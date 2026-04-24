@@ -58,6 +58,7 @@ GAME_LABELS: dict[str, str] = {
     "figgie": "Figgie",
     "mathsprint": "Math Sprint",
     "pokemon": "Who's That Pokemon?",
+    "tradingfloor": "Trading Floor",
 }
 
 GAME_CATEGORIES: list[tuple[str, str]] = [

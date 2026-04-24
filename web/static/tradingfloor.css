@@ -1,0 +1,405 @@
+/* Trading Floor — Market Simulation Styles */
+
+.tf-container {
+    max-width: 750px;
+    margin: 0 auto;
+    padding: 16px;
+    min-height: 100vh;
+}
+
+.tf-container h1 {
+    text-align: center;
+    color: var(--accent);
+    font-size: 1.6rem;
+    margin-bottom: 4px;
+}
+
+.phase { display: none; }
+.phase.active { display: block; }
+
+/* ── Game Header ────────────────────────────────────────────────────────── */
+
+.game-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 12px;
+}
+
+.round-info {
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+
+.timer {
+    font-size: 1.4rem;
+    font-weight: 700;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    color: var(--accent);
+}
+
+.timer.urgent { color: var(--red); }
+
+.cash-display {
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    font-size: 0.9rem;
+    color: var(--green);
+}
+
+/* ── Tip Banner ─────────────────────────────────────────────────────────── */
+
+.tip-banner {
+    padding: 12px 16px;
+    background: rgba(241, 196, 15, 0.1);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+    margin-bottom: 12px;
+    font-size: 0.85rem;
+    color: var(--accent);
+}
+
+.tip-banner .tip-label {
+    font-weight: 700;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+
+/* ── Stock Grid ─────────────────────────────────────────────────────────── */
+
+.stock-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.stock-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    text-align: center;
+    transition: border-color 0.2s;
+}
+
+.stock-card.halted {
+    border-color: var(--red);
+    opacity: 0.6;
+}
+
+.stock-card .stock-emoji { font-size: 1.3rem; }
+
+.stock-card .stock-ticker {
+    font-weight: 700;
+    font-size: 0.85rem;
+    margin-top: 2px;
+}
+
+.stock-card .stock-price {
+    font-size: 1.3rem;
+    font-weight: 700;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    margin: 4px 0;
+}
+
+.stock-card .stock-change {
+    font-size: 0.8rem;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+}
+
+.stock-card .stock-sparkline {
+    font-size: 0.7rem;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+.stock-card .stock-book {
+    font-size: 0.7rem;
+    margin-top: 4px;
+    color: var(--text-muted);
+}
+
+.stock-card .stock-book .bid { color: var(--green); }
+.stock-card .stock-book .ask { color: var(--red); }
+
+/* ── Portfolio Panel ────────────────────────────────────────────────────── */
+
+.portfolio-panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    margin-bottom: 12px;
+}
+
+.positions-list {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+}
+
+.position-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 3px 0;
+    font-size: 0.85rem;
+}
+
+.position-row .pos-ticker { font-weight: 600; }
+
+.position-row .pos-qty {
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+}
+
+.pnl-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+    font-size: 0.85rem;
+    border-top: 1px solid var(--border);
+}
+
+.pnl-row:first-of-type { margin-top: 4px; }
+
+/* ── Trade Panel ────────────────────────────────────────────────────────── */
+
+.trade-panel { margin-bottom: 12px; }
+
+.trade-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.trade-row-secondary {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.trade-input {
+    background: var(--card);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    font-size: 0.9rem;
+    font-family: inherit;
+    flex: 1;
+}
+
+.trade-input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.trade-btn {
+    padding: 10px 18px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    font-family: inherit;
+    border: none;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.trade-btn:hover { opacity: 0.9; }
+
+.buy-btn { background: var(--green); color: var(--bg); }
+.sell-btn { background: var(--red); color: white; }
+.short-btn { background: #e67e22; color: white; }
+
+.secondary-btn {
+    flex: 1;
+    padding: 8px;
+    font-size: 0.8rem;
+    font-family: inherit;
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+}
+
+.secondary-btn:hover { color: var(--text); border-color: var(--text-muted); }
+
+/* ── Event Reveal ───────────────────────────────────────────────────────── */
+
+.event-reveal {
+    padding: 12px 16px;
+    background: var(--card);
+    border: 1px solid var(--accent-dim);
+    border-radius: var(--radius);
+    margin-bottom: 12px;
+    text-align: center;
+}
+
+.event-reveal .event-emoji { font-size: 1.8rem; }
+
+.event-reveal .event-name {
+    font-weight: 700;
+    font-size: 1rem;
+    color: var(--accent);
+    margin: 4px 0;
+}
+
+.event-reveal .event-desc {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.event-reveal .event-effects {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    margin-top: 8px;
+    font-size: 0.8rem;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+}
+
+/* ── Section Labels ─────────────────────────────────────────────────────── */
+
+.section-label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+}
+
+/* ── News Feed ──────────────────────────────────────────────────────────── */
+
+.news-feed { margin-bottom: 12px; }
+
+.news-list {
+    max-height: 120px;
+    overflow-y: auto;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.news-item {
+    padding: 3px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+/* ── Trade Log ──────────────────────────────────────────────────────────── */
+
+.trade-log { margin-bottom: 12px; }
+
+.trade-entry {
+    display: flex;
+    justify-content: space-between;
+    padding: 3px 8px;
+    font-size: 0.8rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.trade-entry .trade-action { font-weight: 600; }
+.trade-entry .trade-action.buy { color: var(--green); }
+.trade-entry .trade-action.sell, .trade-entry .trade-action.short { color: var(--red); }
+
+.trade-entry .trade-price {
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    color: var(--accent);
+}
+
+/* ── Standings ──────────────────────────────────────────────────────────── */
+
+.standings { margin-bottom: 12px; }
+
+.standing-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 10px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 4px;
+    font-size: 0.85rem;
+}
+
+.standing-pv {
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    color: var(--accent);
+}
+
+.standing-pnl {
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    font-size: 0.8rem;
+    margin-left: 8px;
+}
+
+/* ── Results ────────────────────────────────────────────────────────────── */
+
+.stock-results {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.stock-result-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    text-align: center;
+}
+
+.stock-result-card .result-ticker {
+    font-weight: 700;
+    font-size: 0.9rem;
+}
+
+.stock-result-card .result-price {
+    font-size: 1.1rem;
+    font-weight: 600;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    margin: 4px 0;
+}
+
+.stock-result-card .result-return {
+    font-size: 0.8rem;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+}
+
+.stock-result-card .result-sparkline {
+    font-size: 0.7rem;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+/* ── Round Closed Banner ────────────────────────────────────────────────── */
+
+.round-closed-banner {
+    text-align: center;
+    padding: 10px;
+    background: rgba(248, 81, 73, 0.1);
+    border: 1px solid var(--red);
+    border-radius: var(--radius);
+    color: var(--red);
+    font-weight: 600;
+    margin-bottom: 12px;
+    font-size: 0.85rem;
+}
+
+/* ── Responsive ─────────────────────────────────────────────────────────── */
+
+@media (max-width: 600px) {
+    .stock-grid { grid-template-columns: repeat(2, 1fr); }
+    .stock-results { grid-template-columns: repeat(2, 1fr); }
+    .trade-row { flex-wrap: wrap; }
+    .trade-input { flex: 1 1 100%; }
+    .trade-btn { flex: 1; }
+}
