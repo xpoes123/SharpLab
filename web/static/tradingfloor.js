@@ -15,7 +15,9 @@ let lastStockPrices = {};
 let settingsRounds = 8;
 let settingsTime = 45;
 let totalRounds = 8;
-let myPositions = {};  // ticker -> qty, for sell/short button label
+let myPositions = {};
+let tradeOpen = false;
+let timerInterval = null;
 
 // ── WebSocket ────────────────────────────────────────────────────────────
 
@@ -45,7 +47,6 @@ function handleMessage(msg) {
         case 'timer':           onTimer(msg); break;
         case 'market_state':    onMarketState(msg); break;
         case 'portfolio':       onPortfolio(msg); break;
-        case 'tip':             onTip(msg); break;
         case 'intel':           onIntel(msg); break;
         case 'trade_executed':  onTradeExecuted(msg); break;
         case 'analyst_pick':    onAnalystPick(msg); break;
@@ -60,6 +61,26 @@ function showPhase(id) {
     gamePhase = id;
     document.querySelectorAll('.phase').forEach(el => el.classList.remove('active'));
     document.getElementById(id).classList.add('active');
+}
+
+function setTradeButtons(enabled) {
+    tradeOpen = enabled;
+    const btns = ['buy-btn', 'sell-btn', 'sell-all-btn'];
+    btns.forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) {
+            btn.disabled = !enabled;
+            btn.style.opacity = enabled ? '1' : '0.4';
+        }
+    });
+}
+
+function selectTicker(ticker) {
+    selectedTicker = ticker;
+    document.querySelectorAll('.ticker-btn').forEach(b => b.classList.remove('active'));
+    const btn = document.querySelector(`.ticker-btn[data-ticker="${ticker}"]`);
+    if (btn) btn.classList.add('active');
+    updateSellButtonLabel();
 }
 
 // ── Lobby ─────────────────────────────────────────────────────────────────
@@ -96,12 +117,12 @@ function onGameStart(msg) {
     document.getElementById('my-cash').textContent = fmt(10000);
     document.getElementById('tip-banner').style.display = 'none';
     document.getElementById('event-reveal').style.display = 'none';
-    // Reset analyst slots
     for (let i = 0; i < 2; i++) {
         const slot = document.getElementById(`analyst-${i}`);
         if (slot) slot.querySelector('.analyst-call').textContent = '\u2014';
     }
     lastStockPrices = {};
+    setTradeButtons(false);
 }
 
 // ── Round Start/End ───────────────────────────────────────────────────────
@@ -109,10 +130,10 @@ function onGameStart(msg) {
 function onRoundStart(msg) {
     showPhase('game');
     document.getElementById('round-num').textContent = `${msg.round_num}/${totalRounds}`;
-    document.getElementById('timer').textContent = msg.time_limit;
     document.getElementById('timer').classList.remove('urgent');
     document.getElementById('event-reveal').style.display = 'none';
-    // Reset analyst calls for new round
+    setTradeButtons(true);
+    // Reset analyst calls
     for (let i = 0; i < 2; i++) {
         const slot = document.getElementById(`analyst-${i}`);
         if (slot) {
@@ -120,17 +141,30 @@ function onRoundStart(msg) {
             slot.className = 'analyst-slot';
         }
     }
-    // Remove closed banner
     const banner = document.querySelector('.round-closed-banner');
     if (banner) banner.remove();
-    // Remove any price flash animations
     document.querySelectorAll('.stock-card').forEach(c => {
         c.classList.remove('flash-up', 'flash-down');
     });
+
+    // Client-side timer countdown
+    clearInterval(timerInterval);
+    let remaining = msg.time_limit;
+    document.getElementById('timer').textContent = remaining;
+    timerInterval = setInterval(() => {
+        remaining--;
+        if (remaining < 0) remaining = 0;
+        const el = document.getElementById('timer');
+        el.textContent = remaining;
+        if (remaining <= 10) el.classList.add('urgent');
+        if (remaining <= 0) clearInterval(timerInterval);
+    }, 1000);
 }
 
 function onRoundEnd(msg) {
+    clearInterval(timerInterval);
     document.getElementById('timer').textContent = '0';
+    setTradeButtons(false);
     const game = document.getElementById('game');
     const existing = document.querySelector('.round-closed-banner');
     if (!existing) {
@@ -144,6 +178,7 @@ function onRoundEnd(msg) {
 }
 
 function onTimer(msg) {
+    // Server timer sync (corrects drift)
     const el = document.getElementById('timer');
     el.textContent = msg.remaining;
     if (msg.remaining <= 10) el.classList.add('urgent');
@@ -167,13 +202,17 @@ function renderStocks(stocks) {
         card.id = `stock-${ticker}`;
         const changeClass = s.change_pct > 0 ? 'positive' : s.change_pct < 0 ? 'negative' : '';
         const changeStr = s.change_pct > 0 ? `+${s.change_pct}%` : `${s.change_pct}%`;
+        const sectorTag = s.sector === 'tech' ? 'TECH' : 'ENERGY';
         card.innerHTML = `
             <div class="stock-emoji">${s.emoji}</div>
-            <div class="stock-ticker">${ticker}</div>
+            <div class="stock-ticker">${ticker} <span class="stock-sector">${sectorTag}</span></div>
             <div class="stock-price">${s.price.toFixed(1)}</div>
             <div class="stock-change ${changeClass}">${changeStr}</div>
             ${s.halted ? '<div style="color:var(--red);font-size:0.7rem;font-weight:600">HALTED</div>' : ''}
         `;
+        // Clickable stock cards to select ticker
+        card.addEventListener('click', () => selectTicker(ticker));
+        card.style.cursor = 'pointer';
         grid.appendChild(card);
         lastStockPrices[ticker] = s.price;
     }
@@ -210,13 +249,18 @@ function updateSellButtonLabel() {
     const btn = document.getElementById('sell-btn');
     if (!btn) return;
     const qty = myPositions[selectedTicker] || 0;
-    btn.textContent = qty > 0 ? 'Sell' : 'Short';
+    if (qty > 0) {
+        btn.textContent = 'Sell';
+        btn.className = 'trade-btn sell-btn';
+    } else {
+        btn.textContent = 'Short';
+        btn.className = 'trade-btn short-btn';
+    }
 }
 
 function onPortfolio(msg) {
     document.getElementById('my-cash').textContent = fmt(msg.cash);
     document.getElementById('portfolio-value').textContent = fmt(msg.portfolio_value) + 'c';
-    // Track positions for sell/short button label
     myPositions = {};
     (msg.positions || []).forEach(p => { myPositions[p.ticker] = p.qty; });
     updateSellButtonLabel();
@@ -241,7 +285,6 @@ function onPortfolio(msg) {
             row.innerHTML = `<span class="pos-ticker">${p.emoji} ${p.ticker} <span class="pos-alloc">${alloc}%</span></span><span class="pos-qty">${label} @ ${p.avg_entry} \u2192 ${p.price} <span class="${pnlClass}">(${pnlStr}c)</span></span>`;
             posList.appendChild(row);
         });
-        // Show cash allocation
         const cashAlloc = pv > 0 ? Math.round(msg.cash / pv * 100) : 100;
         const cashRow = document.createElement('div');
         cashRow.className = 'position-row cash-row';
@@ -250,18 +293,9 @@ function onPortfolio(msg) {
     }
 }
 
-// ── Tip ───────────────────────────────────────────────────────────────────
-
-function onTip(msg) {
-    // Legacy tip handler (kept for compatibility)
-    const banner = document.getElementById('tip-banner');
-    banner.style.display = 'block';
-    banner.innerHTML = `<div class="tip-label">\ud83d\udd12 Insider Tip \u2014 Round ${msg.round}</div>${esc(msg.text)}`;
-    setTimeout(() => { banner.style.display = 'none'; }, 35000);
-}
+// ── Intel ─────────────────────────────────────────────────────────────────
 
 function onIntel(msg) {
-    // Range intel: 1 stock with a range estimate
     const banner = document.getElementById('tip-banner');
     banner.style.display = 'block';
     const low = msg.low;
@@ -279,25 +313,20 @@ function onTradeExecuted(msg) {
     showToast(`${msg.player_name}: ${msg.action} ${msg.qty}\u00d7 ${msg.ticker} @ ${msg.price}`, 'success');
 }
 
-// ── Analyst Picks (2 persistent slots) ───────────────────────────────────
+// ── Analyst Picks ────────────────────────────────────────────────────────
 
-const analystSlotMap = {
-    'Cramer': 0,
-    'Pelosi': 1,
-};
+const analystSlotMap = { 'Cramer': 0, 'Pelosi': 1 };
 
 function onAnalystPick(msg) {
     const slotIdx = analystSlotMap[msg.analyst];
     if (slotIdx === undefined) return;
     const slot = document.getElementById(`analyst-${slotIdx}`);
     if (!slot) return;
-
     const callEl = slot.querySelector('.analyst-call');
     callEl.innerHTML = `
         <div class="pick-row"><span class="pick-tag buy">BUY</span><span class="pick-ticker">${esc(msg.buy_ticker)}</span><span class="pick-reason">${esc(msg.buy_reason)}</span></div>
         <div class="pick-row"><span class="pick-tag sell">SELL</span><span class="pick-ticker">${esc(msg.sell_ticker)}</span><span class="pick-reason">${esc(msg.sell_reason)}</span></div>
     `;
-
     slot.classList.add('pick-flash');
     setTimeout(() => slot.classList.remove('pick-flash'), 600);
 }
@@ -308,18 +337,13 @@ function onPricesUpdated(msg) {
     for (const [ticker, data] of Object.entries(msg.stocks)) {
         const card = document.getElementById(`stock-${ticker}`);
         if (!card) continue;
-
         const change = data.change;
         const cls = change > 0 ? 'flash-up' : change < 0 ? 'flash-down' : '';
         if (cls) card.classList.add(cls);
-
-        // Floating change indicator
         const overlay = document.createElement('div');
         overlay.className = `price-change-overlay ${change > 0 ? 'up' : 'down'}`;
         overlay.textContent = change > 0 ? `+${change.toFixed(1)}` : change.toFixed(1);
         card.appendChild(overlay);
-
-        // Smooth count animation: price rolls from old to new over 1.5s
         const priceEl = card.querySelector('.stock-price');
         if (priceEl) {
             const startVal = data.prev;
@@ -329,7 +353,6 @@ function onPricesUpdated(msg) {
             function tick(now) {
                 const elapsed = now - startTime;
                 const progress = Math.min(elapsed / duration, 1);
-                // Ease out quad
                 const eased = 1 - (1 - progress) * (1 - progress);
                 const current = startVal + (endVal - startVal) * eased;
                 priceEl.textContent = current.toFixed(1);
@@ -337,7 +360,6 @@ function onPricesUpdated(msg) {
             }
             requestAnimationFrame(tick);
         }
-
         setTimeout(() => {
             overlay.remove();
             card.classList.remove('flash-up', 'flash-down');
@@ -345,7 +367,7 @@ function onPricesUpdated(msg) {
     }
 }
 
-// ── Event Reveal (animate on stock cards) ────────────────────────────────
+// ── Event Reveal ─────────────────────────────────────────────────────────
 
 function onEventReveal(msg) {
     const el = document.getElementById('event-reveal');
@@ -364,13 +386,14 @@ function onEventReveal(msg) {
         <div class="event-desc">${esc(evt.desc)}</div>
         <div class="event-effects">${effectsHtml}</div>
     `;
-    document.getElementById('tip-banner').style.display = 'none';
+    // Keep intel visible alongside event reveal (don't hide it)
 }
 
 // ── Game Over ─────────────────────────────────────────────────────────────
 
 function onGameOver(msg) {
     showPhase('results');
+    clearInterval(timerInterval);
 
     const stockResults = document.getElementById('stock-results');
     stockResults.innerHTML = '';
@@ -396,8 +419,10 @@ function onGameOver(msg) {
         const badge = i < 3 ? medals[i] : (i + 1);
         const pnlClass = r.pnl > 0 ? 'positive' : r.pnl < 0 ? 'negative' : '';
         const netClass = r.net > 0 ? 'positive' : r.net < 0 ? 'negative' : '';
+        const winnerClass = r.is_winner ? ' winner-row' : '';
+        tr.className = winnerClass;
         tr.innerHTML = `
-            <td>${badge}</td>
+            <td>${badge}${r.is_winner ? ' \ud83d\udc51' : ''}</td>
             <td>${esc(r.display_name)}</td>
             <td class="num">${fmt(r.final_cash)}c</td>
             <td class="num ${pnlClass}">${r.pnl > 0 ? '+' : ''}${fmt(r.pnl)}</td>
@@ -419,16 +444,6 @@ function esc(s) {
 
 function fmt(n) {
     return Math.round(n).toLocaleString();
-}
-
-function sparkline(history) {
-    if (!history || history.length < 2) return '';
-    const chars = '\u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588';
-    const lo = Math.min(...history);
-    const hi = Math.max(...history);
-    const rng = hi - lo;
-    if (rng === 0) return chars[3].repeat(history.length);
-    return history.map(v => chars[Math.min(7, Math.floor((v - lo) / rng * 7))]).join('');
 }
 
 function setStatus(text, cls) {
@@ -459,7 +474,6 @@ document.addEventListener('DOMContentLoaded', () => {
         send({ type: 'start', rounds: settingsRounds, round_seconds: settingsTime });
     });
 
-    // Rounds selector
     document.querySelectorAll('.rounds-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             document.querySelectorAll('.rounds-btn').forEach(b => b.classList.remove('active'));
@@ -468,7 +482,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // Round time selector
     document.querySelectorAll('.time-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
@@ -477,7 +490,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // Leverage selector (3 buttons)
     document.querySelectorAll('.leverage-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             document.querySelectorAll('.leverage-btn').forEach(b => b.classList.remove('active'));
@@ -486,17 +498,10 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // Ticker selector (4 buttons)
     document.querySelectorAll('.ticker-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            document.querySelectorAll('.ticker-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            selectedTicker = btn.dataset.ticker;
-            updateSellButtonLabel();
-        });
+        btn.addEventListener('click', () => selectTicker(btn.dataset.ticker));
     });
 
-    // Quantity selector
     document.querySelectorAll('.qty-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             document.querySelectorAll('.qty-btn').forEach(b => b.classList.remove('active'));
@@ -509,14 +514,11 @@ document.addEventListener('DOMContentLoaded', () => {
         send({ type: 'buy', ticker: selectedTicker, qty: selectedQty * leverageMode });
     });
 
-    // Sell button: sells if you have shares, shorts if you don't
     document.getElementById('sell-btn').addEventListener('click', () => {
         send({ type: 'sell_or_short', ticker: selectedTicker, qty: selectedQty * leverageMode });
     });
 
-    // Close position: sells all longs or covers all shorts
     document.getElementById('sell-all-btn').addEventListener('click', () => {
         send({ type: 'close_position', ticker: selectedTicker });
     });
-
 });

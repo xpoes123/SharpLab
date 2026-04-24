@@ -709,10 +709,37 @@
 
 /* ── Responsive ─────────────────────────────────────────────────────────── */
 
+/* ── Winner Row ──────────────────────────────────────────────────────────── */
+
+.winner-row {
+    background: var(--accent-dim) !important;
+}
+
+.winner-row td:first-child {
+    font-weight: 700;
+}
+
+/* ── Sector Tag ─────────────────────────────────────────────────────────── */
+
+.stock-sector {
+    font-size: 0.55rem;
+    font-weight: 600;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: var(--border);
+    color: var(--text-muted);
+    vertical-align: middle;
+    margin-left: 2px;
+}
+
+/* ── Responsive ─────────────────────────────────────────────────────────── */
+
 @media (max-width: 600px) {
     .stock-grid { grid-template-columns: repeat(2, 1fr); }
     .stock-results { grid-template-columns: repeat(2, 1fr); }
+    .ticker-row { flex-wrap: wrap; }
     .trade-row { flex-wrap: wrap; }
     .trade-input { flex: 1 1 100%; }
     .trade-btn { flex: 1; }
+    .trade-controls-row { flex-wrap: wrap; }
 }

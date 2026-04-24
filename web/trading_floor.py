@@ -75,12 +75,6 @@ EVENT_CARDS = [
      "effects": {"CHIP": 0.15, "SOFT": 0.10, "OIL": 0.05, "SOLAR": 0.10}},
 ]
 
-TIP_TEMPLATES = [
-    "Insider tip: {sector} sector expected to move {direction}.",
-    "Rumor: {name} — {desc}",
-    "Sources say {ticker} will {direction_verb} next round.",
-]
-
 # ── Dataclasses ────────────────────────────────────────────────────────────
 
 
@@ -150,6 +144,7 @@ class TradingFloor:
     next_order_id: int = 0
     custom_rounds: int = 0  # 0 = use default NUM_ROUNDS
     custom_time: int = 0    # 0 = use default ROUND_SECONDS
+    active_round_seconds: int = ROUND_SECONDS  # set at game start for bot/NPC use
 
 
 rooms: dict[str, TradingFloor] = {}
@@ -320,17 +315,6 @@ async def _handle_message(room: TradingFloor, player: TFPlayer, data: dict) -> N
         else:
             await _handle_market_order(room, player, ticker, qty, "short")
 
-    elif msg_type == "sell_all":
-        ticker = data.get("ticker", "").upper()
-        if ticker not in room.stocks:
-            await _send_error(player, "Invalid ticker")
-            return
-        held = player.positions.get(ticker, 0)
-        if held <= 0:
-            await _send_error(player, "No shares to sell")
-            return
-        await _handle_market_order(room, player, ticker, held, "sell")
-
     elif msg_type == "close_position":
         # Close any position: sell longs or cover shorts
         ticker = data.get("ticker", "").upper()
@@ -344,17 +328,6 @@ async def _handle_message(room: TradingFloor, player: TFPlayer, data: dict) -> N
             await _handle_market_order(room, player, ticker, abs(pos), "buy")
         else:
             await _send_error(player, "No position to close")
-
-    elif msg_type == "cover":
-        ticker = data.get("ticker", "").upper()
-        if ticker not in room.stocks:
-            await _send_error(player, "Invalid ticker")
-            return
-        qty = player.positions.get(ticker, 0)
-        if qty >= 0:
-            await _send_error(player, "No short position to cover")
-            return
-        await _handle_market_order(room, player, ticker, abs(qty), "buy")
 
     elif msg_type == "limit_order":
         await _handle_limit_order(room, player, data)
@@ -634,7 +607,7 @@ async def _run_bot_trades(room: TradingFloor) -> None:
         return
 
     num_actions = random.randint(4, 8)
-    interval = (ROUND_SECONDS - 6) / max(num_actions, 1)
+    interval = (room.active_round_seconds - 6) / max(num_actions, 1)
 
     for i in range(num_actions):
         await asyncio.sleep(interval + random.uniform(-1, 1))
@@ -771,6 +744,7 @@ async def _game_loop(room: TradingFloor) -> None:
         # Use custom settings or defaults
         num_rounds = room.custom_rounds if room.custom_rounds > 0 else NUM_ROUNDS
         round_seconds = room.custom_time if room.custom_time > 0 else ROUND_SECONDS
+        room.active_round_seconds = round_seconds
 
         # Shuffle and draw event deck
         deck = list(EVENT_CARDS)
