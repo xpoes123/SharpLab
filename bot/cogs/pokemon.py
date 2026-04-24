@@ -2207,6 +2207,7 @@ class PokeTable:
     total_rounds_played: int = 0
     used_ids: set[int] = field(default_factory=set)
     round_messages: list[discord.Message] = field(default_factory=list)
+    stop_requested: bool = False
 
 
 @dataclass
@@ -2229,7 +2230,6 @@ class SoloSession:
     round_solved: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     race_task: asyncio.Task | None = field(default=None, repr=False)
     round_messages: list[discord.Message] = field(default_factory=list)
-    stop_requested: bool = False
 
 
 # ── Embeds ───────────────────────────────────────────────────────────────────
