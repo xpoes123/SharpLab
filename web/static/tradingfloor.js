@@ -211,8 +211,9 @@ function onPortfolio(msg) {
             const row = document.createElement('div');
             row.className = 'position-row';
             const label = p.qty < 0 ? `SHORT ${Math.abs(p.qty)}` : `LONG ${p.qty}`;
-            const valClass = p.value > 0 ? 'positive' : p.value < 0 ? 'negative' : '';
-            row.innerHTML = `<span class="pos-ticker">${p.emoji} ${p.ticker}</span><span class="pos-qty">${label} @ ${p.price} = <span class="${valClass}">${fmt(p.value)}c</span></span>`;
+            const pnlClass = p.pnl > 0 ? 'positive' : p.pnl < 0 ? 'negative' : '';
+            const pnlStr = p.pnl > 0 ? `+${fmt(p.pnl)}` : fmt(p.pnl);
+            row.innerHTML = `<span class="pos-ticker">${p.emoji} ${p.ticker}</span><span class="pos-qty">${label} @ ${p.avg_entry} → ${p.price} <span class="${pnlClass}">(${pnlStr}c)</span></span>`;
             posList.appendChild(row);
         });
     }
@@ -223,9 +224,12 @@ function onPortfolio(msg) {
 function onTip(msg) {
     const banner = document.getElementById('tip-banner');
     banner.style.display = 'block';
-    banner.innerHTML = `<div class="tip-label">🔒 Insider Tip — Round ${msg.round}</div>${esc(msg.text)}`;
-    // Auto-hide after 30s
-    setTimeout(() => { banner.style.display = 'none'; }, 30000);
+    const stars = msg.stars || '⭐⭐⭐';
+    const conf = msg.confidence || 3;
+    const confLabel = conf >= 4 ? 'High confidence' : conf >= 3 ? 'Medium confidence' : 'Low confidence';
+    banner.innerHTML = `<div class="tip-label">🔒 Insider Tip — Round ${msg.round} — ${stars} ${confLabel}</div>${esc(msg.text)}`;
+    // Auto-hide after 35s
+    setTimeout(() => { banner.style.display = 'none'; }, 35000);
 }
 
 // ── Trade Executed ────────────────────────────────────────────────────────

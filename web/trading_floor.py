@@ -115,6 +115,7 @@ class TFPlayer:
     is_host: bool = False
     cash: float = STARTING_CASH
     positions: dict[str, int] = field(default_factory=lambda: {t: 0 for t in TICKERS})
+    cost_basis: dict[str, float] = field(default_factory=lambda: {t: 0.0 for t in TICKERS})
     trade_count: int = 0
     ws: WebSocket | None = None
 
@@ -349,7 +350,15 @@ async def _handle_market_order(
             await _send_error(player, f"Not enough cash (need {cost:.0f}, have {player.cash:.0f})")
             return
         player.cash -= cost
-        player.positions[ticker] = player.positions.get(ticker, 0) + qty
+        old_qty = player.positions.get(ticker, 0)
+        old_cost = player.cost_basis.get(ticker, 0.0)
+        player.positions[ticker] = old_qty + qty
+        # Update cost basis (weighted average for longs)
+        if old_qty >= 0:
+            player.cost_basis[ticker] = old_cost + price * qty
+        else:
+            # Covering a short — reduce cost basis
+            player.cost_basis[ticker] = old_cost + price * qty
 
     elif action == "sell":
         held = player.positions.get(ticker, 0)
@@ -358,14 +367,19 @@ async def _handle_market_order(
             return
         player.cash += price * qty
         player.positions[ticker] = held - qty
+        # Reduce cost basis proportionally
+        if held > 0:
+            player.cost_basis[ticker] -= (player.cost_basis.get(ticker, 0.0) / held) * qty
 
     elif action == "short":
-        current_short = player.positions.get(ticker, 0)
-        if current_short - qty < -MAX_SHORT_PER_STOCK:
+        current_pos = player.positions.get(ticker, 0)
+        if current_pos - qty < -MAX_SHORT_PER_STOCK:
             await _send_error(player, f"Max short is {MAX_SHORT_PER_STOCK} shares")
             return
         player.cash += price * qty
-        player.positions[ticker] = current_short - qty
+        player.positions[ticker] = current_pos - qty
+        # Track short entry cost (negative cost basis = short proceeds)
+        player.cost_basis[ticker] = player.cost_basis.get(ticker, 0.0) - price * qty
 
     player.trade_count += 1
 
@@ -437,22 +451,17 @@ def _init_stocks() -> dict[str, TFStock]:
     }
 
 
-def _generate_tip(event: dict) -> str:
-    """Generate a private tip string from an event card."""
-    # Find the ticker with the biggest absolute effect
+def _generate_accurate_tip(event: dict) -> str:
+    """Generate an accurate tip from the real event."""
     biggest_ticker = max(event["effects"], key=lambda t: abs(event["effects"][t]))
     biggest_pct = event["effects"][biggest_ticker]
     direction = "surge" if biggest_pct > 0 else "decline"
-    # Find sector direction
     tech_effect = event["effects"].get("CHIP", 0) + event["effects"].get("SOFT", 0)
     energy_effect = event["effects"].get("OIL", 0) + event["effects"].get("SOLAR", 0)
     if abs(tech_effect) > abs(energy_effect):
-        sector = "Tech"
-        sector_dir = "positively" if tech_effect > 0 else "negatively"
+        sector, sector_dir = "Tech", ("positively" if tech_effect > 0 else "negatively")
     else:
-        sector = "Energy"
-        sector_dir = "positively" if energy_effect > 0 else "negatively"
-
+        sector, sector_dir = "Energy", ("positively" if energy_effect > 0 else "negatively")
     templates = [
         f"Insider: {sector} sector expected to move {sector_dir}. ({biggest_ticker} may {direction})",
         f"Sources say {biggest_ticker} will {direction} — {event['desc'][:50]}",
@@ -461,42 +470,143 @@ def _generate_tip(event: dict) -> str:
     return random.choice(templates)
 
 
-NPC_NAMES = ["Algo Fund", "Retail Bot", "Quant Desk"]
+def _generate_fake_tip() -> str:
+    """Generate a misleading tip that sounds real but is noise."""
+    fake_tickers = random.sample(TICKERS, 2)
+    fake_directions = random.choice([
+        (fake_tickers[0], "surge", "Tech", "positively"),
+        (fake_tickers[0], "decline", "Energy", "negatively"),
+        (fake_tickers[1], "rally", "Tech", "strongly upward"),
+        (fake_tickers[1], "crash", "Energy", "sharply downward"),
+    ])
+    ticker, direction, sector, sector_dir = fake_directions
+    templates = [
+        f"Insider: {sector} sector expected to move {sector_dir}. ({ticker} may {direction})",
+        f"Sources say {ticker} will {direction} — unconfirmed reports",
+        f"Rumor: Big move incoming. {sector} sector watch closely.",
+    ]
+    return random.choice(templates)
 
 
-async def _run_npc_trades(room: TradingFloor) -> None:
-    """NPCs trade during the round at random intervals, visible in the trade log."""
-    num_trades = random.randint(3, 6)
-    # Spread NPC trades across the trading window
-    for i in range(num_trades):
-        delay = random.uniform(3, ROUND_SECONDS - 5)
-        await asyncio.sleep(delay / num_trades)  # stagger evenly-ish
+def _generate_tips_for_all(event: dict, player_ids: list[str]) -> dict[str, tuple[str, int]]:
+    """Give every player a tip with a confidence score (1-5 stars).
+
+    Higher confidence = more likely to be accurate.
+    - 5 stars: 95% accurate (nearly guaranteed real info)
+    - 4 stars: 80% accurate
+    - 3 stars: 60% accurate
+    - 2 stars: 40% accurate (more likely noise than signal)
+    - 1 star:  20% accurate (almost certainly noise)
+
+    Returns {uid: (tip_text, confidence)}
+    """
+    tips: dict[str, tuple[str, int]] = {}
+    # Distribute confidence levels — one player gets the best tip, rest get varying quality
+    confidences = []
+    n = len(player_ids)
+    if n == 1:
+        confidences = [4]
+    elif n == 2:
+        confidences = [5, 2]
+    elif n == 3:
+        confidences = [5, 3, 1]
+    elif n == 4:
+        confidences = [5, 3, 2, 1]
+    else:
+        # 5+ players: one 5-star, one 4-star, rest distributed 1-3
+        confidences = [5, 4] + [random.randint(1, 3) for _ in range(n - 2)]
+    random.shuffle(confidences)
+
+    accuracy_map = {5: 0.95, 4: 0.80, 3: 0.60, 2: 0.40, 1: 0.20}
+
+    for uid, confidence in zip(player_ids, confidences):
+        is_accurate = random.random() < accuracy_map[confidence]
+        if is_accurate:
+            tip_text = _generate_accurate_tip(event)
+        else:
+            tip_text = _generate_fake_tip()
+        tips[uid] = (tip_text, confidence)
+
+    return tips
+
+
+# ── NPC Analysts ───────────────────────────────────────────────────────────
+
+NPC_ANALYSTS = [
+    {"name": "Momentum Alpha", "style": "momentum", "emoji": "\U0001f4ca"},
+    {"name": "Value Capital", "style": "value", "emoji": "\U0001f3e6"},
+    {"name": "Degen Research", "style": "noise", "emoji": "\U0001f916"},
+]
+
+
+async def _run_npc_picks(room: TradingFloor) -> None:
+    """NPC analysts post stock picks to the news feed during each round.
+
+    - Momentum Alpha: recommends stocks trending up, avoids stocks trending down
+    - Value Capital: recommends cheap stocks (mean reversion), sells expensive ones
+    - Degen Research: random picks (noise — sometimes right, often wrong)
+
+    Players see these in the news feed and decide whether to follow them.
+    """
+    # 3-5 picks per round, staggered through the trading window
+    num_picks = random.randint(3, 5)
+    interval = (ROUND_SECONDS - 8) / num_picks
+
+    for i in range(num_picks):
+        await asyncio.sleep(interval + random.uniform(-2, 2))
         if not room.trade_open:
             break
-        ticker = random.choice(TICKERS)
-        stock = room.stocks.get(ticker)
-        if not stock or stock.halted:
-            continue
-        action = random.choice(["buy", "sell"])
-        qty = random.randint(1, 3)
-        npc_name = random.choice(NPC_NAMES)
 
-        # Apply price impact
-        direction = 1 if action == "buy" else -1
-        impact = MARKET_IMPACT_K * math.sqrt(qty) * direction
-        price_before = stock.price
-        stock.price = round(max(1.0, stock.price + impact), 1)
+        analyst = random.choice(NPC_ANALYSTS)
+        npc_name = analyst["name"]
+        npc_emoji = analyst["emoji"]
+        style = analyst["style"]
 
-        trade = {
-            "player_id": "__npc__",
-            "player_name": f"\U0001f916 {npc_name}",
-            "action": action,
-            "ticker": ticker,
-            "price": round(price_before, 1),
-            "qty": qty,
-        }
-        room.trades.append(trade)
-        await _broadcast(room, {"type": "trade_executed", **trade})
+        if style == "momentum":
+            # Recommend the stock with the biggest recent uptrend
+            best_ticker, best_move = None, -999
+            for t, s in room.stocks.items():
+                if len(s.history) >= 1 and not s.halted:
+                    move = s.price - s.history[-1]
+                    if move > best_move:
+                        best_ticker, best_move = t, move
+            if not best_ticker:
+                continue
+            if best_move > 0:
+                pick = f"BUY {best_ticker}"
+                reason = f"momentum — up {best_move:+.1f}c"
+            else:
+                # Everything trending down — recommend selling the worst
+                worst_ticker = min(room.stocks, key=lambda t: room.stocks[t].price - (room.stocks[t].history[-1] if room.stocks[t].history else 100))
+                pick = f"SELL {worst_ticker}"
+                reason = "negative momentum across the board"
+
+        elif style == "value":
+            # Recommend the stock furthest below starting price (100)
+            cheapest = min(room.stocks, key=lambda t: room.stocks[t].price)
+            priciest = max(room.stocks, key=lambda t: room.stocks[t].price)
+            stock_c = room.stocks[cheapest]
+            stock_p = room.stocks[priciest]
+            if stock_c.price < 95:
+                pick = f"BUY {cheapest}"
+                reason = f"undervalued at {stock_c.price:.1f}c"
+            elif stock_p.price > 110:
+                pick = f"SELL {priciest}"
+                reason = f"overvalued at {stock_p.price:.1f}c"
+            else:
+                pick = f"HOLD"
+                reason = "fair value — no clear mispricing"
+
+        else:
+            # Noise — random pick, often wrong
+            ticker = random.choice(TICKERS)
+            action = random.choice(["BUY", "SELL", "STRONG BUY"])
+            pick = f"{action} {ticker}"
+            reasons = ["gut feeling", "chart looks good", "heard something", "vibes", "technical breakout", "oversold bounce"]
+            reason = random.choice(reasons)
+
+        news_entry = f"[R{room.round_num}] {npc_emoji} {npc_name}: {pick} ({reason})"
+        room.news_feed.insert(0, news_entry)
         await _broadcast(room, _market_state_msg(room))
 
 
@@ -566,6 +676,7 @@ async def _game_loop(room: TradingFloor) -> None:
         for p in room.players.values():
             p.cash = STARTING_CASH
             p.positions = {t: 0 for t in TICKERS}
+            p.cost_basis = {t: 0.0 for t in TICKERS}
             p.trade_count = 0
 
         # Broadcast game start
@@ -591,15 +702,16 @@ async def _game_loop(room: TradingFloor) -> None:
             event = room.event_deck[rnd - 1]
             room.current_event = event
 
-            # Send private tips to 1-2 players
-            num_tips = 1 if rnd <= 3 else 2
-            tip_recipients = random.sample(list(room.players.keys()),
-                                           min(num_tips, len(room.players)))
-            for uid in tip_recipients:
-                tip_text = _generate_tip(event)
+            # Send tips to ALL players with varying confidence
+            all_tips = _generate_tips_for_all(event, list(room.players.keys()))
+            for uid, (tip_text, confidence) in all_tips.items():
                 room.private_tips[uid] = tip_text
+                stars = "\u2b50" * confidence + "\u2606" * (5 - confidence)
                 p = room.players[uid]
-                await _send(p.ws, {"type": "tip", "text": tip_text, "round": rnd})
+                await _send(p.ws, {
+                    "type": "tip", "text": tip_text, "round": rnd,
+                    "confidence": confidence, "stars": stars,
+                })
 
             # Open trading
             room.trade_open = True
@@ -612,8 +724,8 @@ async def _game_loop(room: TradingFloor) -> None:
             })
             await _broadcast(room, _market_state_msg(room))
 
-            # Run NPC trades in background during the trading window
-            npc_task = asyncio.create_task(_run_npc_trades(room))
+            # Run NPC analyst picks in background during the trading window
+            npc_task = asyncio.create_task(_run_npc_picks(room))
 
             # Timer loop
             elapsed = 0
@@ -782,13 +894,20 @@ def _portfolio_msg(player: TFPlayer, room: TradingFloor) -> dict:
         qty = player.positions.get(ticker, 0)
         if qty != 0:
             stock = room.stocks[ticker]
-            value = qty * stock.price
+            market_value = qty * stock.price
+            cost = player.cost_basis.get(ticker, 0.0)
+            # For longs: pnl = market_value - cost_basis
+            # For shorts: pnl = -cost_basis - market_value (cost_basis is negative for shorts)
+            unrealized_pnl = market_value - cost
+            avg_entry = abs(cost / qty) if qty != 0 else 0
             positions.append({
                 "ticker": ticker,
                 "emoji": stock.emoji,
                 "qty": qty,
                 "price": round(stock.price, 1),
-                "value": round(value, 1),
+                "avg_entry": round(avg_entry, 1),
+                "value": round(market_value, 1),
+                "pnl": round(unrealized_pnl, 1),
             })
     return {
         "type": "portfolio",
