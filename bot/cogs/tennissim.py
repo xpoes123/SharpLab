@@ -1,12 +1,14 @@
 """Casino cog — /tennissim fake tennis match simulator.
 
-Two random ATP/WTA players are drawn. Each gets a win probability.
+Two random ATP or WTA players are drawn (same tour — no cross-gender
+matches). Each gets a win probability based on realistic player ratings.
 Players pick a side and bet coins. A set-by-set simulation runs with
 realistic tennis scoring (games, tiebreaks, best-of-3 sets), and
 winners are paid fixed odds based on the pre-match probability.
 """
 
 import asyncio
+import math
 import random
 from dataclasses import dataclass, field
 
@@ -24,49 +26,75 @@ GAME_DELAY = 1.2  # seconds between individual game updates
 SET_PAUSE = 1.5   # extra pause between sets
 SETS_TO_WIN = 2   # best-of-3
 
-# Top ATP + WTA players for random matchup draws
-TENNIS_PLAYERS: list[tuple[str, str]] = [
-    # (full_name, short_name)  — ATP
-    ("Jannik Sinner", "Sinner"),
-    ("Carlos Alcaraz", "Alcaraz"),
-    ("Novak Djokovic", "Djokovic"),
-    ("Alexander Zverev", "Zverev"),
-    ("Daniil Medvedev", "Medvedev"),
-    ("Andrey Rublev", "Rublev"),
-    ("Casper Ruud", "Ruud"),
-    ("Holger Rune", "Rune"),
-    ("Stefanos Tsitsipas", "Tsitsipas"),
-    ("Taylor Fritz", "Fritz"),
-    ("Tommy Paul", "T. Paul"),
-    ("Ben Shelton", "Shelton"),
-    ("Hubert Hurkacz", "Hurkacz"),
-    ("Felix Auger-Aliassime", "FAA"),
-    ("Alex de Minaur", "de Minaur"),
-    ("Frances Tiafoe", "Tiafoe"),
-    # WTA
-    ("Aryna Sabalenka", "Sabalenka"),
-    ("Iga Swiatek", "Swiatek"),
-    ("Coco Gauff", "Gauff"),
-    ("Elena Rybakina", "Rybakina"),
-    ("Jessica Pegula", "Pegula"),
-    ("Ons Jabeur", "Jabeur"),
-    ("Qinwen Zheng", "Zheng"),
-    ("Jasmine Paolini", "Paolini"),
+
+# ── Player Data ──────────────────────────────────────────────────────────────
+# Ratings on a 50-99 scale roughly calibrated to 2025 form.
+# Higher = stronger. Win probability derived via sigmoid on rating diff.
+
+
+@dataclass(frozen=True)
+class TennisPlayerInfo:
+    name: str
+    short: str
+    tour: str   # "atp" or "wta"
+    rating: int  # 50-99
+
+
+ATP_PLAYERS: list[TennisPlayerInfo] = [
+    TennisPlayerInfo("Jannik Sinner", "Sinner", "atp", 96),
+    TennisPlayerInfo("Carlos Alcaraz", "Alcaraz", "atp", 95),
+    TennisPlayerInfo("Novak Djokovic", "Djokovic", "atp", 90),
+    TennisPlayerInfo("Alexander Zverev", "Zverev", "atp", 89),
+    TennisPlayerInfo("Daniil Medvedev", "Medvedev", "atp", 86),
+    TennisPlayerInfo("Taylor Fritz", "Fritz", "atp", 83),
+    TennisPlayerInfo("Casper Ruud", "Ruud", "atp", 82),
+    TennisPlayerInfo("Alex de Minaur", "de Minaur", "atp", 81),
+    TennisPlayerInfo("Andrey Rublev", "Rublev", "atp", 80),
+    TennisPlayerInfo("Holger Rune", "Rune", "atp", 79),
+    TennisPlayerInfo("Tommy Paul", "T. Paul", "atp", 78),
+    TennisPlayerInfo("Stefanos Tsitsipas", "Tsitsipas", "atp", 78),
+    TennisPlayerInfo("Ben Shelton", "Shelton", "atp", 77),
+    TennisPlayerInfo("Hubert Hurkacz", "Hurkacz", "atp", 76),
+    TennisPlayerInfo("Frances Tiafoe", "Tiafoe", "atp", 75),
+    TennisPlayerInfo("Felix Auger-Aliassime", "FAA", "atp", 75),
+    TennisPlayerInfo("Learner Tien", "Tien", "atp", 74),
 ]
+
+WTA_PLAYERS: list[TennisPlayerInfo] = [
+    TennisPlayerInfo("Aryna Sabalenka", "Sabalenka", "wta", 95),
+    TennisPlayerInfo("Iga Swiatek", "Swiatek", "wta", 93),
+    TennisPlayerInfo("Coco Gauff", "Gauff", "wta", 88),
+    TennisPlayerInfo("Elena Rybakina", "Rybakina", "wta", 86),
+    TennisPlayerInfo("Qinwen Zheng", "Zheng", "wta", 85),
+    TennisPlayerInfo("Jessica Pegula", "Pegula", "wta", 84),
+    TennisPlayerInfo("Jasmine Paolini", "Paolini", "wta", 83),
+    TennisPlayerInfo("Ons Jabeur", "Jabeur", "wta", 80),
+    TennisPlayerInfo("Madison Keys", "Keys", "wta", 80),
+    TennisPlayerInfo("Mirra Andreeva", "Andreeva", "wta", 78),
+    TennisPlayerInfo("Emma Navarro", "Navarro", "wta", 77),
+    TennisPlayerInfo("Danielle Collins", "Collins", "wta", 76),
+    TennisPlayerInfo("Maya Joint", "Joint", "wta", 72),
+]
+
+ALL_TENNIS_PLAYERS: list[TennisPlayerInfo] = ATP_PLAYERS + WTA_PLAYERS
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def _pick_matchup() -> tuple[tuple[str, str], tuple[str, str]]:
-    """Pick two random tennis players. Returns ((name, short), (name, short))."""
-    pair = random.sample(TENNIS_PLAYERS, 2)
-    return (pair[0], pair[1])
+def _pick_matchup() -> tuple[TennisPlayerInfo, TennisPlayerInfo]:
+    """Pick two random players from the same tour."""
+    tour = random.choice(["atp", "wta"])
+    pool = ATP_PLAYERS if tour == "atp" else WTA_PLAYERS
+    p1, p2 = random.sample(pool, 2)
+    return p1, p2
 
 
-def _generate_win_prob() -> float:
-    """Generate a win probability for player 1 (0.25–0.75 range)."""
-    return max(0.20, min(0.80, random.betavariate(3, 3)))
+def _generate_win_prob(p1: TennisPlayerInfo, p2: TennisPlayerInfo) -> float:
+    """Win probability for p1 based on rating difference (sigmoid)."""
+    diff = p1.rating - p2.rating
+    raw = 1.0 / (1.0 + math.exp(-diff / 6.0))
+    return max(0.15, min(0.85, raw))
 
 
 def _payout_multiplier(prob: float) -> float:
@@ -157,8 +185,8 @@ class TennisSimTable:
     host_name: str
     phase: str = "betting"  # betting | playing | finished
     # Matchup — p1 listed first (like "home"), p2 second
-    p1: tuple[str, str] = ("", "")  # (full_name, short_name)
-    p2: tuple[str, str] = ("", "")
+    p1: TennisPlayerInfo | None = None
+    p2: TennisPlayerInfo | None = None
     p1_prob: float = 0.5
     # Players
     players: dict[int, TennisSimPlayer] = field(default_factory=dict)
@@ -183,8 +211,8 @@ class TennisSimTable:
 def _betting_embed(table: TennisSimTable) -> discord.Embed:
     total_wagered = sum(p.bet for p in table.players.values())
 
-    p1_name, p1_short = table.p1
-    p2_name, p2_short = table.p2
+    p1 = table.p1
+    p2 = table.p2
     p2_prob = 1 - table.p1_prob
 
     p1_odds = _prob_to_american(table.p1_prob)
@@ -192,23 +220,25 @@ def _betting_embed(table: TennisSimTable) -> discord.Embed:
     p1_mult = _payout_multiplier(table.p1_prob)
     p2_mult = _payout_multiplier(p2_prob)
 
+    tour_label = p1.tour.upper() if p1 else ""
+
     embed = discord.Embed(
         title=f"\U0001f3be Tennis Sim \u2014 Place Your Bets (Round {table.round_num})",
         description=(
-            "Pick a player and bet coins on the match winner!\n"
+            f"**{tour_label}** match \u2014 pick a player and bet coins!\n"
             f"Best of {SETS_TO_WIN * 2 - 1} sets."
         ),
         colour=discord.Colour.teal(),
     )
 
     matchup_text = (
-        f"**{p1_short}** {p1_name}\n"
+        f"**{p1.short}** {p1.name} (rating {p1.rating})\n"
         f"\u2003Win: {table.p1_prob * 100:.0f}% ({p1_odds}) \u2014 **{p1_mult:.1f}x** payout\n\n"
-        f"**{p2_short}** {p2_name}\n"
+        f"**{p2.short}** {p2.name} (rating {p2.rating})\n"
         f"\u2003Win: {p2_prob * 100:.0f}% ({p2_odds}) \u2014 **{p2_mult:.1f}x** payout"
     )
     embed.add_field(
-        name=f"{p1_short} vs {p2_short}", value=matchup_text, inline=False,
+        name=f"{p1.short} vs {p2.short}", value=matchup_text, inline=False,
     )
 
     if total_wagered:
@@ -217,7 +247,7 @@ def _betting_embed(table: TennisSimTable) -> discord.Embed:
     if table.players:
         player_lines = []
         for p in table.players.values():
-            pick_short = p1_short if p.side == "p1" else p2_short
+            pick_short = p1.short if p.side == "p1" else p2.short
             player_lines.append(
                 f"\U0001f3b0 **{p.display_name}** \u2014 {p.bet}c on **{pick_short}**"
             )
@@ -232,7 +262,7 @@ def _betting_embed(table: TennisSimTable) -> discord.Embed:
     embed.set_footer(
         text=(
             f"Host: {table.host_name} \u2502 Min {MIN_PLAYERS} player(s) "
-            f"\u2502 Enter \"{p1_short.lower()}\" or \"{p2_short.lower()}\" in modal"
+            f"\u2502 Enter \"{p1.short.lower()}\" or \"{p2.short.lower()}\" in modal"
         ),
     )
     return embed
@@ -240,8 +270,8 @@ def _betting_embed(table: TennisSimTable) -> discord.Embed:
 
 def _scoreboard_text(table: TennisSimTable) -> str:
     """Render an ASCII tennis scoreboard with live set progress."""
-    _, p1_short = table.p1
-    _, p2_short = table.p2
+    p1_short = table.p1.short
+    p2_short = table.p2.short
 
     max_name = max(len(p1_short), len(p2_short))
 
@@ -279,8 +309,8 @@ def _scoreboard_text(table: TennisSimTable) -> str:
 
 
 def _playing_embed(table: TennisSimTable) -> discord.Embed:
-    _, p1_short = table.p1
-    _, p2_short = table.p2
+    p1_short = table.p1.short
+    p2_short = table.p2.short
 
     if table.in_tiebreak:
         period = f"Set {table.current_set} \u2014 Tiebreak"
@@ -307,8 +337,8 @@ def _playing_embed(table: TennisSimTable) -> discord.Embed:
 def _finished_embed(
     table: TennisSimTable, *, balances: dict[int, int] | None = None,
 ) -> discord.Embed:
-    _, p1_short = table.p1
-    _, p2_short = table.p2
+    p1_short = table.p1.short
+    p2_short = table.p2.short
 
     winner_short = p1_short if table.p1_sets > table.p2_sets else p2_short
     sets_text = f"{table.p1_sets}-{table.p2_sets}"
@@ -370,8 +400,8 @@ class JoinTennisSimModal(ui.Modal):
     def __init__(
         self, table: TennisSimTable, view: "TennisSimTableView", balance: int,
     ) -> None:
-        _, p1_short = table.p1
-        _, p2_short = table.p2
+        p1_short = table.p1.short
+        p2_short = table.p2.short
         super().__init__(title=f"Tennis Sim \u2014 {p1_short} vs {p2_short}")
         self.table = table
         self.table_view = view
@@ -393,15 +423,15 @@ class JoinTennisSimModal(ui.Modal):
             return
 
         raw = self.side_input.value.strip().lower()
-        p1_full, p1_short = self.table.p1
-        p2_full, p2_short = self.table.p2
-        if raw in (p1_short.lower(), p1_full.lower(), "p1", "1"):
+        p1 = self.table.p1
+        p2 = self.table.p2
+        if raw in (p1.short.lower(), p1.name.lower(), "p1", "1"):
             side = "p1"
-        elif raw in (p2_short.lower(), p2_full.lower(), "p2", "2"):
+        elif raw in (p2.short.lower(), p2.name.lower(), "p2", "2"):
             side = "p2"
         else:
             await interaction.response.send_message(
-                f"Enter **{p1_short}** or **{p2_short}**.",
+                f"Enter **{p1.short}** or **{p2.short}**.",
                 ephemeral=True,
             )
             return
@@ -794,7 +824,7 @@ class TennisSimTableView(ui.View):
         p1, p2 = _pick_matchup()
         table.p1 = p1
         table.p2 = p2
-        table.p1_prob = _generate_win_prob()
+        table.p1_prob = _generate_win_prob(p1, p2)
         table.current_set = 0
         table.p1_sets = 0
         table.p2_sets = 0
@@ -888,7 +918,7 @@ class TennisSimCog(commands.Cog):
             host_name=interaction.user.display_name,
             p1=p1,
             p2=p2,
-            p1_prob=_generate_win_prob(),
+            p1_prob=_generate_win_prob(p1, p2),
         )
         self.active_tables[channel_id] = table
 
