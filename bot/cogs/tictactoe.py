@@ -6,6 +6,7 @@ import discord
 from discord import app_commands, ui
 from discord.ext import commands
 
+from bot.cogs._elo_helpers import update_elo_1v1, update_elo_draw
 from bot.cogs._minigames import TTTBoard
 from bot.cogs._pool import compute_side_pot_payouts
 from db import queries
@@ -237,6 +238,17 @@ class TTTView(ui.View):
             await queries.log_casino_result(
                 str(uid), "tictactoe", game.bet, payouts.get(uid, 0),
             )
+
+        # ELO update
+        try:
+            if winner_id == game.challenger_id:
+                await update_elo_1v1(str(game.challenger_id), str(game.opponent_id), "tictactoe", "tictactoe")
+            elif winner_id == game.opponent_id:
+                await update_elo_1v1(str(game.opponent_id), str(game.challenger_id), "tictactoe", "tictactoe")
+            else:
+                await update_elo_draw(str(game.challenger_id), str(game.opponent_id), "tictactoe", "tictactoe")
+        except Exception:
+            pass
 
         # Build result embed
         embed = _result_embed(game, winner_id)

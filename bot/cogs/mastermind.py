@@ -9,6 +9,7 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
+from bot.cogs._elo_helpers import update_elo_multiplayer
 from bot.cogs._pool import compute_side_pot_payouts
 
 # ── Constants ────────────────────────────────────────────────────────────────
@@ -571,6 +572,18 @@ class MastermindTableView(ui.View):
             await queries.log_casino_result(
                 str(uid), "mastermind", player.bet, payout,
             )
+
+        # ELO update — rank by solve_count (fewer = better), unsolved = last
+        if len(table.players) >= 2:
+            sorted_p = sorted(
+                table.players.values(),
+                key=lambda p: p.solve_count if p.solve_count is not None else 999,
+            )
+            finish_order = [p.user_id for p in sorted_p]
+            try:
+                await update_elo_multiplayer(finish_order, "mastermind", "mastermind")
+            except Exception:
+                pass
 
         # Save last bets for re-bet
         for uid, player in table.players.items():

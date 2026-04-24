@@ -11,6 +11,7 @@ import httpx
 from discord import app_commands, ui
 from discord.ext import commands, tasks
 
+from bot.cogs._elo_helpers import update_elo_multiplayer
 from db import queries
 
 WEB_API_BASE = os.environ.get("WEB_API_BASE", "https://djiang.xyz")
@@ -109,6 +110,14 @@ class SudokuCog(commands.Cog):
                     text=f"Room {room_id} \u2022 {result.get('total_rounds', 0)} rounds played"
                 )
                 await channel.send(embed=embed)
+
+                # ELO update — results already sorted by rank
+                finish = [int(r["discord_user"]) for r in result.get("results", []) if r.get("discord_user")]
+                if len(finish) >= 2:
+                    try:
+                        await update_elo_multiplayer(finish, "sudoku", "sudoku")
+                    except Exception:
+                        pass
             except Exception:
                 pass
 

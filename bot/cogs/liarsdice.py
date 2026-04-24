@@ -10,6 +10,7 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
+from bot.cogs._elo_helpers import update_elo_multiplayer
 from bot.cogs._pool import compute_side_pot_payouts
 
 # ── Constants ────────────────────────────────────────────────────────────────
@@ -975,6 +976,14 @@ class LiarTableView(ui.View):
             await queries.log_casino_result(
                 str(uid), "liarsdice", player.bet, player.payout,
             )
+
+        # ELO update — winner first, rest in arbitrary order
+        if len(table.players) >= 2:
+            finish_order = [winner_uid] + [uid for uid in table.turn_order if uid != winner_uid]
+            try:
+                await update_elo_multiplayer(finish_order, "liarsdice", "liarsdice")
+            except Exception:
+                pass
 
         # Save last bets for re-bet
         for uid, player in table.players.items():

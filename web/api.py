@@ -150,8 +150,23 @@ ELO_GAME_LABELS: dict[str, str] = {
     "word_scramble": "Word Scramble",
     "nim": "Nim",
     "battleship": "Battleship",
+    "rps": "Rock Paper Scissors",
     "pokemon": "Pokemon",
     "valorant": "Valorant Guess",
+    "math24": "Math 24",
+    "mathsprint": "Math Sprint",
+    "geography": "Geography",
+    "wordle": "Wordle",
+    "countdown": "Countdown",
+    "quizbowl": "Quiz Bowl",
+    "mastermind": "Mastermind",
+    "liarsdice": "Liar's Dice",
+    "stockguess": "Stock Guess",
+    "nba-trivia": "NBA Trivia",
+    "nfl-trivia": "NFL Trivia",
+    "sudoku": "Sudoku Sprint",
+    "figgie": "Figgie",
+    "tradingfloor": "Trading Floor",
 }
 
 MIN_ELO_GAMES = 5

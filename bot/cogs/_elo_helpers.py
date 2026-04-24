@@ -10,6 +10,7 @@ log = logging.getLogger(__name__)
 # ── Label mapping ────────────────────────────────────────────────────────────
 
 ELO_GAME_LABELS: dict[str, str] = {
+    # Duel/tournament mini-games (skill-based)
     "speed_math": "Speed Math",
     "trivia": "Trivia",
     "guess_number": "Guess the Number",
@@ -17,8 +18,25 @@ ELO_GAME_LABELS: dict[str, str] = {
     "word_scramble": "Word Scramble",
     "nim": "Nim",
     "battleship": "Battleship",
+    "rps": "Rock Paper Scissors",
+    # Standalone multiplayer games
     "pokemon": "Pokemon",
     "valorant": "Valorant Guess",
+    "math24": "Math 24",
+    "mathsprint": "Math Sprint",
+    "geography": "Geography",
+    "wordle": "Wordle",
+    "countdown": "Countdown",
+    "quizbowl": "Quiz Bowl",
+    "mastermind": "Mastermind",
+    "liarsdice": "Liar's Dice",
+    "stockguess": "Stock Guess",
+    "nba-trivia": "NBA Trivia",
+    "nfl-trivia": "NFL Trivia",
+    # Web games
+    "sudoku": "Sudoku Sprint",
+    "figgie": "Figgie",
+    "tradingfloor": "Trading Floor",
 }
 
 MIN_GAMES_FOR_LEADERBOARD = 5

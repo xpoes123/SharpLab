@@ -9,6 +9,7 @@ import discord
 from discord import app_commands, ui
 from discord.ext import commands
 
+from bot.cogs._elo_helpers import update_elo_1v1
 from bot.cogs._minigames import RPSLogic
 from bot.cogs._pool import compute_side_pot_payouts
 from db import queries
@@ -280,6 +281,14 @@ class RPSView(ui.View):
                 await queries.log_casino_result(
                     str(uid), "rps", game.bet, payouts.get(uid, 0),
                 )
+
+        # ELO update (human vs human only)
+        if not game.vs_bot:
+            loser_id = game.opponent_id if winner_id == game.challenger_id else game.challenger_id
+            try:
+                await update_elo_1v1(str(winner_id), str(loser_id), "rps", "rps")
+            except Exception:
+                pass
 
         embed = _result_embed(game, payouts)
         self._update_buttons()

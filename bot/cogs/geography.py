@@ -15,6 +15,7 @@ import discord
 from discord import app_commands, ui
 from discord.ext import commands
 
+from bot.cogs._elo_helpers import update_elo_multiplayer
 from db import queries
 
 # ── Constants ────────────────────────────────────────────────────────────────
@@ -1216,6 +1217,15 @@ class GeoTableView(ui.View):
         table.phase = "closed"
 
         payouts, balances = await self._compute_and_apply_payouts()
+
+        if len(table.players) >= 2:
+            sorted_p = sorted(table.players.values(), key=lambda p: p.rounds_won, reverse=True)
+            finish_order = [p.user_id for p in sorted_p]
+            try:
+                await update_elo_multiplayer(finish_order, "geography", "geography")
+            except Exception:
+                pass
+
         embed = _final_embed(table, payouts=payouts, balances=balances)
 
         for child in self.children:

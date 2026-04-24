@@ -11,6 +11,7 @@ import httpx
 from discord import app_commands, ui
 from discord.ext import commands, tasks
 
+from bot.cogs._elo_helpers import update_elo_multiplayer
 from db import queries
 
 WEB_API_BASE = os.environ.get("WEB_API_BASE", "https://djiang.xyz")
@@ -110,6 +111,13 @@ class FiggieCog(commands.Cog):
                     text=f"Room {room_id} \u2022 {result.get('total_trades', 0)} trades"
                 )
                 await channel.send(embed=embed)
+
+                finish = [int(r["discord_user"]) for r in result.get("results", []) if r.get("discord_user")]
+                if len(finish) >= 2:
+                    try:
+                        await update_elo_multiplayer(finish, "figgie", "figgie")
+                    except Exception:
+                        pass
             except Exception:
                 pass
 

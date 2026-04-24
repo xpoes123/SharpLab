@@ -12,6 +12,7 @@ import discord
 from discord import app_commands, ui
 from discord.ext import commands
 
+from bot.cogs._elo_helpers import update_elo_multiplayer
 from db import queries
 
 # ── Constants ────────────────────────────────────────────────────────────────
@@ -730,6 +731,19 @@ async def _do_final_summary(
 ) -> None:
     """Post the final leaderboard after all rounds complete."""
     table.phase = "finished"
+
+    if len(table.players) >= 2:
+        sorted_p = sorted(
+            table.players.items(),
+            key=lambda kv: table.round_scores.get(kv[0], 0),
+            reverse=True,
+        )
+        finish_order = [uid for uid, _ in sorted_p]
+        try:
+            await update_elo_multiplayer(finish_order, "stockguess", "stockguess")
+        except Exception:
+            pass
+
     active_tables.pop(table.channel_id, None)
     await interaction.followup.send(embed=_final_embed(table))
 

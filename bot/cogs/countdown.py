@@ -10,6 +10,7 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
+from bot.cogs._elo_helpers import update_elo_multiplayer
 from bot.cogs._pool import compute_side_pot_payouts
 
 # ── Constants ────────────────────────────────────────────────────────────────
@@ -1073,6 +1074,14 @@ class CountdownTableView(ui.View):
             await queries.log_casino_result(
                 str(uid), "countdown", player.bet, payout,
             )
+
+        if len(table.players) >= 2:
+            sorted_p = sorted(table.players.values(), key=lambda p: p.total_points, reverse=True)
+            finish_order = [p.user_id for p in sorted_p]
+            try:
+                await update_elo_multiplayer(finish_order, "countdown", "countdown")
+            except Exception:
+                pass
 
         embed = _final_embed(table, winner_uids, payouts, balances)
 
