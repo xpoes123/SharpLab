@@ -1920,6 +1920,740 @@ class WordScramble:
         )
 
 
+# ── 10. Nim ────────────────────────────────────────────────────────────────
+
+PILE_EMOJI = "\U0001f7e6"  # blue square
+PILE_GONE = "\u2b1b"       # black square
+
+
+class _NimView(ui.View):
+    """Multi-pile Poison Nim. Take from one pile per turn; last to take loses."""
+
+    def __init__(
+        self,
+        p1_id: int,
+        p2_id: int,
+        p1_name: str,
+        p2_name: str,
+        piles: list[int],
+    ) -> None:
+        super().__init__(timeout=60)
+        self.p1_id = p1_id
+        self.p2_id = p2_id
+        self.p1_name = p1_name
+        self.p2_name = p2_name
+        self.piles = list(piles)
+        self.turn = p1_id
+        self.done = asyncio.Event()
+        self.loser_id = 0
+        self._selected_pile: int | None = None
+        self._rebuild_buttons()
+
+    # ── helpers ──────────────────────────────────────────────────────────
+
+    def _turn_name(self) -> str:
+        return self.p1_name if self.turn == self.p1_id else self.p2_name
+
+    def _other_id(self) -> int:
+        return self.p2_id if self.turn == self.p1_id else self.p1_id
+
+    def _render_piles(self) -> str:
+        lines = []
+        labels = ["A", "B", "C"]
+        for i, count in enumerate(self.piles):
+            bar = PILE_EMOJI * count + PILE_GONE * (max(self.piles) - count) if count else PILE_GONE
+            lines.append(f"**{labels[i]}**: {bar}  ({count})")
+        return "\n".join(lines)
+
+    def _make_embed(self, status: str) -> discord.Embed:
+        embed = discord.Embed(
+            title="\U0001f9e0 Nim",
+            description=f"{status}\n\n{self._render_piles()}",
+            colour=discord.Colour.dark_magenta(),
+        )
+        embed.set_footer(text="Take the last piece and you LOSE!")
+        return embed
+
+    # ── button management ────────────────────────────────────────────────
+
+    def _rebuild_buttons(self) -> None:
+        self.clear_items()
+        self._selected_pile = None
+        labels = ["A", "B", "C"]
+        for i, count in enumerate(self.piles):
+            btn = ui.Button(
+                label=f"Pile {labels[i]} ({count})",
+                style=discord.ButtonStyle.primary if count > 0 else discord.ButtonStyle.secondary,
+                custom_id=f"nim_pile_{i}",
+                disabled=count == 0,
+                row=0,
+            )
+            btn.callback = self._make_pile_callback(i)
+            self.add_item(btn)
+
+    def _build_take_buttons(self, pile_idx: int) -> None:
+        self.clear_items()
+        self._selected_pile = pile_idx
+        labels = ["A", "B", "C"]
+        count = self.piles[pile_idx]
+        # Back button
+        back = ui.Button(
+            label="Back",
+            style=discord.ButtonStyle.secondary,
+            custom_id="nim_back",
+            row=0,
+        )
+        back.callback = self._back_callback
+        self.add_item(back)
+        # Take 1..count buttons (max 4 per row, cap at 8 to stay within limits)
+        max_take = min(count, 8)
+        for n in range(1, max_take + 1):
+            btn = ui.Button(
+                label=f"Take {n}",
+                style=discord.ButtonStyle.danger,
+                custom_id=f"nim_take_{n}",
+                row=1 + (n - 1) // 4,
+            )
+            btn.callback = self._make_take_callback(pile_idx, n)
+            self.add_item(btn)
+
+    # ── callbacks ────────────────────────────────────────────────────────
+
+    def _make_pile_callback(self, pile_idx: int):
+        async def callback(interaction: discord.Interaction) -> None:
+            if interaction.user.id != self.turn:
+                await interaction.response.send_message(
+                    f"It's **{self._turn_name()}**'s turn!", ephemeral=True,
+                )
+                return
+            self._build_take_buttons(pile_idx)
+            labels = ["A", "B", "C"]
+            status = f"**{self._turn_name()}** selected pile **{labels[pile_idx]}**. How many?"
+            embed = self._make_embed(status)
+            await interaction.response.edit_message(embed=embed, view=self)
+        return callback
+
+    async def _back_callback(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self.turn:
+            await interaction.response.send_message(
+                f"It's **{self._turn_name()}**'s turn!", ephemeral=True,
+            )
+            return
+        self._rebuild_buttons()
+        status = f"**{self._turn_name()}**'s turn \u2014 pick a pile!"
+        embed = self._make_embed(status)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    def _make_take_callback(self, pile_idx: int, amount: int):
+        async def callback(interaction: discord.Interaction) -> None:
+            if interaction.user.id != self.turn:
+                await interaction.response.send_message(
+                    f"It's **{self._turn_name()}**'s turn!", ephemeral=True,
+                )
+                return
+
+            name = self._turn_name()
+            labels = ["A", "B", "C"]
+
+            self.piles[pile_idx] -= amount
+
+            # Check if all piles empty — current player took the last piece(s) and loses
+            if sum(self.piles) == 0:
+                self.loser_id = self.turn
+                self.done.set()
+                self.stop()
+                embed = self._make_embed(
+                    f"**{name}** takes {amount} from pile **{labels[pile_idx]}** "
+                    f"\u2014 took the last piece! **{name}** loses!"
+                )
+                await interaction.response.edit_message(embed=embed, view=None)
+                return
+
+            # Switch turn
+            self.turn = self._other_id()
+            self._rebuild_buttons()
+            status = (
+                f"**{name}** takes {amount} from pile **{labels[pile_idx]}**.\n"
+                f"**{self._turn_name()}**'s turn \u2014 pick a pile!"
+            )
+            embed = self._make_embed(status)
+            await interaction.response.edit_message(embed=embed, view=self)
+        return callback
+
+
+class Nim:
+    name = "Nim"
+    emoji = "\U0001f9e0"
+    stakes = 300
+
+    async def play(
+        self,
+        message: discord.Message,
+        p1_id: int,
+        p1_name: str,
+        p2_id: int,
+        p2_name: str,
+    ) -> int:
+        # Random pile sizes — keeps it unsolvable by memorization
+        piles = [random.randint(2, 7) for _ in range(3)]
+
+        view = _NimView(p1_id, p2_id, p1_name, p2_name, piles)
+        status = f"**{p1_name}**'s turn \u2014 pick a pile!"
+        embed = view._make_embed(status)
+        await message.edit(embed=embed, view=view)
+
+        try:
+            await asyncio.wait_for(view.done.wait(), timeout=60)
+        except asyncio.TimeoutError:
+            view.stop()
+            # Whoever's turn it was loses (timed out)
+            view.loser_id = view.turn
+
+        if view.loser_id:
+            winner_id = p2_id if view.loser_id == p1_id else p1_id
+            winner_name = p2_name if view.loser_id == p1_id else p1_name
+            loser_name = p1_name if view.loser_id == p1_id else p2_name
+        else:
+            winner_id = 0
+            winner_name = ""
+            loser_name = ""
+
+        if winner_id:
+            embed = discord.Embed(
+                title="\U0001f9e0 Nim",
+                description=f"**{winner_name}** wins! {loser_name} took the last piece.",
+                colour=discord.Colour.gold(),
+            )
+        else:
+            embed = discord.Embed(
+                title="\U0001f9e0 Nim",
+                description="Game timed out \u2014 draw!",
+                colour=discord.Colour.greyple(),
+            )
+        await message.edit(embed=embed, view=None)
+        return winner_id
+
+
+# ── 11. PushYourLuck ──────────────────────────────────────────────────────
+
+
+class _PushLuckView(ui.View):
+    """Draw tiles for points. Hit a bomb and you bust (score = 0)."""
+
+    def __init__(self, player_id: int, player_name: str, target: int) -> None:
+        super().__init__(timeout=25)
+        self.player_id = player_id
+        self.player_name = player_name
+        self.target = target  # score to beat (0 for first player)
+        self.score = 0
+        self.draws = 0
+        self.busted = False
+        self.stopped = False
+        self.done = asyncio.Event()
+        # 12 tiles: 9 safe (+25 each), 3 bombs
+        tiles = [True] * 9 + [False] * 3
+        random.shuffle(tiles)
+        self._tiles = tiles
+        self.history: list[str] = []
+
+    def _make_embed(self, status: str) -> discord.Embed:
+        embed = discord.Embed(
+            title="\U0001f3b0 Push Your Luck",
+            description=status,
+            colour=discord.Colour.red() if self.busted else discord.Colour.dark_gold(),
+        )
+        if self.history:
+            embed.add_field(
+                name="Draws",
+                value="\n".join(self.history[-6:]),
+                inline=False,
+            )
+        return embed
+
+    @ui.button(label="Draw!", emoji="\U0001f3b0", style=discord.ButtonStyle.primary)
+    async def draw_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        if interaction.user.id != self.player_id:
+            await interaction.response.send_message("Not your turn!", ephemeral=True)
+            return
+
+        tile = self._tiles[self.draws]
+        self.draws += 1
+
+        if not tile:
+            self.busted = True
+            self.history.append("\U0001f4a3 **BOMB!**")
+            self.done.set()
+            self.stop()
+            embed = self._make_embed(
+                f"**{self.player_name}** drew a bomb! Score: **0**",
+            )
+            await interaction.response.edit_message(embed=embed, view=None)
+        else:
+            self.score += 25
+            self.history.append(f"\u2705 +25 (total: **{self.score}**)")
+
+            remaining = len(self._tiles) - self.draws
+            remaining_bombs = sum(1 for t in self._tiles[self.draws:] if not t)
+
+            if remaining == 0 or remaining_bombs == remaining:
+                self.stopped = True
+                self.done.set()
+                self.stop()
+                embed = self._make_embed(
+                    f"**{self.player_name}** clears the deck! Score: **{self.score}**",
+                )
+                await interaction.response.edit_message(embed=embed, view=None)
+            else:
+                status = (
+                    f"**{self.player_name}**: **{self.score}** pts\n"
+                    f"{remaining} tiles left ({remaining_bombs} \U0001f4a3)\n"
+                    f"Draw again or stop?"
+                )
+                if self.target > 0:
+                    status += f"\nNeed to beat: **{self.target}**"
+                embed = self._make_embed(status)
+                await interaction.response.edit_message(embed=embed, view=self)
+
+    @ui.button(label="Stop", emoji="\U0001f6d1", style=discord.ButtonStyle.danger)
+    async def stop_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        if interaction.user.id != self.player_id:
+            await interaction.response.send_message("Not your turn!", ephemeral=True)
+            return
+        self.stopped = True
+        self.done.set()
+        self.stop()
+        embed = self._make_embed(f"**{self.player_name}** stops at **{self.score}**!")
+        await interaction.response.edit_message(embed=embed, view=None)
+
+
+class PushYourLuck:
+    name = "Push Your Luck"
+    emoji = "\U0001f3b0"
+    stakes = 300
+
+    async def play(
+        self,
+        message: discord.Message,
+        p1_id: int,
+        p1_name: str,
+        p2_id: int,
+        p2_name: str,
+    ) -> int:
+        # Phase 1: P1 draws
+        view1 = _PushLuckView(p1_id, p1_name, target=0)
+        embed = view1._make_embed(
+            f"**{p1_name}** goes first!\n"
+            "Draw tiles for **25 pts** each \u2014 but hit a \U0001f4a3 and you bust!\n"
+            "12 tiles, 3 are bombs.",
+        )
+        await message.edit(embed=embed, view=view1)
+
+        try:
+            await asyncio.wait_for(view1.done.wait(), timeout=25)
+        except asyncio.TimeoutError:
+            view1.stop()
+            view1.stopped = True
+
+        p1_score = 0 if view1.busted else view1.score
+
+        await asyncio.sleep(1.5)
+
+        # Phase 2: P2 draws, knowing P1's score
+        view2 = _PushLuckView(p2_id, p2_name, target=p1_score)
+        status = (
+            f"**{p1_name}** scored **{p1_score}**"
+            + (" (busted!)" if view1.busted else "")
+            + f"\n**{p2_name}**'s turn! Beat **{p1_score}** to win.\n"
+            "12 tiles, 3 are bombs."
+        )
+        embed = view2._make_embed(status)
+        await message.edit(embed=embed, view=view2)
+
+        try:
+            await asyncio.wait_for(view2.done.wait(), timeout=25)
+        except asyncio.TimeoutError:
+            view2.stop()
+            view2.stopped = True
+
+        p2_score = 0 if view2.busted else view2.score
+
+        if p1_score > p2_score:
+            winner_id = p1_id
+            desc = f"**{p1_name}** wins! ({p1_score} vs {p2_score})"
+        elif p2_score > p1_score:
+            winner_id = p2_id
+            desc = f"**{p2_name}** wins! ({p2_score} vs {p1_score})"
+        else:
+            winner_id = 0
+            desc = f"Tied at **{p1_score}**!"
+
+        colour = discord.Colour.gold() if winner_id else discord.Colour.greyple()
+        final = discord.Embed(
+            title="\U0001f3b0 Push Your Luck", description=desc, colour=colour,
+        )
+        p1_note = " (bust)" if view1.busted else ""
+        p2_note = " (bust)" if view2.busted else ""
+        final.add_field(name=p1_name, value=f"**{p1_score}** pts{p1_note}", inline=True)
+        final.add_field(name="vs", value="\u200b", inline=True)
+        final.add_field(name=p2_name, value=f"**{p2_score}** pts{p2_note}", inline=True)
+        await message.edit(embed=final, view=None)
+        return winner_id
+
+
+# ── 12. Chicken ───────────────────────────────────────────────────────────
+
+
+class _ChickenView(ui.View):
+    """Alternating push. Hidden bomb threshold. Push past it and you lose."""
+
+    def __init__(
+        self,
+        p1_id: int,
+        p2_id: int,
+        p1_name: str,
+        p2_name: str,
+        bomb: int,
+    ) -> None:
+        super().__init__(timeout=45)
+        self.p1_id = p1_id
+        self.p2_id = p2_id
+        self.p1_name = p1_name
+        self.p2_name = p2_name
+        self.bomb = bomb
+        self.counter = 0
+        self.turn = p1_id
+        self.done = asyncio.Event()
+        self.result: str = ""  # "chicken" | "boom" | "timeout"
+        self.loser_id = 0
+
+    def _turn_name(self) -> str:
+        return self.p1_name if self.turn == self.p1_id else self.p2_name
+
+    def _other_id(self) -> int:
+        return self.p2_id if self.turn == self.p1_id else self.p1_id
+
+    def _make_embed(self, status: str) -> discord.Embed:
+        embed = discord.Embed(
+            title="\U0001f414 Chicken",
+            description=status,
+            colour=discord.Colour.orange(),
+        )
+        bar_len = 20
+        fill = min(bar_len, int(self.counter / 350 * bar_len))
+        bar = "\U0001f7e5" * fill + "\u2b1c" * (bar_len - fill)
+        embed.add_field(name=f"Danger: {self.counter}", value=bar, inline=False)
+        embed.set_footer(text="Push or chicken out!")
+        return embed
+
+    @ui.button(label="Push!", emoji="\U0001f4a3", style=discord.ButtonStyle.danger)
+    async def push_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        if interaction.user.id != self.turn:
+            await interaction.response.send_message(
+                f"It's **{self._turn_name()}**'s turn!", ephemeral=True,
+            )
+            return
+
+        name = self._turn_name()
+        add = random.randint(15, 35)
+        self.counter += add
+
+        if self.counter >= self.bomb:
+            self.result = "boom"
+            self.loser_id = self.turn
+            self.done.set()
+            self.stop()
+            embed = self._make_embed(
+                f"**{name}** pushes +{add}... "
+                f"\U0001f4a5 **BOOM!** The bomb was at **{self.bomb}**!",
+            )
+            await interaction.response.edit_message(embed=embed, view=None)
+            return
+
+        self.turn = self._other_id()
+        next_name = self._turn_name()
+        status = (
+            f"**{name}** pushes +{add} (total: **{self.counter}**)\n"
+            f"**{next_name}**, push or chicken out?"
+        )
+        embed = self._make_embed(status)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @ui.button(label="Chicken Out!", emoji="\U0001f414", style=discord.ButtonStyle.secondary)
+    async def chicken_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        if interaction.user.id != self.turn:
+            await interaction.response.send_message(
+                f"It's **{self._turn_name()}**'s turn!", ephemeral=True,
+            )
+            return
+
+        self.result = "chicken"
+        self.loser_id = self.turn
+        self.done.set()
+        self.stop()
+        name = self._turn_name()
+        embed = self._make_embed(
+            f"\U0001f414 **{name}** chickens out! The bomb was at **{self.bomb}**.",
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+
+
+class Chicken:
+    name = "Chicken"
+    emoji = "\U0001f414"
+    stakes = 300
+
+    async def play(
+        self,
+        message: discord.Message,
+        p1_id: int,
+        p1_name: str,
+        p2_id: int,
+        p2_name: str,
+    ) -> int:
+        bomb = random.randint(150, 300)
+        view = _ChickenView(p1_id, p2_id, p1_name, p2_name, bomb)
+        status = f"**{p1_name}**, push or chicken out?"
+        embed = view._make_embed(status)
+        await message.edit(embed=embed, view=view)
+
+        try:
+            await asyncio.wait_for(view.done.wait(), timeout=45)
+        except asyncio.TimeoutError:
+            view.stop()
+            view.result = "timeout"
+            view.loser_id = view.turn
+
+        if view.loser_id:
+            winner_id = p2_id if view.loser_id == p1_id else p1_id
+            winner_name = p2_name if view.loser_id == p1_id else p1_name
+            loser_name = p1_name if view.loser_id == p1_id else p2_name
+
+            if view.result == "boom":
+                desc = f"\U0001f4a5 **{loser_name}** hit the bomb! **{winner_name}** wins!"
+            elif view.result == "chicken":
+                desc = f"\U0001f414 **{loser_name}** chickened out! **{winner_name}** wins!"
+            else:
+                desc = f"**{loser_name}** timed out! **{winner_name}** wins!"
+        else:
+            winner_id = 0
+            desc = "Game timed out \u2014 draw!"
+
+        colour = discord.Colour.gold() if winner_id else discord.Colour.greyple()
+        embed = discord.Embed(
+            title="\U0001f414 Chicken", description=desc, colour=colour,
+        )
+        await message.edit(embed=embed, view=None)
+        return winner_id
+
+
+# ── 13. Battleship ────────────────────────────────────────────────────────
+
+_BS_COLS = "ABCD"
+
+
+def _place_ships() -> set[tuple[int, int]]:
+    """Place 2 ships of length 2 on a 4x4 grid (no overlap)."""
+    occupied: set[tuple[int, int]] = set()
+    for _ in range(2):
+        for _ in range(100):
+            r = random.randint(0, 3)
+            c = random.randint(0, 3)
+            if random.choice([True, False]):
+                if c + 1 > 3:
+                    continue
+                cells = {(r, c), (r, c + 1)}
+            else:
+                if r + 1 > 3:
+                    continue
+                cells = {(r, c), (r + 1, c)}
+            if cells & occupied:
+                continue
+            occupied |= cells
+            break
+    return occupied
+
+
+class _BattleshipView(ui.View):
+    """4x4 grid, 2 ships each (length 2). First to sink both wins."""
+
+    def __init__(
+        self,
+        p1_id: int,
+        p2_id: int,
+        p1_name: str,
+        p2_name: str,
+        p1_ships: set[tuple[int, int]],
+        p2_ships: set[tuple[int, int]],
+    ) -> None:
+        super().__init__(timeout=90)
+        self.p1_id = p1_id
+        self.p2_id = p2_id
+        self.p1_name = p1_name
+        self.p2_name = p2_name
+        self.p1_ships = p1_ships
+        self.p2_ships = p2_ships
+        self.p1_shots: dict[tuple[int, int], bool] = {}
+        self.p2_shots: dict[tuple[int, int], bool] = {}
+        self.turn = p1_id
+        self.done = asyncio.Event()
+        self.winner_id = 0
+        self._rebuild_buttons()
+
+    def _active_shots(self) -> dict[tuple[int, int], bool]:
+        return self.p1_shots if self.turn == self.p1_id else self.p2_shots
+
+    def _target_ships(self) -> set[tuple[int, int]]:
+        return self.p2_ships if self.turn == self.p1_id else self.p1_ships
+
+    def _turn_name(self) -> str:
+        return self.p1_name if self.turn == self.p1_id else self.p2_name
+
+    def _render_grid(self, shots: dict[tuple[int, int], bool]) -> str:
+        rows = []
+        for r in range(4):
+            row = ""
+            for c in range(4):
+                if (r, c) in shots:
+                    row += "\U0001f4a5" if shots[(r, c)] else "\U0001f30a"
+                else:
+                    row += "\u2b1c"
+            rows.append(row)
+        return "\n".join(rows)
+
+    def _make_embed(self, status: str) -> discord.Embed:
+        embed = discord.Embed(
+            title="\U0001f6a2 Battleship",
+            description=status,
+            colour=discord.Colour.dark_blue(),
+        )
+        p1_hits = sum(1 for v in self.p1_shots.values() if v)
+        p2_hits = sum(1 for v in self.p2_shots.values() if v)
+        embed.add_field(
+            name=f"{self.p1_name} ({p1_hits}/{len(self.p2_ships)} hits)",
+            value=self._render_grid(self.p1_shots),
+            inline=True,
+        )
+        embed.add_field(name="\u200b", value="\u200b", inline=True)
+        embed.add_field(
+            name=f"{self.p2_name} ({p2_hits}/{len(self.p1_ships)} hits)",
+            value=self._render_grid(self.p2_shots),
+            inline=True,
+        )
+        return embed
+
+    def _rebuild_buttons(self) -> None:
+        self.clear_items()
+        shots = self._active_shots()
+        for r in range(4):
+            for c in range(4):
+                coord = (r, c)
+                if coord in shots:
+                    hit = shots[coord]
+                    btn = ui.Button(
+                        label="\U0001f4a5" if hit else "\u00b7",
+                        style=discord.ButtonStyle.danger if hit else discord.ButtonStyle.secondary,
+                        custom_id=f"bs_{r}_{c}",
+                        disabled=True,
+                        row=r,
+                    )
+                else:
+                    btn = ui.Button(
+                        label=f"{_BS_COLS[c]}{r + 1}",
+                        style=discord.ButtonStyle.primary,
+                        custom_id=f"bs_{r}_{c}",
+                        row=r,
+                    )
+                    btn.callback = self._make_fire_callback(r, c)
+                self.add_item(btn)
+
+    def _make_fire_callback(self, r: int, c: int):
+        async def callback(interaction: discord.Interaction) -> None:
+            if interaction.user.id != self.turn:
+                await interaction.response.send_message("Not your turn!", ephemeral=True)
+                return
+
+            shots = self._active_shots()
+            target = self._target_ships()
+            hit = (r, c) in target
+            shots[(r, c)] = hit
+
+            name = self._turn_name()
+            coord_str = f"{_BS_COLS[c]}{r + 1}"
+            result = "\U0001f4a5 **HIT!**" if hit else "\U0001f30a Miss"
+
+            hits = sum(1 for v in shots.values() if v)
+            if hits >= len(target):
+                self.winner_id = self.turn
+                self.done.set()
+                self.stop()
+                embed = self._make_embed(
+                    f"**{name}** fires at **{coord_str}** \u2014 {result}\n"
+                    f"\U0001f3c6 **{name}** sinks all ships!",
+                )
+                await interaction.response.edit_message(embed=embed, view=None)
+                return
+
+            self.turn = self.p2_id if self.turn == self.p1_id else self.p1_id
+            self._rebuild_buttons()
+            next_name = self._turn_name()
+            status = (
+                f"**{name}** fires at **{coord_str}** \u2014 {result}\n"
+                f"**{next_name}**'s turn!"
+            )
+            embed = self._make_embed(status)
+            await interaction.response.edit_message(embed=embed, view=self)
+        return callback
+
+
+class Battleship:
+    name = "Battleship"
+    emoji = "\U0001f6a2"
+    stakes = 300
+
+    async def play(
+        self,
+        message: discord.Message,
+        p1_id: int,
+        p1_name: str,
+        p2_id: int,
+        p2_name: str,
+    ) -> int:
+        p1_ships = _place_ships()
+        p2_ships = _place_ships()
+
+        view = _BattleshipView(
+            p1_id, p2_id, p1_name, p2_name, p1_ships, p2_ships,
+        )
+        status = f"**{p1_name}**'s turn! Fire at a coordinate."
+        embed = view._make_embed(status)
+        await message.edit(embed=embed, view=view)
+
+        try:
+            await asyncio.wait_for(view.done.wait(), timeout=120)
+        except asyncio.TimeoutError:
+            view.stop()
+
+        if not view.winner_id:
+            # Timeout \u2014 most hits wins
+            p1h = sum(1 for v in view.p1_shots.values() if v)
+            p2h = sum(1 for v in view.p2_shots.values() if v)
+            if p1h > p2h:
+                view.winner_id = p1_id
+                desc = f"Time's up! **{p1_name}** wins ({p1h} vs {p2h} hits)!"
+            elif p2h > p1h:
+                view.winner_id = p2_id
+                desc = f"Time's up! **{p2_name}** wins ({p2h} vs {p1h} hits)!"
+            else:
+                desc = f"Time's up! Tied at {p1h} hits \u2014 draw!"
+            colour = discord.Colour.gold() if view.winner_id else discord.Colour.greyple()
+            embed = discord.Embed(
+                title="\U0001f6a2 Battleship", description=desc, colour=colour,
+            )
+            await message.edit(embed=embed, view=None)
+
+        return view.winner_id
+
+
 # ── Registry & Picker ───────────────────────────────────────────────────────
 
 ALL_GAMES: list[MiniGame] = [
@@ -1932,6 +2666,10 @@ ALL_GAMES: list[MiniGame] = [
     TicTacToe(),
     BlackjackShowdown(),
     WordScramble(),
+    Nim(),
+    PushYourLuck(),
+    Chicken(),
+    Battleship(),
 ]
 
 
