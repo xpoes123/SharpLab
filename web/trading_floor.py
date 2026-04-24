@@ -18,7 +18,7 @@ from bot.cogs._pool import compute_side_pot_payouts
 
 WEB_API_SECRET = os.environ.get("WEB_API_SECRET", "dev-secret")
 ROOM_TTL = 1800
-ROUND_DELAY = 4
+ROUND_DELAY = 8
 
 # ── Constants ──────────────────────────────────────────────────────────────
 
@@ -793,22 +793,40 @@ async def _game_loop(room: TradingFloor) -> None:
             bot_task.cancel()
             await _broadcast(room, {"type": "round_end", "round_num": rnd})
 
-            # Settlement phase — apply noise + event (market impact is now real-time)
-            _apply_noise(room)
-            _apply_event(room, event)
-            _check_circuit_breakers(room)
-            _record_prices(room)
+            # ── Settlement sequence (paced for clarity) ──
 
-            # Broadcast event reveal + updated state
+            # Step 1: Show event card (3s to read it)
+            await asyncio.sleep(1)
             await _broadcast(room, {
                 "type": "event_reveal",
                 "round_num": rnd,
                 "event": {"name": event["name"], "emoji": event["emoji"],
                           "desc": event["desc"], "effects": event["effects"]},
             })
+            await asyncio.sleep(3)
+
+            # Step 2: Apply effects + noise, then show price changes with animation
+            _apply_noise(room)
+            _apply_event(room, event)
+            _check_circuit_breakers(room)
+            _record_prices(room)
+
+            # Send "prices_updated" so client can animate the changes
+            await _broadcast(room, {
+                "type": "prices_updated",
+                "stocks": {
+                    t: {
+                        "price": round(s.price, 1),
+                        "prev": s.history[-2] if len(s.history) >= 2 else 100.0,
+                        "change": round(s.price - (s.history[-2] if len(s.history) >= 2 else 100.0), 1),
+                    }
+                    for t, s in room.stocks.items()
+                },
+            })
             await _broadcast(room, _market_state_msg(room))
 
-            # Send updated portfolios
+            # Step 3: Update portfolios
+            await asyncio.sleep(2)
             for p in room.players.values():
                 await _send(p.ws, _portfolio_msg(p, room))
 

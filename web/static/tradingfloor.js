@@ -44,6 +44,7 @@ function handleMessage(msg) {
         case 'intel':           onIntel(msg); break;
         case 'trade_executed':  onTradeExecuted(msg); break;
         case 'analyst_pick':    onAnalystPick(msg); break;
+        case 'prices_updated':  onPricesUpdated(msg); break;
         case 'event_reveal':    onEventReveal(msg); break;
         case 'game_over':       onGameOver(msg); break;
         case 'error':           showToast(msg.message, 'error'); break;
@@ -144,26 +145,17 @@ function onTimer(msg) {
 // ── Market State ──────────────────────────────────────────────────────────
 
 function onMarketState(msg) {
-    renderStocks(msg.stocks, false);
+    renderStocks(msg.stocks);
     renderStandings(msg.standings);
     renderRecentTrades(msg.recent_trades);
 }
 
-function renderStocks(stocks, animate) {
+function renderStocks(stocks) {
     const grid = document.getElementById('stock-grid');
     grid.innerHTML = '';
     for (const [ticker, s] of Object.entries(stocks)) {
         const card = document.createElement('div');
-        let extraClass = '';
-        if (s.halted) extraClass = ' halted';
-
-        // Flash animation on event reveal
-        if (animate && lastStockPrices[ticker] !== undefined) {
-            const diff = s.price - lastStockPrices[ticker];
-            if (diff > 0.5) extraClass += ' flash-up';
-            else if (diff < -0.5) extraClass += ' flash-down';
-        }
-
+        let extraClass = s.halted ? ' halted' : '';
         card.className = 'stock-card' + extraClass;
         card.id = `stock-${ticker}`;
         const changeClass = s.change_pct > 0 ? 'positive' : s.change_pct < 0 ? 'negative' : '';
@@ -173,7 +165,6 @@ function renderStocks(stocks, animate) {
             <div class="stock-ticker">${ticker}</div>
             <div class="stock-price">${s.price.toFixed(1)}</div>
             <div class="stock-change ${changeClass}">${changeStr}</div>
-            <div class="stock-sparkline">${s.sparkline || ''}</div>
             ${s.halted ? '<div style="color:var(--red);font-size:0.7rem;font-weight:600">HALTED</div>' : ''}
         `;
         grid.appendChild(card);
@@ -285,6 +276,36 @@ function onAnalystPick(msg) {
     setTimeout(() => slot.classList.remove('pick-flash'), 600);
 }
 
+// ── Price Update Animation ───────────────────────────────────────────────
+
+function onPricesUpdated(msg) {
+    // Show a big animated change overlay on each stock card
+    for (const [ticker, data] of Object.entries(msg.stocks)) {
+        const card = document.getElementById(`stock-${ticker}`);
+        if (!card) continue;
+
+        const change = data.change;
+        const cls = change > 0 ? 'flash-up' : change < 0 ? 'flash-down' : '';
+        if (cls) card.classList.add(cls);
+
+        // Add a floating change indicator
+        const overlay = document.createElement('div');
+        overlay.className = `price-change-overlay ${change > 0 ? 'up' : 'down'}`;
+        overlay.textContent = change > 0 ? `+${change.toFixed(1)}` : change.toFixed(1);
+        card.appendChild(overlay);
+
+        // Update the price text
+        const priceEl = card.querySelector('.stock-price');
+        if (priceEl) priceEl.textContent = data.price.toFixed(1);
+
+        // Remove overlay after animation
+        setTimeout(() => {
+            overlay.remove();
+            card.classList.remove('flash-up', 'flash-down');
+        }, 2500);
+    }
+}
+
 // ── Event Reveal (animate on stock cards) ────────────────────────────────
 
 function onEventReveal(msg) {
@@ -305,17 +326,6 @@ function onEventReveal(msg) {
         <div class="event-effects">${effectsHtml}</div>
     `;
     document.getElementById('tip-banner').style.display = 'none';
-
-    // Re-render stocks with animation (the market_state that follows will have new prices)
-    // We trigger the flash by setting animate=true on the next market_state render
-    // Override the next onMarketState to use animate
-    const origHandler = onMarketState;
-    onMarketState = function(m) {
-        renderStocks(m.stocks, true);
-        renderStandings(m.standings);
-        renderRecentTrades(m.recent_trades);
-        onMarketState = origHandler; // restore
-    };
 }
 
 // ── Game Over ─────────────────────────────────────────────────────────────
@@ -330,13 +340,11 @@ function onGameOver(msg) {
         card.className = 'stock-result-card';
         const retClass = s.return > 0 ? 'positive' : s.return < 0 ? 'negative' : '';
         const retStr = s.return > 0 ? `+${s.return}%` : `${s.return}%`;
-        const spark = sparkline(s.history);
         card.innerHTML = `
             <div>${s.emoji}</div>
             <div class="result-ticker">${ticker}</div>
             <div class="result-price">${s.final_price.toFixed(1)}c</div>
             <div class="result-return ${retClass}">${retStr}</div>
-            <div class="result-sparkline">${spark}</div>
         `;
         stockResults.appendChild(card);
     }
