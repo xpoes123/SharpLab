@@ -6,6 +6,7 @@ endpoint handles fuzzy matching.  Game runs until the host ends it.
 """
 
 import asyncio
+import difflib
 import html
 import re
 import time
@@ -121,6 +122,58 @@ async def _check_answer(
     resp.raise_for_status()
     data = resp.json()
     return data.get("directive", "reject")
+
+
+_ARTICLES = re.compile(r"\b(the|a|an)\b")
+_PUNCT = re.compile(r"[^\w\s]")
+_WS = re.compile(r"\s+")
+# Brackets like [accept USSR] or [or Soviet Russia]
+_BRACKET_ALTERNATES = re.compile(r"\[(?:accept|or)\s+([^\]]+)\]", re.IGNORECASE)
+_HTML_TAG = re.compile(r"<[^>]+>")
+
+
+def _normalize(s: str) -> str:
+    """Lowercase, strip HTML, remove punctuation and English articles."""
+    s = _HTML_TAG.sub("", s).lower()
+    s = _PUNCT.sub("", s)
+    s = _ARTICLES.sub("", s)
+    return _WS.sub(" ", s).strip()
+
+
+def _extract_alternates(answerline: str) -> list[str]:
+    """Return main answer plus any [accept X] / [or Y] alternates."""
+    main = _BRACKET_ALTERNATES.split(answerline)[0]
+    alternates: list[str] = [main]
+    for group in _BRACKET_ALTERNATES.findall(answerline):
+        # Each group may contain " or " separators inside the bracket
+        for part in re.split(r"\s+or\s+", group, flags=re.IGNORECASE):
+            alternates.append(part.strip())
+    return alternates
+
+
+def _local_check_answer(answerline: str, given: str) -> bool:
+    """Fallback fuzzy answer check used when the qbreader API is unavailable.
+
+    Parses [accept X] / [or Y] alternates and uses difflib for fuzzy matching
+    (ratio ≥ 0.75).  Also accepts if either string is a substring of the other
+    after normalisation (handles "Elizabeth Stanton" → "Elizabeth Cady Stanton").
+    """
+    candidates = _extract_alternates(answerline)
+    given_norm = _normalize(given)
+    if not given_norm:
+        return False
+    for candidate in candidates:
+        cand_norm = _normalize(candidate)
+        if not cand_norm:
+            continue
+        if given_norm == cand_norm:
+            return True
+        if given_norm in cand_norm or cand_norm in given_norm:
+            return True
+        ratio = difflib.SequenceMatcher(None, given_norm, cand_norm).ratio()
+        if ratio >= 0.75:
+            return True
+    return False
 
 
 # ── Payout helpers ───────────────────────────────────────────────────────────
@@ -1125,7 +1178,22 @@ class QuizBowlCog(commands.Cog):
                 table = t
                 break
 
-        if table is None or table.phase != "playing":
+        if table is None:
+            return
+
+        # Snapshot mutable state before any await so we can re-validate later.
+        # We also use submission_mono to handle the race where asyncio processes
+        # the wait_for timeout before dispatching on_message: if the handler fires
+        # within 0.5 s after the deadline we still accept the answer.
+        submission_mono = time.monotonic()
+        captured_part_idx = table.current_part_idx
+        captured_bonus_num = table.bonus_num
+
+        if table.phase == "between_parts":
+            # Allow a short grace window for late handler dispatch
+            if submission_mono - table.part_start_time > PART_TIME + 0.5:
+                return
+        elif table.phase != "playing":
             return
 
         uid = message.author.id
@@ -1139,17 +1207,29 @@ class QuizBowlCog(commands.Cog):
         if len(guess) < 2:
             return
 
-        # Check answer via qbreader API
         bonus = table.current_bonus
         if bonus is None:
             return
 
-        answerline = bonus["answers"][table.current_part_idx]
+        answerline = bonus["answers"][captured_part_idx]
 
         try:
             directive = await _check_answer(self._http, answerline, guess)
         except Exception:
-            # API error — silently skip
+            # API unavailable — fall back to local fuzzy matching so a network
+            # hiccup doesn't silently discard a correct answer.
+            directive = "accept" if _local_check_answer(answerline, guess) else "reject"
+
+        # "prompt" means the answer is close enough to warrant clarification.
+        # In Discord there is no back-and-forth, so treat it as correct.
+        if directive == "prompt":
+            directive = "accept"
+
+        # Re-validate: the async API call may have taken a while.  If the bonus
+        # or part advanced while we waited, discard this result entirely.
+        if table.bonus_num != captured_bonus_num or table.current_part_idx != captured_part_idx:
+            return
+        if table.part_winner is not None or captured_part_idx in table.bonus_part_results:
             return
 
         if directive == "accept":
@@ -1160,7 +1240,11 @@ class QuizBowlCog(commands.Cog):
                 await message.add_reaction("\u2705")
             except discord.HTTPException:
                 pass
-            table.part_solved.set()
+            # Only signal the game loop if it is still waiting (phase == "playing").
+            # If the timer already expired the event is harmless but we skip it to
+            # avoid confusing the next part's wait.
+            if table.phase == "playing":
+                table.part_solved.set()
         else:
             try:
                 await message.add_reaction("\u274c")
