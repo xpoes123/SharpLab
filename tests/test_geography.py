@@ -29,6 +29,7 @@ if "db.queries" not in sys.modules:
 from bot.cogs.geography import (  # noqa: E402
     CAPITALS,
     COUNTRY_CODES,
+    OUTLINE_URL_TEMPLATE,
     US_STATE_CAPITALS,
     US_STATE_CODES,
     GeoPlayer,
@@ -208,12 +209,12 @@ class TestPickQuestion:
     def test_mixed_can_return_any_type(self):
         view = self._view("mixed")
         seen_types = set()
-        for _ in range(200):
+        for _ in range(300):
             q_type, *_ = view._pick_question()
             seen_types.add(q_type)
-            if len(seen_types) == 4:
+            if len(seen_types) == 5:
                 break
-        assert len(seen_types) == 4, f"Mixed mode only produced: {seen_types}"
+        assert len(seen_types) == 5, f"Mixed mode only produced: {seen_types}"
 
     def test_no_repeat_within_category_until_exhausted(self):
         view = self._view("state_capitals")
@@ -271,3 +272,82 @@ class TestQuestionText:
         view = self._view()
         text = view._question_text("state_flag", "Texas")
         assert "flag" in text.lower() or "state" in text.lower()
+
+    def test_country_outline_text(self):
+        view = self._view()
+        text = view._question_text("country_outline", "France")
+        assert "outline" in text.lower() or "country" in text.lower()
+
+
+# ── Country Outlines ─────────────────────────────────────────────────────────
+
+class TestCountryOutlines:
+    def _view(self, category: str = "country_outlines") -> geo.GeoTableView:
+        table = _make_table(category=category)
+        return _make_view(table)
+
+    def test_pick_question_returns_outline(self):
+        view = self._view()
+        q_type, subject, answers, image_url = view._pick_question()
+        assert q_type == "country_outline"
+        assert subject in COUNTRY_CODES
+        assert answers == [subject]
+        assert image_url is not None
+
+    def test_outline_url_contains_country_code(self):
+        view = self._view()
+        q_type, subject, answers, image_url = view._pick_question()
+        code = COUNTRY_CODES[subject]
+        assert f"/{code}/" in image_url
+
+    def test_outline_url_well_formed_for_all_countries(self):
+        for country, code in COUNTRY_CODES.items():
+            url = OUTLINE_URL_TEMPLATE.format(code=code)
+            assert url.startswith("https://")
+            assert f"/{code}/" in url
+            assert url.endswith(".svg")
+
+    def test_outline_url_format_specific(self):
+        url = OUTLINE_URL_TEMPLATE.format(code="fr")
+        assert url == "https://raw.githubusercontent.com/djaiss/mapsicon/master/all/fr/vector.svg"
+
+    def test_mixed_mode_includes_outlines(self):
+        view = self._view("mixed")
+        seen_types = set()
+        for _ in range(300):
+            q_type, *_ = view._pick_question()
+            seen_types.add(q_type)
+            if "country_outline" in seen_types:
+                break
+        assert "country_outline" in seen_types, f"Mixed mode never produced country_outline: {seen_types}"
+
+    def test_no_repeat_until_exhausted(self):
+        view = self._view()
+        seen = set()
+        n = len(COUNTRY_CODES)
+        for _ in range(n):
+            _, subject, _, _ = view._pick_question()
+            assert subject not in seen, f"{subject} appeared twice before pool reset"
+            seen.add(subject)
+        # n+1 resets and succeeds
+        _, subject, _, _ = view._pick_question()
+        assert subject in COUNTRY_CODES
+
+    def test_used_questions_tracked(self):
+        view = self._view()
+        _, subject, _, _ = view._pick_question()
+        assert ("country_outline", subject) in view.table.used_questions
+
+    def test_outline_separate_from_flag(self):
+        """country_outline and country_flag are tracked independently."""
+        table = _make_table(category="mixed")
+        view = _make_view(table)
+        # Mark all country_flag as used
+        for k in COUNTRY_CODES:
+            table.used_questions.add(("country_flag", k))
+        # country_outline should still be available
+        outline_available = [
+            (qt, k) for qt, k in [("country_outline", c) for c in COUNTRY_CODES]
+            if (qt, k) not in table.used_questions
+        ]
+        assert len(outline_available) == len(COUNTRY_CODES)

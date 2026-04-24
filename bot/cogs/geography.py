@@ -23,6 +23,12 @@ MAX_PLAYERS = 8
 MIN_PLAYERS = 1
 ROUND_TIME = 30  # seconds per round
 ROUND_DELAY = 4  # seconds between rounds
+
+# Country outline silhouette URL template — keyed by ISO 3166-1 alpha-2 code.
+# Uses djaiss/mapsicon SVGs served via raw.githubusercontent.com.
+# Discord renders PNGs better than SVGs; if outlines don't display, swap this
+# for a PNG-based CDN or host converted PNGs in /assets/outlines/.
+OUTLINE_URL_TEMPLATE = "https://raw.githubusercontent.com/djaiss/mapsicon/master/all/{code}/vector.svg"
 WINS_TO_WIN = 3  # first to N wins
 MAX_ROUNDS = 15  # safety cap
 
@@ -411,7 +417,7 @@ class GeoTable:
     players: dict[int, GeoPlayer] = field(default_factory=dict)
     message: discord.Message | None = None
     round_num: int = 0
-    # Category: mixed | country_capitals | state_capitals | country_flags | state_flags
+    # Category: mixed | country_capitals | state_capitals | country_flags | state_flags | country_outlines
     category: str = "mixed"
     current_subject: str = ""      # display name (country/state) shown in result embeds
     current_question_text: str = ""  # full question string shown during round
@@ -454,6 +460,7 @@ _CATEGORY_LABELS: dict[str, str] = {
     "state_capitals": "US State Capitals",
     "country_flags": "Country Flags",
     "state_flags": "US State Flags",
+    "country_outlines": "Country Outlines",
 }
 
 
@@ -647,6 +654,12 @@ _CATEGORY_OPTIONS = [
         description="Name the US state from its flag image",
         emoji="\U0001f3f3\ufe0f",
     ),
+    discord.SelectOption(
+        label="Country Outlines",
+        value="country_outlines",
+        description="Name the country from its silhouette",
+        emoji="\U0001f5fa\ufe0f",
+    ),
 ]
 
 
@@ -839,12 +852,15 @@ class GeoTableView(ui.View):
             pool = _available("country_flag", list(COUNTRY_CODES.keys()))
         elif cat == "state_flags":
             pool = _available("state_flag", list(US_STATE_CODES.keys()))
+        elif cat == "country_outlines":
+            pool = _available("country_outline", list(COUNTRY_CODES.keys()))
         else:  # mixed — combine all sub-pools
             country_cap_pool = _available("country_cap", list(CAPITALS.keys()))
             state_cap_pool = _available("state_cap", list(US_STATE_CAPITALS.keys()))
             country_flag_pool = _available("country_flag", list(COUNTRY_CODES.keys()))
             state_flag_pool = _available("state_flag", list(US_STATE_CODES.keys()))
-            pool = country_cap_pool + state_cap_pool + country_flag_pool + state_flag_pool
+            country_outline_pool = _available("country_outline", list(COUNTRY_CODES.keys()))
+            pool = country_cap_pool + state_cap_pool + country_flag_pool + state_flag_pool + country_outline_pool
             if not pool:
                 table.used_questions.clear()
                 pool = (
@@ -852,6 +868,7 @@ class GeoTableView(ui.View):
                     + [("state_cap", k) for k in US_STATE_CAPITALS]
                     + [("country_flag", k) for k in COUNTRY_CODES]
                     + [("state_flag", k) for k in US_STATE_CODES]
+                    + [("country_outline", k) for k in COUNTRY_CODES]
                 )
 
         q_type, key = random.choice(pool)
@@ -864,6 +881,10 @@ class GeoTableView(ui.View):
         elif q_type == "country_flag":
             code = COUNTRY_CODES[key]
             url = f"https://flagcdn.com/w320/{code}.png"
+            return q_type, key, [key], url
+        elif q_type == "country_outline":
+            code = COUNTRY_CODES[key]
+            url = OUTLINE_URL_TEMPLATE.format(code=code)
             return q_type, key, [key], url
         else:  # state_flag
             code = US_STATE_CODES[key]
@@ -878,6 +899,8 @@ class GeoTableView(ui.View):
             return f"What is the capital of the US state **{subject}**?"
         elif q_type == "country_flag":
             return "Which country does this flag belong to?"
+        elif q_type == "country_outline":
+            return "Which country does this outline belong to?"
         else:  # state_flag
             return "Which US state does this flag belong to?"
 
@@ -1137,6 +1160,7 @@ _QTYPE_TO_CATEGORY: dict[str, str] = {
     "state_cap": "state_cap",
     "country_flag": "country_flag",
     "state_flag": "state_flag",
+    "country_outline": "country_outline",
 }
 
 

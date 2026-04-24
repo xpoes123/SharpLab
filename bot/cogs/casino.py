@@ -1747,9 +1747,11 @@ GAME_RULES: dict[str, str] = {
     ),
     "geography": (
         "**Speed Geography**\n"
-        "Name the capital city of the given country.\n\n"
-        "**How to play:** A country is shown. Type the capital city as fast as you can. "
+        "Name capitals, identify flags, or recognize country outlines.\n\n"
+        "**How to play:** A question is shown — type your answer as fast as you can. "
         "First correct answer wins the round. Multiple rounds per game.\n\n"
+        "**Modes:** Country Capitals, US State Capitals, Country Flags, US State Flags, "
+        "Country Outlines (guess a country from its silhouette), or Mixed.\n\n"
         "**Scoring:** Points for speed. Spelling must be close (fuzzy matching).\n"
         "**Tip:** Brush up on obscure capitals (Ouagadougou, Thimphu, Naypyidaw...)."
     ),
