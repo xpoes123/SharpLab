@@ -2,7 +2,7 @@
 
 const API = '/api/v1';
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
+// -- Helpers -----------------------------------------------------------------
 
 function fmt(n) {
     if (n == null) return '-';
@@ -48,7 +48,7 @@ function empty(msg) {
     return `<div class="empty">${msg}</div>`;
 }
 
-// ── Tab Switching ───────────────────────────────────────────────────────────
+// -- Tab Switching -----------------------------------------------------------
 
 function initTabs() {
     const tabs = document.querySelectorAll('.tab');
@@ -61,63 +61,64 @@ function initTabs() {
             tab.classList.add('active');
             document.getElementById(tab.dataset.tab).classList.add('active');
 
-            // Load data for the tab if not loaded
             const target = tab.dataset.tab;
-            if (target === 'casino' && !casinoLoaded) loadCasinoLeaderboard();
-            if (target === 'per-game' && !gamesListLoaded) loadGamesList();
+            if (target === 'standings' && !standingsLoaded) loadStandings();
+            if (target === 'per-game' && !gamesListLoaded) loadEloGamesList();
             if (target === 'trading' && !tradingLoaded) loadTradingLeaderboard();
         });
     });
 }
 
-// ── Casino Leaderboard ──────────────────────────────────────────────────────
+// -- Championship Standings --------------------------------------------------
 
-let casinoLoaded = false;
+let standingsLoaded = false;
 
-async function loadCasinoLeaderboard() {
-    const el = document.getElementById('casino-table');
+async function loadStandings() {
+    const el = document.getElementById('standings-table');
     el.innerHTML = spinner();
     try {
-        const res = await fetch(`${API}/casino/leaderboard?limit=50`);
+        const res = await fetch(`${API}/elo/standings?limit=50`);
         const data = await res.json();
-        if (!data.leaderboard.length) { el.innerHTML = empty('No data yet'); return; }
-        casinoLoaded = true;
-        el.innerHTML = renderCasinoTable(data.leaderboard);
+        if (!data.standings.length) { el.innerHTML = empty('No qualified players yet. Play 5+ games to appear.'); return; }
+        standingsLoaded = true;
+        el.innerHTML = renderStandingsTable(data.standings);
     } catch (e) {
         el.innerHTML = empty('Failed to load');
     }
 }
 
-function renderCasinoTable(rows) {
+function renderStandingsTable(rows) {
     let html = `<table class="leaderboard-table">
         <thead><tr>
             <th class="rank">#</th>
             <th>Player</th>
-            <th>Balance</th>
-            <th>Net P/L</th>
-            <th class="hide-mobile">Rounds</th>
+            <th>Points</th>
+            <th>Best Rating</th>
+            <th class="hide-mobile">Games</th>
         </tr></thead><tbody>`;
 
     rows.forEach((r, i) => {
-        html += `<tr onclick="location.href='/player/${r.discord_user}'">
+        const breakdownTip = r.breakdown.map(b => `${b.game}: #${b.position} (${b.points}pts)`).join(', ');
+        html += `<tr onclick="location.href='/player/${r.discord_user}'" title="${esc(breakdownTip)}">
             <td class="${rankClass(i)}">${rankBadge(i)}</td>
             <td><div class="user-cell">${avatarImg(r.avatar_url)}<span>${esc(r.username)}</span></div></td>
-            <td class="num">${fmt(r.balance)}c</td>
-            <td class="num ${profitClass(r.net_profit)}">${fmtSign(r.net_profit)}c</td>
-            <td class="num hide-mobile text-muted">${fmt(r.rounds)}</td>
+            <td class="num"><strong>${r.total_points}</strong></td>
+            <td class="num">${fmt(r.best_rating)}</td>
+            <td class="num hide-mobile text-muted">${fmt(r.total_games)}</td>
         </tr>`;
     });
 
-    return html + '</tbody></table>';
+    return html + '</tbody></table>' +
+        '<div class="table-footer">Points: 25/18/15/12/10/8/6/4/2/1 for top 10 in each game. Min 5 games to qualify.</div>';
 }
 
-// ── Per-Game Leaderboard ────────────────────────────────────────────────────
+// -- Per-Game ELO Leaderboard ------------------------------------------------
 
 let gamesListLoaded = false;
 
-async function loadGamesList() {
+async function loadEloGamesList() {
     try {
-        const res = await fetch(`${API}/games`);
+        const res = await fetch(`${API}/elo/games`);
         const data = await res.json();
         const select = document.getElementById('game-select');
         data.games.forEach(g => {
@@ -127,53 +128,53 @@ async function loadGamesList() {
             select.appendChild(opt);
         });
         gamesListLoaded = true;
-        // Load first game
         if (data.games.length) {
             select.value = data.games[0].key;
-            loadGameLeaderboard(data.games[0].key);
+            loadEloGameLeaderboard(data.games[0].key);
         }
     } catch (e) {
         console.error('Failed to load games list', e);
     }
 }
 
-async function loadGameLeaderboard(game) {
+async function loadEloGameLeaderboard(game) {
     const el = document.getElementById('game-table');
     el.innerHTML = spinner();
     try {
-        const res = await fetch(`${API}/casino/leaderboard/${game}?limit=50`);
+        const res = await fetch(`${API}/elo/leaderboard/${game}?limit=50`);
         const data = await res.json();
-        if (!data.leaderboard.length) { el.innerHTML = empty('No data for this game'); return; }
-        el.innerHTML = renderGameTable(data.leaderboard);
+        if (!data.leaderboard.length) { el.innerHTML = empty('No qualified players for this game yet'); return; }
+        el.innerHTML = renderEloGameTable(data.leaderboard);
     } catch (e) {
         el.innerHTML = empty('Failed to load');
     }
 }
 
-function renderGameTable(rows) {
+function renderEloGameTable(rows) {
     let html = `<table class="leaderboard-table">
         <thead><tr>
             <th class="rank">#</th>
             <th>Player</th>
-            <th>Net P/L</th>
-            <th>ROI</th>
-            <th class="hide-mobile">Rounds</th>
+            <th>Rating</th>
+            <th>Record</th>
+            <th class="hide-mobile">Peak</th>
         </tr></thead><tbody>`;
 
     rows.forEach((r, i) => {
+        const record = `${r.wins}W-${r.losses}L` + (r.draws ? `-${r.draws}D` : '');
         html += `<tr onclick="location.href='/player/${r.discord_user}'">
             <td class="${rankClass(i)}">${rankBadge(i)}</td>
             <td><div class="user-cell">${avatarImg(r.avatar_url)}<span>${esc(r.username)}</span></div></td>
-            <td class="num ${profitClass(r.net_profit)}">${fmtSign(r.net_profit)}c</td>
-            <td class="num ${profitClass(r.roi)}">${r.roi > 0 ? '+' : ''}${r.roi}%</td>
-            <td class="num hide-mobile text-muted">${fmt(r.rounds)}</td>
+            <td class="num"><strong>${Math.round(r.rating)}</strong></td>
+            <td class="num">${record}</td>
+            <td class="num hide-mobile text-muted">${Math.round(r.peak_rating)}</td>
         </tr>`;
     });
 
     return html + '</tbody></table>';
 }
 
-// ── Trading Leaderboard ─────────────────────────────────────────────────────
+// -- Trading Leaderboard -----------------------------------------------------
 
 let tradingLoaded = false;
 
@@ -218,7 +219,7 @@ function renderTradingTable(rows) {
     return html + '</tbody></table>';
 }
 
-// ── Player Profile ──────────────────────────────────────────────────────────
+// -- Player Profile ----------------------------------------------------------
 
 async function loadPlayerProfile(userId) {
     const el = document.getElementById('profile-content');
@@ -235,8 +236,6 @@ async function loadPlayerProfile(userId) {
 
 function renderProfile(p) {
     const xpProgress = p.next_level_xp > 0 ? Math.min((p.total_xp / p.next_level_xp) * 100, 100) : 100;
-    const casino = p.casino;
-    const roi = casino.total_wagered > 0 ? ((casino.net_profit / casino.total_wagered) * 100).toFixed(1) : '0.0';
 
     let html = `
     <div class="profile-header">
@@ -249,32 +248,41 @@ function renderProfile(p) {
                 <div class="xp-label">${fmt(p.total_xp)} / ${fmt(p.next_level_xp)} XP</div>
             </div>
         </div>
-    </div>
-
-    <div class="stats-grid">
-        <div class="stat-card"><div class="label">Balance</div><div class="value">${fmt(p.balance)}c</div></div>
-        <div class="stat-card"><div class="label">Net Profit</div><div class="value ${profitClass(casino.net_profit)}">${fmtSign(casino.net_profit)}c</div></div>
-        <div class="stat-card"><div class="label">Games Played</div><div class="value">${fmt(casino.rounds)}</div></div>
-        <div class="stat-card"><div class="label">ROI</div><div class="value ${profitClass(parseFloat(roi))}">${roi}%</div></div>
     </div>`;
 
-    // Per-game breakdown
-    if (p.per_game && p.per_game.length) {
-        html += '<h3 class="section-title">Per-Game Breakdown</h3>';
+    // ELO Ratings section (primary)
+    if (p.elo_ratings && p.elo_ratings.length) {
+        html += '<h3 class="section-title">ELO Ratings</h3>';
         html += `<table class="game-breakdown">
             <thead><tr>
-                <th>Game</th><th>Rounds</th><th>Net P/L</th><th class="hide-mobile">Wagered</th>
+                <th>Game</th><th>Rating</th><th>Record</th><th class="hide-mobile">Peak</th>
             </tr></thead><tbody>`;
-        p.per_game.forEach(g => {
+        p.elo_ratings.forEach(r => {
+            const record = `${r.wins}W-${r.losses}L` + (r.draws ? `-${r.draws}D` : '');
+            const prov = r.provisional ? '?' : '';
             html += `<tr>
-                <td>${esc(g.game_label)}</td>
-                <td class="num">${fmt(g.rounds)}</td>
-                <td class="num ${profitClass(g.net_profit)}">${fmtSign(g.net_profit)}c</td>
-                <td class="num hide-mobile text-muted">${fmt(g.total_wagered)}c</td>
+                <td>${esc(r.game_label)}</td>
+                <td class="num"><strong>${Math.round(r.rating)}</strong>${prov}</td>
+                <td class="num">${record}</td>
+                <td class="num hide-mobile text-muted">${Math.round(r.peak_rating)}</td>
             </tr>`;
         });
         html += '</tbody></table>';
     }
+
+    // Quick stats
+    const casino = p.casino;
+    html += '<h3 class="section-title">Stats</h3>';
+    html += '<div class="stats-grid">';
+    html += `<div class="stat-card"><div class="label">Balance</div><div class="value">${fmt(p.balance)}c</div></div>`;
+    html += `<div class="stat-card"><div class="label">Games Played</div><div class="value">${fmt(casino.rounds)}</div></div>`;
+    if (p.duels.wins > 0 || p.duels.losses > 0) {
+        html += `<div class="stat-card"><div class="label">Duels</div><div class="value">${p.duels.wins}W-${p.duels.losses}L</div></div>`;
+    }
+    if (p.tournaments.entries > 0) {
+        html += `<div class="stat-card"><div class="label">Tournaments</div><div class="value">${p.tournaments.wins}W / ${p.tournaments.entries}</div></div>`;
+    }
+    html += '</div>';
 
     // Paper trading
     if (p.paper_trading && p.paper_trading.num_won > 0) {
@@ -287,19 +295,6 @@ function renderProfile(p) {
             <div class="stat-card"><div class="label">ROI</div><div class="value ${profitClass(parseFloat(ptRoi))}">${ptRoi}%</div></div>
             <div class="stat-card"><div class="label">Avg CLV</div><div class="value ${profitClass(pt.avg_clv)}">${pt.avg_clv != null ? (pt.avg_clv > 0 ? '+' : '') + pt.avg_clv.toFixed(2) + 'pp' : '-'}</div></div>
         </div>`;
-    }
-
-    // Duels & Tournaments
-    if (p.duels.wins > 0 || p.duels.losses > 0 || p.tournaments.entries > 0) {
-        html += '<h3 class="section-title">Competitive</h3>';
-        html += '<div class="stats-grid">';
-        if (p.duels.wins > 0 || p.duels.losses > 0) {
-            html += `<div class="stat-card"><div class="label">Duels</div><div class="value">${p.duels.wins}W-${p.duels.losses}L</div></div>`;
-        }
-        if (p.tournaments.entries > 0) {
-            html += `<div class="stat-card"><div class="label">Tournaments</div><div class="value">${p.tournaments.wins}W / ${p.tournaments.entries} played</div></div>`;
-        }
-        html += '</div>';
     }
 
     // Achievements
@@ -320,7 +315,7 @@ function renderProfile(p) {
     return html;
 }
 
-// ── Escape HTML ─────────────────────────────────────────────────────────────
+// -- Escape HTML -------------------------------------------------------------
 
 function esc(s) {
     if (!s) return '';
@@ -329,17 +324,17 @@ function esc(s) {
     return d.innerHTML;
 }
 
-// ── Init ────────────────────────────────────────────────────────────────────
+// -- Init --------------------------------------------------------------------
 
 document.addEventListener('DOMContentLoaded', () => {
     // Index page
     if (document.getElementById('leaderboard-tabs')) {
         initTabs();
-        loadCasinoLeaderboard();
+        loadStandings();
 
         const gameSelect = document.getElementById('game-select');
         if (gameSelect) {
-            gameSelect.addEventListener('change', () => loadGameLeaderboard(gameSelect.value));
+            gameSelect.addEventListener('change', () => loadEloGameLeaderboard(gameSelect.value));
         }
     }
 

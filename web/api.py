@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from db.schema import init_db
+from shared.elo import championship_points
 from web.sudoku import router as sudoku_router, sudoku_websocket, cleanup_stale_rooms
 from web.figgie import router as figgie_router, figgie_websocket, cleanup_stale_figgie_rooms
 from web.bingo import router as bingo_router, bingo_websocket, cleanup_stale_bingo_rooms
@@ -140,6 +141,26 @@ ALL_ACHIEVEMENTS = [
 ]
 
 ACHIEVEMENTS_BY_ID = {a["id"]: a for a in ALL_ACHIEVEMENTS}
+
+ELO_GAME_LABELS: dict[str, str] = {
+    "higher_card": "Higher Card",
+    "dice_roll": "Dice Roll",
+    "speed_math": "Speed Math",
+    "trivia": "Trivia",
+    "guess_number": "Guess the Number",
+    "coin_flip": "Coin Flip",
+    "tictactoe": "Tic Tac Toe",
+    "blackjack_showdown": "Blackjack",
+    "word_scramble": "Word Scramble",
+    "nim": "Nim",
+    "push_your_luck": "Push Your Luck",
+    "chicken": "Chicken",
+    "battleship": "Battleship",
+    "pokemon": "Pokemon",
+    "valorant": "Valorant Guess",
+}
+
+MIN_ELO_GAMES = 5
 
 
 def compute_level(xp: int) -> int:
@@ -293,6 +314,96 @@ async def trading_leaderboard(limit: int = Query(25, ge=1, le=100)):
     return {"leaderboard": rows}
 
 
+@app.get("/api/v1/elo/games")
+async def elo_games():
+    return {"games": [{"key": k, "label": v} for k, v in ELO_GAME_LABELS.items()]}
+
+
+@app.get("/api/v1/elo/standings")
+async def elo_standings(limit: int = Query(50, ge=1, le=100)):
+    """F1-style championship standings across all ELO games."""
+    # Fetch all qualified ratings
+    rows = await _fetch_all(
+        """SELECT discord_user, game, rating, games_played, wins, losses, draws
+           FROM elo_ratings
+           WHERE games_played >= ?
+           ORDER BY game, rating DESC""",
+        (MIN_ELO_GAMES,),
+    )
+
+    if not rows:
+        return {"standings": []}
+
+    # Group by game, compute positions
+    by_game: dict[str, list[dict]] = {}
+    for r in rows:
+        by_game.setdefault(r["game"], []).append(r)
+
+    player_points: dict[str, int] = {}
+    player_breakdown: dict[str, list[dict]] = {}
+    player_best_rating: dict[str, float] = {}
+    player_total_games: dict[str, int] = {}
+
+    for game_key, lb in by_game.items():
+        label = ELO_GAME_LABELS.get(game_key, game_key)
+        for pos, entry in enumerate(lb, 1):
+            pts = championship_points(pos)
+            if pts == 0:
+                break
+            uid = entry["discord_user"]
+            player_points[uid] = player_points.get(uid, 0) + pts
+            player_breakdown.setdefault(uid, []).append({
+                "game": label,
+                "rating": round(entry["rating"]),
+                "position": pos,
+                "points": pts,
+            })
+
+    # Collect best rating and total games for each player with points
+    for r in rows:
+        uid = r["discord_user"]
+        if uid not in player_points:
+            continue
+        if uid not in player_best_rating or r["rating"] > player_best_rating[uid]:
+            player_best_rating[uid] = r["rating"]
+        player_total_games[uid] = player_total_games.get(uid, 0) + r["games_played"]
+
+    sorted_players = sorted(
+        player_points.items(), key=lambda x: x[1], reverse=True,
+    )[:limit]
+
+    standings = []
+    for uid, total_pts in sorted_players:
+        standings.append({
+            "discord_user": uid,
+            "total_points": total_pts,
+            "best_rating": round(player_best_rating.get(uid, 1000)),
+            "total_games": player_total_games.get(uid, 0),
+            "breakdown": player_breakdown.get(uid, []),
+        })
+
+    await _enrich_users(standings)
+    return {"standings": standings}
+
+
+@app.get("/api/v1/elo/leaderboard/{game}")
+async def elo_game_leaderboard(game: str, limit: int = Query(50, ge=1, le=100)):
+    if game not in ELO_GAME_LABELS:
+        return JSONResponse({"error": f"Unknown game: {game}"}, status_code=404)
+
+    rows = await _fetch_all(
+        """SELECT discord_user, rating, games_played, wins, losses, draws, peak_rating
+           FROM elo_ratings
+           WHERE game = ? AND games_played >= ?
+           ORDER BY rating DESC
+           LIMIT ?""",
+        (game, MIN_ELO_GAMES, limit),
+    )
+
+    await _enrich_users(rows)
+    return {"game": game, "game_label": ELO_GAME_LABELS[game], "leaderboard": rows}
+
+
 @app.get("/api/v1/player/{user_id}")
 async def player_profile(user_id: str):
     # Username
@@ -393,6 +504,18 @@ async def player_profile(user_id: str):
         (user_id,),
     )
 
+    # ELO ratings
+    elo_rows = await _fetch_all(
+        """SELECT game, rating, games_played, wins, losses, draws, peak_rating
+           FROM elo_ratings WHERE discord_user = ? ORDER BY rating DESC""",
+        (user_id,),
+    )
+    elo_ratings = []
+    for r in elo_rows:
+        r["game_label"] = ELO_GAME_LABELS.get(r["game"], r["game"])
+        r["provisional"] = r["games_played"] < MIN_ELO_GAMES
+        elo_ratings.append(r)
+
     return {
         "user_id": user_id,
         "username": username,
@@ -407,6 +530,7 @@ async def player_profile(user_id: str):
         "achievements": achievements,
         "duels": dict(duel) if duel and duel["wins"] is not None else {"wins": 0, "losses": 0},
         "tournaments": dict(tourney) if tourney and tourney["entries"] is not None else {"entries": 0, "wins": 0, "total_payout": 0},
+        "elo_ratings": elo_ratings,
     }
 
 

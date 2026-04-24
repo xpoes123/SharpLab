@@ -351,6 +351,15 @@ header p {
     border-bottom: 1px solid var(--border);
 }
 
+/* ── Table footer ────────────────────────────────────────────────────────── */
+
+.table-footer {
+    text-align: center;
+    padding: 12px 0;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+}
+
 /* ── Loading / Empty ─────────────────────────────────────────────────────── */
 
 .loading, .empty {
