@@ -64,6 +64,7 @@ COGS = [
     "bot.cogs.quizbowl",
     "bot.cogs.valorant",
     "bot.cogs.solitairechess",
+    "bot.cogs.nbaguess",
 ]
 
 GUILD_ID = int(os.environ["DISCORD_GUILD_ID"])
