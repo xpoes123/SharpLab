@@ -27,6 +27,12 @@ MIN_PLAYERS = 1
 HALF_DELAY = 2.5  # seconds between half updates
 EVENT_DELAY = 1.5
 
+# Tournament-specific pacing
+GROUP_MATCH_DELAY = 1.8   # seconds between group match results
+KO_HALF_DELAY = 3.5       # seconds between knockout half updates
+KO_PERIOD_DELAY = 2.0     # seconds between ET / penalty phases
+TOURNAMENT_TIMEOUT = 600  # 10 min view timeout (tournaments take longer)
+
 # ── Team Data ────────────────────────────────────────────────────────────────
 
 
@@ -234,7 +240,11 @@ class MatchEvent:
 
 
 def _event_line(event: MatchEvent) -> str:
-    emoji_map = {"goal": "\u26bd", "yellow": "\U0001f7e8", "red": "\U0001f7e5", "sub": "\U0001f504"}
+    emoji_map = {
+        "goal": "\u26bd", "yellow": "\U0001f7e8", "red": "\U0001f7e5",
+        "sub": "\U0001f504", "save": "\U0001f9e4", "miss": "\U0001f4a8",
+        "crossbar": "\U0001f6a7", "chance": "\U0001f525",
+    }
     emoji = emoji_map.get(event.event_type, "\u2753")
     detail = f" {event.detail}" if event.detail else ""
     return f"`{event.minute}'` {emoji} **{event.team_name}** \u2014 {event.player}{detail}"
@@ -296,6 +306,30 @@ def _simulate_half(
             events.append(MatchEvent(
                 minute=minute, event_type="red",
                 team_name=team.abbr, player=_pick_player(team),
+            ))
+
+    # Near misses: saves, shots wide, crossbar — adds drama
+    for team, opp in ((home, away), (away, home)):
+        attack_factor = team.attack / 85.0
+        # 1-3 chances per half depending on attack rating
+        n_chances = random.choices([1, 2, 3], weights=[30, 50, 20])[0]
+        n_chances = max(1, int(n_chances * attack_factor))
+        for _ in range(n_chances):
+            minute = random.randint(minute_base + 1, minute_base + 45)
+            chance_type = random.choices(
+                ["save", "miss", "crossbar", "chance"],
+                weights=[40, 30, 10, 20],
+            )[0]
+            detail_map = {
+                "save": random.choice(["great save!", "fingertip save", "blocked", "point blank save"]),
+                "miss": random.choice(["shot wide", "blazed over", "dragged wide", "headed over"]),
+                "crossbar": random.choice(["hits the bar!", "off the post!", "rattles the woodwork!"]),
+                "chance": random.choice(["dangerous cross", "through ball!", "counter attack", "free kick"]),
+            }
+            events.append(MatchEvent(
+                minute=minute, event_type=chance_type,
+                team_name=team.abbr, player=_pick_player(team),
+                detail=detail_map[chance_type],
             ))
 
     # Substitutions: 1-2 in second half only
@@ -667,45 +701,74 @@ def _empty_standing(team: SoccerTeam) -> dict:
     }
 
 
+def _group_fixtures(
+    groups: dict[str, list[SoccerTeam]],
+) -> list[tuple[str, SoccerTeam, SoccerTeam]]:
+    """Return all group match fixtures as (group_name, home, away) tuples."""
+    fixtures: list[tuple[str, SoccerTeam, SoccerTeam]] = []
+    for grp_name, grp_teams in groups.items():
+        for i in range(len(grp_teams)):
+            for j in range(i + 1, len(grp_teams)):
+                fixtures.append((grp_name, grp_teams[i], grp_teams[j]))
+    return fixtures
+
+
+def _init_group_standings(
+    groups: dict[str, list[SoccerTeam]],
+) -> dict[str, dict[str, dict]]:
+    """Initialize empty standings dicts per group."""
+    return {
+        grp_name: {t.abbr: _empty_standing(t) for t in grp_teams}
+        for grp_name, grp_teams in groups.items()
+    }
+
+
+def _apply_match_result(
+    standings: dict[str, dict], home_abbr: str, away_abbr: str,
+    hg: int, ag: int,
+) -> None:
+    """Apply a single match result to standings in-place."""
+    standings[home_abbr]["P"] += 1
+    standings[away_abbr]["P"] += 1
+    standings[home_abbr]["GF"] += hg
+    standings[home_abbr]["GA"] += ag
+    standings[away_abbr]["GF"] += ag
+    standings[away_abbr]["GA"] += hg
+    if hg > ag:
+        standings[home_abbr]["W"] += 1
+        standings[home_abbr]["Pts"] += 3
+        standings[away_abbr]["L"] += 1
+    elif hg < ag:
+        standings[away_abbr]["W"] += 1
+        standings[away_abbr]["Pts"] += 3
+        standings[home_abbr]["L"] += 1
+    else:
+        standings[home_abbr]["D"] += 1
+        standings[away_abbr]["D"] += 1
+        standings[home_abbr]["Pts"] += 1
+        standings[away_abbr]["Pts"] += 1
+
+
+def _sorted_standings(standings: dict[str, dict]) -> list[dict]:
+    return sorted(
+        standings.values(),
+        key=lambda s: (s["Pts"], s["GF"] - s["GA"], s["GF"]),
+        reverse=True,
+    )
+
+
 def _run_group_stage(
     groups: dict[str, list[SoccerTeam]],
 ) -> dict[str, list[dict]]:
     """Round-robin each group. Returns standings sorted by Pts > GD > GF."""
-    results: dict[str, list[dict]] = {}
-    for grp_name, grp_teams in groups.items():
-        standings = {t.abbr: _empty_standing(t) for t in grp_teams}
-        # Round-robin: every pair plays once
-        for i in range(len(grp_teams)):
-            for j in range(i + 1, len(grp_teams)):
-                home = grp_teams[i]
-                away = grp_teams[j]
-                hg, ag = _sim_group_match(home, away)
-                standings[home.abbr]["P"] += 1
-                standings[away.abbr]["P"] += 1
-                standings[home.abbr]["GF"] += hg
-                standings[home.abbr]["GA"] += ag
-                standings[away.abbr]["GF"] += ag
-                standings[away.abbr]["GA"] += hg
-                if hg > ag:
-                    standings[home.abbr]["W"] += 1
-                    standings[home.abbr]["Pts"] += 3
-                    standings[away.abbr]["L"] += 1
-                elif hg < ag:
-                    standings[away.abbr]["W"] += 1
-                    standings[away.abbr]["Pts"] += 3
-                    standings[home.abbr]["L"] += 1
-                else:
-                    standings[home.abbr]["D"] += 1
-                    standings[away.abbr]["D"] += 1
-                    standings[home.abbr]["Pts"] += 1
-                    standings[away.abbr]["Pts"] += 1
-        sorted_standings = sorted(
-            standings.values(),
-            key=lambda s: (s["Pts"], s["GF"] - s["GA"], s["GF"]),
-            reverse=True,
-        )
-        results[grp_name] = sorted_standings
-    return results
+    all_standings = _init_group_standings(groups)
+    for grp_name, home, away in _group_fixtures(groups):
+        hg, ag = _sim_group_match(home, away)
+        _apply_match_result(all_standings[grp_name], home.abbr, away.abbr, hg, ag)
+    return {
+        grp_name: _sorted_standings(st)
+        for grp_name, st in all_standings.items()
+    }
 
 
 def _group_standings_text(standings: list[dict]) -> str:
@@ -734,11 +797,15 @@ def _tournament_team_win_prob(team: SoccerTeam, all_teams: list[SoccerTeam]) -> 
     return (my_str ** 2) / sq_total if sq_total > 0 else 1.0 / len(all_teams)
 
 
-def _tournament_group_embed(table: TournamentTable) -> discord.Embed:
-    embed = discord.Embed(
-        title=f"\u26bd Soccer Tournament \u2014 Group Stage (Round {table.round_num})",
-        colour=discord.Colour.dark_green(),
-    )
+def _tournament_group_embed(
+    table: TournamentTable, *,
+    match_log: list[str] | None = None,
+    current_match: str | None = None,
+) -> discord.Embed:
+    title = f"\u26bd Soccer Tournament \u2014 Group Stage (Round {table.round_num})"
+    if current_match:
+        title = f"\u26bd Soccer Tournament \u2014 Groups: {current_match}"
+    embed = discord.Embed(title=title, colour=discord.Colour.dark_green())
     for grp_name in ("A", "B"):
         standings = table.group_results.get(grp_name, [])
         if standings:
@@ -755,6 +822,11 @@ def _tournament_group_embed(table: TournamentTable) -> discord.Embed:
                 inline=False,
             )
 
+    if match_log:
+        # Show last 6 results to avoid embed overflow
+        log_text = "\n".join(match_log[-6:])
+        embed.add_field(name="Results", value=log_text, inline=False)
+
     if table.players:
         lines = []
         for p in table.players.values():
@@ -764,6 +836,39 @@ def _tournament_group_embed(table: TournamentTable) -> discord.Embed:
         embed.add_field(name="Bets", value="*No players yet \u2014 click Join!*", inline=False)
 
     embed.set_footer(text=f"Host: {table.host_name}")
+    return embed
+
+
+def _tournament_live_ko_embed(
+    table: TournamentTable, stage: str,
+    home: SoccerTeam, away: SoccerTeam,
+    home_score: int, away_score: int,
+    events: list[MatchEvent],
+    period: str,
+    *,
+    prev_results: list[tuple[str, str, str]] | None = None,
+    pen_score: tuple[int, int] | None = None,
+) -> discord.Embed:
+    """Live match embed during a knockout game in tournament."""
+    embed = discord.Embed(
+        title=f"\u26bd {stage} \u2014 {away.abbr} vs {home.abbr} ({period})",
+        colour=discord.Colour.gold(),
+    )
+    score_line = f"**{away.abbr}** {away_score} \u2014 {home_score} **{home.abbr}**"
+    if pen_score:
+        ph, pa = pen_score
+        score_line += f"\n(Pens: {away.abbr} {pa} \u2014 {ph} {home.abbr})"
+    embed.description = score_line
+
+    if events:
+        event_text = "\n".join(_event_line(e) for e in events[-12:])
+        embed.add_field(name="Match Events", value=event_text, inline=False)
+
+    if prev_results:
+        prev_text = "\n".join(f"{m} \u2014 {s} \u2192 **{w}**" for m, s, w in prev_results)
+        embed.add_field(name="Earlier Results", value=prev_text, inline=False)
+
+    embed.set_footer(text=f"Host: {table.host_name} \u2502 Round {table.round_num}")
     return embed
 
 
@@ -1448,7 +1553,7 @@ class TournamentView(ui.View):
     def __init__(
         self, table: TournamentTable, active_tables: dict,
     ) -> None:
-        super().__init__(timeout=300)
+        super().__init__(timeout=TOURNAMENT_TIMEOUT)
         self.table = table
         self.active_tables = active_tables
         self._update_buttons()
@@ -1579,25 +1684,133 @@ class TournamentView(ui.View):
 
     # ── Tournament logic ─────────────────────────────────────────────────────
 
+    async def _edit_msg(self, embed: discord.Embed) -> None:
+        if self.table.message:
+            try:
+                await self.table.message.edit(embed=embed, view=self)
+            except discord.HTTPException:
+                pass
+
+    async def _sim_ko_match_live(
+        self, home: SoccerTeam, away: SoccerTeam, stage: str, *,
+        prev_results: list[tuple[str, str, str]] | None = None,
+    ) -> tuple[SoccerTeam, str, list[MatchEvent]]:
+        """Simulate a knockout match with live half-by-half embed updates.
+        Returns (winner, score_string, all_events)."""
+        table = self.table
+        home_prob = _generate_win_prob(home, away)
+        all_events: list[MatchEvent] = []
+        h_total = 0
+        a_total = 0
+
+        # 1st half
+        await self._edit_msg(_tournament_live_ko_embed(
+            table, stage, home, away, 0, 0, [], "1st Half",
+            prev_results=prev_results,
+        ))
+        await asyncio.sleep(KO_HALF_DELAY)
+
+        hg, ag, evts = _simulate_half(home, away, 1, home_prob)
+        h_total += hg
+        a_total += ag
+        all_events.extend(evts)
+
+        await self._edit_msg(_tournament_live_ko_embed(
+            table, stage, home, away, h_total, a_total, all_events, "Half-Time",
+            prev_results=prev_results,
+        ))
+        await asyncio.sleep(KO_HALF_DELAY)
+
+        # 2nd half
+        hg, ag, evts = _simulate_half(home, away, 2, home_prob)
+        h_total += hg
+        a_total += ag
+        all_events.extend(evts)
+
+        await self._edit_msg(_tournament_live_ko_embed(
+            table, stage, home, away, h_total, a_total, all_events, "Full Time",
+            prev_results=prev_results,
+        ))
+
+        if h_total != a_total:
+            winner = home if h_total > a_total else away
+            return winner, f"{h_total}-{a_total}", all_events
+
+        # Extra time
+        await asyncio.sleep(KO_PERIOD_DELAY)
+        eth, eta, et_evts = _simulate_extra_time(home, away, home_prob)
+        h_total += eth
+        a_total += eta
+        all_events.extend(et_evts)
+
+        await self._edit_msg(_tournament_live_ko_embed(
+            table, stage, home, away, h_total, a_total, all_events, "Extra Time",
+            prev_results=prev_results,
+        ))
+
+        if h_total != a_total:
+            await asyncio.sleep(KO_PERIOD_DELAY)
+            winner = home if h_total > a_total else away
+            return winner, f"{h_total}-{a_total} AET", all_events
+
+        # Penalties
+        await asyncio.sleep(KO_PERIOD_DELAY)
+        ph, pa, pen_log = _simulate_penalties(home, away)
+
+        await self._edit_msg(_tournament_live_ko_embed(
+            table, stage, home, away, h_total, a_total, all_events, "Penalties",
+            prev_results=prev_results, pen_score=(ph, pa),
+        ))
+        await asyncio.sleep(KO_PERIOD_DELAY)
+
+        winner = home if ph > pa else away
+        return winner, f"{h_total}-{a_total} ({ph}-{pa} Pens)", all_events
+
     async def _tournament_loop(self) -> None:
         table = self.table
         try:
-            # Group stage
-            await asyncio.sleep(HALF_DELAY)
+            # ── Group stage: show matches one by one ──────────────────────
             table.current_stage = "groups"
-            table.group_results = _run_group_stage(table.groups)
+            all_standings = _init_group_standings(table.groups)
+            fixtures = _group_fixtures(table.groups)
+            match_log: list[str] = []
 
-            if table.message:
-                try:
-                    await table.message.edit(
-                        embed=_tournament_group_embed(table), view=self,
-                    )
-                except discord.HTTPException:
-                    pass
+            for grp_name, home, away in fixtures:
+                # Show "now playing" before result
+                current = f"{home.abbr} vs {away.abbr} (Group {grp_name})"
+                # Update standings snapshot for display
+                table.group_results = {
+                    gn: _sorted_standings(st)
+                    for gn, st in all_standings.items()
+                }
+                await self._edit_msg(_tournament_group_embed(
+                    table, match_log=match_log, current_match=current,
+                ))
+                await asyncio.sleep(GROUP_MATCH_DELAY)
 
-            await asyncio.sleep(HALF_DELAY)
+                # Simulate and record
+                hg, ag = _sim_group_match(home, away)
+                _apply_match_result(all_standings[grp_name], home.abbr, away.abbr, hg, ag)
 
-            # Semi-finals: A1 vs B2, B1 vs A2
+                # Result emoji
+                if hg > ag:
+                    result_str = f"\u26bd **{home.abbr}** {hg}-{ag} {away.abbr}"
+                elif ag > hg:
+                    result_str = f"\u26bd {home.abbr} {hg}-{ag} **{away.abbr}**"
+                else:
+                    result_str = f"\U0001f91d {home.abbr} {hg}-{ag} {away.abbr}"
+                match_log.append(result_str)
+
+            # Final group standings
+            table.group_results = {
+                gn: _sorted_standings(st) for gn, st in all_standings.items()
+            }
+            await self._edit_msg(_tournament_group_embed(
+                table, match_log=match_log,
+            ))
+            await asyncio.sleep(KO_HALF_DELAY)
+
+            # ── Semi-finals: live simulated ───────────────────────────────
             table.current_stage = "semis"
             a_standings = table.group_results["A"]
             b_standings = table.group_results["B"]
@@ -1606,35 +1819,41 @@ class TournamentView(ui.View):
             b1 = b_standings[0]["team"]
             b2 = b_standings[1]["team"]
 
-            sf1_winner, sf1_score = _sim_knockout_match(a1, b2)
-            sf2_winner, sf2_score = _sim_knockout_match(b1, a2)
-
+            sf1_winner, sf1_score, _ = await self._sim_ko_match_live(
+                a1, b2, "Semi-Final 1",
+            )
             semis_results = [
                 (f"{a1.abbr} vs {b2.abbr}", sf1_score, sf1_winner.abbr),
-                (f"{b1.abbr} vs {a2.abbr}", sf2_score, sf2_winner.abbr),
             ]
+            await asyncio.sleep(KO_HALF_DELAY)
 
-            if table.message:
-                try:
-                    await table.message.edit(
-                        embed=_tournament_knockout_embed(table, "Semi-Finals", semis_results),
-                        view=self,
-                    )
-                except discord.HTTPException:
-                    pass
+            sf2_winner, sf2_score, _ = await self._sim_ko_match_live(
+                b1, a2, "Semi-Final 2",
+                prev_results=semis_results,
+            )
+            semis_results.append(
+                (f"{b1.abbr} vs {a2.abbr}", sf2_score, sf2_winner.abbr),
+            )
 
-            await asyncio.sleep(HALF_DELAY)
+            # Show both semi results
+            await self._edit_msg(
+                _tournament_knockout_embed(table, "Semi-Finals", semis_results),
+            )
+            await asyncio.sleep(KO_HALF_DELAY)
 
-            # Final
+            # ── Final: live simulated ─────────────────────────────────────
             table.current_stage = "final"
-            final_winner, final_score = _sim_knockout_match(sf1_winner, sf2_winner)
+            final_winner, final_score, _ = await self._sim_ko_match_live(
+                sf1_winner, sf2_winner, "\U0001f3c6 FINAL",
+                prev_results=semis_results,
+            )
             final_result = (
                 f"{sf1_winner.abbr} vs {sf2_winner.abbr}",
                 final_score,
                 final_winner.abbr,
             )
 
-            # Resolve bets
+            # ── Resolve bets ──────────────────────────────────────────────
             table.phase = "finished"
             balances: dict[int, int] = {}
             for uid, player in table.players.items():
@@ -1660,18 +1879,11 @@ class TournamentView(ui.View):
                 )
 
             self._update_buttons()
-            if table.message:
-                try:
-                    await table.message.edit(
-                        embed=_tournament_final_embed(
-                            table, final_winner,
-                            semis=semis_results, final_result=final_result,
-                            balances=balances,
-                        ),
-                        view=self,
-                    )
-                except discord.HTTPException:
-                    pass
+            await self._edit_msg(_tournament_final_embed(
+                table, final_winner,
+                semis=semis_results, final_result=final_result,
+                balances=balances,
+            ))
 
         except asyncio.CancelledError:
             pass

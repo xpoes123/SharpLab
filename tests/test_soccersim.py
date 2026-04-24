@@ -89,7 +89,7 @@ class TestSimulateHalf:
         assert isinstance(events, list)
         for e in events:
             assert isinstance(e, MatchEvent)
-            assert e.event_type in ("goal", "yellow", "red", "sub")
+            assert e.event_type in ("goal", "yellow", "red", "sub", "save", "miss", "crossbar", "chance")
 
     def test_events_sorted_by_minute(self):
         home = CLUB_TEAMS[0]
