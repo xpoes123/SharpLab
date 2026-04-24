@@ -75,6 +75,81 @@ test:
 test-all:
     uv run pytest -v -s
 
+# ── Deploy ────────────────────────────────────────────────────────────────────
+
+VPS := "root@87.99.136.82"
+DEPLOY_PATH := "/opt/sharplab"
+SERVICES := "sharplab-bot sharplab-worker sharplab-web"
+
+# Deploy to VPS: push, pull main, install deps, restart all services
+deploy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "▶ Pushing to GitHub..."
+    git push
+    echo "▶ Deploying to VPS..."
+    ssh {{VPS}} bash -s <<'REMOTE'
+    set -euo pipefail
+    cd {{DEPLOY_PATH}}
+    # Always deploy from main, regardless of current branch state
+    git fetch origin main
+    git checkout main --force
+    git reset --hard origin/main
+    echo "▶ On commit: $(git log --oneline -1)"
+    echo "▶ Installing dependencies..."
+    source venv/bin/activate
+    pip install -e . -q
+    echo "▶ Restarting services..."
+    for svc in {{SERVICES}}; do
+        systemctl restart "$svc" && echo "  ✓ $svc restarted" || echo "  ✗ $svc failed"
+    done
+    sleep 2
+    echo "▶ Service status:"
+    for svc in {{SERVICES}}; do
+        status=$(systemctl is-active "$svc")
+        echo "  $svc: $status"
+    done
+    REMOTE
+    echo "✓ Deploy complete"
+
+# Deploy bot only (no worker/web restart)
+deploy-bot:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    git push
+    ssh {{VPS}} bash -s <<'REMOTE'
+    set -euo pipefail
+    cd {{DEPLOY_PATH}}
+    git fetch origin main
+    git checkout main --force
+    git reset --hard origin/main
+    source venv/bin/activate
+    pip install -e . -q
+    systemctl restart sharplab-bot
+    echo "✓ Bot restarted on $(git log --oneline -1)"
+    REMOTE
+
+# Show VPS service status and recent logs
+status:
+    #!/usr/bin/env bash
+    ssh {{VPS}} bash -s <<'REMOTE'
+    echo "── Services ──"
+    for svc in {{SERVICES}}; do
+        status=$(systemctl is-active "$svc")
+        echo "  $svc: $status"
+    done
+    echo ""
+    echo "── Recent bot logs ──"
+    journalctl -u sharplab-bot --no-pager -n 15 --since "10 min ago"
+    echo ""
+    echo "── Recent web logs ──"
+    journalctl -u sharplab-web --no-pager -n 15 --since "10 min ago"
+    REMOTE
+
+# SSH into the VPS
+ssh:
+    ssh {{VPS}}
+
 # ── Misc ───────────────────────────────────────────────────────────────────────
 
 # Install dependencies
