@@ -10,8 +10,11 @@ let isHost = false;
 let gamePhase = 'lobby';
 let selectedQty = 1;
 let selectedTicker = 'CHIP';
-let leverageMode = 1;  // 1x or 2x
-let lastStockPrices = {};  // for animating price changes
+let leverageMode = 1;
+let lastStockPrices = {};
+let settingsRounds = 8;
+let settingsTime = 45;
+let totalRounds = 8;
 
 // ── WebSocket ────────────────────────────────────────────────────────────
 
@@ -80,6 +83,7 @@ function onRoomState(msg) {
         startBtn.style.display = isHost ? 'block' : 'none';
         startBtn.disabled = msg.players.filter(p => p.connected).length < 1;
         document.getElementById('waiting-text').style.display = isHost ? 'none' : 'block';
+        document.getElementById('host-settings').style.display = isHost ? 'block' : 'none';
     }
 }
 
@@ -87,6 +91,7 @@ function onRoomState(msg) {
 
 function onGameStart(msg) {
     showPhase('game');
+    totalRounds = msg.num_rounds || 8;
     document.getElementById('my-cash').textContent = fmt(10000);
     document.getElementById('tip-banner').style.display = 'none';
     document.getElementById('event-reveal').style.display = 'none';
@@ -102,7 +107,7 @@ function onGameStart(msg) {
 
 function onRoundStart(msg) {
     showPhase('game');
-    document.getElementById('round-num').textContent = msg.round_num;
+    document.getElementById('round-num').textContent = `${msg.round_num}/${totalRounds}`;
     document.getElementById('timer').textContent = msg.time_limit;
     document.getElementById('timer').classList.remove('urgent');
     document.getElementById('event-reveal').style.display = 'none';
@@ -130,7 +135,7 @@ function onRoundEnd(msg) {
     if (!existing) {
         const banner = document.createElement('div');
         banner.className = 'round-closed-banner';
-        banner.textContent = msg.round_num < 8
+        banner.textContent = msg.round_num < totalRounds
             ? 'Trading closed \u2014 settling round...'
             : 'Trading closed \u2014 calculating final results...';
         game.insertBefore(banner, game.querySelector('.trade-panel'));
@@ -438,7 +443,27 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!token || !roomId) { setStatus('Invalid game link', 'disconnected'); return; }
     connect();
 
-    document.getElementById('start-btn').addEventListener('click', () => send({ type: 'start' }));
+    document.getElementById('start-btn').addEventListener('click', () => {
+        send({ type: 'start', rounds: settingsRounds, round_seconds: settingsTime });
+    });
+
+    // Rounds selector
+    document.querySelectorAll('.rounds-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.rounds-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            settingsRounds = parseInt(btn.dataset.rounds);
+        });
+    });
+
+    // Round time selector
+    document.querySelectorAll('.time-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            settingsTime = parseInt(btn.dataset.time);
+        });
+    });
 
     // Leverage selector (3 buttons)
     document.querySelectorAll('.leverage-btn').forEach(btn => {

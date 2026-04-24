@@ -148,6 +148,8 @@ class TradingFloor:
     result_data: dict | None = None
     created_at: float = field(default_factory=time.time)
     next_order_id: int = 0
+    custom_rounds: int = 0  # 0 = use default NUM_ROUNDS
+    custom_time: int = 0    # 0 = use default ROUND_SECONDS
 
 
 rooms: dict[str, TradingFloor] = {}
@@ -279,6 +281,13 @@ async def _handle_message(room: TradingFloor, player: TFPlayer, data: dict) -> N
         if len(room.players) < MIN_PLAYERS:
             await _send_error(player, f"Need at least {MIN_PLAYERS} players")
             return
+        # Host can set rounds and round time
+        custom_rounds = data.get("rounds")
+        custom_time = data.get("round_seconds")
+        if isinstance(custom_rounds, int) and custom_rounds in (4, 8, 12):
+            room.custom_rounds = custom_rounds
+        if isinstance(custom_time, int) and custom_time in (30, 45, 60):
+            room.custom_time = custom_time
         room.game_task = asyncio.create_task(_game_loop(room))
 
     elif msg_type == "buy":
@@ -759,10 +768,14 @@ async def _game_loop(room: TradingFloor) -> None:
         room.orders.clear()
         room.news_feed.clear()
 
+        # Use custom settings or defaults
+        num_rounds = room.custom_rounds if room.custom_rounds > 0 else NUM_ROUNDS
+        round_seconds = room.custom_time if room.custom_time > 0 else ROUND_SECONDS
+
         # Shuffle and draw event deck
         deck = list(EVENT_CARDS)
         random.shuffle(deck)
-        room.event_deck = deck[:NUM_ROUNDS]
+        room.event_deck = deck[:num_rounds]
 
         # Add bot player if solo mode
         if len(room.players) == 1:
@@ -783,8 +796,8 @@ async def _game_loop(room: TradingFloor) -> None:
         # Broadcast game start
         await _broadcast(room, {
             "type": "game_start",
-            "num_rounds": NUM_ROUNDS,
-            "round_seconds": ROUND_SECONDS,
+            "num_rounds": num_rounds,
+            "round_seconds": round_seconds,
             "stocks": {t: {"price": 100.0, "emoji": s.emoji, "name": s.name, "sector": s.sector}
                        for t, s in room.stocks.items()},
         })
@@ -794,7 +807,7 @@ async def _game_loop(room: TradingFloor) -> None:
             await _send(p.ws, _portfolio_msg(p, room))
 
         # Trading rounds
-        for rnd in range(1, NUM_ROUNDS + 1):
+        for rnd in range(1, num_rounds + 1):
             room.round_num = rnd
             room.orders.clear()
             room.private_tips.clear()
@@ -819,12 +832,12 @@ async def _game_loop(room: TradingFloor) -> None:
 
             # Open trading
             room.trade_open = True
-            room.round_end = time.monotonic() + ROUND_SECONDS
+            room.round_end = time.monotonic() + round_seconds
 
             await _broadcast(room, {
                 "type": "round_start",
                 "round_num": rnd,
-                "time_limit": ROUND_SECONDS,
+                "time_limit": round_seconds,
             })
             await _broadcast(room, _market_state_msg(room))
 
@@ -834,9 +847,9 @@ async def _game_loop(room: TradingFloor) -> None:
 
             # Timer loop
             elapsed = 0
-            while elapsed < ROUND_SECONDS:
-                await asyncio.sleep(min(10, ROUND_SECONDS - elapsed))
-                elapsed = time.monotonic() - (room.round_end - ROUND_SECONDS)
+            while elapsed < round_seconds:
+                await asyncio.sleep(min(10, round_seconds - elapsed))
+                elapsed = time.monotonic() - (room.round_end - round_seconds)
                 remaining = max(0, int(room.round_end - time.monotonic()))
                 await _broadcast(room, {"type": "timer", "remaining": remaining})
 
@@ -882,7 +895,7 @@ async def _game_loop(room: TradingFloor) -> None:
             for p in room.players.values():
                 await _send(p.ws, _portfolio_msg(p, room))
 
-            if rnd < NUM_ROUNDS:
+            if rnd < num_rounds:
                 await asyncio.sleep(ROUND_DELAY)
 
         await _end_game(room)

@@ -20,6 +20,24 @@
                 <div class="pot" id="lobby-pot">0c</div>
             </div>
             <ul class="player-list" id="lobby-players"></ul>
+            <div id="host-settings" class="host-settings" style="display:none">
+                <div class="setting-row">
+                    <label>Rounds</label>
+                    <div class="qty-group">
+                        <button class="rounds-btn" data-rounds="4">4</button>
+                        <button class="rounds-btn active" data-rounds="8">8</button>
+                        <button class="rounds-btn" data-rounds="12">12</button>
+                    </div>
+                </div>
+                <div class="setting-row">
+                    <label>Round time</label>
+                    <div class="qty-group">
+                        <button class="time-btn" data-time="30">30s</button>
+                        <button class="time-btn active" data-time="45">45s</button>
+                        <button class="time-btn" data-time="60">60s</button>
+                    </div>
+                </div>
+            </div>
             <button id="start-btn" class="btn-primary" disabled>Start Game</button>
             <p class="waiting-text" id="waiting-text">Waiting for players to connect...</p>
         </div>
@@ -27,7 +45,7 @@
         <!-- Game -->
         <div id="game" class="phase">
             <div class="game-header">
-                <div class="round-info">Round <span id="round-num">1</span>/8</div>
+                <div class="round-info">Round <span id="round-num">1/8</span></div>
                 <div class="timer" id="timer">45</div>
                 <div class="cash-display">Cash: <span id="my-cash">10,000</span>c</div>
             </div>
