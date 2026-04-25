@@ -41,7 +41,7 @@ from bot.cogs.geography import (  # noqa: E402
     check_answer,
 )
 import bot.cogs.geography as geo  # noqa: E402
-from bot.cogs._landmarks import LANDMARKS, _LANDMARK_POOL  # noqa: E402
+from bot.cogs._landmarks import LANDMARKS, _LANDMARK_POOL, _to_thumbnail  # noqa: E402
 
 import pytest  # noqa: E402
 
@@ -368,12 +368,12 @@ class TestLandmarks:
         for name, country, url in _LANDMARK_POOL:
             assert url.startswith("https"), f"{name} has non-https URL: {url}"
 
-    def test_no_thumb_urls(self):
-        # Wikimedia /thumb/ URLs return HTTP 400 from Discord's embed proxy.
-        # All landmark URLs must use the direct Wikimedia format instead.
+    def test_all_urls_use_thumbnail_api(self):
+        # Direct Wikimedia originals can be 60+ MB — Discord's proxy times out.
+        # All pool URLs must go through thumb.php for manageable sizes.
         for name, country, url in _LANDMARK_POOL:
-            assert "/thumb/" not in url, (
-                f"{name} uses a /thumb/ URL which fails in Discord embeds: {url}"
+            assert "thumb.php" in url, (
+                f"{name} is not using thumb.php thumbnail URL: {url}"
             )
 
     def test_all_countries_in_regions(self):
@@ -427,3 +427,26 @@ class TestLandmarks:
     def test_unique_landmark_names(self):
         names = [name for name, _, _ in _LANDMARK_POOL]
         assert len(names) == len(set(names)), "Duplicate landmark names found"
+
+    def test_to_thumbnail_converts_direct_url(self):
+        direct = "https://upload.wikimedia.org/wikipedia/commons/a/a8/Tour_Eiffel_Wikimedia_Commons.jpg"
+        thumb = _to_thumbnail(direct)
+        assert thumb == "https://commons.wikimedia.org/w/thumb.php?f=Tour_Eiffel_Wikimedia_Commons.jpg&w=800"
+
+    def test_to_thumbnail_preserves_non_wikimedia(self):
+        url = "https://example.com/image.jpg"
+        assert _to_thumbnail(url) == url
+
+    def test_to_thumbnail_handles_encoded_filenames(self):
+        direct = "https://upload.wikimedia.org/wikipedia/commons/b/bd/Taj_Mahal%2C_Agra%2C_India_edit3.jpg"
+        thumb = _to_thumbnail(direct)
+        assert "thumb.php" in thumb
+        assert "Taj_Mahal%2C_Agra%2C_India_edit3.jpg" in thumb
+
+    def test_raw_landmarks_use_direct_urls(self):
+        """Source data in LANDMARKS dict should still be direct Wikimedia URLs."""
+        for country, entries in LANDMARKS.items():
+            for name, url in entries:
+                assert "upload.wikimedia.org" in url, (
+                    f"{name} ({country}): source URL should be a direct Wikimedia URL"
+                )

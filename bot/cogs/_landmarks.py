@@ -3,11 +3,10 @@
 Each entry maps a country to a list of (landmark_name, image_url) tuples.
 Image URLs use Wikimedia Commons direct format (public domain / CC).
 
-NOTE: Use direct Wikimedia URLs (not /thumb/ URLs).  The Wikimedia thumbnail
-server returns HTTP 400 for requests originating from non-browser clients
-(including Discord's embed proxy), so /thumb/ URLs will silently fail to
-display in Discord embeds.  Direct URLs serve the original file and work
-reliably.  Pattern: https://upload.wikimedia.org/wikipedia/commons/{a}/{ab}/{filename}
+At pool-build time, direct URLs are converted to ``thumb.php`` thumbnails
+(800 px wide, typically 50–200 KB).  The originals can be multi-MB (some
+exceed 60 MB), which causes Discord's embed proxy to time out — that is
+the root cause of "only the first landmark loads."
 """
 
 LANDMARKS: dict[str, list[tuple[str, str]]] = {
@@ -197,9 +196,29 @@ LANDMARKS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+# ── Thumbnail conversion ───────────────────────────────────────────────────
+# Direct Wikimedia originals can be enormous (60+ MB).  Discord's embed proxy
+# times out on them, so we convert to 800 px thumbnails via thumb.php.
+
+_THUMB_WIDTH = 800
+
+def _to_thumbnail(url: str) -> str:
+    """Convert a direct Wikimedia Commons URL to an 800 px thumbnail.
+
+    Input:  https://upload.wikimedia.org/wikipedia/commons/{a}/{ab}/{filename}
+    Output: https://commons.wikimedia.org/w/thumb.php?f={filename}&w=800
+    """
+    prefix = "https://upload.wikimedia.org/wikipedia/commons/"
+    if url.startswith(prefix):
+        # Extract filename — last path segment
+        filename = url.rsplit("/", 1)[-1]
+        return f"https://commons.wikimedia.org/w/thumb.php?f={filename}&w={_THUMB_WIDTH}"
+    return url  # non-Wikimedia URL, leave as-is
+
+
 # ── Flat pool for question picking ──────────────────────────────────────────
-# (landmark_name, country, image_url)
+# (landmark_name, country, thumbnail_url)
 _LANDMARK_POOL: list[tuple[str, str, str]] = []
 for _country, _landmarks in LANDMARKS.items():
     for _name, _url in _landmarks:
-        _LANDMARK_POOL.append((_name, _country, _url))
+        _LANDMARK_POOL.append((_name, _country, _to_thumbnail(_url)))
