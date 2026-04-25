@@ -2219,6 +2219,7 @@ class SoloSession:
     category: str = "all"
     phase: str = "playing"  # playing | between_rounds | closed
     message: discord.Message | None = None
+    thread: discord.Thread | None = None
     current_entry: tuple | None = None
     hint_level: int = 1
     round_start_time: float = 0.0
@@ -3141,9 +3142,24 @@ class PokemonCog(commands.Cog):
         session.round_num = 1
         session.round_start_time = time.monotonic()
 
-        embed = _solo_playing_embed(session)
-        await interaction.response.send_message(embed=embed)
-        session.message = await interaction.original_response()
+        # Post anchor message, then create a thread for gameplay
+        anchor_embed = discord.Embed(
+            title="\u2753 Pok\u00e9mon Solo \u2014 In Progress",
+            description=f"**{interaction.user.display_name}** is playing solo!",
+            colour=discord.Colour.orange(),
+        )
+        await interaction.response.send_message(embed=anchor_embed)
+        anchor = await interaction.original_response()
+        thread = await anchor.create_thread(
+            name=f"Pok\u00e9mon Solo \u2014 {interaction.user.display_name}",
+        )
+        session.thread = thread
+
+        await thread.send(
+            "\U0001f3c1 **Pok\u00e9mon Solo started!** Type your guesses here. "
+            "Type `quit` to end.",
+        )
+        session.message = await thread.send(embed=_solo_playing_embed(session))
         session.race_task = asyncio.create_task(self._solo_loop(session))
 
     # ── Solo loop ─────────────────────────────────────────────
@@ -3261,6 +3277,11 @@ class PokemonCog(commands.Cog):
         finally:
             session.phase = "closed"
             self.active_solos.pop(session.user_id, None)
+            if session.thread:
+                try:
+                    await session.thread.edit(archived=True)
+                except discord.HTTPException:
+                    pass
 
     @commands.Cog.listener("on_message")
     async def on_message(self, message: discord.Message) -> None:
@@ -3309,7 +3330,8 @@ class PokemonCog(commands.Cog):
         if (
             solo is not None
             and solo.phase == "playing"
-            and solo.channel_id == message.channel.id
+            and solo.thread is not None
+            and solo.thread.id == message.channel.id
         ):
             if len(guess) < 3:
                 return
