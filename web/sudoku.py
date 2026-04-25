@@ -142,6 +142,45 @@ async def get_result(room_id: str):
     raise HTTPException(404, "Game not finished yet")
 
 
+class PublicJoinRequest(BaseModel):
+    display_name: str
+
+
+@router.post("/public/create")
+async def public_create_room(body: PublicJoinRequest):
+    user_id = f"web_{secrets.token_hex(6)}"
+    room_id = secrets.token_hex(4)
+    room = SudokuRoom(room_id=room_id, host_id=user_id, channel_id="web")
+    rooms[room_id] = room
+    await queries.create_game_session(room_id, "sudoku", user_id, "web")
+    token = secrets.token_hex(16)
+    room.players[user_id] = WebPlayer(
+        discord_user=user_id, display_name=body.display_name, wager=0, is_host=True, user_id=user_id,
+    )
+    await queries.create_game_token(token, room_id, user_id, body.display_name, 0)
+    base = os.environ.get("WEB_BASE_URL", "https://sharplab.djiang.xyz")
+    return {"room_id": room_id, "token": token, "url": f"{base}/sudoku/{room_id}?t={token}"}
+
+
+@router.post("/public/join/{room_id}")
+async def public_join_room(room_id: str, body: PublicJoinRequest):
+    room = rooms.get(room_id)
+    if not room or room.phase != "waiting":
+        raise HTTPException(404, "Room not found or not accepting players")
+    if len(room.players) >= 8:
+        raise HTTPException(400, "Room is full")
+    user_id = f"web_{secrets.token_hex(6)}"
+    token = secrets.token_hex(16)
+    room.players[user_id] = WebPlayer(
+        discord_user=user_id, display_name=body.display_name, wager=0, user_id=user_id,
+    )
+    await queries.create_game_token(token, room_id, user_id, body.display_name, 0)
+    await _broadcast_room_state(room)
+    base = os.environ.get("WEB_BASE_URL", "https://sharplab.djiang.xyz")
+    return {"token": token, "url": f"{base}/sudoku/{room_id}?t={token}"}
+
+
+
 # ── WebSocket handler ────────────────────────────────────────────────────────
 
 

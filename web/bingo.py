@@ -153,6 +153,53 @@ async def get_result(room_id: str):
     raise HTTPException(404, "Game not finished yet")
 
 
+class PublicJoinRequest(BaseModel):
+    display_name: str
+
+
+@router.post("/public/create")
+async def public_create_room(body: PublicJoinRequest):
+    user_id = f"web_{secrets.token_hex(6)}"
+    room_id = secrets.token_hex(4)
+    pattern, idx = pick_pattern()
+    room = BingoRoom(
+        room_id=room_id, host_id=user_id, channel_id="web",
+        pattern_idx=idx, pattern_name=pattern.name, pattern_target=pattern.target,
+    )
+    rooms[room_id] = room
+    await queries.create_game_session(room_id, "bingo", user_id, "web")
+    token = secrets.token_hex(16)
+    grid, marked = generate_card()
+    cards = [WebBingoCard(grid=grid, marked=marked)]
+    room.players[user_id] = WebBingoPlayer(
+        discord_user=user_id, display_name=body.display_name, num_cards=1, wager=0, is_host=True, cards=cards,
+    )
+    await queries.create_game_token(token, room_id, user_id, body.display_name, 0)
+    base = os.environ.get("WEB_BASE_URL", "https://sharplab.djiang.xyz")
+    return {"room_id": room_id, "token": token, "url": f"{base}/bingo/{room_id}?t={token}", "pattern": pattern.name}
+
+
+@router.post("/public/join/{room_id}")
+async def public_join_room(room_id: str, body: PublicJoinRequest):
+    room = rooms.get(room_id)
+    if not room or room.phase != "waiting":
+        raise HTTPException(404, "Room not found or not accepting players")
+    if len(room.players) >= MAX_PLAYERS:
+        raise HTTPException(400, "Room is full")
+    user_id = f"web_{secrets.token_hex(6)}"
+    token = secrets.token_hex(16)
+    grid, marked = generate_card()
+    cards = [WebBingoCard(grid=grid, marked=marked)]
+    room.players[user_id] = WebBingoPlayer(
+        discord_user=user_id, display_name=body.display_name, num_cards=1, wager=0, cards=cards,
+    )
+    await queries.create_game_token(token, room_id, user_id, body.display_name, 0)
+    await _broadcast_room_state(room)
+    base = os.environ.get("WEB_BASE_URL", "https://sharplab.djiang.xyz")
+    return {"token": token, "url": f"{base}/bingo/{room_id}?t={token}"}
+
+
+
 # ── WebSocket handler ────────────────────────────────────────────────────────
 
 

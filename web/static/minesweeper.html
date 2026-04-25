@@ -351,8 +351,20 @@
     <div class="ms-container">
         <div id="connection-status" class="status-bar"></div>
 
+        <!-- Join Screen (shown when no token) -->
+        <div id="join-screen" class="join-screen phase">
+            <h1>Minesweeper Race</h1>
+            <p class="subtitle">9x9 board, 10 mines. Race to clear the board. First to 3 wins.</p>
+            <div class="join-form">
+                <input type="text" id="player-name" placeholder="Your name" maxlength="20" autocomplete="off">
+                <button id="create-room-btn" class="btn-join">Create Room</button>
+                <button id="join-room-btn" class="btn-join" style="display:none">Join Room</button>
+                <div class="error-msg" id="join-error"></div>
+            </div>
+        </div>
+
         <!-- Lobby -->
-        <div id="lobby" class="phase active">
+        <div id="lobby" class="phase">
             <h1>Minesweeper Race</h1>
             <p class="subtitle">9x9 board, 10 mines — first to clear wins the round</p>
             <div class="lobby-info">
@@ -362,6 +374,13 @@
             <ul class="player-list" id="lobby-players"></ul>
             <button id="start-btn" class="btn-primary" disabled>Start Game</button>
             <p class="waiting-text" id="waiting-text">Waiting for players to connect...</p>
+            <div id="invite-section" class="invite-section" style="display:none">
+                <div class="invite-label">Invite Link</div>
+                <div class="invite-url-row">
+                    <input type="text" id="invite-url" readonly>
+                    <button id="copy-invite-btn">Copy</button>
+                </div>
+            </div>
         </div>
 
         <!-- Playing -->
@@ -408,7 +427,10 @@
 
 const params = new URLSearchParams(window.location.search);
 const token = params.get('t');
-const roomId = window.location.pathname.split('/').filter(Boolean).pop();
+const pathParts = window.location.pathname.split('/').filter(Boolean);
+const gamePath = pathParts[0] || '';
+const roomId = pathParts.length > 1 ? pathParts[pathParts.length - 1] : null;
+const hasRoomId = roomId && roomId !== gamePath;
 
 let ws;
 let myId = null;
@@ -469,6 +491,41 @@ function showPhase(id) {
     document.getElementById(id).classList.add('active');
 }
 
+// ── Public Join ──────────────────────────────────────────────────────────
+
+function initJoinScreen(game) {
+    const screen = document.getElementById('join-screen');
+    screen.classList.add('active');
+    const nameInput = document.getElementById('player-name');
+    const createBtn = document.getElementById('create-room-btn');
+    const joinBtn = document.getElementById('join-room-btn');
+    const errorEl = document.getElementById('join-error');
+    if (hasRoomId) { createBtn.style.display = 'none'; joinBtn.style.display = 'block'; }
+    nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') (hasRoomId ? joinBtn : createBtn).click(); });
+    createBtn.addEventListener('click', async () => {
+        const name = nameInput.value.trim();
+        if (!name) { errorEl.textContent = 'Enter a name'; return; }
+        createBtn.disabled = true;
+        try {
+            const resp = await fetch(`/api/v1/${game}/public/create`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({display_name: name}) });
+            if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed');
+            const data = await resp.json();
+            window.location.href = `/${gamePath}/${data.room_id}?t=${data.token}`;
+        } catch (e) { errorEl.textContent = e.message; createBtn.disabled = false; }
+    });
+    joinBtn.addEventListener('click', async () => {
+        const name = nameInput.value.trim();
+        if (!name) { errorEl.textContent = 'Enter a name'; return; }
+        joinBtn.disabled = true;
+        try {
+            const resp = await fetch(`/api/v1/${game}/public/join/${roomId}`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({display_name: name}) });
+            if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed');
+            const data = await resp.json();
+            window.location.href = data.url;
+        } catch (e) { errorEl.textContent = e.message; joinBtn.disabled = false; }
+    });
+}
+
 // ── Room State (lobby) ───────────────────────────────────────────────────
 
 function onRoomState(msg) {
@@ -501,6 +558,17 @@ function onRoomState(msg) {
         startBtn.style.display = isHost ? 'block' : 'none';
         startBtn.disabled = msg.players.filter(p => p.connected).length < 1;
         document.getElementById('waiting-text').style.display = isHost ? 'none' : 'block';
+        const inviteSection = document.getElementById('invite-section');
+        if (inviteSection) {
+            inviteSection.style.display = 'block';
+            const inviteUrl = `${window.location.origin}/${gamePath}/${msg.room_id}`;
+            document.getElementById('invite-url').value = inviteUrl;
+            document.getElementById('copy-invite-btn').onclick = () => {
+                navigator.clipboard.writeText(inviteUrl);
+                document.getElementById('copy-invite-btn').textContent = 'Copied!';
+                setTimeout(() => document.getElementById('copy-invite-btn').textContent = 'Copy', 2000);
+            };
+        }
     }
 }
 
@@ -775,10 +843,9 @@ function showToast(message, type) {
 // ── Event Listeners ──────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
-    if (!token || !roomId) {
-        setStatus('Invalid game link', 'disconnected');
-        return;
-    }
+    if (!token) { initJoinScreen('minesweeper'); return; }
+    if (!hasRoomId) { setStatus('Invalid game link', 'disconnected'); return; }
+    document.getElementById('join-screen').style.display = 'none';
     connect();
 
     document.getElementById('start-btn').addEventListener('click', () => {

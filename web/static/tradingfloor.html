@@ -11,8 +11,20 @@
     <div class="tf-container">
         <div id="connection-status" class="status-bar"></div>
 
+        <!-- Join Screen (shown when no token) -->
+        <div id="join-screen" class="join-screen phase">
+            <h1>Trading Floor</h1>
+            <p class="subtitle">Trade 4 correlated stocks over 8 rounds. Insider tips. NPC analysts. Highest portfolio wins.</p>
+            <div class="join-form">
+                <input type="text" id="player-name" placeholder="Your name" maxlength="20" autocomplete="off">
+                <button id="create-room-btn" class="btn-join">Create Room</button>
+                <button id="join-room-btn" class="btn-join" style="display:none">Join Room</button>
+                <div class="error-msg" id="join-error"></div>
+            </div>
+        </div>
+
         <!-- Lobby -->
-        <div id="lobby" class="phase active">
+        <div id="lobby" class="phase">
             <h1>📈 Trading Floor</h1>
             <p class="subtitle">Trade 4 correlated stocks over 8 rounds. Player trades move prices. Insider tips. NPC noise. Highest portfolio wins.</p>
             <div class="lobby-info">
@@ -40,6 +52,13 @@
             </div>
             <button id="start-btn" class="btn-primary" disabled>Start Game</button>
             <p class="waiting-text" id="waiting-text">Waiting for players to connect...</p>
+            <div id="invite-section" class="invite-section" style="display:none">
+                <div class="invite-label">Invite Link</div>
+                <div class="invite-url-row">
+                    <input type="text" id="invite-url" readonly>
+                    <button id="copy-invite-btn">Copy</button>
+                </div>
+            </div>
         </div>
 
         <!-- Game -->

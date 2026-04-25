@@ -186,22 +186,60 @@ function showHint(msg, isError) {
     setTimeout(() => el.classList.add('hidden'), 4000);
 }
 
+// ── Public Join ─────────────────────────────────────────────────────────────
+
+const _params = new URLSearchParams(window.location.search);
+const _token = _params.get('t');
+const _pathParts = window.location.pathname.split('/').filter(Boolean);
+const _gamePath = _pathParts[0] || '';
+const _roomId = _pathParts.length > 1 ? _pathParts[_pathParts.length - 1] : null;
+const _hasRoomId = _roomId && _roomId !== _gamePath;
+
+function initJoinScreen(game) {
+    const screen = document.getElementById('join-screen');
+    screen.classList.add('active');
+    const nameInput = document.getElementById('player-name');
+    const createBtn = document.getElementById('create-room-btn');
+    const joinBtn = document.getElementById('join-room-btn');
+    const errorEl = document.getElementById('join-error');
+    if (_hasRoomId) { createBtn.style.display = 'none'; joinBtn.style.display = 'block'; }
+    nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') (_hasRoomId ? joinBtn : createBtn).click(); });
+    createBtn.addEventListener('click', async () => {
+        const name = nameInput.value.trim();
+        if (!name) { errorEl.textContent = 'Enter a name'; return; }
+        createBtn.disabled = true;
+        try {
+            const resp = await fetch(`/api/v1/${game}/public/create`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({display_name: name}) });
+            if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed');
+            const data = await resp.json();
+            window.location.href = `/${_gamePath}/${data.room_id}?t=${data.token}`;
+        } catch (e) { errorEl.textContent = e.message; createBtn.disabled = false; }
+    });
+    joinBtn.addEventListener('click', async () => {
+        const name = nameInput.value.trim();
+        if (!name) { errorEl.textContent = 'Enter a name'; return; }
+        joinBtn.disabled = true;
+        try {
+            const resp = await fetch(`/api/v1/${game}/public/join/${_roomId}`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({display_name: name}) });
+            if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed');
+            const data = await resp.json();
+            window.location.href = data.url;
+        } catch (e) { errorEl.textContent = e.message; joinBtn.disabled = false; }
+    });
+}
+
 // ── WebSocket ───────────────────────────────────────────────────────────────
 
 function connect() {
-    const params = new URLSearchParams(window.location.search);
-    const token = params.get('t');
-    const pathParts = window.location.pathname.split('/');
-    const roomId = pathParts[pathParts.length - 1] || pathParts[pathParts.length - 2];
-
-    if (!token || !roomId) {
+    if (!_token || !_hasRoomId) {
         statusBar.textContent = 'Missing token or room ID';
         statusBar.className = 'status-bar disconnected';
         return;
     }
+    document.getElementById('join-screen').style.display = 'none';
 
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const url = `${proto}://${location.host}/ws/solitairechess/${roomId}?t=${token}`;
+    const url = `${proto}://${location.host}/ws/solitairechess/${_roomId}?t=${_token}`;
 
     statusBar.textContent = 'Connecting...';
     statusBar.className = 'status-bar connecting';
@@ -262,6 +300,18 @@ function handleMessage(msg) {
             $('waiting-text').textContent = isHost
                 ? 'You are the host. Click Start when ready!'
                 : 'Waiting for host to start...';
+
+            const inviteSection = document.getElementById('invite-section');
+            if (inviteSection) {
+                inviteSection.style.display = 'block';
+                const inviteUrl = `${window.location.origin}/${_gamePath}/${msg.room_id}`;
+                document.getElementById('invite-url').value = inviteUrl;
+                document.getElementById('copy-invite-btn').onclick = () => {
+                    navigator.clipboard.writeText(inviteUrl);
+                    document.getElementById('copy-invite-btn').textContent = 'Copied!';
+                    setTimeout(() => document.getElementById('copy-invite-btn').textContent = 'Copy', 2000);
+                };
+            }
 
             if (msg.phase === 'waiting') showPhase('lobby');
             break;
@@ -427,4 +477,8 @@ $('giveup-btn').addEventListener('click', () => {
 
 // ── Init ────────────────────────────────────────────────────────────────────
 
-connect();
+if (!_token) {
+    initJoinScreen('solitairechess');
+} else {
+    connect();
+}

@@ -2,7 +2,10 @@
 
 const params = new URLSearchParams(window.location.search);
 const token = params.get('t');
-const roomId = window.location.pathname.split('/').filter(Boolean).pop();
+const pathParts = window.location.pathname.split('/').filter(Boolean);
+const gamePath = pathParts[0] || '';
+const roomId = pathParts.length > 1 ? pathParts[pathParts.length - 1] : null;
+const hasRoomId = roomId && roomId !== gamePath;
 
 let ws;
 let myId = null;
@@ -75,6 +78,39 @@ function showPhase(id) {
 
 // ── Room State (lobby) ──────────────────────────────────────────────────────
 
+function initJoinScreen(game) {
+    const screen = document.getElementById('join-screen');
+    screen.classList.add('active');
+    const nameInput = document.getElementById('player-name');
+    const createBtn = document.getElementById('create-room-btn');
+    const joinBtn = document.getElementById('join-room-btn');
+    const errorEl = document.getElementById('join-error');
+    if (hasRoomId) { createBtn.style.display = 'none'; joinBtn.style.display = 'block'; }
+    nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') (hasRoomId ? joinBtn : createBtn).click(); });
+    createBtn.addEventListener('click', async () => {
+        const name = nameInput.value.trim();
+        if (!name) { errorEl.textContent = 'Enter a name'; return; }
+        createBtn.disabled = true;
+        try {
+            const resp = await fetch(`/api/v1/${game}/public/create`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({display_name: name}) });
+            if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed');
+            const data = await resp.json();
+            window.location.href = `/${gamePath}/${data.room_id}?t=${data.token}`;
+        } catch (e) { errorEl.textContent = e.message; createBtn.disabled = false; }
+    });
+    joinBtn.addEventListener('click', async () => {
+        const name = nameInput.value.trim();
+        if (!name) { errorEl.textContent = 'Enter a name'; return; }
+        joinBtn.disabled = true;
+        try {
+            const resp = await fetch(`/api/v1/${game}/public/join/${roomId}`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({display_name: name}) });
+            if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed');
+            const data = await resp.json();
+            window.location.href = data.url;
+        } catch (e) { errorEl.textContent = e.message; joinBtn.disabled = false; }
+    });
+}
+
 function onRoomState(msg) {
     myId = msg.you;
     isHost = msg.players.some(p => p.id === myId && p.is_host);
@@ -104,6 +140,17 @@ function onRoomState(msg) {
         startBtn.style.display = isHost ? 'block' : 'none';
         startBtn.disabled = msg.players.filter(p => p.connected).length < 1;
         document.getElementById('waiting-text').style.display = isHost ? 'none' : 'block';
+        const inviteSection = document.getElementById('invite-section');
+        if (inviteSection) {
+            inviteSection.style.display = 'block';
+            const inviteUrl = `${window.location.origin}/${gamePath}/${msg.room_id}`;
+            document.getElementById('invite-url').value = inviteUrl;
+            document.getElementById('copy-invite-btn').onclick = () => {
+                navigator.clipboard.writeText(inviteUrl);
+                document.getElementById('copy-invite-btn').textContent = 'Copied!';
+                setTimeout(() => document.getElementById('copy-invite-btn').textContent = 'Copy', 2000);
+            };
+        }
     }
 }
 
@@ -370,11 +417,12 @@ function showToast(message, type) {
 // ── Event Listeners ─────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
-    if (!token || !roomId) {
-        setStatus('Invalid game link', 'disconnected');
+    if (!token) {
+        initJoinScreen('sudoku');
         return;
     }
-
+    if (!hasRoomId) { setStatus('Invalid game link', 'disconnected'); return; }
+    document.getElementById('join-screen').style.display = 'none';
     connect();
 
     // Start button
