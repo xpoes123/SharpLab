@@ -68,7 +68,7 @@ COGS = [
     "bot.cogs.minesweeper",
 ]
 
-GUILD_ID = int(os.environ["DISCORD_GUILD_ID"])
+GUILD_IDS = [int(g) for g in os.environ["DISCORD_GUILD_ID"].split(",")]
 
 intents = discord.Intents.default()
 intents.message_content = True  # required for prefix commands (privileged intent)
@@ -89,10 +89,11 @@ class SharpBot(commands.Bot):
             print(f"Startup cleanup: {duels} duels, {tournaments} tournaments, {sessions} web sessions expired+refunded.")
         for cog in COGS:
             await self.load_extension(cog)
-        guild = discord.Object(id=GUILD_ID)
-        self.tree.copy_global_to(guild=guild)
-        await self.tree.sync(guild=guild)
-        print(f"Slash commands synced to guild {GUILD_ID}.")
+        for gid in GUILD_IDS:
+            guild = discord.Object(id=gid)
+            self.tree.copy_global_to(guild=guild)
+            await self.tree.sync(guild=guild)
+        print(f"Slash commands synced to {len(GUILD_IDS)} guild(s).")
 
     async def on_ready(self) -> None:
         print(f"Logged in as {self.user} (id={self.user.id})")
