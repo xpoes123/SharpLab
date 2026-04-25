@@ -2219,6 +2219,7 @@ class SoloSession:
     category: str = "all"
     phase: str = "playing"  # playing | between_rounds | closed
     message: discord.Message | None = None
+    anchor_message: discord.Message | None = None
     thread: discord.Thread | None = None
     current_entry: tuple | None = None
     hint_level: int = 1
@@ -3150,6 +3151,7 @@ class PokemonCog(commands.Cog):
         )
         await interaction.response.send_message(embed=anchor_embed)
         anchor = await interaction.original_response()
+        session.anchor_message = anchor
         thread = await anchor.create_thread(
             name=f"Pok\u00e9mon Solo \u2014 {interaction.user.display_name}",
         )
@@ -3276,7 +3278,26 @@ class PokemonCog(commands.Cog):
             pass
         finally:
             session.phase = "closed"
-            self.active_solos.pop(session.user_id, None)
+            # Only pop if this session is still the active one (avoids
+            # race where quit handler already popped and user started
+            # a new game — we must not remove the new session).
+            if self.active_solos.get(session.user_id) is session:
+                self.active_solos.pop(session.user_id, None)
+            # Update anchor embed to show game is finished
+            if session.anchor_message:
+                done_embed = discord.Embed(
+                    title="\u2705 Pok\u00e9mon Solo \u2014 Finished",
+                    description=(
+                        f"**{session.display_name}** finished with "
+                        f"**{session.total_correct}** correct "
+                        f"(best streak: {session.best_streak})"
+                    ),
+                    colour=discord.Colour.green(),
+                )
+                try:
+                    await session.anchor_message.edit(embed=done_embed)
+                except discord.HTTPException:
+                    pass
             if session.thread:
                 try:
                     await session.thread.edit(archived=True)
@@ -3329,16 +3350,11 @@ class PokemonCog(commands.Cog):
         solo = self.active_solos.get(uid)
         if (
             solo is not None
-            and solo.phase == "playing"
+            and solo.phase in ("playing", "between_rounds")
             and solo.thread is not None
             and solo.thread.id == message.channel.id
         ):
-            if len(guess) < 3:
-                return
-            alpha_chars = sum(1 for c in guess if c.isalpha())
-            if alpha_chars < len(guess) * 0.5:
-                return
-            # Quit command
+            # Quit command — works during any active phase
             if guess.lower() in ("quit", "stop", "end"):
                 solo.phase = "closed"
                 if solo.race_task and not solo.race_task.done():
@@ -3348,7 +3364,29 @@ class PokemonCog(commands.Cog):
                         await solo.message.edit(embed=_solo_gameover_embed(solo))
                     except discord.HTTPException:
                         pass
+                if solo.anchor_message:
+                    done_embed = discord.Embed(
+                        title="\u2705 Pok\u00e9mon Solo \u2014 Finished",
+                        description=(
+                            f"**{solo.display_name}** finished with "
+                            f"**{solo.total_correct}** correct "
+                            f"(best streak: {solo.best_streak})"
+                        ),
+                        colour=discord.Colour.green(),
+                    )
+                    try:
+                        await solo.anchor_message.edit(embed=done_embed)
+                    except discord.HTTPException:
+                        pass
                 self.active_solos.pop(uid, None)
+                return
+            # Only process guesses during playing phase
+            if solo.phase != "playing":
+                return
+            if len(guess) < 3:
+                return
+            alpha_chars = sum(1 for c in guess if c.isalpha())
+            if alpha_chars < len(guess) * 0.5:
                 return
             solo.round_messages.append(message)
             if check_pokemon_answer(guess, solo.current_entry):
