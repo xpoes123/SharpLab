@@ -64,6 +64,10 @@ GAME_LABELS: dict[str, str] = {
     "solitaire-chess": "Solitaire Chess",
     "nba": "NBA Player Guess",
     "minesweeper": "Minesweeper Race",
+    "sequence": "Sequence",
+    "prisoner": "Prisoner's Dilemma",
+    "indian-poker": "Indian Poker",
+    "battleship": "Battleship",
 }
 
 GAME_CATEGORIES: list[tuple[str, str]] = [
@@ -1906,6 +1910,50 @@ GAME_RULES: dict[str, str] = {
         "**Scoring:** First to 3 round wins takes the pot. 120s time limit per round.\n"
         "**Tip:** Speed matters \u2014 don't waste time flagging, just reveal safe cells!"
     ),
+    "sequence": (
+        "**Sequence** (5 rounds, 30s each)\n"
+        "Guess the next number in a mathematical sequence!\n\n"
+        "**How to play:** Each round shows 4\u20136 terms of a sequence (e.g. 2, 6, 12, 20, ?). "
+        "Click **Answer** to submit your guess via modal. First correct answer = 3 pts, "
+        "second = 2 pts, third = 1 pt.\n\n"
+        "**Win condition:** Most points after 5 rounds wins the pot.\n"
+        "**Sequences:** Arithmetic, geometric, Fibonacci, primes, squares, cubes, triangular, "
+        "and more tricky patterns.\n"
+        "**Tip:** Look at the differences between terms \u2014 are they constant, growing, or alternating?"
+    ),
+    "prisoner": (
+        "**Prisoner's Dilemma** (10 rounds)\n"
+        "The classic game theory experiment \u2014 cooperate or betray?\n\n"
+        "**How to play:** Each round, all players simultaneously choose Cooperate or Defect. "
+        "Payoffs are computed pairwise:\n"
+        "\u2022 Both Cooperate: 3/3 pts\n"
+        "\u2022 You Defect, They Cooperate: 5/0 pts\n"
+        "\u2022 Both Defect: 1/1 pts\n\n"
+        "**Win condition:** Highest total score after 10 rounds.\n"
+        "**Solo:** Play against a tit-for-tat bot.\n"
+        "**Tip:** Cooperation is optimal long-term, but can you resist the temptation to defect?"
+    ),
+    "indian-poker": (
+        "**Indian Poker** (sit-and-go)\n"
+        "Everyone sees everyone else's card \u2014 but not their own!\n\n"
+        "**How to play:** Each player gets one card face-up on their 'forehead'. "
+        "Click **View Cards** to see opponents' cards. Bet based on what you think you have. "
+        "Check, bet, call, raise, or fold \u2014 standard poker actions.\n\n"
+        "**Cards:** Standard deck, ranked A(high) to 2(low). Suits break ties.\n"
+        "**Blinds:** Escalate every 5 hands (10/20 \u2192 25/50 \u2192 50/100 \u2192 100/200).\n"
+        "**Win condition:** Last player with chips, or most chips after 30 hands.\n"
+        "**Tip:** If everyone else has weak cards, you probably have a strong one!"
+    ),
+    "battleship": (
+        "**Battleship** (10\u00d710 grid, 1v1)\n"
+        "Sink the enemy fleet before they sink yours!\n\n"
+        "**How to play:** Place 5 ships on your grid using the select menus (or click Random). "
+        "Then take turns firing at coordinates. Hit all cells of a ship to sink it.\n\n"
+        "**Ships:** Carrier (5), Battleship (4), Cruiser (3), Submarine (3), Destroyer (2)\n"
+        "**Solo:** Play against Captain Bot (hunt/target AI).\n"
+        "**Tip:** Use a checkerboard pattern to find ships efficiently, "
+        "then target adjacent cells on a hit!"
+    ),
 }
 
 CASINO_GAMES: list[tuple[str, str, str, str]] = [
@@ -1918,6 +1966,7 @@ CASINO_GAMES: list[tuple[str, str, str, str]] = [
     ("videopoker", "Video Poker (Jacks or Better)", "Card Games", "solo"),
     ("hilo", "Hi-Lo card guessing game", "Card Games", "solo"),
     ("figgie", "Figgie \u2014 Jane Street trading game", "Card Games", "party"),
+    ("indian-poker", "Indian Poker sit-and-go", "Card Games", "party"),
     # ── Table & Arcade
     ("roulette", "American roulette", "Table & Arcade", "solo"),
     ("craps", "Craps with full side bets", "Table & Arcade", "solo"),
@@ -1932,6 +1981,7 @@ CASINO_GAMES: list[tuple[str, str, str, str]] = [
     ("penalties", "1v1 Penalty Shootout duel", "Party Games", "duo"),
     ("tictactoe", "1v1 Tic Tac Toe with coin wagers", "Party Games", "duo"),
     ("rps", "1v1 Rock Paper Scissors duel", "Party Games", "duo"),
+    ("prisoner", "Prisoner's Dilemma tournament", "Party Games", "party"),
     # ── Brain Games
     ("math24", "Make 24 from four numbers", "Brain Games", "party"),
     ("countdown", "Countdown numbers math game", "Brain Games", "party"),
@@ -1949,6 +1999,8 @@ CASINO_GAMES: list[tuple[str, str, str, str]] = [
     ("solitaire-chess", "Solitaire Chess \u2014 capture until 1 remains", "Brain Games", "party"),
     ("nba", "NBA Player Guess \u2014 name the player from career teams", "Brain Games", "party"),
     ("minesweeper", "Minesweeper Race \u2014 clear the board fastest", "Brain Games", "party"),
+    ("sequence", "Guess the next number in the sequence", "Brain Games", "party"),
+    ("battleship", "Battleship \u2014 sink the enemy fleet", "Brain Games", "duo"),
     # ── Sports Sim
     ("nbasim", "Simulated NBA game betting", "Sports Sim", "solo"),
     ("nflsim", "Simulated NFL game betting", "Sports Sim", "solo"),
