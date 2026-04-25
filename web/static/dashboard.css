@@ -1,0 +1,395 @@
+/* SharpLab Sports Dashboard — extends style.css vars */
+
+.dashboard-container { max-width: 1100px; }
+
+/* ── Sport Filter Pills ──────────────────────────────────────────────────── */
+
+.sport-filter {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    margin-bottom: 24px;
+}
+
+.sport-btn {
+    padding: 6px 18px;
+    border-radius: 20px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-family: inherit;
+    transition: all 0.15s;
+}
+
+.sport-btn:hover { border-color: var(--text-muted); color: var(--text); }
+.sport-btn.active { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
+
+/* ── Section Titles ──────────────────────────────────────────────────────── */
+
+.section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 14px;
+}
+
+.section-header h2 {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.section-header .updated {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+section { margin-bottom: 32px; }
+
+/* ── Game Cards ──────────────────────────────────────────────────────────── */
+
+.game-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-bottom: 12px;
+}
+
+.game-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.game-matchup {
+    font-size: 1.05rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.sport-badge {
+    font-size: 0.65rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--border);
+    color: var(--text-muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.game-meta {
+    text-align: right;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+}
+
+.status-live { color: var(--green); font-weight: 600; }
+.status-final { color: var(--text-muted); }
+.status-scheduled { color: var(--text); }
+
+/* Score display for finals */
+.game-score-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 10px 0;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+.score-team {
+    font-size: 0.9rem;
+    font-weight: 500;
+    text-align: center;
+    min-width: 100px;
+}
+
+.score-team .abbr { font-size: 0.75rem; color: var(--text-muted); display: block; }
+.score-num {
+    font-size: 1.6rem;
+    font-weight: 700;
+    font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    min-width: 48px;
+    text-align: center;
+}
+.score-separator {
+    font-size: 1.2rem;
+    color: var(--text-muted);
+    font-weight: 300;
+}
+.score-winner { color: var(--green); }
+
+/* ── Odds Grid ───────────────────────────────────────────────────────────── */
+
+.odds-grid {
+    display: grid;
+    grid-template-columns: 100px repeat(3, 1fr);
+    gap: 0;
+    font-size: 0.8rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.odds-grid .og-header {
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 8px 10px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+}
+
+.odds-grid .og-cell {
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--border);
+    font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    font-size: 0.78rem;
+}
+
+.odds-grid .og-cell:last-child { border-bottom: none; }
+
+.odds-grid .og-source {
+    font-family: inherit;
+    font-weight: 500;
+    font-size: 0.78rem;
+    color: var(--text);
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    background: var(--bg);
+}
+
+.og-best { color: var(--green); font-weight: 600; }
+.og-na { color: var(--text-muted); font-style: italic; font-family: inherit; font-size: 0.75rem; }
+
+/* Expand button for line movement */
+.expand-btn {
+    display: inline-block;
+    margin-top: 10px;
+    padding: 4px 12px;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s;
+}
+.expand-btn:hover { color: var(--text); border-color: var(--text-muted); }
+
+/* ── Line Movement Table ─────────────────────────────────────────────────── */
+
+.line-movement-table {
+    width: 100%;
+    margin-top: 12px;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+}
+
+.line-movement-table th {
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    text-align: left;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+}
+
+.line-movement-table td {
+    padding: 6px 10px;
+    font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    border-bottom: 1px solid var(--border);
+}
+
+.line-movement-table .lm-source {
+    font-family: inherit;
+    font-weight: 500;
+    color: var(--text);
+}
+
+.move-up { color: var(--green); }
+.move-down { color: var(--red); }
+.move-flat { color: var(--text-muted); }
+
+/* ── Two-Column Grid ─────────────────────────────────────────────────────── */
+
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin-bottom: 32px;
+}
+
+.dashboard-grid section { margin-bottom: 0; }
+
+.dashboard-grid h2 {
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin-bottom: 14px;
+}
+
+/* Paper trading compact table */
+.compact-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+}
+
+.compact-table th {
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+}
+
+.compact-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+}
+
+.compact-table .num {
+    font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    text-align: right;
+}
+
+.compact-table tr:hover { background: var(--hover); }
+.compact-table .user-cell { display: flex; align-items: center; gap: 8px; }
+.compact-table .avatar { width: 22px; height: 22px; border-radius: 50%; }
+
+.view-all {
+    display: inline-block;
+    margin-top: 10px;
+    font-size: 0.78rem;
+    color: var(--accent);
+}
+
+/* ── Result Cards ────────────────────────────────────────────────────────── */
+
+.result-card {
+    padding: 10px 14px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 8px;
+    font-size: 0.82rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.result-matchup {
+    font-weight: 500;
+    min-width: 0;
+    flex: 1;
+}
+
+.result-matchup .date {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.result-scores {
+    font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    font-weight: 600;
+    font-size: 0.9rem;
+    white-space: nowrap;
+}
+
+.result-tags {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.result-tag {
+    font-size: 0.7rem;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.tag-cover { background: rgba(63, 185, 80, 0.15); color: var(--green); }
+.tag-miss { background: rgba(248, 81, 73, 0.15); color: var(--red); }
+.tag-push { background: rgba(139, 148, 158, 0.15); color: var(--text-muted); }
+.tag-over { background: rgba(241, 196, 15, 0.15); color: var(--accent); }
+.tag-under { background: rgba(88, 166, 255, 0.15); color: #58a6ff; }
+
+/* ── Injury List ─────────────────────────────────────────────────────────── */
+
+.injury-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 8px;
+}
+
+.injury-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 0.8rem;
+}
+
+.injury-status {
+    font-weight: 700;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    min-width: 38px;
+}
+
+.injury-status-Out { color: var(--red); }
+.injury-status-Doubtful { color: #f0883e; }
+.injury-status-Questionable { color: var(--accent); }
+.injury-status-Day-To-Day { color: #58a6ff; }
+
+.injury-info { flex: 1; min-width: 0; }
+.injury-name { font-weight: 500; }
+.injury-team { font-size: 0.72rem; color: var(--text-muted); }
+.injury-detail { font-size: 0.72rem; color: var(--text-muted); }
+
+/* ── Loading / Empty States ──────────────────────────────────────────────── */
+
+.positive { color: var(--green); }
+.negative { color: var(--red); }
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+    .dashboard-container { padding: 16px 10px; }
+    .dashboard-grid { grid-template-columns: 1fr; }
+    .odds-grid { font-size: 0.72rem; grid-template-columns: 80px repeat(3, 1fr); }
+    .odds-grid .og-cell, .odds-grid .og-source { padding: 5px 6px; }
+    .game-matchup { font-size: 0.92rem; }
+    .game-score-row { gap: 10px; }
+    .score-num { font-size: 1.3rem; }
+    .injury-grid { grid-template-columns: 1fr; }
+    .result-card { flex-wrap: wrap; }
+}
+
+@media (max-width: 480px) {
+    .odds-grid { grid-template-columns: 70px repeat(3, 1fr); }
+    .odds-grid .og-cell, .odds-grid .og-source, .odds-grid .og-header { padding: 4px 5px; font-size: 0.7rem; }
+    .header-nav { gap: 12px; }
+}

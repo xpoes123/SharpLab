@@ -1,12 +1,14 @@
-"""SharpLab Web API — leaderboards + game engine."""
+"""SharpLab Web API — leaderboards + game engine + sports dashboard."""
 
 import asyncio
+import json
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from math import isqrt
 
 import aiosqlite
-from fastapi import FastAPI, Query, WebSocket
+from fastapi import FastAPI, Path, Query, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -567,3 +569,196 @@ async def player_profile(user_id: str):
 @app.get("/api/v1/games")
 async def list_games():
     return {"games": [{"key": k, "label": v} for k, v in GAME_LABELS.items()]}
+
+
+# ── Dashboard API ────────────────────────────────────────────────────────────
+
+SOURCE_LABELS: dict[str, str] = {
+    "draftkings": "DraftKings",
+    "fanduel": "FanDuel",
+    "betmgm": "BetMGM",
+    "pinnacle": "Pinnacle",
+    "kalshi": "Kalshi",
+    "polymarket": "Polymarket",
+}
+
+
+@app.get("/api/v1/dashboard/slate")
+async def dashboard_slate(sport: str = Query("all")):
+    """Today's games with current odds from all tracked sources."""
+    now = datetime.now(timezone.utc)
+    start = (now - timedelta(days=1)).replace(hour=6, minute=0, second=0).isoformat()
+    end = (now + timedelta(days=1)).replace(hour=12, minute=0, second=0).isoformat()
+
+    if sport == "all":
+        games = await _fetch_all(
+            "SELECT * FROM games WHERE start_time >= ? AND start_time <= ? ORDER BY start_time ASC",
+            (start, end),
+        )
+    else:
+        games = await _fetch_all(
+            "SELECT * FROM games WHERE sport = ? AND start_time >= ? AND start_time <= ? ORDER BY start_time ASC",
+            (sport, start, end),
+        )
+
+    game_ids = [g["game_id"] for g in games]
+    if game_ids:
+        placeholders = ",".join("?" for _ in game_ids)
+        snapshots = await _fetch_all(
+            f"""SELECT s.game_id, s.source, s.payload, s.captured_at
+                FROM odds_snapshots s
+                INNER JOIN (
+                    SELECT game_id, source, MAX(captured_at) AS max_cap
+                    FROM odds_snapshots
+                    WHERE game_id IN ({placeholders}) AND kind = 'poll'
+                    GROUP BY game_id, source
+                ) latest ON s.game_id = latest.game_id AND s.source = latest.source
+                    AND s.captured_at = latest.max_cap
+                WHERE s.kind = 'poll'""",
+            tuple(game_ids),
+        )
+    else:
+        snapshots = []
+
+    odds_by_game: dict[str, dict] = {}
+    for snap in snapshots:
+        gid = snap["game_id"]
+        odds_by_game.setdefault(gid, {})[snap["source"]] = {
+            **json.loads(snap["payload"]),
+            "captured_at": snap["captured_at"],
+        }
+
+    result = []
+    for g in games:
+        result.append({
+            "game_id": g["game_id"],
+            "home_team": g["home_team"],
+            "away_team": g["away_team"],
+            "start_time": g["start_time"],
+            "sport": g["sport"],
+            "status": g["status"],
+            "home_score": g.get("home_score"),
+            "away_score": g.get("away_score"),
+            "odds": odds_by_game.get(g["game_id"], {}),
+        })
+    return {"games": result, "updated_at": now.isoformat()}
+
+
+@app.get("/api/v1/dashboard/line-movement/{game_id}")
+async def dashboard_line_movement(game_id: str = Path(...)):
+    """All poll + close snapshots for a game, chronologically."""
+    game = await _fetch_one(
+        "SELECT game_id, home_team, away_team, start_time, sport, status FROM games WHERE game_id = ?",
+        (game_id,),
+    )
+    if not game:
+        return JSONResponse({"error": "Game not found"}, status_code=404)
+
+    polls = await _fetch_all(
+        """SELECT source, captured_at, payload
+           FROM odds_snapshots
+           WHERE game_id = ? AND kind = 'poll'
+           ORDER BY captured_at ASC""",
+        (game_id,),
+    )
+    closes = await _fetch_all(
+        """SELECT source, captured_at, payload
+           FROM odds_snapshots
+           WHERE game_id = ? AND kind = 'close'
+           ORDER BY captured_at ASC""",
+        (game_id,),
+    )
+
+    snap_list = []
+    for s in polls:
+        snap_list.append({
+            "source": s["source"],
+            "captured_at": s["captured_at"],
+            **json.loads(s["payload"]),
+        })
+
+    close_map: dict[str, dict] = {}
+    for s in closes:
+        close_map[s["source"]] = {
+            "captured_at": s["captured_at"],
+            **json.loads(s["payload"]),
+        }
+
+    return {
+        **game,
+        "snapshots": snap_list,
+        "close": close_map,
+    }
+
+
+@app.get("/api/v1/dashboard/results")
+async def dashboard_results(sport: str = Query("all"), limit: int = Query(10, ge=1, le=50)):
+    """Recently completed games with scores and closing line analysis."""
+    if sport == "all":
+        games = await _fetch_all(
+            """SELECT game_id, home_team, away_team, start_time, sport, status,
+                      home_score, away_score
+               FROM games
+               WHERE status = 'final' AND home_score IS NOT NULL
+               ORDER BY start_time DESC LIMIT ?""",
+            (limit,),
+        )
+    else:
+        games = await _fetch_all(
+            """SELECT game_id, home_team, away_team, start_time, sport, status,
+                      home_score, away_score
+               FROM games
+               WHERE status = 'final' AND home_score IS NOT NULL AND sport = ?
+               ORDER BY start_time DESC LIMIT ?""",
+            (sport, limit),
+        )
+
+    results = []
+    for g in games:
+        # Get DraftKings close (source of truth for spread/total)
+        close_row = await _fetch_one(
+            """SELECT payload FROM odds_snapshots
+               WHERE game_id = ? AND kind = 'close' AND source = 'draftkings'
+               LIMIT 1""",
+            (g["game_id"],),
+        )
+        close = json.loads(close_row["payload"]) if close_row else None
+
+        margin = g["home_score"] - g["away_score"] if g["home_score"] is not None else None
+        combined = (g["home_score"] + g["away_score"]) if g["home_score"] is not None else None
+
+        entry: dict = {**g, "close": close}
+        if close and margin is not None:
+            spread = close.get("spread")
+            total = close.get("total")
+            if spread is not None:
+                ats = margin + spread  # positive = home covered
+                entry["ats_margin"] = ats
+                entry["home_covered"] = ats > 0 if ats != 0 else None  # None = push
+            if total is not None and combined is not None:
+                entry["total_result"] = "over" if combined > total else ("under" if combined < total else "push")
+                entry["total_margin"] = round(abs(combined - total), 1)
+
+        results.append(entry)
+
+    return {"results": results}
+
+
+@app.get("/api/v1/dashboard/injuries")
+async def dashboard_injuries():
+    """Current injury report sorted by severity."""
+    rows = await _fetch_all(
+        """SELECT player_name, team, status, detail, updated_at
+           FROM injuries
+           WHERE status IN ('Out', 'Doubtful', 'Questionable', 'Day-To-Day')
+           ORDER BY
+               CASE status
+                   WHEN 'Out' THEN 0
+                   WHEN 'Doubtful' THEN 1
+                   WHEN 'Questionable' THEN 2
+                   WHEN 'Day-To-Day' THEN 3
+                   ELSE 4
+               END,
+               team, player_name"""
+    )
+    return {"injuries": rows}
