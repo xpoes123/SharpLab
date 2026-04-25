@@ -14,7 +14,7 @@ from discord.ext import commands, tasks
 from bot.cogs._elo_helpers import fmt_elo_change, update_elo_multiplayer
 from shared.bingo_logic import MAX_CARDS
 
-WEB_API_BASE = os.environ.get("WEB_API_BASE", "https://djiang.xyz")
+WEB_API_BASE = os.environ.get("WEB_API_BASE", "https://sharplab.djiang.xyz")
 WEB_API_SECRET = os.environ.get("WEB_API_SECRET", "dev-secret")
 
 

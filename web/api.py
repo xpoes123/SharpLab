@@ -44,7 +44,7 @@ app = FastAPI(title="SharpLab", docs_url=None, redoc_url=None, lifespan=lifespan
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://djiang.xyz", "http://localhost:8000"],
+    allow_origins=["https://sharplab.djiang.xyz", "http://localhost:8000"],
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )

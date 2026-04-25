@@ -103,7 +103,7 @@ Create `web/static/<game>.html` — single self-contained file:
 
 - Dark theme (background `#1a1a2e`, text `#e0e0e0`, accent `#f1c40f`)
 - No build step, no external dependencies (vanilla HTML/CSS/JS)
-- WebSocket connection to `wss://djiang.xyz/ws/<game>/{room_id}?token={token}`
+- WebSocket connection to `wss://sharplab.djiang.xyz/ws/<game>/{room_id}?token={token}`
 - Parse `room_id` and `token` from URL path/query params
 - Responsive layout that works on desktop and mobile
 - Show live game state, opponent progress, timer if applicable

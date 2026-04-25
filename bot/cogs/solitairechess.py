@@ -13,7 +13,7 @@ from discord.ext import commands, tasks
 
 from db import queries
 
-WEB_API_BASE = os.environ.get("WEB_API_BASE", "https://djiang.xyz")
+WEB_API_BASE = os.environ.get("WEB_API_BASE", "https://sharplab.djiang.xyz")
 WEB_API_SECRET = os.environ.get("WEB_API_SECRET", "dev-secret")
 
 DIFFICULTY_CHOICES = [

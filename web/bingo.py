@@ -138,7 +138,7 @@ async def create_token(room_id: str, body: CreateTokenRequest, x_api_key: str = 
     )
     await queries.create_game_token(token, room_id, body.discord_user, body.display_name, wager)
     await _broadcast_room_state(room)
-    base = os.environ.get("WEB_BASE_URL", "https://djiang.xyz")
+    base = os.environ.get("WEB_BASE_URL", "https://sharplab.djiang.xyz")
     return {"token": token, "url": f"{base}/bingo/{room_id}?t={token}"}
 
 
