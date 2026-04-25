@@ -973,7 +973,9 @@ class GeoTableView(ui.View):
             url = f"https://flagcdn.com/w320/{code}.png"
             return q_type, key, _alias_answers(key), url
         elif q_type == "landmark":
-            entry = next((n, c, u) for n, c, u in _LANDMARK_POOL if n == key)
+            entry = next(((n, c, u) for n, c, u in _LANDMARK_POOL if n == key), None)
+            if entry is None:
+                raise KeyError(f"Landmark key {key!r} not found in _LANDMARK_POOL")
             name, country, url = entry
             return q_type, name, _alias_answers(country), url
         else:  # state_flag
