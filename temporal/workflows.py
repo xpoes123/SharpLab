@@ -120,7 +120,7 @@ class OddsPollingWorkflow:
                 )
 
             await workflow.sleep(timedelta(minutes=interval_minutes))
-            workflow.continue_as_new(interval_minutes, sport)
+            workflow.continue_as_new(args=[interval_minutes, sport])
 
 
 @workflow.defn
@@ -233,7 +233,7 @@ class BetResolutionWorkflow:
                 )
 
             await workflow.sleep(timedelta(hours=interval_hours))
-            workflow.continue_as_new(interval_hours, sport)
+            workflow.continue_as_new(args=[interval_hours, sport])
 
 
 @workflow.defn
@@ -308,4 +308,4 @@ class InjuryPollingWorkflow:
                         )
 
             await workflow.sleep(timedelta(minutes=interval_minutes))
-            workflow.continue_as_new(interval_minutes)
+            workflow.continue_as_new(args=[interval_minutes])
