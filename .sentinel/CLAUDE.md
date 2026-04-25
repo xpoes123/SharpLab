@@ -1,48 +1,48 @@
 # Sentinel Learnings for xpoes123/SharpLab
 
-Auto-maintained by Sentinel's memory system. Last updated: 2026-04-24 22:37 UTC
+Auto-maintained by Sentinel's memory system. Last updated: 2026-04-25 22:42 UTC
 
 These are patterns learned from completed tasks on this repo.
 Claude Code loads this file automatically.
 
 ## Warnings (avoid these)
 
-- Task loops swallow exceptions silently—unhandled errors kill loops permanently (confidence: 60)
-- Temporal workflows should guard against replay of partial side effects (confidence: 55)
-- Validate line data completeness before processing (confidence: 44)
-- Test with realistic data volumes; unit tests may miss batch edge cases (confidence: 41)
-- Discord API calls should be idempotent or preceded by state checks (confidence: 38)
-- Race condition: bot restart between send() and DB mark causes dupes (confidence: 34)
-- Generic code requires explicit per-instance startup calls (confidence: 33)
-- Rate-limit API calls to avoid odds provider blocking (confidence: 32)
-- Don't mutate embeds mid-loop without prior bounds checking (confidence: 32)
-- Live data source exclusions may filter out entire dataset (confidence: 31)
+- Task loops swallow exceptions silently—unhandled errors kill loops permanently (confidence: 72)
+- Temporal workflows should guard against replay of partial side effects (confidence: 61)
+- Validate line data completeness before processing (confidence: 52)
+- Test with realistic data volumes; unit tests may miss batch edge cases (confidence: 47)
+- Discord API calls should be idempotent or preceded by state checks (confidence: 43)
+- Generic code requires explicit per-instance startup calls (confidence: 39)
+- Race condition: bot restart between send() and DB mark causes dupes (confidence: 39)
+- Rate-limit API calls to avoid odds provider blocking (confidence: 37)
+- Don't mutate embeds mid-loop without prior bounds checking (confidence: 37)
+- Test both self-view and other-user-view paths thoroughly (confidence: 32)
 
 ## Conventions & Preferences
 
-- Document intentional trade-offs when reordering state updates and side effects (confidence: 44)
-- Prioritize silent failures over duplicate notifications in bot integrations (confidence: 41)
-- Document why fallback behavior is acceptable in code comments (confidence: 39)
-- Document which dirs are packages vs data/docs in discovery config (confidence: 36)
-- Extract repeated filter patterns into reusable utility functions (confidence: 35)
-- Use Discord embeds for rich, scannable alert formatting (confidence: 33)
+- Document intentional trade-offs when reordering state updates and side effects (confidence: 51)
+- Prioritize silent failures over duplicate notifications in bot integrations (confidence: 47)
+- Document why fallback behavior is acceptable in code comments (confidence: 44)
+- Document which dirs are packages vs data/docs in discovery config (confidence: 41)
+- Extract repeated filter patterns into reusable utility functions (confidence: 40)
+- Use Discord embeds for rich, scannable alert formatting (confidence: 38)
+- Consider transaction-like patterns for multi-step operations (confidence: 37)
+- Test edge cases where filters exclude all data sources (confidence: 34)
+- Scan for duplicated code blocks during review (confidence: 34)
 - Use try-except with fallback when filtering empty sequences (confidence: 33)
-- Consider transaction-like patterns for multi-step operations (confidence: 32)
-- Scan for duplicated code blocks during review (confidence: 29)
-- Test edge cases where filters exclude all data sources (confidence: 28)
 
 ## Learned Patterns
 
-- Copy-pasted error handling in similar code paths (confidence: 52)
-- Async crash windows between message send and state persistence (confidence: 52)
-- Empty sequence check before max()/min() on generators (confidence: 40)
-- DB state updates after external API calls should be atomic or pre-committed (confidence: 40)
-- Test with boundary cases (24, 25, 26, 50 items) before deployment (confidence: 36)
-- Sport-agnostic code needs all sport configs in startup (confidence: 35)
-- Chunk overflow data into continuation messages with consistent naming (confidence: 33)
+- Copy-pasted error handling in similar code paths (confidence: 63)
+- Async crash windows between message send and state persistence (confidence: 61)
+- DB state updates after external API calls should be atomic or pre-committed (confidence: 47)
+- Empty sequence check before max()/min() on generators (confidence: 46)
+- Test with boundary cases (24, 25, 26, 50 items) before deployment (confidence: 41)
+- Sport-agnostic code needs all sport configs in startup (confidence: 40)
+- Chunk overflow data into continuation messages with consistent naming (confidence: 38)
+- Discord embed field limit (25) requires pre-validation before send() (confidence: 32)
+- Database snapshots for historical tracking and analysis (confidence: 31)
 - Stage data into collections before mutating embeds to enable slicing (confidence: 30)
-- Discord embed field limit (25) requires pre-validation before send() (confidence: 29)
-- Database snapshots for historical tracking and analysis (confidence: 26)
 - Flat-layout multi-package projects need explicit setuptools config (confidence: 26)
 - Threshold-based detection for significant value movements (confidence: 25)
 - Periodic polling with configurable intervals for sports data (confidence: 25)
