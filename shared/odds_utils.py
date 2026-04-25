@@ -25,6 +25,8 @@ def prob_to_american(prob: float) -> int:
 
 def american_to_prob(odds: int) -> float:
     """Convert American odds to implied probability."""
+    if odds == 0:
+        raise ValueError("American odds cannot be zero")
     if odds > 0:
         return 100 / (odds + 100)
     else:
@@ -33,6 +35,8 @@ def american_to_prob(odds: int) -> float:
 
 def american_to_decimal(odds: int) -> float:
     """Convert American odds to decimal odds."""
+    if odds == 0:
+        raise ValueError("American odds cannot be zero")
     if odds > 0:
         return (odds / 100) + 1
     else:
@@ -41,6 +45,8 @@ def american_to_decimal(odds: int) -> float:
 
 def decimal_to_american(decimal: float) -> int:
     """Convert decimal odds to American odds."""
+    if decimal <= 1.0:
+        raise ValueError(f"Decimal odds must be > 1.0, got {decimal}")
     if decimal >= 2.0:
         return round((decimal - 1) * 100)
     else:

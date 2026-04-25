@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS games (
     status      TEXT DEFAULT 'scheduled',
     clv_posted  INTEGER DEFAULT 0
 );
+CREATE INDEX IF NOT EXISTS idx_games_sport ON games(sport);
+CREATE INDEX IF NOT EXISTS idx_games_status ON games(status);
 
 CREATE TABLE IF NOT EXISTS odds_snapshots (
     snapshot_id  TEXT PRIMARY KEY,
@@ -26,6 +28,8 @@ CREATE TABLE IF NOT EXISTS odds_snapshots (
     captured_at  TEXT NOT NULL,
     payload      TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_odds_snapshots_game ON odds_snapshots(game_id);
+CREATE INDEX IF NOT EXISTS idx_odds_snapshots_game_source_kind ON odds_snapshots(game_id, source, kind);
 
 CREATE TABLE IF NOT EXISTS bets (
     bet_id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,6 +46,10 @@ CREATE TABLE IF NOT EXISTS bets (
     clv           REAL,
     notes         TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_bets_game ON bets(game_id);
+CREATE INDEX IF NOT EXISTS idx_bets_user ON bets(discord_user);
+CREATE INDEX IF NOT EXISTS idx_bets_user_status ON bets(discord_user, status);
+CREATE INDEX IF NOT EXISTS idx_bets_game_status ON bets(game_id, status);
 
 CREATE TABLE IF NOT EXISTS injuries (
     record_id    TEXT PRIMARY KEY,
@@ -53,6 +61,7 @@ CREATE TABLE IF NOT EXISTS injuries (
     updated_at   TEXT NOT NULL,
     notified     INTEGER DEFAULT 0
 );
+CREATE INDEX IF NOT EXISTS idx_injuries_team ON injuries(team);
 
 CREATE TABLE IF NOT EXISTS wallets (
     discord_user  TEXT PRIMARY KEY,
@@ -166,6 +175,9 @@ CREATE TABLE IF NOT EXISTS paper_bets (
     payout          INTEGER DEFAULT 0,
     clv             REAL
 );
+CREATE INDEX IF NOT EXISTS idx_paper_bets_user ON paper_bets(discord_user);
+CREATE INDEX IF NOT EXISTS idx_paper_bets_game ON paper_bets(game_id);
+CREATE INDEX IF NOT EXISTS idx_paper_bets_user_status ON paper_bets(discord_user, status);
 
 CREATE TABLE IF NOT EXISTS user_settings (
     discord_user       TEXT PRIMARY KEY,

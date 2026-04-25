@@ -92,7 +92,10 @@ class SharpBot(commands.Bot):
         if total:
             print(f"Startup cleanup: {duels} duels, {tournaments} tournaments, {sessions} web sessions expired+refunded.")
         for cog in COGS:
-            await self.load_extension(cog)
+            try:
+                await self.load_extension(cog)
+            except Exception as e:
+                print(f"Failed to load cog {cog}: {e}")
         for gid in GUILD_IDS:
             guild = discord.Object(id=gid)
             self.tree.copy_global_to(guild=guild)

@@ -153,116 +153,119 @@ class CLVCog(commands.Cog):
 
         game_ids = await queries.get_games_with_close_not_posted()
         for game_id in game_ids:
-            game = await queries.get_game_by_id(game_id)
-            if game is None:
-                continue
+            try:
+                game = await queries.get_game_by_id(game_id)
+                if game is None:
+                    continue
 
-            kalshi_close = await queries.get_close_snapshot(game_id, "kalshi")
-            dk_close = await queries.get_close_snapshot(game_id, "draftkings")
+                kalshi_close = await queries.get_close_snapshot(game_id, "kalshi")
+                dk_close = await queries.get_close_snapshot(game_id, "draftkings")
 
-            if kalshi_close is None and dk_close is None:
-                continue
+                if kalshi_close is None and dk_close is None:
+                    continue
 
-            dk_open = await queries.get_first_poll_snapshot(game_id, "draftkings")
+                dk_open = await queries.get_first_poll_snapshot(game_id, "draftkings")
 
-            ref_snap = kalshi_close or dk_close
-            captured_dt = datetime.fromisoformat(ref_snap.captured_at_utc_iso)
-            if captured_dt.tzinfo is None:
-                captured_dt = captured_dt.replace(tzinfo=timezone.utc)
-            captured_dt = captured_dt.astimezone(_ET)
-            ch = captured_dt.hour % 12 or 12
-            campm = "AM" if captured_dt.hour < 12 else "PM"
-            captured_str = f"{ch}:{captured_dt.strftime('%M')} {campm} {captured_dt.strftime('%Z')}"
-            sources = ", ".join(
-                s for s, snap in [("Kalshi", kalshi_close), ("DraftKings", dk_close)]
-                if snap is not None
-            )
+                ref_snap = kalshi_close or dk_close
+                captured_dt = datetime.fromisoformat(ref_snap.captured_at_utc_iso)
+                if captured_dt.tzinfo is None:
+                    captured_dt = captured_dt.replace(tzinfo=timezone.utc)
+                captured_dt = captured_dt.astimezone(_ET)
+                ch = captured_dt.hour % 12 or 12
+                campm = "AM" if captured_dt.hour < 12 else "PM"
+                captured_str = f"{ch}:{captured_dt.strftime('%M')} {campm} {captured_dt.strftime('%Z')}"
+                sources = ", ".join(
+                    s for s, snap in [("Kalshi", kalshi_close), ("DraftKings", dk_close)]
+                    if snap is not None
+                )
 
-            embed = discord.Embed(
-                title=f"Closing Lines — {game.away_team} @ {game.home_team}",
-                description=(
-                    f"Source: **{sources}** at {captured_str}\n"
-                    f"Positive CLV = you got a better price than closing"
-                ),
-                color=0xF1C40F,
-            )
-
-            # Always show the closing line numbers
-            embed.add_field(
-                name="Close",
-                value=_build_closing_lines_field(kalshi_close, dk_close, dk_open),
-                inline=False,
-            )
-
-            # Only post CLV if someone has an active bet on this game.
-            bets = await queries.get_open_bets_for_game(game_id)
-            if not bets:
-                await queries.mark_game_clv_posted(game_id)
-                continue
-
-            # If anyone has bets, compute CLV and add their lines.
-            # Discord caps embeds at 25 fields. We use 1 for "Close", so the
-            # first embed holds up to 24 bet fields. Overflow goes into
-            # follow-up embeds (25 fields each) to avoid HTTP 400.
-            mention_ids: set[str] = set()
-            bet_fields: list[tuple[str, str]] = []
-            for bet in bets:
-                ref = kalshi_close if (bet.market.lower() == "moneyline" and kalshi_close) else dk_close
-                close_odds = _close_odds_for_bet(bet, game, ref.payload) if ref else None
-                clv: float | None = None
-                close_line_display: str | None = None
-                if close_odds is not None:
-                    market = bet.market.lower()
-                    is_home = side_is_home(bet.side, game.home_team, game.away_team)
-                    close_spread = ref.payload.get("spread") if ref else None
-                    close_total = ref.payload.get("total") if ref else None
-
-                    clv = compute_clv(
-                        bet.odds, close_odds,
-                        market=market,
-                        bet_line=bet.line,
-                        close_line=close_spread if market == "spread" else close_total if market == "total" else None,
-                        is_home=is_home if market == "spread" else None,
-                        is_over=(bet.side.lower() == "over") if market == "total" else None,
-                    )
-
-                    # Show closing line number for spread/total
-                    if market == "spread" and close_spread is not None and is_home is not None:
-                        close_for_bettor = close_spread if is_home else -close_spread
-                        close_line_display = f"{close_for_bettor:+.1f}"
-                    elif market == "total" and close_total is not None:
-                        close_line_display = f"{close_total}"
-
-                await queries.update_bet_clv(bet.bet_id, clv)
-                bet_fields.append((f"<@{bet.discord_user}>", _build_bet_line(bet, close_odds, clv, close_line_display)))
-                mention_ids.add(bet.discord_user)
-
-            # Fill the first embed (1 slot already used by "Close")
-            for name, value in bet_fields[:24]:
-                embed.add_field(name=name, value=value, inline=False)
-
-            # Build overflow embeds for any bets beyond the first 24
-            overflow_embeds: list[discord.Embed] = []
-            overflow = bet_fields[24:]
-            while overflow:
-                chunk, overflow = overflow[:25], overflow[25:]
-                ov_embed = discord.Embed(
-                    title=f"CLV (continued) — {game.away_team} @ {game.home_team}",
+                embed = discord.Embed(
+                    title=f"Closing Lines — {game.away_team} @ {game.home_team}",
+                    description=(
+                        f"Source: **{sources}** at {captured_str}\n"
+                        f"Positive CLV = you got a better price than closing"
+                    ),
                     color=0xF1C40F,
                 )
-                for name, value in chunk:
-                    ov_embed.add_field(name=name, value=value, inline=False)
-                overflow_embeds.append(ov_embed)
 
-            # Mark posted before sending so a crash between these two lines
-            # results in a missed post (recoverable) rather than a duplicate
-            # ping on the next 5-minute tick (not recoverable without complaints).
-            await queries.mark_game_clv_posted(game_id)
-            # Ping bettors in message content so Discord actually notifies them
-            ping_str = " ".join(f"<@{uid}>" for uid in mention_ids) if mention_ids else None
-            await channel.send(content=ping_str, embed=embed)
-            for ov_embed in overflow_embeds:
-                await channel.send(embed=ov_embed)
+                # Always show the closing line numbers
+                embed.add_field(
+                    name="Close",
+                    value=_build_closing_lines_field(kalshi_close, dk_close, dk_open),
+                    inline=False,
+                )
+
+                # Only post CLV if someone has an active bet on this game.
+                bets = await queries.get_open_bets_for_game(game_id)
+                if not bets:
+                    await queries.mark_game_clv_posted(game_id)
+                    continue
+
+                # If anyone has bets, compute CLV and add their lines.
+                # Discord caps embeds at 25 fields. We use 1 for "Close", so the
+                # first embed holds up to 24 bet fields. Overflow goes into
+                # follow-up embeds (25 fields each) to avoid HTTP 400.
+                mention_ids: set[str] = set()
+                bet_fields: list[tuple[str, str]] = []
+                for bet in bets:
+                    ref = kalshi_close if (bet.market.lower() == "moneyline" and kalshi_close) else dk_close
+                    close_odds = _close_odds_for_bet(bet, game, ref.payload) if ref else None
+                    clv: float | None = None
+                    close_line_display: str | None = None
+                    if close_odds is not None:
+                        market = bet.market.lower()
+                        is_home = side_is_home(bet.side, game.home_team, game.away_team)
+                        close_spread = ref.payload.get("spread") if ref else None
+                        close_total = ref.payload.get("total") if ref else None
+
+                        clv = compute_clv(
+                            bet.odds, close_odds,
+                            market=market,
+                            bet_line=bet.line,
+                            close_line=close_spread if market == "spread" else close_total if market == "total" else None,
+                            is_home=is_home if market == "spread" else None,
+                            is_over=(bet.side.lower() == "over") if market == "total" else None,
+                        )
+
+                        # Show closing line number for spread/total
+                        if market == "spread" and close_spread is not None and is_home is not None:
+                            close_for_bettor = close_spread if is_home else -close_spread
+                            close_line_display = f"{close_for_bettor:+.1f}"
+                        elif market == "total" and close_total is not None:
+                            close_line_display = f"{close_total}"
+
+                    await queries.update_bet_clv(bet.bet_id, clv)
+                    bet_fields.append((f"<@{bet.discord_user}>", _build_bet_line(bet, close_odds, clv, close_line_display)))
+                    mention_ids.add(bet.discord_user)
+
+                # Fill the first embed (1 slot already used by "Close")
+                for name, value in bet_fields[:24]:
+                    embed.add_field(name=name, value=value, inline=False)
+
+                # Build overflow embeds for any bets beyond the first 24
+                overflow_embeds: list[discord.Embed] = []
+                overflow = bet_fields[24:]
+                while overflow:
+                    chunk, overflow = overflow[:25], overflow[25:]
+                    ov_embed = discord.Embed(
+                        title=f"CLV (continued) — {game.away_team} @ {game.home_team}",
+                        color=0xF1C40F,
+                    )
+                    for name, value in chunk:
+                        ov_embed.add_field(name=name, value=value, inline=False)
+                    overflow_embeds.append(ov_embed)
+
+                # Mark posted before sending so a crash between these two lines
+                # results in a missed post (recoverable) rather than a duplicate
+                # ping on the next 5-minute tick (not recoverable without complaints).
+                await queries.mark_game_clv_posted(game_id)
+                # Ping bettors in message content so Discord actually notifies them
+                ping_str = " ".join(f"<@{uid}>" for uid in mention_ids) if mention_ids else None
+                await channel.send(content=ping_str, embed=embed)
+                for ov_embed in overflow_embeds:
+                    await channel.send(embed=ov_embed)
+            except Exception:
+                log.exception("CLV auto-post failed for game %s", game_id)
 
     @clv_check.before_loop
     async def before_clv_check(self) -> None:

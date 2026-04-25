@@ -792,25 +792,41 @@ async def get_or_create_wallet(discord_user: str) -> tuple[int, bool]:
 
 
 async def update_balance(discord_user: str, delta: int) -> int:
-    """Add/subtract coins. Returns new balance. Raises ValueError if insufficient."""
+    """Add/subtract coins atomically. Returns new balance. Raises ValueError if insufficient."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        if delta < 0:
+            # Atomic check-and-subtract: WHERE guards against going negative
+            cursor = await db.execute(
+                "UPDATE wallets SET balance = balance + ? "
+                "WHERE discord_user = ? AND balance + ? >= 0",
+                (delta, discord_user, delta),
+            )
+            if cursor.rowcount == 0:
+                # Either wallet doesn't exist or insufficient balance
+                check = await db.execute(
+                    "SELECT balance FROM wallets WHERE discord_user = ?",
+                    (discord_user,),
+                )
+                row = await check.fetchone()
+                if row is None:
+                    raise ValueError("No wallet found")
+                raise ValueError(f"Insufficient coins (have {row['balance']}, need {-delta})")
+        else:
+            cursor = await db.execute(
+                "UPDATE wallets SET balance = balance + ? WHERE discord_user = ?",
+                (delta, discord_user),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError("No wallet found")
+        await db.commit()
+        # Read back the new balance
         cursor = await db.execute(
             "SELECT balance FROM wallets WHERE discord_user = ?",
             (discord_user,),
         )
         row = await cursor.fetchone()
-        if row is None:
-            raise ValueError("No wallet found")
-        new_balance = row["balance"] + delta
-        if new_balance < 0:
-            raise ValueError(f"Insufficient coins (have {row['balance']}, need {-delta})")
-        await db.execute(
-            "UPDATE wallets SET balance = ? WHERE discord_user = ?",
-            (new_balance, discord_user),
-        )
-        await db.commit()
-        return new_balance
+        return row["balance"]
 
 
 async def get_balance(discord_user: str) -> int | None:
@@ -859,27 +875,38 @@ async def get_or_create_casino_wallet(discord_user: str) -> int:
 
 
 async def update_casino_balance(discord_user: str, delta: int) -> int:
-    """Add/subtract casino coins. Returns new balance. Raises ValueError if insufficient."""
+    """Add/subtract casino coins atomically. Returns new balance. Raises ValueError if insufficient."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        if delta < 0:
+            # Atomic check-and-subtract: WHERE guards against going negative
+            cursor = await db.execute(
+                "UPDATE casino_wallets SET balance = MAX(balance + ?, ?) "
+                "WHERE discord_user = ? AND balance + ? >= 0",
+                (delta, CASINO_MIN_BALANCE, discord_user, delta),
+            )
+            if cursor.rowcount == 0:
+                check = await db.execute(
+                    "SELECT balance FROM casino_wallets WHERE discord_user = ?",
+                    (discord_user,),
+                )
+                row = await check.fetchone()
+                if row is None:
+                    raise ValueError("No casino wallet found")
+                raise ValueError(f"Insufficient casino coins (have {row['balance']}, need {-delta})")
+        else:
+            await db.execute(
+                "UPDATE casino_wallets SET balance = balance + ? WHERE discord_user = ?",
+                (delta, discord_user),
+            )
+        await db.commit()
+        # Read back the new balance
         cursor = await db.execute(
             "SELECT balance FROM casino_wallets WHERE discord_user = ?",
             (discord_user,),
         )
         row = await cursor.fetchone()
-        if row is None:
-            raise ValueError("No casino wallet found")
-        new_balance = row["balance"] + delta
-        if new_balance < 0:
-            raise ValueError(f"Insufficient casino coins (have {row['balance']}, need {-delta})")
-        if new_balance < CASINO_MIN_BALANCE:
-            new_balance = CASINO_MIN_BALANCE
-        await db.execute(
-            "UPDATE casino_wallets SET balance = ? WHERE discord_user = ?",
-            (new_balance, discord_user),
-        )
-        await db.commit()
-        return new_balance
+        return row["balance"]
 
 
 async def get_casino_balance(discord_user: str) -> int | None:

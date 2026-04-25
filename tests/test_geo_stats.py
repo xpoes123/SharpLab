@@ -62,10 +62,15 @@ def tmp_db(tmp_path):
     original_queries = _queries.DB_PATH
     _schema.DB_PATH = db_path
     _queries.DB_PATH = db_path
-    asyncio.get_event_loop().run_until_complete(_schema.init_db())
+    asyncio.run(_schema.init_db())
     yield db_path
     _schema.DB_PATH = original_schema
     _queries.DB_PATH = original_queries
+
+
+def _run(coro):
+    """Run an async coroutine from sync test code (Python 3.14 compatible)."""
+    return asyncio.run(coro)
 
 
 # ── Region mapping completeness ──────────────────────────────────────────────
@@ -99,10 +104,10 @@ class TestCountryRegions:
 
 class TestRecordGeoAttempt:
     def test_first_correct_attempt(self, tmp_db):
-        asyncio.get_event_loop().run_until_complete(
+        _run(
             _queries.record_geo_attempt("user1", "France", "Europe", "country_cap", True)
         )
-        rows = asyncio.get_event_loop().run_until_complete(
+        rows = _run(
             _queries.get_geo_stats("user1")
         )
         assert len(rows) == 1
@@ -111,10 +116,10 @@ class TestRecordGeoAttempt:
         assert rows[0]["total"] == 1
 
     def test_first_incorrect_attempt(self, tmp_db):
-        asyncio.get_event_loop().run_until_complete(
+        _run(
             _queries.record_geo_attempt("user1", "Japan", "Asia", "country_cap", False)
         )
-        rows = asyncio.get_event_loop().run_until_complete(
+        rows = _run(
             _queries.get_geo_stats("user1")
         )
         assert len(rows) == 1
@@ -122,42 +127,25 @@ class TestRecordGeoAttempt:
         assert rows[0]["total"] == 1
 
     def test_upsert_increments(self, tmp_db):
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(
-            _queries.record_geo_attempt("user1", "France", "Europe", "country_cap", True)
-        )
-        loop.run_until_complete(
-            _queries.record_geo_attempt("user1", "France", "Europe", "country_cap", False)
-        )
-        loop.run_until_complete(
-            _queries.record_geo_attempt("user1", "France", "Europe", "country_cap", True)
-        )
-        rows = loop.run_until_complete(_queries.get_geo_stats("user1"))
+        _run(_queries.record_geo_attempt("user1", "France", "Europe", "country_cap", True))
+        _run(_queries.record_geo_attempt("user1", "France", "Europe", "country_cap", False))
+        _run(_queries.record_geo_attempt("user1", "France", "Europe", "country_cap", True))
+        rows = _run(_queries.get_geo_stats("user1"))
         assert len(rows) == 1
         assert rows[0]["correct"] == 2
         assert rows[0]["total"] == 3
 
     def test_different_categories_separate_rows(self, tmp_db):
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(
-            _queries.record_geo_attempt("user1", "France", "Europe", "country_cap", True)
-        )
-        loop.run_until_complete(
-            _queries.record_geo_attempt("user1", "France", "Europe", "country_flag", False)
-        )
-        rows = loop.run_until_complete(_queries.get_geo_stats("user1"))
+        _run(_queries.record_geo_attempt("user1", "France", "Europe", "country_cap", True))
+        _run(_queries.record_geo_attempt("user1", "France", "Europe", "country_flag", False))
+        rows = _run(_queries.get_geo_stats("user1"))
         assert len(rows) == 2
 
     def test_different_users_separate(self, tmp_db):
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(
-            _queries.record_geo_attempt("user1", "France", "Europe", "country_cap", True)
-        )
-        loop.run_until_complete(
-            _queries.record_geo_attempt("user2", "France", "Europe", "country_cap", False)
-        )
-        rows1 = loop.run_until_complete(_queries.get_geo_stats("user1"))
-        rows2 = loop.run_until_complete(_queries.get_geo_stats("user2"))
+        _run(_queries.record_geo_attempt("user1", "France", "Europe", "country_cap", True))
+        _run(_queries.record_geo_attempt("user2", "France", "Europe", "country_cap", False))
+        rows1 = _run(_queries.get_geo_stats("user1"))
+        rows2 = _run(_queries.get_geo_stats("user2"))
         assert len(rows1) == 1
         assert rows1[0]["correct"] == 1
         assert len(rows2) == 1
@@ -169,53 +157,34 @@ class TestRecordGeoAttempt:
 
 class TestGetGeoStatsByRegion:
     def test_aggregates_across_countries(self, tmp_db):
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(
-            _queries.record_geo_attempt("user1", "France", "Europe", "country_cap", True)
-        )
-        loop.run_until_complete(
-            _queries.record_geo_attempt("user1", "Germany", "Europe", "country_cap", True)
-        )
-        loop.run_until_complete(
-            _queries.record_geo_attempt("user1", "Spain", "Europe", "country_cap", False)
-        )
-        regions = loop.run_until_complete(_queries.get_geo_stats_by_region("user1"))
+        _run(_queries.record_geo_attempt("user1", "France", "Europe", "country_cap", True))
+        _run(_queries.record_geo_attempt("user1", "Germany", "Europe", "country_cap", True))
+        _run(_queries.record_geo_attempt("user1", "Spain", "Europe", "country_cap", False))
+        regions = _run(_queries.get_geo_stats_by_region("user1"))
         assert len(regions) == 1
         assert regions[0]["region"] == "Europe"
         assert regions[0]["correct"] == 2
         assert regions[0]["total"] == 3
 
     def test_multiple_regions(self, tmp_db):
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(
-            _queries.record_geo_attempt("user1", "France", "Europe", "country_cap", True)
-        )
-        loop.run_until_complete(
-            _queries.record_geo_attempt("user1", "Japan", "Asia", "country_cap", False)
-        )
-        loop.run_until_complete(
-            _queries.record_geo_attempt("user1", "Brazil", "Americas", "country_cap", True)
-        )
-        regions = loop.run_until_complete(_queries.get_geo_stats_by_region("user1"))
+        _run(_queries.record_geo_attempt("user1", "France", "Europe", "country_cap", True))
+        _run(_queries.record_geo_attempt("user1", "Japan", "Asia", "country_cap", False))
+        _run(_queries.record_geo_attempt("user1", "Brazil", "Americas", "country_cap", True))
+        regions = _run(_queries.get_geo_stats_by_region("user1"))
         assert len(regions) == 3
         region_names = {r["region"] for r in regions}
         assert region_names == {"Europe", "Asia", "Americas"}
 
     def test_empty_user(self, tmp_db):
-        regions = asyncio.get_event_loop().run_until_complete(
+        regions = _run(
             _queries.get_geo_stats_by_region("nonexistent")
         )
         assert regions == []
 
     def test_aggregates_across_categories(self, tmp_db):
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(
-            _queries.record_geo_attempt("user1", "France", "Europe", "country_cap", True)
-        )
-        loop.run_until_complete(
-            _queries.record_geo_attempt("user1", "France", "Europe", "country_flag", False)
-        )
-        regions = loop.run_until_complete(_queries.get_geo_stats_by_region("user1"))
+        _run(_queries.record_geo_attempt("user1", "France", "Europe", "country_cap", True))
+        _run(_queries.record_geo_attempt("user1", "France", "Europe", "country_flag", False))
+        regions = _run(_queries.get_geo_stats_by_region("user1"))
         assert len(regions) == 1
         assert regions[0]["correct"] == 1
         assert regions[0]["total"] == 2
