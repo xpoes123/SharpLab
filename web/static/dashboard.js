@@ -139,9 +139,11 @@ const SOURCE_LABELS = {
     draftkings: 'DraftKings', fanduel: 'FanDuel', betmgm: 'BetMGM',
     pinnacle: 'Pinnacle', bovada: 'Bovada', betonlineag: 'BetOnline',
     betrivers: 'BetRivers', betus: 'BetUS', lowvig: 'LowVig',
-    mybookieag: 'MyBookie', williamhill_us: 'Caesars',
+    mybookieag: 'MyBookie', williamhill_us: 'Caesars', fanatics: 'Fanatics',
     kalshi: 'Kalshi', polymarket: 'Polymarket',
 };
+// Primary sources shown by default (major US books + prediction markets)
+const PRIMARY_SOURCES = ['draftkings', 'fanduel', 'betmgm', 'pinnacle', 'kalshi', 'polymarket'];
 
 // ── Slate ───────────────────────────────────────────────────────────────────
 
@@ -214,30 +216,30 @@ function renderGameCard(game) {
 }
 
 function renderOddsGrid(odds, sport) {
-    // Show key sources first, then any extras not in the preferred order
-    const DISPLAY_SOURCES = ['draftkings', 'fanduel', 'betmgm', 'pinnacle', 'kalshi', 'polymarket'];
-    const sources = DISPLAY_SOURCES.filter(s => odds[s]);
-    // Add any sources not in the display list
-    for (const s of Object.keys(odds)) {
-        if (!DISPLAY_SOURCES.includes(s)) sources.push(s);
+    // Build ordered source list: primary first, then extras
+    const primary = PRIMARY_SOURCES.filter(s => odds[s]);
+    const extras = [];
+    for (const s of SOURCE_ORDER) {
+        if (odds[s] && !primary.includes(s)) extras.push(s);
     }
-    if (!sources.length) return '';
+    for (const s of Object.keys(odds)) {
+        if (!primary.includes(s) && !extras.includes(s)) extras.push(s);
+    }
+    const allSources = [...primary, ...extras];
+    if (!allSources.length) return '';
 
-    // Find best values across ALL sources (not just displayed)
-    const allSources = Object.keys(odds);
+    // Find best values across ALL sources
     let bestSpread = null, bestSpreadSrc = null;
     let bestMlHome = null, bestMlHomeSrc = null;
     let bestMlAway = null, bestMlAwaySrc = null;
 
     for (const src of allSources) {
         const o = odds[src];
-        // Best spread for home = most positive (fewest points to give)
         if (o.spread != null) {
             if (bestSpread === null || o.spread > bestSpread) {
                 bestSpread = o.spread; bestSpreadSrc = src;
             }
         }
-        // Best ML = best payout = lowest implied prob (most plus-money)
         if (o.ml_home != null) {
             const p = americanToProb(o.ml_home);
             if (bestMlHome === null || p < americanToProb(bestMlHome)) {
@@ -252,26 +254,20 @@ function renderOddsGrid(odds, sport) {
         }
     }
 
-    let html = `<div class="odds-grid">
-        <div class="og-header">Source</div>
-        <div class="og-header">Spread</div>
-        <div class="og-header">Moneyline</div>
-        <div class="og-header">Total</div>`;
-
-    for (const src of sources) {
+    function renderSourceRow(src, isExtra) {
         const o = odds[src];
         const label = sourceLabel(src);
+        const hide = isExtra ? ' style="display:none"' : '';
+        const cls = isExtra ? ' og-extra' : '';
 
-        // Spread cell
         let spreadCell;
         if (o.spread != null) {
-            const cls = (src === bestSpreadSrc) ? 'og-best' : '';
-            spreadCell = `<span class="${cls}">${fmtSpread(o.spread)} (${fmtProb(o.spread_odds) || ''})</span>`;
+            const best = (src === bestSpreadSrc) ? 'og-best' : '';
+            spreadCell = `<span class="${best}">${fmtSpread(o.spread)} (${fmtProb(o.spread_odds) || ''})</span>`;
         } else {
             spreadCell = '<span class="og-na">-</span>';
         }
 
-        // ML cell — show away% / home%
         let mlCell;
         if (o.ml_home != null || o.ml_away != null) {
             const awayP = fmtProb(o.ml_away);
@@ -283,23 +279,42 @@ function renderOddsGrid(odds, sport) {
             mlCell = '<span class="og-na">-</span>';
         }
 
-        // Total cell
-        let totalCell;
-        if (o.total != null) {
-            totalCell = `${o.total}`;
-        } else {
-            totalCell = '<span class="og-na">-</span>';
-        }
+        let totalCell = o.total != null ? `${o.total}` : '<span class="og-na">-</span>';
 
-        html += `
-        <div class="og-source">${esc(label)}</div>
-        <div class="og-cell">${spreadCell}</div>
-        <div class="og-cell">${mlCell}</div>
-        <div class="og-cell">${totalCell}</div>`;
+        return `<div class="og-source${cls}"${hide}>${esc(label)}</div>
+        <div class="og-cell${cls}"${hide}>${spreadCell}</div>
+        <div class="og-cell${cls}"${hide}>${mlCell}</div>
+        <div class="og-cell${cls}"${hide}>${totalCell}</div>`;
     }
 
+    let html = `<div class="odds-grid">
+        <div class="og-header">Source</div>
+        <div class="og-header">Spread</div>
+        <div class="og-header">Moneyline</div>
+        <div class="og-header">Total</div>`;
+
+    for (const src of primary) {
+        html += renderSourceRow(src);
+    }
+    for (const src of extras) {
+        html += renderSourceRow(src, true);
+    }
     html += '</div>';
+
+    if (extras.length) {
+        html += `<button class="expand-btn show-all-btn" onclick="toggleAllBooks(this)">+ ${extras.length} more books</button>`;
+    }
+
     return html;
+}
+
+function toggleAllBooks(btn) {
+    const card = btn.closest('.game-card');
+    const extras = card.querySelectorAll('.og-extra');
+    const showing = extras[0] && extras[0].style.display !== 'none';
+    extras.forEach(el => el.style.display = showing ? 'none' : '');
+    const count = extras.length / 4; // 4 cells per row
+    btn.textContent = showing ? `+ ${Math.round(count)} more books` : 'Show fewer';
 }
 
 // ── Line Movement (expandable) ──────────────────────────────────────────────
