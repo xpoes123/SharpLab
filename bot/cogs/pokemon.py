@@ -2943,10 +2943,21 @@ class PokeTableView(ui.View):
             await self._end_game()
 
         except asyncio.CancelledError:
-            pass
+            table.phase = "closed"
+            self.active_tables.pop(table.channel_id, None)
+            if table.thread:
+                try:
+                    await table.thread.edit(archived=True)
+                except Exception:
+                    pass
         except Exception:
             table.phase = "closed"
             self.active_tables.pop(table.channel_id, None)
+            if table.thread:
+                try:
+                    await table.thread.edit(archived=True)
+                except Exception:
+                    pass
 
     async def _end_game(self) -> None:
         table = self.table
