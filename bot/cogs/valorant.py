@@ -26,6 +26,7 @@ ROUND_TIME = 30  # seconds per round
 ROUND_DELAY = 4  # seconds between rounds
 WINS_TO_WIN = 3  # first to N wins
 MAX_ROUNDS = 15  # safety cap
+INACTIVITY_ROUNDS = 5  # auto-end after N consecutive unanswered rounds
 
 # Hint reveal timing (seconds into the round)
 HINT2_AT = 10
@@ -1135,6 +1136,7 @@ class ValTableView(ui.View):
         table = self.table
         try:
             rnd = 0
+            consecutive_unanswered = 0
             while True:
                 rnd += 1
 
@@ -1184,6 +1186,21 @@ class ValTableView(ui.View):
                             )
                         except discord.HTTPException:
                             pass
+
+                # Inactivity: end if nobody answered N rounds in a row
+                if table.round_winner is None:
+                    consecutive_unanswered += 1
+                else:
+                    consecutive_unanswered = 0
+                if consecutive_unanswered >= INACTIVITY_ROUNDS:
+                    if table.thread:
+                        try:
+                            await table.thread.send(
+                                "\u23f8\ufe0f No one answered for 5 consecutive rounds — ending due to inactivity."
+                            )
+                        except discord.HTTPException:
+                            pass
+                    break
 
                 if any(p.rounds_won >= WINS_TO_WIN for p in table.players.values()):
                     break

@@ -28,6 +28,7 @@ MIN_PLAYERS = 1
 NUM_PROBLEMS = 10
 ROUND_SECONDS = 20
 ROUND_DELAY = 4  # seconds between problems
+INACTIVITY_ROUNDS = 5  # auto-end after N consecutive unanswered rounds
 
 PAYTABLE: dict[int, list[float]] = {
     1: [1.0],
@@ -665,6 +666,7 @@ class SprintTableView(ui.View):
         table = self.table
         try:
             rnd = 0
+            consecutive_unanswered = 0
             while True:
                 rnd += 1
                 if rnd > 1:
@@ -705,6 +707,21 @@ class SprintTableView(ui.View):
                             await table.current_thread_msg.edit(embed=_timeout_embed(table))
                         except discord.HTTPException:
                             pass
+
+                # Inactivity: end if nobody answered N rounds in a row
+                if table.round_winner is None:
+                    consecutive_unanswered += 1
+                else:
+                    consecutive_unanswered = 0
+                if consecutive_unanswered >= INACTIVITY_ROUNDS:
+                    if table.thread:
+                        try:
+                            await table.thread.send(
+                                "\u23f8\ufe0f No one answered for 5 consecutive rounds — ending due to inactivity."
+                            )
+                        except discord.HTTPException:
+                            pass
+                    break
 
                 if rnd >= NUM_PROBLEMS:
                     break

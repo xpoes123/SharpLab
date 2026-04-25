@@ -22,6 +22,7 @@ MIN_PLAYERS = 1
 MAX_PLAYERS = 8
 DEFAULT_ROUNDS = 10
 MAX_ROUNDS_CAP = 20
+INACTIVITY_ROUNDS = 5  # auto-end after N consecutive unanswered rounds
 
 MEDALS = ["\U0001f947", "\U0001f948", "\U0001f949"]
 
@@ -662,6 +663,7 @@ class NbaGuessView(ui.View):
         table = self.table
         try:
             rnd = 0
+            consecutive_unanswered = 0
             while True:
                 rnd += 1
 
@@ -711,6 +713,21 @@ class NbaGuessView(ui.View):
                             )
                         except discord.HTTPException:
                             pass
+
+                # Inactivity: end if nobody answered N rounds in a row
+                if table.round_winner is None:
+                    consecutive_unanswered += 1
+                else:
+                    consecutive_unanswered = 0
+                if consecutive_unanswered >= INACTIVITY_ROUNDS:
+                    if table.thread:
+                        try:
+                            await table.thread.send(
+                                "\u23f8\ufe0f No one answered for 5 consecutive rounds — ending due to inactivity."
+                            )
+                        except discord.HTTPException:
+                            pass
+                    break
 
                 if rnd >= table.total_rounds:
                     break

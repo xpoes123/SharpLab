@@ -26,6 +26,7 @@ MIN_PLAYERS = 1
 PART_TIME = 10  # seconds per bonus part
 BETWEEN_PARTS_DELAY = 3  # seconds between parts
 BETWEEN_BONUS_DELAY = 4  # seconds between bonuses
+INACTIVITY_ROUNDS = 5  # auto-end after N consecutive unanswered parts
 BATCH_SIZE = 5  # bonuses fetched per API call
 QB_API = "https://www.qbreader.org/api"
 
@@ -687,6 +688,7 @@ class QBLobbyView(ui.View):
     async def _game_loop(self) -> None:
         table = self.table
         try:
+            consecutive_unanswered = 0
             async with httpx.AsyncClient() as client:
                 while not table.stop_requested:
                     # Refill queue if empty
@@ -771,15 +773,35 @@ class QBLobbyView(ui.View):
 
                         table.total_parts_played += 1
 
+                        # Inactivity: end if nobody answered N parts in a row
+                        if table.part_winner is None:
+                            consecutive_unanswered += 1
+                        else:
+                            consecutive_unanswered = 0
+                        if consecutive_unanswered >= INACTIVITY_ROUNDS:
+                            if table.thread:
+                                try:
+                                    await table.thread.send(
+                                        "\u23f8\ufe0f No one answered for 5 consecutive questions — ending due to inactivity."
+                                    )
+                                except discord.HTTPException:
+                                    pass
+                            break
+
                         # Delay between parts (shorter than between bonuses)
                         if part_idx < 2 and not table.stop_requested:
                             await asyncio.sleep(BETWEEN_PARTS_DELAY)
 
-                    # Post bonus summary
-                    if table.thread and not table.stop_requested:
-                        table.phase = "between_bonuses"
-                        await table.thread.send(embed=_bonus_summary_embed(table))
-                        await asyncio.sleep(BETWEEN_BONUS_DELAY)
+                    else:
+                        # for-loop completed normally (no inactivity break)
+                        # Post bonus summary
+                        if table.thread and not table.stop_requested:
+                            table.phase = "between_bonuses"
+                            await table.thread.send(embed=_bonus_summary_embed(table))
+                            await asyncio.sleep(BETWEEN_BONUS_DELAY)
+                        continue
+                    # for-loop exited via inactivity break — propagate to outer while
+                    break
 
             # Game ended
             await self._end_game()
