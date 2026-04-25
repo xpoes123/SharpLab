@@ -123,10 +123,24 @@ function teamAbbr(name, sport) {
     return TEAM_ABBR_NBA[name] || name;
 }
 
-const SOURCE_ORDER = ['draftkings', 'fanduel', 'betmgm', 'pinnacle', 'kalshi', 'polymarket'];
+function sourceLabel(key) {
+    if (SOURCE_LABELS[key]) return SOURCE_LABELS[key];
+    // Title-case unknown sources: "betonlineag" → "Betonlineag"
+    return key.charAt(0).toUpperCase() + key.slice(1);
+}
+
+// Preferred display order — sources not in this list appear at the end alphabetically
+const SOURCE_ORDER = [
+    'draftkings', 'fanduel', 'betmgm', 'pinnacle',
+    'bovada', 'betonlineag', 'betrivers', 'betus', 'lowvig', 'mybookieag', 'williamhill_us',
+    'kalshi', 'polymarket',
+];
 const SOURCE_LABELS = {
     draftkings: 'DraftKings', fanduel: 'FanDuel', betmgm: 'BetMGM',
-    pinnacle: 'Pinnacle', kalshi: 'Kalshi', polymarket: 'Polymarket',
+    pinnacle: 'Pinnacle', bovada: 'Bovada', betonlineag: 'BetOnline',
+    betrivers: 'BetRivers', betus: 'BetUS', lowvig: 'LowVig',
+    mybookieag: 'MyBookie', williamhill_us: 'Caesars',
+    kalshi: 'Kalshi', polymarket: 'Polymarket',
 };
 
 // ── Slate ───────────────────────────────────────────────────────────────────
@@ -200,32 +214,39 @@ function renderGameCard(game) {
 }
 
 function renderOddsGrid(odds, sport) {
-    const sources = SOURCE_ORDER.filter(s => odds[s]);
+    // Show key sources first, then any extras not in the preferred order
+    const DISPLAY_SOURCES = ['draftkings', 'fanduel', 'betmgm', 'pinnacle', 'kalshi', 'polymarket'];
+    const sources = DISPLAY_SOURCES.filter(s => odds[s]);
+    // Add any sources not in the display list
+    for (const s of Object.keys(odds)) {
+        if (!DISPLAY_SOURCES.includes(s)) sources.push(s);
+    }
     if (!sources.length) return '';
 
-    // Find best values across sources
+    // Find best values across ALL sources (not just displayed)
+    const allSources = Object.keys(odds);
     let bestSpread = null, bestSpreadSrc = null;
-    let bestMlHome = -Infinity, bestMlHomeSrc = null;
-    let bestMlAway = -Infinity, bestMlAwaySrc = null;
+    let bestMlHome = null, bestMlHomeSrc = null;
+    let bestMlAway = null, bestMlAwaySrc = null;
 
-    for (const src of sources) {
+    for (const src of allSources) {
         const o = odds[src];
-        // Best spread = lowest absolute value (closest to pick'em, most advantageous for home)
+        // Best spread for home = most positive (fewest points to give)
         if (o.spread != null) {
             if (bestSpread === null || o.spread > bestSpread) {
                 bestSpread = o.spread; bestSpreadSrc = src;
             }
         }
-        // Best ML = highest implied prob (for respective side)
+        // Best ML = best payout = lowest implied prob (most plus-money)
         if (o.ml_home != null) {
             const p = americanToProb(o.ml_home);
-            if (p < americanToProb(bestMlHome === -Infinity ? -100000 : bestMlHome)) {
+            if (bestMlHome === null || p < americanToProb(bestMlHome)) {
                 bestMlHome = o.ml_home; bestMlHomeSrc = src;
             }
         }
         if (o.ml_away != null) {
             const p = americanToProb(o.ml_away);
-            if (p < americanToProb(bestMlAway === -Infinity ? -100000 : bestMlAway)) {
+            if (bestMlAway === null || p < americanToProb(bestMlAway)) {
                 bestMlAway = o.ml_away; bestMlAwaySrc = src;
             }
         }
@@ -239,7 +260,7 @@ function renderOddsGrid(odds, sport) {
 
     for (const src of sources) {
         const o = odds[src];
-        const label = SOURCE_LABELS[src] || src;
+        const label = sourceLabel(src);
 
         // Spread cell
         let spreadCell;
@@ -326,12 +347,17 @@ function renderLineMovement(data) {
             <th>Move</th>
         </tr></thead><tbody>`;
 
-    for (const src of SOURCE_ORDER) {
-        if (!bySource[src]) continue;
+    // Show sources in preferred order, then any extras
+    const lmSources = SOURCE_ORDER.filter(s => bySource[s]);
+    for (const s of Object.keys(bySource)) {
+        if (!lmSources.includes(s)) lmSources.push(s);
+    }
+
+    for (const src of lmSources) {
         const snaps = bySource[src];
         const first = snaps[0];
         const last = snaps[snaps.length - 1];
-        const label = SOURCE_LABELS[src] || src;
+        const label = sourceLabel(src);
         let firstRow = true;
 
         // ML row
@@ -386,7 +412,7 @@ function renderLineMovement(data) {
     // Close snapshot info
     if (data.close && Object.keys(data.close).length) {
         html += '<div style="margin-top:8px;font-size:0.72rem;color:var(--text-muted)">Closing lines captured: ';
-        html += Object.keys(data.close).map(s => esc(SOURCE_LABELS[s] || s)).join(', ');
+        html += Object.keys(data.close).map(s => esc(sourceLabel(s))).join(', ');
         html += '</div>';
     }
 
