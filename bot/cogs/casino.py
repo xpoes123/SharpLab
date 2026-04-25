@@ -63,6 +63,7 @@ GAME_LABELS: dict[str, str] = {
     "valorant": "Valorant Guess",
     "solitaire-chess": "Solitaire Chess",
     "nba": "NBA Player Guess",
+    "minesweeper": "Minesweeper Race",
 }
 
 GAME_CATEGORIES: list[tuple[str, str]] = [
@@ -1894,6 +1895,17 @@ GAME_RULES: dict[str, str] = {
         "**Categories:** Agents, Weapons, Maps, or Everything mixed.\n"
         "**Tip:** Pay attention to the role and origin \u2014 they narrow it down fast!"
     ),
+    "minesweeper": (
+        "**Minesweeper Race** (9\u00d79, 10 mines)\n"
+        "Race to clear a minesweeper board before your opponents!\n\n"
+        "**How to play:** Everyone gets the same mine layout. Click cells to reveal them \u2014 "
+        "numbers show how many adjacent mines. Zeros auto-expand (flood fill). "
+        "Right-click to place a flag (optional, visual only).\n\n"
+        "**Mine hit:** Click a mine and you're eliminated from that round.\n"
+        "**Win condition:** First to reveal all 71 safe cells wins the round.\n"
+        "**Scoring:** First to 3 round wins takes the pot. 120s time limit per round.\n"
+        "**Tip:** Speed matters \u2014 don't waste time flagging, just reveal safe cells!"
+    ),
 }
 
 CASINO_GAMES: list[tuple[str, str, str, str]] = [
@@ -1936,6 +1948,7 @@ CASINO_GAMES: list[tuple[str, str, str, str]] = [
     ("valorant", "Guess the Valorant agent, weapon, or map", "Brain Games", "party"),
     ("solitaire-chess", "Solitaire Chess \u2014 capture until 1 remains", "Brain Games", "party"),
     ("nba", "NBA Player Guess \u2014 name the player from career teams", "Brain Games", "party"),
+    ("minesweeper", "Minesweeper Race \u2014 clear the board fastest", "Brain Games", "party"),
     # ── Sports Sim
     ("nbasim", "Simulated NBA game betting", "Sports Sim", "solo"),
     ("nflsim", "Simulated NFL game betting", "Sports Sim", "solo"),

@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minesweeper Race — SharpLab</title>
+    <link rel="stylesheet" href="/style.css">
+    <style>
+        .ms-container {
+            max-width: 520px;
+            margin: 0 auto;
+            padding: 24px 16px;
+            min-height: 100vh;
+        }
+        .ms-container h1 {
+            text-align: center;
+            color: var(--accent);
+            font-size: 1.6rem;
+            margin-bottom: 4px;
+        }
+        .subtitle {
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            margin-bottom: 20px;
+        }
+        .phase { display: none; }
+        .phase.active { display: block; }
+
+        /* ── Lobby ────────────────────────────────────────── */
+        .lobby-info {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+        .lobby-info .pot {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--accent);
+            text-align: center;
+            font-family: 'SF Mono', 'Cascadia Code', monospace;
+        }
+        .lobby-info .pot-label {
+            text-align: center;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .player-list {
+            list-style: none;
+            margin: 16px 0;
+            padding: 0;
+        }
+        .player-list li {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            margin-bottom: 6px;
+            font-size: 0.9rem;
+        }
+        .player-list .host-badge {
+            background: var(--accent);
+            color: var(--bg);
+            font-size: 0.7rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+        .player-list .wager {
+            color: var(--text-muted);
+            font-family: 'SF Mono', 'Cascadia Code', monospace;
+        }
+        .player-list .connected { color: var(--green); }
+        .player-list .disconnected { color: var(--text-muted); }
+
+        .btn-primary {
+            display: block;
+            width: 100%;
+            padding: 14px;
+            font-size: 1rem;
+            font-weight: 600;
+            font-family: inherit;
+            background: var(--accent);
+            color: var(--bg);
+            border: none;
+            border-radius: var(--radius);
+            cursor: pointer;
+            transition: opacity 0.15s;
+        }
+        .btn-primary:hover { opacity: 0.9; }
+        .btn-primary:disabled { opacity: 0.3; cursor: not-allowed; }
+        .waiting-text {
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            margin-top: 12px;
+        }
+
+        /* ── Game Header ──────────────────────────────────── */
+        .game-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            padding: 12px 16px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+        }
+        .round-info { font-weight: 600; font-size: 0.9rem; }
+        .timer {
+            font-size: 1.8rem;
+            font-weight: 700;
+            font-family: 'SF Mono', 'Cascadia Code', monospace;
+            color: var(--accent);
+            min-width: 60px;
+            text-align: center;
+        }
+        .timer.urgent { color: var(--red); animation: pulse 1s infinite; }
+        @keyframes pulse { 50% { opacity: 0.5; } }
+        .pot-display {
+            font-family: 'SF Mono', 'Cascadia Code', monospace;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        /* ── Minesweeper Grid ─────────────────────────────── */
+        .grid-container {
+            display: flex;
+            justify-content: center;
+            margin: 16px 0;
+        }
+        .ms-grid {
+            display: grid;
+            grid-template-columns: repeat(9, 1fr);
+            gap: 1px;
+            width: 360px;
+            height: 360px;
+            background: var(--border);
+            border: 2px solid var(--text-muted);
+            border-radius: 4px;
+        }
+        .ms-cell {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.95rem;
+            font-weight: 700;
+            background: #2a2a4a;
+            cursor: pointer;
+            user-select: none;
+            transition: background 0.1s;
+            position: relative;
+        }
+        .ms-cell:hover:not(.revealed):not(.mine-hit):not(.dead) {
+            background: #3a3a5a;
+        }
+        .ms-cell.revealed {
+            background: var(--card);
+            cursor: default;
+        }
+        .ms-cell.mine-hit {
+            background: rgba(248, 81, 73, 0.4);
+            cursor: default;
+        }
+        .ms-cell.mine-show {
+            background: rgba(248, 81, 73, 0.15);
+            cursor: default;
+        }
+        .ms-cell.flagged::after {
+            content: '\u2691';
+            font-size: 1.1rem;
+            color: var(--red);
+        }
+        .ms-cell.dead {
+            cursor: default;
+            opacity: 0.5;
+        }
+
+        /* Number colors (classic minesweeper) */
+        .ms-cell.n1 { color: #5b9bd5; }
+        .ms-cell.n2 { color: #70ad47; }
+        .ms-cell.n3 { color: #f85149; }
+        .ms-cell.n4 { color: #7b68ee; }
+        .ms-cell.n5 { color: #c55a11; }
+        .ms-cell.n6 { color: #2ec4b6; }
+        .ms-cell.n7 { color: #e0e0e0; }
+        .ms-cell.n8 { color: #8b949e; }
+
+        /* ── Progress Bars ────────────────────────────────── */
+        .progress-section {
+            margin: 16px 0;
+        }
+        .progress-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 0;
+        }
+        .progress-name {
+            width: 100px;
+            font-size: 0.8rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .progress-bar-bg {
+            flex: 1;
+            height: 16px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            background: var(--accent);
+            border-radius: 8px;
+            transition: width 0.3s ease;
+        }
+        .progress-bar-fill.dead {
+            background: var(--red);
+        }
+        .progress-pct {
+            width: 40px;
+            text-align: right;
+            font-size: 0.8rem;
+            font-family: 'SF Mono', 'Cascadia Code', monospace;
+            color: var(--text-muted);
+        }
+        .progress-status {
+            font-size: 0.7rem;
+            width: 20px;
+            text-align: center;
+        }
+
+        /* ── Scoreboard ───────────────────────────────────── */
+        .scoreboard { margin: 16px 0; }
+        .scoreboard-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 12px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            margin-bottom: 4px;
+            font-size: 0.85rem;
+        }
+        .score-wins {
+            font-weight: 600;
+            color: var(--accent);
+            font-family: 'SF Mono', 'Cascadia Code', monospace;
+        }
+
+        /* ── Round Result ─────────────────────────────────── */
+        .round-result {
+            text-align: center;
+            padding: 24px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            margin: 16px 0;
+        }
+        .round-result h2 { font-size: 1.2rem; margin-bottom: 8px; }
+        .round-result .time {
+            color: var(--accent);
+            font-family: 'SF Mono', 'Cascadia Code', monospace;
+            font-size: 1.1rem;
+        }
+        .round-result .next {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            margin-top: 8px;
+        }
+
+        /* ── Results Table ────────────────────────────────── */
+        .results-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+            margin: 16px 0;
+        }
+        .results-table th {
+            text-align: left;
+            padding: 8px 10px;
+            color: var(--text-muted);
+            font-weight: 500;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            border-bottom: 1px solid var(--border);
+        }
+        .results-table td {
+            padding: 10px;
+            border-bottom: 1px solid var(--border);
+        }
+        .results-table .num { text-align: right; font-family: 'SF Mono', 'Cascadia Code', monospace; }
+        .results-table .positive { color: var(--green); }
+        .results-table .negative { color: var(--red); }
+
+        /* ── Toast ────────────────────────────────────────── */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--card);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 10px 20px;
+            border-radius: var(--radius);
+            font-size: 0.85rem;
+            z-index: 100;
+            animation: fadeInUp 0.2s ease;
+        }
+        .toast.error { border-color: var(--red); color: var(--red); }
+        .toast.success { border-color: var(--green); color: var(--green); }
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateX(-50%) translateY(10px); }
+            to { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
+
+        /* ── Connection status ────────────────────────────── */
+        .status-bar {
+            text-align: center;
+            font-size: 0.8rem;
+            padding: 6px;
+            margin-bottom: 12px;
+            border-radius: var(--radius);
+        }
+        .status-bar.connected { color: var(--green); }
+        .status-bar.disconnected { color: var(--red); background: rgba(248,81,73,0.1); }
+
+        /* ── Responsive ───────────────────────────────────── */
+        @media (max-width: 420px) {
+            .ms-grid { width: 288px; height: 288px; }
+            .ms-cell { font-size: 0.75rem; }
+            .timer { font-size: 1.4rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="ms-container">
+        <div id="connection-status" class="status-bar"></div>
+
+        <!-- Lobby -->
+        <div id="lobby" class="phase active">
+            <h1>Minesweeper Race</h1>
+            <p class="subtitle">9x9 board, 10 mines — first to clear wins the round</p>
+            <div class="lobby-info">
+                <div class="pot-label">Prize Pool</div>
+                <div class="pot" id="lobby-pot">0c</div>
+            </div>
+            <ul class="player-list" id="lobby-players"></ul>
+            <button id="start-btn" class="btn-primary" disabled>Start Game</button>
+            <p class="waiting-text" id="waiting-text">Waiting for players to connect...</p>
+        </div>
+
+        <!-- Playing -->
+        <div id="game" class="phase">
+            <div class="game-header">
+                <div class="round-info">Round <span id="round-num">1</span></div>
+                <div class="timer" id="timer">120</div>
+                <div class="pot-display" id="game-pot">0c</div>
+            </div>
+
+            <div class="grid-container">
+                <div id="ms-grid" class="ms-grid"></div>
+            </div>
+
+            <div class="progress-section" id="progress-section"></div>
+            <div id="scoreboard" class="scoreboard"></div>
+        </div>
+
+        <!-- Round Result -->
+        <div id="round-result" class="phase">
+            <div class="round-result">
+                <h2 id="result-title"></h2>
+                <div class="time" id="result-time"></div>
+                <div id="result-scoreboard" class="scoreboard"></div>
+                <div class="next" id="result-next">Next round in 5s...</div>
+            </div>
+        </div>
+
+        <!-- Final Results -->
+        <div id="results" class="phase">
+            <h1>Game Over</h1>
+            <table class="results-table">
+                <thead><tr>
+                    <th>#</th><th>Player</th><th>Wins</th><th>Bet</th><th>Payout</th><th>Net</th>
+                </tr></thead>
+                <tbody id="results-body"></tbody>
+            </table>
+            <a href="/" class="back-link" style="display:block;text-align:center;margin-top:20px">&larr; Back to Leaderboard</a>
+        </div>
+    </div>
+
+<script>
+/* Minesweeper Race — WebSocket Client */
+
+const params = new URLSearchParams(window.location.search);
+const token = params.get('t');
+const roomId = window.location.pathname.split('/').filter(Boolean).pop();
+
+let ws;
+let myId = null;
+let isHost = false;
+let gamePhase = 'lobby';
+let myRevealed = {};  // "r,c" -> value
+let myFlags = {};     // "r,c" -> true
+let myAlive = true;
+let minePositions = null;  // set after round ends or mine_hit
+let prizePool = 0;
+const ROWS = 9, COLS = 9;
+
+// ── WebSocket ────────────────────────────────────────────────────────────
+
+function connect() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = `${proto}//${location.host}/ws/minesweeper/${roomId}?t=${token}`;
+    ws = new WebSocket(url);
+
+    ws.onopen = () => setStatus('Connected', 'connected');
+    ws.onmessage = (e) => handleMessage(JSON.parse(e.data));
+    ws.onclose = (e) => {
+        if (e.code === 4001) setStatus('Invalid or expired link', 'disconnected');
+        else if (e.code === 4002) setStatus('Room closed', 'disconnected');
+        else {
+            setStatus('Disconnected — reconnecting...', 'disconnected');
+            setTimeout(connect, 2000);
+        }
+    };
+    ws.onerror = () => {};
+}
+
+function send(msg) {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+}
+
+// ── Message Handling ─────────────────────────────────────────────────────
+
+function handleMessage(msg) {
+    switch (msg.type) {
+        case 'room_state':       onRoomState(msg); break;
+        case 'round_start':      onRoundStart(msg); break;
+        case 'reveal_result':    onRevealResult(msg); break;
+        case 'mine_hit':         onMineHit(msg); break;
+        case 'player_progress':  onPlayerProgress(msg); break;
+        case 'timer':            onTimer(msg); break;
+        case 'round_result':     onRoundResult(msg); break;
+        case 'game_over':        onGameOver(msg); break;
+        case 'flag_result':      onFlagResult(msg); break;
+        case 'error':            showToast(msg.message, 'error'); break;
+        case 'pong':             break;
+    }
+}
+
+function showPhase(id) {
+    gamePhase = id;
+    document.querySelectorAll('.phase').forEach(el => el.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+}
+
+// ── Room State (lobby) ───────────────────────────────────────────────────
+
+function onRoomState(msg) {
+    myId = msg.you;
+    isHost = msg.players.some(p => p.id === myId && p.is_host);
+    prizePool = msg.prize_pool;
+
+    if (msg.phase === 'waiting') {
+        showPhase('lobby');
+        document.getElementById('lobby-pot').textContent = msg.prize_pool + 'c';
+
+        const list = document.getElementById('lobby-players');
+        list.innerHTML = '';
+        msg.players.forEach(p => {
+            const li = document.createElement('li');
+            const connClass = p.connected ? 'connected' : 'disconnected';
+            const connDot = p.connected ? '\u2022' : '\u25CB';
+            li.innerHTML = `
+                <span>
+                    <span class="${connClass}">${connDot}</span>
+                    ${esc(p.name)}
+                    ${p.is_host ? '<span class="host-badge">HOST</span>' : ''}
+                </span>
+                <span class="wager">${p.wager}c</span>
+            `;
+            list.appendChild(li);
+        });
+
+        const startBtn = document.getElementById('start-btn');
+        startBtn.style.display = isHost ? 'block' : 'none';
+        startBtn.disabled = msg.players.filter(p => p.connected).length < 1;
+        document.getElementById('waiting-text').style.display = isHost ? 'none' : 'block';
+    }
+}
+
+// ── Round Start ──────────────────────────────────────────────────────────
+
+function onRoundStart(msg) {
+    showPhase('game');
+    myRevealed = {};
+    myFlags = {};
+    myAlive = true;
+    minePositions = null;
+
+    document.getElementById('round-num').textContent = msg.round_num;
+    document.getElementById('timer').textContent = msg.time_limit;
+    document.getElementById('timer').classList.remove('urgent');
+    document.getElementById('game-pot').textContent = prizePool + 'c';
+
+    renderGrid();
+    document.getElementById('progress-section').innerHTML = '';
+}
+
+// ── Grid Rendering ───────────────────────────────────────────────────────
+
+function renderGrid() {
+    const grid = document.getElementById('ms-grid');
+    grid.innerHTML = '';
+
+    for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+            const cell = document.createElement('div');
+            cell.className = 'ms-cell';
+            cell.dataset.row = r;
+            cell.dataset.col = c;
+
+            const key = r + ',' + c;
+            if (myRevealed[key] !== undefined) {
+                cell.classList.add('revealed');
+                const val = myRevealed[key];
+                if (val > 0) {
+                    cell.textContent = val;
+                    cell.classList.add('n' + val);
+                }
+            } else if (minePositions && minePositions.has(key)) {
+                cell.classList.add('mine-show');
+                cell.textContent = '\uD83D\uDCA3';
+            } else {
+                if (myFlags[key]) {
+                    cell.classList.add('flagged');
+                }
+                if (!myAlive) {
+                    cell.classList.add('dead');
+                }
+                cell.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    if (myAlive && gamePhase === 'game') send({ type: 'reveal', r, c });
+                });
+                cell.addEventListener('contextmenu', (e) => {
+                    e.preventDefault();
+                    if (myAlive && gamePhase === 'game') send({ type: 'flag', r, c });
+                });
+            }
+
+            grid.appendChild(cell);
+        }
+    }
+}
+
+function updateCell(r, c, value) {
+    const key = r + ',' + c;
+    myRevealed[key] = value;
+    const idx = r * COLS + c;
+    const cells = document.querySelectorAll('.ms-cell');
+    const cell = cells[idx];
+    if (!cell) return;
+
+    cell.className = 'ms-cell revealed';
+    cell.innerHTML = '';
+    cell.onclick = null;
+    cell.oncontextmenu = null;
+    if (value > 0) {
+        cell.textContent = value;
+        cell.classList.add('n' + value);
+    }
+}
+
+// ── Reveal Result ────────────────────────────────────────────────────────
+
+function onRevealResult(msg) {
+    msg.cells.forEach(c => updateCell(c.r, c.c, c.value));
+}
+
+// ── Mine Hit ─────────────────────────────────────────────────────────────
+
+function onMineHit(msg) {
+    myAlive = false;
+    // Show the mine that was hit
+    const hitKey = msg.r + ',' + msg.c;
+    const hitIdx = msg.r * COLS + msg.c;
+    const cells = document.querySelectorAll('.ms-cell');
+    const hitCell = cells[hitIdx];
+    if (hitCell) {
+        hitCell.className = 'ms-cell mine-hit';
+        hitCell.textContent = '\uD83D\uDCA3';
+    }
+
+    // Show all mines
+    minePositions = new Set();
+    msg.mines.forEach(([mr, mc]) => {
+        minePositions.add(mr + ',' + mc);
+        const mIdx = mr * COLS + mc;
+        const mCell = cells[mIdx];
+        if (mCell && mIdx !== hitIdx && !mCell.classList.contains('revealed')) {
+            mCell.className = 'ms-cell mine-show';
+            mCell.textContent = '\uD83D\uDCA3';
+        }
+    });
+
+    // Disable remaining cells
+    cells.forEach(cell => {
+        if (!cell.classList.contains('revealed') && !cell.classList.contains('mine-hit') && !cell.classList.contains('mine-show')) {
+            cell.classList.add('dead');
+        }
+    });
+
+    showToast('You hit a mine!', 'error');
+}
+
+// ── Flag Result ──────────────────────────────────────────────────────────
+
+function onFlagResult(msg) {
+    const key = msg.r + ',' + msg.c;
+    if (msg.flagged) myFlags[key] = true;
+    else delete myFlags[key];
+
+    const idx = msg.r * COLS + msg.c;
+    const cells = document.querySelectorAll('.ms-cell');
+    const cell = cells[idx];
+    if (cell && !cell.classList.contains('revealed')) {
+        if (msg.flagged) {
+            cell.classList.add('flagged');
+        } else {
+            cell.classList.remove('flagged');
+        }
+    }
+}
+
+// ── Player Progress ──────────────────────────────────────────────────────
+
+function onPlayerProgress(msg) {
+    const section = document.getElementById('progress-section');
+    section.innerHTML = '';
+
+    msg.players.forEach(p => {
+        const pct = Math.round((p.revealed / p.total) * 100);
+        const row = document.createElement('div');
+        row.className = 'progress-row';
+
+        const statusIcon = !p.alive ? '\uD83D\uDC80' : (pct >= 100 ? '\u2705' : '');
+
+        row.innerHTML = `
+            <span class="progress-status">${statusIcon}</span>
+            <span class="progress-name">${esc(p.name)}</span>
+            <div class="progress-bar-bg">
+                <div class="progress-bar-fill ${!p.alive ? 'dead' : ''}" style="width:${pct}%"></div>
+            </div>
+            <span class="progress-pct">${pct}%</span>
+        `;
+        section.appendChild(row);
+    });
+}
+
+// ── Timer ────────────────────────────────────────────────────────────────
+
+function onTimer(msg) {
+    const el = document.getElementById('timer');
+    el.textContent = msg.remaining;
+    if (msg.remaining <= 15) el.classList.add('urgent');
+}
+
+// ── Round Result ─────────────────────────────────────────────────────────
+
+function onRoundResult(msg) {
+    showPhase('round-result');
+
+    // Show all mines
+    if (msg.mines) {
+        minePositions = new Set();
+        msg.mines.forEach(([mr, mc]) => minePositions.add(mr + ',' + mc));
+    }
+
+    if (msg.winner_id) {
+        document.getElementById('result-title').textContent =
+            `${msg.winner_name} wins Round ${msg.round_num}!`;
+        document.getElementById('result-time').textContent = `${msg.solve_time}s`;
+    } else {
+        document.getElementById('result-title').textContent =
+            `Round ${msg.round_num} — Draw`;
+        document.getElementById('result-time').textContent = 'Nobody cleared the board';
+    }
+
+    renderScoreboard(document.getElementById('result-scoreboard'), msg.scoreboard);
+    document.getElementById('result-next').textContent = 'Next round in 5s...';
+}
+
+// ── Game Over ────────────────────────────────────────────────────────────
+
+function onGameOver(msg) {
+    showPhase('results');
+
+    const tbody = document.getElementById('results-body');
+    tbody.innerHTML = '';
+    const medals = ['\uD83E\uDD47', '\uD83E\uDD48', '\uD83E\uDD49'];
+
+    msg.results.forEach((r, i) => {
+        const tr = document.createElement('tr');
+        const badge = i < 3 ? medals[i] : (i + 1);
+        const netClass = r.net > 0 ? 'positive' : r.net < 0 ? 'negative' : '';
+        tr.innerHTML = `
+            <td>${badge}</td>
+            <td>${esc(r.display_name)}</td>
+            <td class="num">${r.rounds_won}</td>
+            <td class="num">${r.wager}c</td>
+            <td class="num">${r.payout}c</td>
+            <td class="num ${netClass}">${r.net > 0 ? '+' : ''}${r.net}c</td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+// ── Scoreboard ───────────────────────────────────────────────────────────
+
+function renderScoreboard(el, scoreboard) {
+    el.innerHTML = '';
+    scoreboard.forEach(s => {
+        const row = document.createElement('div');
+        row.className = 'scoreboard-row';
+        row.innerHTML = `
+            <span>${esc(s.name)}</span>
+            <span class="score-wins">${s.rounds_won}/3</span>
+        `;
+        el.appendChild(row);
+    });
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────
+
+function esc(s) {
+    if (!s) return '';
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+}
+
+function setStatus(text, cls) {
+    const el = document.getElementById('connection-status');
+    el.textContent = text;
+    el.className = 'status-bar ' + cls;
+}
+
+let toastTimer;
+function showToast(message, type) {
+    const existing = document.querySelector('.toast');
+    if (existing) existing.remove();
+    const toast = document.createElement('div');
+    toast.className = `toast ${type || ''}`;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.remove(), 3000);
+}
+
+// ── Event Listeners ──────────────────────────────────────────────────────
+
+document.addEventListener('DOMContentLoaded', () => {
+    if (!token || !roomId) {
+        setStatus('Invalid game link', 'disconnected');
+        return;
+    }
+    connect();
+
+    document.getElementById('start-btn').addEventListener('click', () => {
+        send({ type: 'start' });
+    });
+
+    // Disable context menu globally to prevent right-click popup
+    document.addEventListener('contextmenu', (e) => {
+        if (gamePhase === 'game') e.preventDefault();
+    });
+});
+</script>
+</body>
+</html>
