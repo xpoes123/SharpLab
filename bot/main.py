@@ -68,7 +68,7 @@ COGS = [
     "bot.cogs.minesweeper",
 ]
 
-GUILD_IDS = [int(g) for g in os.environ["DISCORD_GUILD_ID"].split(",")]
+GUILD_IDS = [int(g.strip()) for g in os.environ["DISCORD_GUILD_ID"].split(",") if g.strip()]
 
 intents = discord.Intents.default()
 intents.message_content = True  # required for prefix commands (privileged intent)

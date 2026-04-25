@@ -102,7 +102,7 @@ class TradingFloorCog(commands.Cog):
                     stock_lines.append(
                         f"{s['emoji']} **{ticker}** {s['final_price']:.1f}c ({arrow} {ret:+.1f}%)"
                     )
-                embed.add_field(name="Stocks", value="\n".join(stock_lines), inline=False)
+                embed.add_field(name="Stocks", value="\n".join(stock_lines) if stock_lines else "No data.", inline=False)
 
                 # Player results
                 medals = ["\U0001f947", "\U0001f948", "\U0001f949"]
@@ -115,7 +115,7 @@ class TradingFloorCog(commands.Cog):
                         f"{badge} **{r['display_name']}** \u2014 "
                         f"{r['final_cash']:,}c ({pnl_sign}{pnl:,} P&L)"
                     )
-                embed.add_field(name="Standings", value="\n".join(lines), inline=False)
+                embed.add_field(name="Standings", value="\n".join(lines) if lines else "No results.", inline=False)
 
                 embed.set_footer(
                     text=f"Room {room_id} \u2022 {result.get('total_trades', 0)} trades"
