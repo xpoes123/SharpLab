@@ -12,7 +12,6 @@ from discord import app_commands, ui
 from discord.ext import commands, tasks
 
 from bot.cogs._elo_helpers import update_elo_multiplayer
-from db import queries
 
 WEB_API_BASE = os.environ.get("WEB_API_BASE", "https://sharplab.djiang.xyz")
 WEB_API_SECRET = os.environ.get("WEB_API_SECRET", "dev-secret")
@@ -36,8 +35,6 @@ class MinesweeperCog(commands.Cog):
     async def minesweeper(self, interaction: discord.Interaction) -> None:
         uid = str(interaction.user.id)
         channel_id = str(interaction.channel_id)
-        await queries.get_or_create_casino_wallet(uid)
-
         # Create room via web API
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(
@@ -63,7 +60,7 @@ class MinesweeperCog(commands.Cog):
             description=(
                 "Race to clear a 9\u00d79 minesweeper board!\n"
                 "10 mines \u2014 hit one and you're out for the round.\n\n"
-                "Click **Join** below to enter your bet and get your game link."
+                "Click **Join** below to get your game link."
             ),
             colour=discord.Colour.gold(),
         )
@@ -99,12 +96,9 @@ class MinesweeperCog(commands.Cog):
                 medals = ["\U0001f947", "\U0001f948", "\U0001f949"]
                 for i, r in enumerate(result.get("results", [])):
                     badge = medals[i] if i < 3 else f"`{i+1}.`"
-                    net = r["net"]
-                    sign = "+" if net > 0 else ""
                     lines.append(
                         f"{badge} **{r['display_name']}** \u2014 "
-                        f"{r['rounds_won']}W \u2014 "
-                        f"{r['wager']}c \u2192 {r['payout']}c ({sign}{net}c)"
+                        f"{r['rounds_won']}W"
                     )
                 embed.description = "\n".join(lines) if lines else "No results."
                 embed.set_footer(
@@ -130,41 +124,17 @@ class MinesweeperCog(commands.Cog):
 # ── Web Minesweeper Lobby View ────────────────────────────────────────────
 
 
-class WebMinesweeperJoinModal(ui.Modal, title="Join Minesweeper Race"):
-    amount = ui.TextInput(
-        label="Bet amount (coins)",
-        placeholder="e.g. 100",
-        min_length=1,
-        max_length=10,
-    )
-
-    def __init__(self, room_id: str) -> None:
-        super().__init__()
+class WebMinesweeperLobbyView(ui.View):
+    def __init__(self, room_id: str, bot: commands.Bot) -> None:
+        super().__init__(timeout=1800)
         self.room_id = room_id
+        self.bot = bot
 
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            amt = int(self.amount.value)
-        except ValueError:
-            await interaction.response.send_message("Invalid amount.", ephemeral=True)
-            return
-
-        if amt <= 0:
-            await interaction.response.send_message("Bet must be positive.", ephemeral=True)
-            return
-
+    @ui.button(label="Join", style=discord.ButtonStyle.primary, emoji="\U0001f3ae")
+    async def join_btn(
+        self, interaction: discord.Interaction, button: ui.Button,
+    ) -> None:
         uid = str(interaction.user.id)
-        bal = await queries.get_casino_balance(uid)
-        if bal is None or bal < amt:
-            await interaction.response.send_message(
-                f"Insufficient balance (you have {bal or 0}c).", ephemeral=True,
-            )
-            return
-
-        # Deduct coins
-        await queries.update_casino_balance(uid, -amt)
-
-        # Create token via web API
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(
@@ -172,43 +142,25 @@ class WebMinesweeperJoinModal(ui.Modal, title="Join Minesweeper Race"):
                     json={
                         "discord_user": uid,
                         "display_name": interaction.user.display_name,
-                        "wager": amt,
+                        "wager": 0,
                     },
                     headers={"X-Api-Key": WEB_API_SECRET},
                 )
             if resp.status_code != 200:
-                # Refund on failure
-                await queries.update_casino_balance(uid, amt)
                 detail = resp.json().get("detail", "Unknown error")
                 await interaction.response.send_message(
                     f"Failed to join: {detail}", ephemeral=True,
                 )
                 return
-
             url = resp.json()["url"]
             await interaction.response.send_message(
-                f"\U0001f517 **[Click here to play]({url})**\n"
-                f"Your {amt}c bet is locked in. Open the link to connect.",
+                f"\U0001f517 **[Click here to play]({url})**",
                 ephemeral=True,
             )
         except Exception:
-            await queries.update_casino_balance(uid, amt)
             await interaction.response.send_message(
-                "Failed to connect to game server. Bet refunded.", ephemeral=True,
+                "Failed to connect to game server.", ephemeral=True,
             )
-
-
-class WebMinesweeperLobbyView(ui.View):
-    def __init__(self, room_id: str, bot: commands.Bot) -> None:
-        super().__init__(timeout=1800)
-        self.room_id = room_id
-        self.bot = bot
-
-    @ui.button(label="Join", style=discord.ButtonStyle.primary, emoji="\U0001f4dd")
-    async def join_btn(
-        self, interaction: discord.Interaction, button: ui.Button,
-    ) -> None:
-        await interaction.response.send_modal(WebMinesweeperJoinModal(self.room_id))
 
 
 async def setup(bot: commands.Bot) -> None:

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 10
-CARD_PRICE = 500
+CARD_PRICE = 0
 MAX_CARDS = 5
 MIN_PLAYERS = 1
 CALL_INTERVAL = 2.5
