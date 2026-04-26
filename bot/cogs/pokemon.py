@@ -2507,7 +2507,7 @@ def _solo_gameover_embed(session: SoloSession) -> discord.Embed:
     )
     embed.set_thumbnail(url=SPRITE_URL.format(dex_id))
     embed.set_footer(
-        text=f"{session.display_name} \u2502 Use /pokemon-solo to play again!",
+        text=f"{session.display_name} \u2502 Click Play Again below or /pokemon-solo",
     )
     return embed
 
@@ -2540,6 +2540,88 @@ _CATEGORY_OPTIONS = [
         description="Only legendary and mythical Pokemon", emoji="\u2b50",
     ),
 ]
+
+
+class SoloRestartView(ui.View):
+    """Play Again button shown after a solo game ends."""
+
+    def __init__(self, cog: "PokemonCog", user_id: int, display_name: str,
+                 category: str, thread: discord.Thread,
+                 anchor_message: discord.Message | None) -> None:
+        super().__init__(timeout=120)
+        self.cog = cog
+        self.user_id = user_id
+        self.display_name = display_name
+        self.category = category
+        self.thread = thread
+        self.anchor_message = anchor_message
+
+    @ui.button(
+        label="Play Again", style=discord.ButtonStyle.green,
+        emoji="\U0001f504", row=0,
+    )
+    async def restart_btn(
+        self, interaction: discord.Interaction, button: ui.Button,
+    ) -> None:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "Only the original player can restart!", ephemeral=True,
+            )
+            return
+
+        if self.user_id in self.cog.active_solos:
+            await interaction.response.send_message(
+                "You already have a solo game running!", ephemeral=True,
+            )
+            return
+
+        # Disable button immediately
+        button.disabled = True
+        button.label = "Starting\u2026"
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
+        # Build fresh session reusing the existing thread
+        session = SoloSession(
+            user_id=self.user_id,
+            channel_id=self.thread.id,
+            display_name=self.display_name,
+            category=self.category,
+            thread=self.thread,
+            anchor_message=self.anchor_message,
+        )
+        entry = _pick_from_pool(self.category, session.used_ids)
+        session.current_entry = entry
+        session.round_num = 1
+        session.round_start_time = time.monotonic()
+
+        self.cog.active_solos[self.user_id] = session
+
+        await self.thread.send(
+            "\U0001f3c1 **New game started!** Type your guesses here. "
+            "Type `quit` to end.",
+        )
+        session.message = await self.thread.send(
+            embed=_solo_playing_embed(session),
+        )
+        session.race_task = asyncio.create_task(
+            self.cog._solo_loop(session),
+        )
+
+    async def on_timeout(self) -> None:
+        # Disable button and archive thread when restart window expires
+        for child in self.children:
+            child.disabled = True  # type: ignore[union-attr]
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+        if self.thread:
+            try:
+                await self.thread.edit(archived=True)
+            except discord.HTTPException:
+                pass
 
 
 class PokeEndGameView(ui.View):
@@ -3290,10 +3372,16 @@ class PokemonCog(commands.Cog):
                     # Timeout — game over
                     session.streak = 0
                     session.phase = "closed"
-                    if session.message:
+                    restart_view = SoloRestartView(
+                        self, session.user_id, session.display_name,
+                        session.category, session.thread,
+                        session.anchor_message,
+                    )
+                    if session.thread:
                         try:
-                            await session.message.edit(
+                            await session.thread.send(
                                 embed=_solo_gameover_embed(session),
+                                view=restart_view,
                             )
                         except discord.HTTPException:
                             pass
@@ -3323,11 +3411,8 @@ class PokemonCog(commands.Cog):
                     await session.anchor_message.edit(embed=done_embed)
                 except discord.HTTPException:
                     pass
-            if session.thread:
-                try:
-                    await session.thread.edit(archived=True)
-                except discord.HTTPException:
-                    pass
+            # Thread archiving is handled by SoloRestartView.on_timeout
+            # so the player has time to click "Play Again".
 
     @commands.Cog.listener("on_message")
     async def on_message(self, message: discord.Message) -> None:
@@ -3384,9 +3469,17 @@ class PokemonCog(commands.Cog):
                 solo.phase = "closed"
                 if solo.race_task and not solo.race_task.done():
                     solo.race_task.cancel()
-                if solo.message:
+                restart_view = SoloRestartView(
+                    self, solo.user_id, solo.display_name,
+                    solo.category, solo.thread,
+                    solo.anchor_message,
+                )
+                if solo.thread:
                     try:
-                        await solo.message.edit(embed=_solo_gameover_embed(solo))
+                        await solo.thread.send(
+                            embed=_solo_gameover_embed(solo),
+                            view=restart_view,
+                        )
                     except discord.HTTPException:
                         pass
                 if solo.anchor_message:
