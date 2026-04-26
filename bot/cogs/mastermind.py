@@ -549,6 +549,7 @@ class MastermindTableView(ui.View):
         """Finish the round with the given winners."""
         table = self.table
         table.phase = "finished"
+        self.active_tables.pop(table.channel_id, None)
         table.winners = winner_uids
 
         if table.round_task and not table.round_task.done():
@@ -880,6 +881,13 @@ class MastermindTableView(ui.View):
                 "Round still in progress!", ephemeral=True,
             )
             return
+        ch = self.table.channel_id
+        if ch in self.active_tables and self.active_tables[ch] is not self.table:
+            await interaction.response.send_message(
+                "Another game was started in this channel!", ephemeral=True,
+            )
+            return
+        self.active_tables[ch] = self.table
         self._start_new_round()
         self._update_buttons()
         await interaction.response.edit_message(

@@ -571,6 +571,12 @@ class IPView(ui.View):
         if self.table.phase != "finished":
             await interaction.response.send_message("Game not over yet!", ephemeral=True)
             return
+        ch = self.table.channel_id
+        if ch in self.active_tables and self.active_tables[ch] is not self.table:
+            await interaction.response.send_message(
+                "Another game was started in this channel!", ephemeral=True,
+            )
+            return
         for uid, p in self.table.players.items():
             self.table.last_bets[uid] = (p.display_name, p.coin_bet)
         self.table.players.clear()
@@ -578,6 +584,7 @@ class IPView(ui.View):
         self.table.phase = "betting"
         self.table.hand_num = 0
         self.table.pot = 0
+        self.active_tables[ch] = self.table
         self._update_buttons()
         await interaction.response.edit_message(
             embed=_betting_embed(self.table), view=self,
@@ -708,6 +715,7 @@ class IPView(ui.View):
 
         # ── Game over ────────────────────────────────────────────────────
         table.phase = "finished"
+        self.active_tables.pop(table.channel_id, None)
 
         # Rank by chips
         all_players = sorted(table.players.values(), key=lambda p: p.chips, reverse=True)

@@ -470,17 +470,23 @@ class SeqView(ui.View):
         if self.table.phase != "finished":
             await interaction.response.send_message("Game not over yet!", ephemeral=True)
             return
+        ch = self.table.channel_id
+        if ch in self.active_tables and self.active_tables[ch] is not self.table:
+            await interaction.response.send_message(
+                "Another game was started in this channel!", ephemeral=True,
+            )
+            return
         # Reset for new game
         for p in self.table.players.values():
             p.score = 0
             p.answered_this_round = False
-        new_players: dict[int, SeqPlayer] = {}
         for uid, p in self.table.players.items():
             self.table.last_bets[uid] = (p.display_name, p.bet)
         self.table.players.clear()
         self.table.phase = "betting"
         self.table.round_num = 0
         self.table.correct_order.clear()
+        self.active_tables[ch] = self.table
         self._update_buttons()
         await interaction.response.edit_message(
             embed=_betting_embed(self.table), view=self,
@@ -549,6 +555,7 @@ class SeqView(ui.View):
 
         # ── Game over ────────────────────────────────────────────────────
         table.phase = "finished"
+        self.active_tables.pop(table.channel_id, None)
 
         # Determine winner(s) by score
         sorted_players = sorted(table.players.values(), key=lambda p: p.score, reverse=True)

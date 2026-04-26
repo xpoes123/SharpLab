@@ -415,6 +415,13 @@ class PlinkoTableView(ui.View):
             return
         if self.table.phase != "finished":
             return
+        ch = self.table.channel_id
+        if ch in self.active_tables and self.active_tables[ch] is not self.table:
+            await interaction.response.send_message(
+                "Another game was started in this channel!", ephemeral=True,
+            )
+            return
+        self.active_tables[ch] = self.table
         self._start_new_round()
         self._sync_risk_btn()
         self._update_buttons()
@@ -495,6 +502,7 @@ class PlinkoTableView(ui.View):
         # Final frame: full trail + results
         await asyncio.sleep(ANIM_DELAY)
         table.phase = "finished"
+        self.active_tables.pop(table.channel_id, None)
 
         balances: dict[int, int] = {}
         for p in table.players.values():
