@@ -2,10 +2,11 @@
 
 ## About This Project
 
-A personal NBA quant trading lab. Monorepo with two main pieces:
+A multi-sport (NBA + MLB) quant trading lab and Discord casino. Monorepo with three pieces:
 
-1. **Temporal pipeline** — ingests odds from major books + Kalshi + Polymarket on a schedule, captures closing lines
-2. **Discord bot** — the interface for the server. Pull odds info, log bets, calculate CLV, run quick math
+1. **Temporal pipeline** — ingests odds from major books + Kalshi + Polymarket on a schedule, captures closing lines, resolves bets
+2. **Discord bot** — the interface for the server. Odds info, bet logging, CLV tracking, casino games, paper trading
+3. **Web server** — FastAPI + WebSocket at `sharplab.djiang.xyz`. Browser-based games, leaderboard API
 
 Core loop:
 1. Ingest odds from major books + Kalshi + Polymarket on a schedule
@@ -15,6 +16,14 @@ Core loop:
 5. Eventually: build a model, compare to market, find edge
 
 All trading/paper-trading happens on **Kalshi** and **sportsbooks**. Polymarket is a secondary market signal.
+
+### Local Copies
+
+This project has two local checkouts (same repo, same code):
+- **`C:\Users\David\CS\SharpLab\`** — primary
+- **`C:\Users\David\CS\hobbies\sports\betlab\`** — alternate working directory
+
+Both point to the same GitHub repo (`xpoes123/sharplab`). Changes in one should be committed+pushed so the other stays in sync.
 
 ---
 
@@ -192,7 +201,7 @@ CREATE TABLE bets (
 - Endpoint: `GET /v4/sports/basketball_nba/odds`
 - Returns spread, ML, total for all major books in one call
 - Env var: `ODDS_API_KEY`
-- Free tier: 500 requests/month. Poll every 15 min = ~3000/month for NBA season. Need paid tier or cache aggressively.
+- Free tier: 500 requests/month. Current poll interval: 30 min. Cache aggressively.
 
 ### Kalshi
 - Base URL: `https://api.elections.kalshi.com/trade-api/v2`
@@ -222,6 +231,22 @@ CREATE TABLE bets (
 
 ---
 
+## VPS Deployment
+
+SharpLab runs on a shared Hetzner VPS (`87.99.136.82`). Full details in [`docs/vps-hosting.md`](docs/vps-hosting.md).
+
+**Quick reference:**
+- **SSH**: `ssh root@87.99.136.82`
+- **Install dir**: `/opt/sharplab/` (venv, .env, data/)
+- **Services**: `temporal.service` → `sharplab-worker.service` + `sharplab-bot.service`
+- **Deploy**: `git pull` → `pip install -e .` → restart services (temporal first, wait 3s, then bot+worker)
+- **Logs**: `journalctl -u sharplab-bot.service -n 50 --no-pager`
+- **DB**: SQLite at `/opt/sharplab/data/sharplab.db`
+
+**Rules**: Never restart sentinel/guardian/stavid. Always restart temporal before bot+worker. Verify with status + logs after deploy.
+
+---
+
 ## Skills
 
 Slash commands in `.claude/commands/`. Type to invoke.
@@ -229,8 +254,12 @@ Slash commands in `.claude/commands/`. Type to invoke.
 - `/fresh-eyes` — re-orient at session start. Check git, status, stubs, what's next.
 - `/new-source` — scaffold a new odds source end-to-end.
 - `/new-game` — scaffold a new casino game cog. **Always run this when adding a game.** Reads `GAMES.md` checklist.
+- `/new-web-game` — scaffold a browser-based casino game (WebSocket gameplay).
 - `/clv-check` — compute CLV for recent bets against close snapshots.
 - `/sanity-check` — adversarial data quality pass before trusting results.
+- `/pre-deploy` — pre-deployment checklist. **Always run before deploying to VPS.**
+- `/debug-discord` — common Discord.py interaction bugs and fixes.
+- `/vps` — VPS operations: pull logs, deploy, check status, troubleshoot.
 
 ---
 
@@ -248,7 +277,7 @@ Slash commands in `.claude/commands/`. Type to invoke.
 ## Conventions
 
 - **All times UTC**, ISO 8601. Never store local time. Never `datetime.now()` without `tz=timezone.utc`.
-- **American odds everywhere** in the DB and bot output. Convert Kalshi/Polymarket probabilities at the boundary.
+- **American odds in DB, implied probability in Discord embeds** (`fmt_prob()` in `shared/odds_utils.py`). Prefix API returns American. Convert Kalshi/Polymarket probabilities at the boundary.
 - **Units not dollars** for sizing. 1 unit = whatever baseline is set in config.
 - **No API keys in code.** `.env` + `python-dotenv`. `.env` is gitignored.
 - **Async everywhere** in pipeline and bot.
@@ -263,12 +292,22 @@ Slash commands in `.claude/commands/`. Type to invoke.
 
 - **Never commit `.env`.** Verify `.gitignore` before touching any key file.
 - **`workflow.now()` not `datetime.now()`** inside Temporal workflows.
-- **The Odds API has a monthly request quota.** Don't poll every minute. 15 min intervals are fine pre-game.
+- **The Odds API has a monthly request quota.** Don't poll every minute. Current interval is 30 min.
 - **Kalshi and Polymarket return probabilities, not American odds.** Always convert in `shared/odds_utils.py` before storing or displaying.
 - **SQLite + concurrent writes = WAL mode.** Enable with `PRAGMA journal_mode=WAL` on DB init. The pipeline and the bot both write.
 - **Validate after wiring a new source.** Are prices in range? Are game IDs consistent with what's in the `games` table?
 - **If CLV is consistently > 10%, something is broken**, not your edge.
 - **Discord slash commands must be synced** after adding new ones: `await bot.tree.sync()`. Don't forget this or the commands won't appear.
+
+---
+
+## Documentation
+
+- [`docs/vps-hosting.md`](docs/vps-hosting.md) — VPS deployment: services, deploy flow, logs, troubleshooting
+- [`SPEC.md`](SPEC.md) — Technical specification for the trading pipeline
+- [`TRADING_FLOOR.md`](TRADING_FLOOR.md) — Sports betting concepts and strategies
+- [`GAMES.md`](GAMES.md) — Checklist for adding new casino games
+- [`FUTURE_GAMES.md`](FUTURE_GAMES.md) — Backlog of games to implement
 
 ---
 
