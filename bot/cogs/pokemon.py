@@ -3147,7 +3147,6 @@ class PokemonCog(commands.Cog):
             display_name=interaction.user.display_name,
             category=cat,
         )
-        self.active_solos[uid] = session
 
         entry = _pick_from_pool(cat, session.used_ids)
         session.current_entry = entry
@@ -3163,10 +3162,25 @@ class PokemonCog(commands.Cog):
         await interaction.response.send_message(embed=anchor_embed)
         anchor = await interaction.original_response()
         session.anchor_message = anchor
-        thread = await anchor.create_thread(
-            name=f"Pok\u00e9mon Solo \u2014 {interaction.user.display_name}",
-        )
+        try:
+            thread = await anchor.create_thread(
+                name=f"Pok\u00e9mon Solo \u2014 {interaction.user.display_name}",
+            )
+        except discord.HTTPException:
+            await anchor.edit(
+                embed=discord.Embed(
+                    title="Could not start solo game",
+                    description="Failed to create a thread. Make sure the bot has "
+                    "**Create Public Threads** permission in this channel.",
+                    colour=discord.Colour.red(),
+                ),
+            )
+            return
         session.thread = thread
+
+        # Only register AFTER thread creation succeeds — prevents
+        # leaked sessions that block future /pokemon-solo calls.
+        self.active_solos[uid] = session
 
         await thread.send(
             "\U0001f3c1 **Pok\u00e9mon Solo started!** Type your guesses here. "
