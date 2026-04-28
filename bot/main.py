@@ -3,12 +3,42 @@ import asyncio
 import os
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
 from db import schema, queries
 
 load_dotenv()
+
+# Game commands that must not be started inside threads (they create their own threads)
+_THREAD_BLOCKED_COMMANDS: set[str] = {
+    "blackjack", "baccarat", "paigow", "uth", "videopoker", "hilo",
+    "roulette", "craps", "crash", "plinko", "slots", "bingo",
+    "horserace", "stockmarket", "stockguess", "math24", "countdown",
+    "mastermind", "geography", "wordle", "nba-trivia", "nfl-trivia",
+    "sudoku", "tictactoe", "rps", "figgie", "mathsprint", "pokemon",
+    "quizbowl", "valorant", "solitaire-chess", "nba", "minesweeper",
+    "sequence", "prisoner", "indian-poker", "battleship",
+    "nbasim", "nflsim", "mlbsim", "tennissim", "soccersim",
+    "penalties", "liarsdice",
+    "soccersim-tournament",
+}
+
+
+class SharpTree(app_commands.CommandTree):
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if (
+            isinstance(interaction.channel, discord.Thread)
+            and interaction.command is not None
+            and getattr(interaction.command, "name", None) in _THREAD_BLOCKED_COMMANDS
+        ):
+            await interaction.response.send_message(
+                "Games can't be started in threads! Use a regular channel.",
+                ephemeral=True,
+            )
+            return False
+        return True
 
 COGS = [
     "bot.cogs.utils",
@@ -80,7 +110,7 @@ intents.message_content = True  # required for prefix commands (privileged inten
 
 class SharpBot(commands.Bot):
     def __init__(self) -> None:
-        super().__init__(command_prefix="!", intents=intents)
+        super().__init__(command_prefix="!", intents=intents, tree_cls=SharpTree)
 
     async def setup_hook(self) -> None:
         await schema.init_db()

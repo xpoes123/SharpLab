@@ -1307,6 +1307,96 @@ class CasinoCog(commands.Cog):
         await interaction.response.send_message(embed=embed, view=view)
         table.message = await interaction.original_response()
 
+    @app_commands.command(name="stop", description="Force-stop any active game in this channel")
+    async def stop_game(self, interaction: discord.Interaction) -> None:
+        channel_id = interaction.channel_id
+
+        # If invoked from a game thread, also check the parent channel
+        parent_id: int | None = None
+        if isinstance(interaction.channel, discord.Thread):
+            parent_id = interaction.channel.parent_id
+
+        found_cog = None
+        found_table = None
+        found_key: int | None = None
+
+        for cog in self.bot.cogs.values():
+            tables = getattr(cog, "active_tables", None)
+            if not isinstance(tables, dict):
+                continue
+            # Check direct channel match
+            if channel_id in tables:
+                found_cog = cog
+                found_table = tables[channel_id]
+                found_key = channel_id
+                break
+            # Check parent channel (if invoked from a game thread)
+            if parent_id and parent_id in tables:
+                found_cog = cog
+                found_table = tables[parent_id]
+                found_key = parent_id
+                break
+            # Check if this channel is a game thread for any table
+            for key, tbl in tables.items():
+                thread = getattr(tbl, "thread", None)
+                if thread is not None and thread.id == channel_id:
+                    found_cog = cog
+                    found_table = tbl
+                    found_key = key
+                    break
+            if found_table is not None:
+                break
+
+        if found_table is None:
+            await interaction.response.send_message(
+                "No active game found in this channel.", ephemeral=True,
+            )
+            return
+
+        phase = getattr(found_table, "phase", None)
+        if phase == "closed":
+            tables = getattr(found_cog, "active_tables", {})
+            tables.pop(found_key, None)
+            await interaction.response.send_message(
+                "Game was already finished. Cleaned up.", ephemeral=True,
+            )
+            return
+
+        # Signal graceful stop via stop_requested + wake event
+        if hasattr(found_table, "stop_requested"):
+            if found_table.stop_requested:
+                await interaction.response.send_message(
+                    "Game is already ending\u2026", ephemeral=True,
+                )
+                return
+            found_table.stop_requested = True
+
+        # Wake up any waiting event so the game loop notices the stop
+        for event_name in ("part_solved", "round_solved", "round_event",
+                           "action_event", "current_event"):
+            evt = getattr(found_table, event_name, None)
+            if evt is not None and hasattr(evt, "set"):
+                evt.set()
+                break
+
+        # Cancel any running task as a fallback
+        for task_name in ("game_task", "race_task", "sim_task", "round_task",
+                          "_round_task", "trade_task", "fly_task",
+                          "_shot_clock_task", "_countdown_task"):
+            task = getattr(found_table, task_name, None)
+            if task is not None and not task.done():
+                task.cancel()
+                break
+
+        # Clean up
+        found_table.phase = "closed"
+        tables = getattr(found_cog, "active_tables", {})
+        tables.pop(found_key, None)
+
+        await interaction.response.send_message(
+            "\u23f9\ufe0f Game force-stopped.", ephemeral=False,
+        )
+
     @app_commands.command(name="balance", description="Check your coin balance")
     @app_commands.describe(user="Check another user's balance (optional)")
     async def balance(

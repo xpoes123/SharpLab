@@ -765,15 +765,13 @@ class GeoTableView(ui.View):
     def _update_buttons(self) -> None:
         phase = self.table.phase
         betting = phase == "betting"
-        playing = phase == "playing"
-        racing = playing or phase == "between_rounds"
 
         self.start_btn.disabled = (
             not betting or len(self.table.players) < MIN_PLAYERS
         )
         self.join_btn.disabled = not betting
         self.leave_btn.disabled = not betting
-        self.close_btn.disabled = racing
+        self.close_btn.disabled = phase == "closed"
         self.category_select.disabled = not betting
 
     # ── Row 0: Betting ──────────────────────────────────────────────────
@@ -873,10 +871,17 @@ class GeoTableView(ui.View):
             )
             return
         if self.table.phase in ("playing", "between_rounds"):
-            await interaction.response.send_message(
-                "Can't close during a race! Wait for it to finish.",
-                ephemeral=True,
-            )
+            # Game is running — signal stop and let the race loop end gracefully
+            if self.table.stop_requested:
+                await interaction.response.send_message(
+                    "Already ending\u2026", ephemeral=True,
+                )
+                return
+            self.table.stop_requested = True
+            self.table.round_solved.set()  # wake up the race loop
+            self.close_btn.disabled = True
+            self.close_btn.label = "Ending\u2026"
+            await interaction.response.edit_message(view=self)
             return
         await self._close_table(interaction)
 
@@ -1071,7 +1076,6 @@ class GeoTableView(ui.View):
                     try:
                         await table.message.edit(
                             embed=_playing_embed(table, remaining=secs_left),
-                            view=self,
                         )
                     except discord.HTTPException:
                         pass

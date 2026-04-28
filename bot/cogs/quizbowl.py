@@ -477,7 +477,7 @@ class QBLobbyView(ui.View):
         )
         self.join_btn.disabled = not betting
         self.leave_btn.disabled = not betting
-        self.close_btn.disabled = self.table.phase == "playing"
+        self.close_btn.disabled = self.table.phase == "closed"
         self.category_select.disabled = not betting
         self.difficulty_select.disabled = not betting
 
@@ -578,11 +578,18 @@ class QBLobbyView(ui.View):
                 "Only the host can close the table!", ephemeral=True,
             )
             return
-        if self.table.phase == "playing":
-            await interaction.response.send_message(
-                "Can't close while playing! Use the End Game button in the thread.",
-                ephemeral=True,
-            )
+        if self.table.phase in ("playing", "between_parts", "between_bonuses"):
+            # Game is running — signal stop and let the game loop end gracefully
+            if self.table.stop_requested:
+                await interaction.response.send_message(
+                    "Already ending\u2026", ephemeral=True,
+                )
+                return
+            self.table.stop_requested = True
+            self.table.part_solved.set()  # wake up the game loop
+            self.close_btn.disabled = True
+            self.close_btn.label = "Ending\u2026"
+            await interaction.response.edit_message(view=self)
             return
         await self._close_table(interaction)
 
