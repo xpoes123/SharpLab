@@ -1358,6 +1358,7 @@ class ValTableView(ui.View):
         if table.phase == "closed":
             return
 
+        await self._clear_round_messages()
         for p in table.players.values():
             if p.bet > 0:
                 try:

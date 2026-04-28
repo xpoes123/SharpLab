@@ -900,6 +900,7 @@ class NbaGuessView(ui.View):
         if table.phase == "closed":
             return
 
+        await self._clear_round_messages()
         table.phase = "closed"
         self.active_tables.pop(table.channel_id, None)
 
