@@ -30,6 +30,7 @@ ROUND_DELAY = 4  # seconds between rounds
 WINS_TO_WIN = 3  # first to N wins
 MAX_ROUNDS = 15  # safety cap
 INACTIVITY_ROUNDS = 5  # auto-end after N consecutive unanswered rounds
+INACTIVITY_SECS = 180  # auto-end after 3 min of no answers
 
 MEDALS = ["\U0001f947", "\U0001f948", "\U0001f949"]  # gold, silver, bronze
 
@@ -485,6 +486,7 @@ class GeoTable:
     # Messages sent by players during a round; cleared after round ends
     round_messages: list[discord.Message] = field(default_factory=list)
     stop_requested: bool = False
+    last_activity: float = field(default_factory=time.monotonic)
 
 
 # ── Embeds ──────────────────────────────────────────────────────────────────
@@ -1165,7 +1167,16 @@ class GeoTableView(ui.View):
                     if table.thread:
                         try:
                             await table.thread.send(
-                                "\u23f8\ufe0f No one answered for 5 consecutive rounds — ending due to inactivity."
+                                "\u23f8\ufe0f No one answered for 5 consecutive rounds \u2014 ending due to inactivity."
+                            )
+                        except discord.HTTPException:
+                            pass
+                    break
+                if time.monotonic() - table.last_activity > INACTIVITY_SECS:
+                    if table.thread:
+                        try:
+                            await table.thread.send(
+                                "\u23f8\ufe0f No activity for 3 minutes \u2014 ending due to inactivity."
                             )
                         except discord.HTTPException:
                             pass
@@ -1494,6 +1505,7 @@ class GeographyCog(commands.Cog):
             player.answer_time = now
             player.rounds_won += 1
             table.round_winner = uid
+            table.last_activity = now
 
             _fire_stat(str(uid), table, correct=True)
 

@@ -27,6 +27,7 @@ PART_TIME = 10  # seconds per bonus part
 BETWEEN_PARTS_DELAY = 3  # seconds between parts
 BETWEEN_BONUS_DELAY = 4  # seconds between bonuses
 INACTIVITY_ROUNDS = 5  # auto-end after N consecutive unanswered parts
+INACTIVITY_SECS = 180  # auto-end after 3 min of no answers
 BATCH_SIZE = 5  # bonuses fetched per API call
 QB_API = "https://www.qbreader.org/api"
 
@@ -195,6 +196,7 @@ class QBTable:
     game_task: asyncio.Task | None = field(default=None, repr=False)
     stop_requested: bool = False
     total_parts_played: int = 0
+    last_activity: float = field(default_factory=time.monotonic)
 
 
 # ── Embeds ───────────────────────────────────────────────────────────────────
@@ -789,7 +791,16 @@ class QBLobbyView(ui.View):
                             if table.thread:
                                 try:
                                     await table.thread.send(
-                                        "\u23f8\ufe0f No one answered for 5 consecutive questions — ending due to inactivity."
+                                        "\u23f8\ufe0f No one answered for 5 consecutive questions \u2014 ending due to inactivity."
+                                    )
+                                except discord.HTTPException:
+                                    pass
+                            break
+                        if time.monotonic() - table.last_activity > INACTIVITY_SECS:
+                            if table.thread:
+                                try:
+                                    await table.thread.send(
+                                        "\u23f8\ufe0f No activity for 3 minutes \u2014 ending due to inactivity."
                                     )
                                 except discord.HTTPException:
                                     pass
@@ -1029,6 +1040,7 @@ class QuizBowlCog(commands.Cog):
             player = table.players[uid]
             player.score += 10
             table.part_winner = uid
+            table.last_activity = time.monotonic()
             try:
                 await message.add_reaction("\u2705")
             except discord.HTTPException:

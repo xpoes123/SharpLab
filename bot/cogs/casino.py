@@ -1,12 +1,22 @@
 """Casino cog — multiplayer /blackjack table and /balance commands."""
+import asyncio
+import logging
 import random
+import time
 from dataclasses import dataclass, field
 
 import discord
 from discord import app_commands, ui
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from db import queries
+
+log = logging.getLogger(__name__)
+
+# How often to scan for orphaned games (seconds)
+_CLEANUP_INTERVAL_SECS = 120
+# Kill any game that has been in active_tables longer than this (seconds)
+_MAX_GAME_AGE_SECS = 900  # 15 minutes
 
 # ── Card helpers ──────────────────────────────────────────────────────────────
 
@@ -1279,6 +1289,88 @@ class CasinoCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.active_tables: dict[int, BlackjackTable] = {}
+        # channel_id -> monotonic time when first seen by the cleanup loop
+        self._table_first_seen: dict[int, float] = {}
+        self._cleanup_orphaned_games.start()
+
+    async def cog_unload(self) -> None:
+        self._cleanup_orphaned_games.cancel()
+
+    @tasks.loop(seconds=_CLEANUP_INTERVAL_SECS)
+    async def _cleanup_orphaned_games(self) -> None:
+        """Periodically scan all cogs and kill games stuck in active_tables."""
+        now = time.monotonic()
+        killed = 0
+        for cog in self.bot.cogs.values():
+            tables = getattr(cog, "active_tables", None)
+            if not isinstance(tables, dict) or not tables:
+                continue
+            # Snapshot keys — we may mutate the dict
+            for channel_id in list(tables.keys()):
+                table = tables.get(channel_id)
+                if table is None:
+                    continue
+                # Track first-seen time
+                key = (id(cog), channel_id)
+                if key not in self._table_first_seen:
+                    self._table_first_seen[key] = now
+                    continue  # give it at least one full interval
+                age = now - self._table_first_seen[key]
+                if age < _MAX_GAME_AGE_SECS:
+                    continue
+                # Game has been running too long — force kill
+                log.warning(
+                    "Cleanup: killing orphaned game in channel %s (cog=%s, age=%.0fs)",
+                    channel_id, type(cog).__name__, age,
+                )
+                if hasattr(table, "stop_requested"):
+                    table.stop_requested = True
+                # Wake any event
+                for evt_name in ("part_solved", "round_solved", "round_event",
+                                 "action_event", "current_event"):
+                    evt = getattr(table, evt_name, None)
+                    if evt is not None and hasattr(evt, "set"):
+                        evt.set()
+                        break
+                # Cancel any task
+                for task_name in ("game_task", "race_task", "sim_task",
+                                  "round_task", "_round_task", "trade_task",
+                                  "fly_task", "_shot_clock_task",
+                                  "_countdown_task"):
+                    task = getattr(table, task_name, None)
+                    if task is not None and not task.done():
+                        task.cancel()
+                        break
+                if hasattr(table, "phase"):
+                    table.phase = "closed"
+                # Archive thread if it exists
+                thread = getattr(table, "thread", None)
+                if thread is not None:
+                    try:
+                        await thread.send(
+                            "\u23f9\ufe0f Game auto-closed after 15 minutes."
+                        )
+                        await thread.edit(archived=True)
+                    except Exception:
+                        pass
+                tables.pop(channel_id, None)
+                self._table_first_seen.pop(key, None)
+                killed += 1
+        # Clean stale first-seen entries for games that ended normally
+        stale_keys = [
+            k for k in self._table_first_seen
+            if not any(
+                k[1] in getattr(cog, "active_tables", {})
+                for cog in self.bot.cogs.values()
+                if id(cog) == k[0]
+            )
+        ]
+        for k in stale_keys:
+            self._table_first_seen.pop(k, None)
+
+    @_cleanup_orphaned_games.before_loop
+    async def _before_cleanup(self) -> None:
+        await self.bot.wait_until_ready()
 
     @app_commands.command(name="blackjack", description="Open a blackjack table (multiplayer)")
     async def blackjack(self, interaction: discord.Interaction) -> None:
