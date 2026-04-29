@@ -28,6 +28,7 @@ from shared.blotto_logic import (
     resolve_round,
     rank_players,
     compute_payouts,
+    generate_weights,
 )
 
 WEB_API_SECRET = os.environ.get("WEB_API_SECRET", "dev-secret")
@@ -66,6 +67,9 @@ class BlottoRoom:
     game_task: asyncio.Task | None = field(default=None, repr=False)
     created_at: float = field(default_factory=time.time)
     result_data: dict | None = None
+    current_weights: list[int] = field(default_factory=list)
+    # {player_id: [soldiers]} from last round — sent at round_start so opponents can adapt
+    last_round_allocations: dict[str, list[int]] = field(default_factory=dict)
 
 
 rooms: dict[str, BlottoRoom] = {}
@@ -304,20 +308,36 @@ async def _game_loop(room: BlottoRoom) -> None:
             room.all_locked.clear()
             room.phase = "allocating"
 
+            # Generate random battlefield weights for this round
+            room.current_weights = generate_weights()
+
             # Reset per-round state
             for p in room.players.values():
                 p.current_allocation = None
                 p.locked_in = False
 
             scoreboard = _scoreboard(room)
+
+            # Build opponent history: what everyone played last round
+            history = {
+                uid: {
+                    "name": room.players[uid].display_name,
+                    "soldiers": alloc,
+                }
+                for uid, alloc in room.last_round_allocations.items()
+                if uid in room.players
+            } if room.last_round_allocations else {}
+
             await _broadcast(room, {
                 "type": "round_start",
                 "round_num": rnd,
                 "soldiers": SOLDIERS,
                 "battlefields": BATTLEFIELDS,
                 "battlefield_names": BATTLEFIELD_NAMES,
+                "weights": room.current_weights,
                 "time_limit": ALLOCATION_TIME,
                 "scoreboard": scoreboard,
+                "last_round": history,
             })
 
             # Wait for all players to lock in or timeout
@@ -329,12 +349,17 @@ async def _game_loop(room: BlottoRoom) -> None:
                     p.current_allocation = list(DEFAULT_ALLOCATION)
                 p.locked_in = True
 
-            # Resolve the round
+            # Resolve the round with weights
             all_allocations = {
                 uid: p.current_allocation
                 for uid, p in room.players.items()
             }
-            result = resolve_round(all_allocations)
+            result = resolve_round(all_allocations, room.current_weights)
+
+            # Save allocations for next round's history
+            room.last_round_allocations = {
+                uid: list(alloc) for uid, alloc in all_allocations.items()
+            }
 
             # Reveal phase — one battlefield at a time
             room.phase = "revealing"
@@ -352,6 +377,7 @@ async def _game_loop(room: BlottoRoom) -> None:
                     "type": "reveal_battlefield",
                     "battlefield": bf_idx,
                     "battlefield_name": BATTLEFIELD_NAMES[bf_idx],
+                    "weight": room.current_weights[bf_idx],
                     "allocations": {
                         uid: {
                             "soldiers": count,
@@ -378,6 +404,7 @@ async def _game_loop(room: BlottoRoom) -> None:
                 "type": "round_result",
                 "round_num": rnd,
                 "battlefields_won": result["battlefields_won"],
+                "points_won": result["points_won"],
                 "round_winner_id": round_winner,
                 "round_winner_name": (
                     room.players[round_winner].display_name

@@ -4,6 +4,7 @@ No external dependencies.  Shared between the web engine and (optionally)
 any Discord-side simulation or tests.
 """
 
+import random
 from itertools import groupby
 
 # ── Constants ──────────────────────────────────────────────────────────────
@@ -19,6 +20,7 @@ MIN_PLAYERS = 2
 MAX_PLAYERS = 8
 
 BATTLEFIELD_NAMES = ["Alpha", "Bravo", "Charlie", "Delta", "Echo"]
+BATTLEFIELD_WEIGHTS = [1, 1, 2, 2, 3]  # shuffled each round; need majority of points (5/9)
 
 PAYTABLE: dict[int, list[float]] = {
     1: [1.0],
@@ -31,17 +33,14 @@ PAYTABLE: dict[int, list[float]] = {
     8: [0.33, 0.21, 0.16, 0.12, 0.08, 0.06, 0.04],
 }
 
-DEFAULT_ALLOCATION = [SOLDIERS // BATTLEFIELDS] * BATTLEFIELDS
+DEFAULT_ALLOCATION = [0] * BATTLEFIELDS  # auto-clear: start empty
 
 
-def _fix_default() -> None:
-    """Ensure the default allocation sums to SOLDIERS exactly."""
-    diff = SOLDIERS - sum(DEFAULT_ALLOCATION)
-    if diff:
-        DEFAULT_ALLOCATION[0] += diff
-
-
-_fix_default()
+def generate_weights() -> list[int]:
+    """Return a shuffled copy of BATTLEFIELD_WEIGHTS for a new round."""
+    w = list(BATTLEFIELD_WEIGHTS)
+    random.shuffle(w)
+    return w
 
 
 # ── Validation ─────────────────────────────────────────────────────────────
@@ -79,23 +78,31 @@ def resolve_battlefield(allocations: dict[str, int]) -> str | None:
 
 def resolve_round(
     all_allocations: dict[str, list[int]],
+    weights: list[int] | None = None,
 ) -> dict:
     """Resolve a full round.
 
     Parameters
     ----------
     all_allocations : {player_id: [soldiers_per_battlefield]}
+    weights : point value per battlefield (default: all 1s)
 
     Returns
     -------
     dict with keys:
       - battlefield_winners: list of (winner_id | None) per battlefield
+      - points_won: {player_id: total_points_this_round}
       - battlefields_won: {player_id: count}
       - round_winner: player_id | None
     """
+    if weights is None:
+        weights = [1] * BATTLEFIELDS
+
     player_ids = list(all_allocations.keys())
     battlefield_winners: list[str | None] = []
     battlefields_won: dict[str, int] = {uid: 0 for uid in player_ids}
+    points_won: dict[str, int] = {uid: 0 for uid in player_ids}
+    total_points = sum(weights)
 
     for bf_idx in range(BATTLEFIELDS):
         bf_allocs = {
@@ -105,18 +112,20 @@ def resolve_round(
         battlefield_winners.append(winner)
         if winner is not None:
             battlefields_won[winner] += 1
+            points_won[winner] += weights[bf_idx]
 
-    # Round winner: whoever won the most battlefields (majority of 5 → need 3)
-    max_bf = max(battlefields_won.values()) if battlefields_won else 0
-    if max_bf >= (BATTLEFIELDS // 2 + 1):
-        # Unique majority winner
-        candidates = [uid for uid, c in battlefields_won.items() if c == max_bf]
+    # Round winner: whoever has majority of POINTS (e.g. 5 of 9)
+    points_needed = total_points // 2 + 1
+    max_pts = max(points_won.values()) if points_won else 0
+    if max_pts >= points_needed:
+        candidates = [uid for uid, p in points_won.items() if p == max_pts]
         round_winner = candidates[0] if len(candidates) == 1 else None
     else:
         round_winner = None
 
     return {
         "battlefield_winners": battlefield_winners,
+        "points_won": points_won,
         "battlefields_won": battlefields_won,
         "round_winner": round_winner,
     }

@@ -238,12 +238,20 @@
         }
         .bf-input:focus { border-color: var(--accent); }
         .bf-input:disabled { opacity: 0.5; cursor: not-allowed; }
-        .bf-slider {
-            width: 100%;
-            accent-color: var(--accent);
-            cursor: pointer;
+
+        /* ── Weight badge ───────────────────────────────── */
+        .bf-weight {
+            display: inline-block;
+            background: rgba(241, 196, 15, 0.15);
+            color: var(--accent);
+            font-size: 0.75rem;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 10px;
+            margin-top: 4px;
+            font-family: 'SF Mono', 'Cascadia Code', monospace;
         }
-        .bf-slider:disabled { opacity: 0.3; cursor: not-allowed; }
+        .bf-weight.high { background: rgba(241, 196, 15, 0.3); font-size: 0.85rem; }
 
         /* ── Fill bar ───────────────────────────────────── */
         .bf-fill {
@@ -259,6 +267,49 @@
             transition: width 0.2s;
             border-radius: 2px;
         }
+
+        /* ── Opponent History ────────────────────────────── */
+        .history-panel {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 12px;
+            margin-bottom: 16px;
+        }
+        .history-panel h4 {
+            margin: 0 0 8px;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .history-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 0;
+            font-size: 0.8rem;
+        }
+        .history-name {
+            min-width: 80px;
+            color: var(--text-muted);
+        }
+        .history-vals {
+            display: flex;
+            gap: 4px;
+            flex: 1;
+        }
+        .history-val {
+            flex: 1;
+            text-align: center;
+            padding: 3px 0;
+            border-radius: 4px;
+            font-family: 'SF Mono', 'Cascadia Code', monospace;
+            font-weight: 600;
+            font-size: 0.75rem;
+            background: rgba(255,255,255,0.05);
+        }
+        .history-val.you { color: var(--accent); }
 
         /* ── Allocation status ──────────────────────────── */
         .alloc-status {
@@ -413,11 +464,16 @@
 
             <div class="scoreboard" id="scoreboard"></div>
 
+            <div class="history-panel" id="history-panel" style="display:none">
+                <h4>Last Round</h4>
+                <div id="history-rows"></div>
+            </div>
+
             <div class="battlefields" id="battlefields"></div>
 
             <div class="alloc-status">
-                <div class="alloc-remaining" id="alloc-remaining">100</div>
-                <div class="alloc-label">soldiers remaining</div>
+                <div class="alloc-remaining invalid" id="alloc-remaining">100</div>
+                <div class="alloc-label">soldiers remaining &bull; need <span id="pts-needed">5</span> pts to win</div>
                 <div class="lock-status" id="lock-status"></div>
             </div>
 
@@ -472,12 +528,14 @@
     let ws = null;
     let myId = null;
     let isHost = false;
-    let allocation = [20, 20, 20, 20, 20];
+    let allocation = [0, 0, 0, 0, 0];
     let lockedIn = false;
     let currentPhase = 'lobby';
     let timerInterval = null;
     let timerVal = 60;
     let revealData = {};  // bf_idx -> {allocations, winner_id}
+    let currentWeights = [1, 1, 1, 1, 1];
+    let lastRound = {};  // {player_id: {name, soldiers[]}}
 
     const BF_ICONS = ['&#9876;', '&#127969;', '&#9968;', '&#128737;', '&#9875;'];
     const BF_NAMES = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo'];
@@ -576,16 +634,48 @@
     function onRoundStart(msg) {
         showPhase('phase-game');
         lockedIn = false;
-        allocation = [20, 20, 20, 20, 20];
+        allocation = [0, 0, 0, 0, 0];  // auto-clear
         revealData = {};
+        currentWeights = msg.weights || [1, 1, 1, 1, 1];
+        lastRound = msg.last_round || {};
         timerVal = msg.time_limit;
         $('round-label').textContent = `Round ${msg.round_num}`;
         renderScoreboard(msg.scoreboard, 'scoreboard');
+        renderHistory();
         renderBattlefields('allocating');
         updateAllocStatus(msg.scoreboard);
-        $('btn-lock').disabled = false;
+        const totalPts = currentWeights.reduce((a, b) => a + b, 0);
+        $('pts-needed').textContent = Math.floor(totalPts / 2) + 1;
+        $('btn-lock').disabled = true;  // disabled until sum == 100
         $('btn-lock').textContent = 'Lock In';
         startTimer(msg.time_limit);
+    }
+
+    // ── History Panel ────────────────────────────────
+    function renderHistory() {
+        const panel = $('history-panel');
+        const rows = $('history-rows');
+        const entries = Object.entries(lastRound);
+        if (entries.length === 0) {
+            panel.style.display = 'none';
+            return;
+        }
+        panel.style.display = 'block';
+        rows.innerHTML = '';
+        entries.forEach(([uid, data]) => {
+            const row = document.createElement('div');
+            row.className = 'history-row';
+            const isYou = uid === myId;
+            row.innerHTML = `
+                <span class="history-name">${data.name}${isYou ? ' (you)' : ''}</span>
+                <div class="history-vals">
+                    ${data.soldiers.map((s, i) =>
+                        `<span class="history-val${isYou ? ' you' : ''}">${s}</span>`
+                    ).join('')}
+                </div>
+            `;
+            rows.appendChild(row);
+        });
     }
 
     function startTimer(secs) {
@@ -611,28 +701,29 @@
     function renderBattlefields(mode) {
         const container = $('battlefields');
         container.innerHTML = '';
+        const totalPts = currentWeights.reduce((a, b) => a + b, 0);
 
         for (let i = 0; i < 5; i++) {
             const card = document.createElement('div');
             card.className = 'bf-card';
             card.id = `bf-${i}`;
+            const w = currentWeights[i];
+            const weightClass = w >= 3 ? 'high' : '';
 
             if (mode === 'allocating') {
-                const pct = (allocation[i] / 100) * 100;
                 card.innerHTML = `
                     <div class="bf-header">
                         <div class="bf-icon">${BF_ICONS[i]}</div>
                         <div class="bf-name">${BF_NAMES[i]}</div>
+                        <div class="bf-weight ${weightClass}">${w} pt${w > 1 ? 's' : ''}</div>
                     </div>
                     <div class="bf-input-area">
                         <input type="number" class="bf-input" id="bf-input-${i}"
-                            value="${allocation[i]}" min="0" max="100"
-                            ${lockedIn ? 'disabled' : ''}>
-                        <input type="range" class="bf-slider" id="bf-slider-${i}"
-                            value="${allocation[i]}" min="0" max="100"
+                            value="${allocation[i] || ''}" min="0" max="100"
+                            placeholder="0"
                             ${lockedIn ? 'disabled' : ''}>
                         <div class="bf-fill">
-                            <div class="bf-fill-inner" style="width: ${pct}%"></div>
+                            <div class="bf-fill-inner" style="width: ${(allocation[i] / 100) * 100}%"></div>
                         </div>
                     </div>
                 `;
@@ -642,6 +733,7 @@
                     <div class="bf-header">
                         <div class="bf-icon">${BF_ICONS[i]}</div>
                         <div class="bf-name">${BF_NAMES[i]}</div>
+                        <div class="bf-weight ${weightClass}">${w} pt${w > 1 ? 's' : ''}</div>
                     </div>
                     <div class="reveal-allocs" id="bf-reveal-${i}">
                         <div style="color:var(--text-muted); font-size:0.8rem">Waiting...</div>
@@ -652,22 +744,13 @@
         }
 
         if (mode === 'allocating') {
-            // Attach input event listeners
             for (let i = 0; i < 5; i++) {
                 const inp = $(`bf-input-${i}`);
-                const slider = $(`bf-slider-${i}`);
                 inp.addEventListener('input', () => {
                     let v = parseInt(inp.value) || 0;
                     if (v < 0) v = 0;
                     if (v > 100) v = 100;
                     allocation[i] = v;
-                    slider.value = v;
-                    updateFills();
-                });
-                slider.addEventListener('input', () => {
-                    let v = parseInt(slider.value) || 0;
-                    allocation[i] = v;
-                    inp.value = v;
                     updateFills();
                 });
             }
@@ -678,8 +761,16 @@
         const total = allocation.reduce((a, b) => a + b, 0);
         const remaining = 100 - total;
         const el = $('alloc-remaining');
-        el.textContent = remaining;
-        el.className = 'alloc-remaining ' + (remaining === 0 ? 'valid' : 'invalid');
+        if (remaining === 0) {
+            el.textContent = '\u2714 Ready';
+            el.className = 'alloc-remaining valid';
+        } else if (remaining < 0) {
+            el.textContent = `${Math.abs(remaining)} over!`;
+            el.className = 'alloc-remaining invalid';
+        } else {
+            el.textContent = remaining;
+            el.className = 'alloc-remaining invalid';
+        }
         $('btn-lock').disabled = lockedIn || remaining !== 0;
 
         for (let i = 0; i < 5; i++) {
