@@ -1471,7 +1471,16 @@ class CasinoCog(commands.Cog):
                 evt.set()
                 break
 
-        # Cancel any running task as a fallback
+        # If the game supports stop_requested, let the game loop handle
+        # its own cleanup (final results, ELO, archiving).  Cancelling the
+        # task races with the graceful-shutdown path and can skip _end_game.
+        if hasattr(found_table, "stop_requested"):
+            await interaction.response.send_message(
+                "\u23f9\ufe0f Game force-stopped.", ephemeral=False,
+            )
+            return
+
+        # For games without stop_requested, cancel the task as a fallback
         for task_name in ("game_task", "race_task", "sim_task", "round_task",
                           "_round_task", "trade_task", "fly_task",
                           "_shot_clock_task", "_countdown_task"):

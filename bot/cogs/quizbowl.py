@@ -756,6 +756,10 @@ class QBLobbyView(ui.View):
                         except asyncio.TimeoutError:
                             pass
 
+                        # Stop requested while we were waiting — bail immediately
+                        if table.stop_requested:
+                            break
+
                         # Disable the skip button
                         if skip_view is not None:
                             skip_view.stop()
