@@ -1471,25 +1471,38 @@ class CasinoCog(commands.Cog):
                 evt.set()
                 break
 
-        # If the game supports stop_requested, let the game loop handle
-        # its own cleanup (final results, ELO, archiving).  Cancelling the
-        # task races with the graceful-shutdown path and can skip _end_game.
-        if hasattr(found_table, "stop_requested"):
-            await interaction.response.send_message(
-                "\u23f9\ufe0f Game force-stopped.", ephemeral=False,
-            )
-            return
-
-        # For games without stop_requested, cancel the task as a fallback
+        # Check if there is actually a running game loop task
+        has_running_task = False
         for task_name in ("game_task", "race_task", "sim_task", "round_task",
                           "_round_task", "trade_task", "fly_task",
                           "_shot_clock_task", "_countdown_task"):
             task = getattr(found_table, task_name, None)
             if task is not None and not task.done():
-                task.cancel()
+                has_running_task = True
                 break
 
-        # Clean up
+        if has_running_task and hasattr(found_table, "stop_requested"):
+            # Game loop is running and supports stop_requested — let it
+            # handle cleanup (final results, ELO, archiving).  Cancelling
+            # the task races with the graceful-shutdown path.
+            await interaction.response.send_message(
+                "\u23f9\ufe0f Game force-stopped.", ephemeral=False,
+            )
+            return
+
+        # No running game loop (lobby phase) or game lacks stop_requested
+        # — cancel any task and clean up directly.
+        if not has_running_task:
+            pass  # nothing to cancel
+        else:
+            for task_name in ("game_task", "race_task", "sim_task", "round_task",
+                              "_round_task", "trade_task", "fly_task",
+                              "_shot_clock_task", "_countdown_task"):
+                task = getattr(found_table, task_name, None)
+                if task is not None and not task.done():
+                    task.cancel()
+                    break
+
         found_table.phase = "closed"
         tables = getattr(found_cog, "active_tables", {})
         tables.pop(found_key, None)
