@@ -23,6 +23,8 @@ from shared.odds_utils import (
     american_to_prob,
     parse_odds_input,
 )
+import logging
+log = logging.getLogger(__name__)
 
 
 def _v(val: object) -> str:

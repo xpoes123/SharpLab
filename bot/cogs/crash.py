@@ -10,6 +10,8 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
+import logging
+log = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -278,7 +280,7 @@ class CrashTableView(ui.View):
                 )
                 await self.table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in crash.py")
 
     def _update_buttons(self) -> None:
         phase = self.table.phase
@@ -610,7 +612,7 @@ class CrashTableView(ui.View):
                 try:
                     await queries.update_casino_balance(str(p.user_id), p.bet)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in crash.py")
 
     async def _close(
         self, interaction: discord.Interaction, reason: str,
@@ -639,7 +641,7 @@ class CrashTableView(ui.View):
                     f"Something went wrong: {error}", ephemeral=True,
                 )
         except Exception:
-            pass
+            log.exception("Unhandled error in crash.py")
 
     async def on_timeout(self) -> None:
         table = self.table
@@ -663,7 +665,7 @@ class CrashTableView(ui.View):
                     )
                     await table.message.edit(embed=embed, view=None)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in crash.py")
             return
 
         # Betting or flying — refund active players
@@ -678,7 +680,7 @@ class CrashTableView(ui.View):
                 )
                 await table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in crash.py")
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

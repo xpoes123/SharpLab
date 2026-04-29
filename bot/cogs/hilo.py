@@ -8,7 +8,9 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
+import logging
 
+log = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 SUITS = ("♠", "♥", "♦", "♣")
@@ -551,7 +553,7 @@ class HiLoTableView(ui.View):
                 try:
                     await queries.update_casino_balance(str(p.user_id), p.bet)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in hilo.py")
         await self._close(interaction, "Table closed by host.")
 
     # ── Game logic ────────────────────────────────────────────────────────
@@ -742,7 +744,7 @@ class HiLoTableView(ui.View):
                     )
                     await table.message.edit(embed=embed, view=None)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in hilo.py")
             return
 
         # Betting or playing — refund/cash-out active players
@@ -761,7 +763,7 @@ class HiLoTableView(ui.View):
                             str(p.user_id), p.bet,
                         )
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in hilo.py")
 
         self.active_tables.pop(table.channel_id, None)
         if table.message:
@@ -773,7 +775,7 @@ class HiLoTableView(ui.View):
                 )
                 await table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in hilo.py")
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

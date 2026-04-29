@@ -13,7 +13,9 @@ from bot.cogs._elo_helpers import update_elo_1v1
 from bot.cogs._minigames import RPSLogic
 from bot.cogs._pool import compute_side_pot_payouts
 from db import queries
+import logging
 
+log = logging.getLogger(__name__)
 # ── Constants (derived from shared RPSLogic) ─────────────────────────────────
 
 CHOICES = RPSLogic.CHOICES
@@ -288,7 +290,7 @@ class RPSView(ui.View):
             try:
                 await update_elo_1v1(str(winner_id), str(loser_id), "rps", "rps")
             except Exception:
-                pass
+                log.exception("Unhandled error in rps.py")
 
         embed = _result_embed(game, payouts)
         self._update_buttons()
@@ -438,7 +440,7 @@ class RPSView(ui.View):
             try:
                 await queries.update_casino_balance(str(game.challenger_id), game.bet)
             except Exception:
-                pass
+                log.exception("Unhandled error in rps.py")
             self.active_tables.pop(game.channel_id, None)
             if game.message:
                 try:
@@ -449,7 +451,7 @@ class RPSView(ui.View):
                     )
                     await game.message.edit(embed=embed, view=None)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in rps.py")
             return
 
         if game.phase == "playing":
@@ -458,7 +460,7 @@ class RPSView(ui.View):
                 if not game.vs_bot:
                     await queries.update_casino_balance(str(game.opponent_id), game.bet)
             except Exception:
-                pass
+                log.exception("Unhandled error in rps.py")
 
         self.active_tables.pop(game.channel_id, None)
         if game.message:
@@ -470,7 +472,7 @@ class RPSView(ui.View):
                 )
                 await game.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in rps.py")
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

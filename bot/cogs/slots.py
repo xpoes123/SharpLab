@@ -9,7 +9,9 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
+import logging
 
+log = logging.getLogger(__name__)
 # ── Symbols ──────────────────────────────────────────────────────────────────
 
 SYMBOLS = {
@@ -1000,7 +1002,7 @@ class SlotsMainView(ui.View):
                 )
                 await s.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in slots.py")
 
 
 # ── Free Spin Pick View ──────────────────────────────────────────────────────
@@ -1099,7 +1101,7 @@ class FreeSpinPickView(ui.View):
                 await asyncio.sleep(1.5)
                 await main_view._free_spin_tick()
             except Exception:
-                pass
+                log.exception("Unhandled error in slots.py")
 
 
 # ── Bonus Pick View ──────────────────────────────────────────────────────────
@@ -1237,7 +1239,7 @@ class BonusPickView(ui.View):
                     embed=_result_embed(s, bal), view=main_view,
                 )
             except Exception:
-                pass
+                log.exception("Unhandled error in slots.py")
 
 
 # ── Gamble View ──────────────────────────────────────────────────────────────
@@ -1360,7 +1362,7 @@ class GambleView(ui.View):
                     embed=_result_embed(s, bal), view=main_view,
                 )
             except Exception:
-                pass
+                log.exception("Unhandled error in slots.py")
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

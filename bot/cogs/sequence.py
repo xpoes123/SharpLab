@@ -11,7 +11,9 @@ from discord.ext import commands
 from db import queries
 from bot.cogs._elo_helpers import update_elo_multiplayer, fmt_elo_change
 from bot.cogs._pool import compute_side_pot_payouts
+import logging
 
+log = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 8
@@ -497,7 +499,7 @@ class SeqView(ui.View):
                 try:
                     await queries.update_casino_balance(str(p.user_id), p.bet)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in sequence.py")
         self.active_tables.pop(self.table.channel_id, None)
         embed = discord.Embed(
             title="\u2716 Sequence \u2014 Table Closed",
@@ -599,7 +601,7 @@ class SeqView(ui.View):
         try:
             await msg.edit(embed=embed, view=self)
         except Exception:
-            pass
+            log.exception("Unhandled error in sequence.py")
 
     # ── Timeout ──────────────────────────────────────────────────────────
 
@@ -612,7 +614,7 @@ class SeqView(ui.View):
                 try:
                     await queries.update_casino_balance(str(p.user_id), p.bet)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in sequence.py")
 
         self.active_tables.pop(self.table.channel_id, None)
         if self.table.message:
@@ -624,7 +626,7 @@ class SeqView(ui.View):
                 )
                 await self.table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in sequence.py")
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

@@ -10,7 +10,9 @@ from bot.cogs._elo_helpers import update_elo_1v1, update_elo_draw
 from bot.cogs._minigames import TTTBoard
 from bot.cogs._pool import compute_side_pot_payouts
 from db import queries
+import logging
 
+log = logging.getLogger(__name__)
 # ── Constants (derived from shared TTTBoard) ─────────────────────────────────
 
 EMPTY = TTTBoard.EMPTY
@@ -248,7 +250,7 @@ class TTTView(ui.View):
             else:
                 await update_elo_draw(str(game.challenger_id), str(game.opponent_id), "tictactoe", "tictactoe")
         except Exception:
-            pass
+            log.exception("Unhandled error in tictactoe.py")
 
         # Build result embed
         embed = _result_embed(game, winner_id)
@@ -410,7 +412,7 @@ class TTTView(ui.View):
             try:
                 await queries.update_casino_balance(str(game.challenger_id), game.bet)
             except Exception:
-                pass
+                log.exception("Unhandled error in tictactoe.py")
             self.active_games.pop(game.channel_id, None)
             if game.message:
                 try:
@@ -421,7 +423,7 @@ class TTTView(ui.View):
                     )
                     await game.message.edit(embed=embed, view=None)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in tictactoe.py")
             return
 
         if game.phase == "playing":
@@ -430,7 +432,7 @@ class TTTView(ui.View):
                 await queries.update_casino_balance(str(game.challenger_id), game.bet)
                 await queries.update_casino_balance(str(game.opponent_id), game.bet)
             except Exception:
-                pass
+                log.exception("Unhandled error in tictactoe.py")
 
         self.active_games.pop(game.channel_id, None)
         if game.message:
@@ -442,7 +444,7 @@ class TTTView(ui.View):
                 )
                 await game.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in tictactoe.py")
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

@@ -12,6 +12,8 @@ from discord import app_commands, ui
 from discord.ext import commands, tasks
 
 from bot.cogs._elo_helpers import update_elo_multiplayer
+import logging
+log = logging.getLogger(__name__)
 
 WEB_API_BASE = os.environ.get("WEB_API_BASE", "https://sharplab.djiang.xyz")
 WEB_API_SECRET = os.environ.get("WEB_API_SECRET", "dev-secret")
@@ -84,7 +86,7 @@ class SolChessCog(commands.Cog):
                 try:
                     detail = resp.json().get("detail", "")
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in solitairechess.py")
                 await interaction.response.send_message(
                     f"Failed to create game room (HTTP {resp.status_code})"
                     + (f": {detail}" if detail else ""),
@@ -117,7 +119,7 @@ class SolChessCog(commands.Cog):
                         f"Error: {type(exc).__name__}: {exc}", ephemeral=True,
                     )
             except Exception:
-                pass
+                log.exception("Unhandled error in solitairechess.py")
 
     # ── Result polling ─────────────────────────────────────────────────────
 
@@ -162,9 +164,9 @@ class SolChessCog(commands.Cog):
                     try:
                         await update_elo_multiplayer(finish, "solitairechess", "solitairechess")
                     except Exception:
-                        pass
+                        log.exception("Unhandled error in solitairechess.py")
             except Exception:
-                pass
+                log.exception("Unhandled error in solitairechess.py")
 
     @_poll_web_results.before_loop
     async def _before_poll(self) -> None:

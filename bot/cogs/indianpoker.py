@@ -11,7 +11,9 @@ from discord.ext import commands
 from db import queries
 from bot.cogs._elo_helpers import update_elo_multiplayer, fmt_elo_change
 from bot.cogs._pool import compute_side_pot_payouts
+import logging
 
+log = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 6
@@ -593,7 +595,7 @@ class IPView(ui.View):
                 try:
                     await queries.update_casino_balance(str(p.user_id), p.coin_bet)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in indianpoker.py")
         self.active_tables.pop(self.table.channel_id, None)
         embed = discord.Embed(
             title="\u2716 Indian Poker \u2014 Table Closed",
@@ -737,7 +739,7 @@ class IPView(ui.View):
                     finish_order, "indian_poker", "indian_poker",
                 )
             except Exception:
-                pass
+                log.exception("Unhandled error in indianpoker.py")
 
         embed = _final_embed(table, payouts)
 
@@ -755,7 +757,7 @@ class IPView(ui.View):
         try:
             await msg.edit(embed=embed, view=self)
         except Exception:
-            pass
+            log.exception("Unhandled error in indianpoker.py")
 
     async def _run_betting_round(self, active_uids: list[int], start_idx: int) -> None:
         """Run one round of betting. Returns when betting is complete."""
@@ -858,7 +860,7 @@ class IPView(ui.View):
                 try:
                     await queries.update_casino_balance(str(p.user_id), p.coin_bet)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in indianpoker.py")
 
         self.active_tables.pop(self.table.channel_id, None)
         if self.table.message:
@@ -870,7 +872,7 @@ class IPView(ui.View):
                 )
                 await self.table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in indianpoker.py")
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

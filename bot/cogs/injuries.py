@@ -14,7 +14,9 @@ from dotenv import load_dotenv
 from db import queries
 from shared.models import Game, InjuryAlert, OddsSnapshot
 from shared.odds_utils import fmt_prob
+import logging
 
+log = logging.getLogger(__name__)
 load_dotenv()
 
 INJURY_CHANNEL_ID = int(os.getenv("INJURY_CHANNEL_ID") or 0)

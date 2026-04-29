@@ -18,7 +18,9 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from bot.cogs._elo_helpers import fmt_elo_change, update_elo_multiplayer
+import logging
 
+log = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 8
@@ -835,7 +837,7 @@ class QBLobbyView(ui.View):
                 try:
                     await table.thread.edit(archived=True)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in quizbowl.py")
         except Exception:
             table.phase = "closed"
             self.active_tables.pop(table.channel_id, None)
@@ -843,7 +845,7 @@ class QBLobbyView(ui.View):
                 try:
                     await table.thread.edit(archived=True)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in quizbowl.py")
 
     async def _end_game(self) -> None:
         table = self.table
@@ -856,7 +858,7 @@ class QBLobbyView(ui.View):
             try:
                 elo_changes = await update_elo_multiplayer(finish_order, "quizbowl", "quizbowl")
             except Exception:
-                pass
+                log.exception("Unhandled error in quizbowl.py")
 
         embed = _final_embed(table, elo_changes)
 
@@ -934,7 +936,7 @@ class QBLobbyView(ui.View):
                 )
                 await table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in quizbowl.py")
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

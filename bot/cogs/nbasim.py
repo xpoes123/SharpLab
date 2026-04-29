@@ -9,7 +9,9 @@ from discord.ext import commands
 
 from db import queries
 from shared.models import TEAM_ABBR_NBA
+import logging
 
+log = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 10
@@ -714,7 +716,7 @@ class NbaSimTableView(ui.View):
                 try:
                     await queries.update_casino_balance(str(p.user_id), p.bet)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in nbasim.py")
         await self._close(interaction, "Table closed by host.")
 
     # ── Game logic ───────────────────────────────────────────────────────────
@@ -872,7 +874,7 @@ class NbaSimTableView(ui.View):
             try:
                 await queries.update_casino_balance(str(p.user_id), p.bet)
             except Exception:
-                pass
+                log.exception("Unhandled error in nbasim.py")
 
     async def _close(
         self, interaction: discord.Interaction, reason: str,
@@ -905,7 +907,7 @@ class NbaSimTableView(ui.View):
                     )
                     await table.message.edit(embed=embed, view=None)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in nbasim.py")
             return
 
         await self._refund_all()
@@ -919,7 +921,7 @@ class NbaSimTableView(ui.View):
                 )
                 await table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in nbasim.py")
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

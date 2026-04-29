@@ -10,7 +10,9 @@ from discord.ext import commands
 from db import queries
 from shared.models import get_team_abbr
 from shared.odds_utils import fmt_prob
+import logging
 
+log = logging.getLogger(__name__)
 PAGE_SIZE = 5
 
 

@@ -12,7 +12,9 @@ from discord import app_commands
 from discord.ext import commands
 
 from db import queries
+import logging
 
+log = logging.getLogger(__name__)
 _STATUS_ICON = {
     "Out":          "🔴",
     "Doubtful":     "🟠",

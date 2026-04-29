@@ -20,7 +20,9 @@ from discord.ext import commands
 from bot.cogs._elo_helpers import update_elo_multiplayer
 
 from db import queries
+import logging
 
+log = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 8
@@ -746,7 +748,7 @@ class SprintTableView(ui.View):
                 try:
                     await table.thread.edit(archived=True)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in mathsprint.py")
         except Exception:
             table.phase = "closed"
             self.active_tables.pop(table.channel_id, None)
@@ -754,7 +756,7 @@ class SprintTableView(ui.View):
                 try:
                     await table.thread.edit(archived=True)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in mathsprint.py")
 
     async def _compute_and_apply_payouts(self) -> tuple[dict[int, int], dict[int, int]]:
         table = self.table
@@ -768,7 +770,7 @@ class SprintTableView(ui.View):
                 try:
                     await queries.update_casino_balance(str(uid), refund)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in mathsprint.py")
         else:
             payouts = _compute_payouts(table.players, pot, n_players)
             for uid, payout in payouts.items():
@@ -776,7 +778,7 @@ class SprintTableView(ui.View):
                     try:
                         await queries.update_casino_balance(str(uid), payout)
                     except Exception:
-                        pass
+                        log.exception("Unhandled error in mathsprint.py")
 
         balances: dict[int, int] = {}
         for uid in table.players:
@@ -798,7 +800,7 @@ class SprintTableView(ui.View):
             try:
                 await update_elo_multiplayer(finish_order, "mathsprint", "mathsprint")
             except Exception:
-                pass
+                log.exception("Unhandled error in mathsprint.py")
 
         embed = _final_embed(table, payouts=payouts, balances=balances)
 
@@ -830,7 +832,7 @@ class SprintTableView(ui.View):
                 try:
                     await queries.update_casino_balance(str(p.user_id), p.bet)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in mathsprint.py")
             embed = discord.Embed(
                 title="\U0001f9e0 Math Sprint \u2014 Closed",
                 description="Table closed. All bets refunded.",
@@ -873,7 +875,7 @@ class SprintTableView(ui.View):
             try:
                 await queries.update_casino_balance(str(p.user_id), p.bet)
             except Exception:
-                pass
+                log.exception("Unhandled error in mathsprint.py")
         table.phase = "closed"
         self.active_tables.pop(table.channel_id, None)
         if table.message:
@@ -887,13 +889,13 @@ class SprintTableView(ui.View):
                     view=None,
                 )
             except Exception:
-                pass
+                log.exception("Unhandled error in mathsprint.py")
 
         if table.thread:
             try:
                 await table.thread.edit(archived=True)
             except Exception:
-                pass
+                log.exception("Unhandled error in mathsprint.py")
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

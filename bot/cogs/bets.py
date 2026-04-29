@@ -14,7 +14,9 @@ from db import queries
 from shared.models import Bet, Game, OddsSnapshot
 from shared.odds_utils import american_to_decimal, compute_clv, fmt_prob, parse_odds_input, side_is_home
 from .odds import game_autocomplete, mlb_game_autocomplete
+import logging
 
+log = logging.getLogger(__name__)
 
 # ── Choices ────────────────────────────────────────────────────────────────────
 

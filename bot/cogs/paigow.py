@@ -9,7 +9,9 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
+import logging
 
+log = logging.getLogger(__name__)
 # ── Card helpers ──────────────────────────────────────────────────────────────
 
 SUITS = ("♠", "♥", "♦", "♣")
@@ -1119,7 +1121,7 @@ class PaiGowTableView(ui.View):
             try:
                 await queries.update_casino_balance(str(seat.user_id), seat.total_wager)
             except Exception:
-                pass
+                log.exception("Unhandled error in paigow.py")
         embed = discord.Embed(
             title="Pai Gow Table — Closed",
             description=reason,
@@ -1158,14 +1160,14 @@ class PaiGowTableView(ui.View):
                     )
                     await table.message.edit(embed=embed, view=None)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in paigow.py")
             return
         # Betting or setting — refund all
         for seat in table.players.values():
             try:
                 await queries.update_casino_balance(str(seat.user_id), seat.total_wager)
             except Exception:
-                pass
+                log.exception("Unhandled error in paigow.py")
         self.active_tables.pop(table.channel_id, None)
         if table.message:
             try:
@@ -1176,7 +1178,7 @@ class PaiGowTableView(ui.View):
                 )
                 await table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in paigow.py")
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

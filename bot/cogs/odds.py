@@ -17,7 +17,9 @@ from dotenv import load_dotenv
 from db import queries
 from shared.models import OddsSnapshot, get_team_abbr
 from shared.odds_utils import american_to_prob, fetch_polymarket_ml, prob_to_american
+import logging
 
+log = logging.getLogger(__name__)
 load_dotenv()
 
 KALSHI_API_KEY = os.getenv("KALSHI_API_KEY", "")

@@ -9,7 +9,9 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
+import logging
 
+log = logging.getLogger(__name__)
 # ── Card helpers ──────────────────────────────────────────────────────────────
 
 SUITS = ("♠", "♥", "♦", "♣")
@@ -855,7 +857,7 @@ class UTHTableView(ui.View):
                 try:
                     await queries.update_casino_balance(str(p.user_id), refund)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in uth.py")
         embed = discord.Embed(
             title="UTH Table — Closed",
             description=reason,
@@ -894,7 +896,7 @@ class UTHTableView(ui.View):
                     )
                     await table.message.edit(embed=embed, view=None)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in uth.py")
             return
         # Active phase — refund everything
         for p in table.players.values():
@@ -903,7 +905,7 @@ class UTHTableView(ui.View):
                 try:
                     await queries.update_casino_balance(str(p.user_id), refund)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in uth.py")
         self.active_tables.pop(table.channel_id, None)
         if table.message:
             try:
@@ -914,7 +916,7 @@ class UTHTableView(ui.View):
                 )
                 await table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in uth.py")
 
 
 # ── Cog ───────────────────────────────────────────────────────────────────────

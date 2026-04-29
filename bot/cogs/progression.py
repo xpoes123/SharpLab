@@ -8,6 +8,8 @@ from discord.ext import commands, tasks
 
 from bot.cogs.casino import GAME_LABELS
 from db import queries
+import logging
+log = logging.getLogger(__name__)
 
 # ── Achievement definitions ──────────────────────────────────────────────────
 
@@ -309,7 +311,6 @@ class ProgressionCog(commands.Cog):
         """Populate discord_users cache for the web leaderboard."""
         from db.schema import DB_PATH
         import aiosqlite
-
         async with aiosqlite.connect(DB_PATH) as db:
             cursor = await db.execute(
                 """SELECT DISTINCT discord_user FROM (
@@ -329,7 +330,7 @@ class ProgressionCog(commands.Cog):
                     uid, user.display_name, str(user.display_avatar.url),
                 )
             except Exception:
-                pass  # deleted account or API error
+                log.warning("Failed to sync Discord user %s", uid, exc_info=True)
 
     @sync_discord_users.before_loop
     async def before_sync(self) -> None:

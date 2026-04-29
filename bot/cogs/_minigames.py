@@ -762,6 +762,8 @@ from bot.cogs.roster import (
     NBA_PLAYERS, NBA_TEAMS,
     NFL_PLAYERS, NFL_TEAMS,
 )
+import logging
+log = logging.getLogger(__name__)
 
 
 def _generate_trivia() -> tuple[str, list[str], int]:

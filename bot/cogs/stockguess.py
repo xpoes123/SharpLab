@@ -14,6 +14,8 @@ from discord.ext import commands
 
 from bot.cogs._elo_helpers import update_elo_multiplayer
 from db import queries
+import logging
+log = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -124,7 +126,6 @@ async def fetch_ytd_change(ticker: str) -> float:
     yfinance is synchronous, so we run it in a thread executor.
     """
     import yfinance as yf
-
     def _fetch() -> float:
         tk = yf.Ticker(ticker)
         hist = tk.history(period="ytd")
@@ -742,7 +743,7 @@ async def _do_final_summary(
         try:
             await update_elo_multiplayer(finish_order, "stockguess", "stockguess")
         except Exception:
-            pass
+            log.exception("Unhandled error in stockguess.py")
 
     active_tables.pop(table.channel_id, None)
     await interaction.followup.send(embed=_final_embed(table))
