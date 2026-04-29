@@ -264,7 +264,9 @@ class CrashTableView(ui.View):
             return  # already closed normally
         if self.table.fly_task and not self.table.fly_task.done():
             self.table.fly_task.cancel()
-        await self._refund_active()
+        # Only refund if a round is actually in progress (not between rounds)
+        if self.table.phase in ("betting", "flying"):
+            await self._refund_active()
         self.active_tables.pop(self.table.channel_id, None)
         self.stop()
         if self.table.message:
