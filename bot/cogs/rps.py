@@ -505,10 +505,14 @@ class RPSCog(commands.Cog):
         channel_id = interaction.channel_id
 
         if channel_id in self.active_tables:
-            await interaction.response.send_message(
-                "There's already an RPS game in this channel!", ephemeral=True,
-            )
-            return
+            existing = self.active_tables[channel_id]
+            if getattr(existing, "phase", None) == "closed":
+                del self.active_tables[channel_id]
+            else:
+                await interaction.response.send_message(
+                    "There's already an RPS game in this channel!", ephemeral=True,
+                )
+                return
         if bet < 1:
             await interaction.response.send_message("Bet must be at least 1c.", ephemeral=True)
             return

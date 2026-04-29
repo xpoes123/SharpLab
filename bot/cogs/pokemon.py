@@ -3187,11 +3187,15 @@ class PokemonCog(commands.Cog):
     async def pokemon(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:
-            await interaction.response.send_message(
-                "There's already a Pokemon game in this channel!",
-                ephemeral=True,
-            )
-            return
+            existing = self.active_tables[channel_id]
+            if getattr(existing, "phase", None) == "closed":
+                del self.active_tables[channel_id]
+            else:
+                await interaction.response.send_message(
+                    "There's already a Pokemon game in this channel!",
+                    ephemeral=True,
+                )
+                return
 
         table = PokeTable(
             channel_id=channel_id,

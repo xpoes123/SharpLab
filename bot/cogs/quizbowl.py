@@ -885,6 +885,7 @@ class QBLobbyView(ui.View):
 
     async def _close_table(self, interaction: discord.Interaction) -> None:
         table = self.table
+        table.phase = "closed"
 
         embed = discord.Embed(
             title="\U0001f9e0 Quiz Bowl \u2014 Closed",
@@ -955,11 +956,15 @@ class QuizBowlCog(commands.Cog):
     async def quizbowl(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:
-            await interaction.response.send_message(
-                "There's already a quiz bowl table in this channel!",
-                ephemeral=True,
-            )
-            return
+            existing = self.active_tables[channel_id]
+            if getattr(existing, "phase", None) == "closed":
+                del self.active_tables[channel_id]
+            else:
+                await interaction.response.send_message(
+                    "There's already a quiz bowl table in this channel!",
+                    ephemeral=True,
+                )
+                return
 
         table = QBTable(
             channel_id=channel_id,

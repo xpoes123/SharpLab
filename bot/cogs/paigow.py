@@ -1191,11 +1191,15 @@ class PaiGowCog(commands.Cog):
     async def paigow(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:
-            await interaction.response.send_message(
-                "There's already a Pai Gow table in this channel!",
-                ephemeral=True,
-            )
-            return
+            existing = self.active_tables[channel_id]
+            if getattr(existing, "phase", None) == "closed":
+                del self.active_tables[channel_id]
+            else:
+                await interaction.response.send_message(
+                    "There's already a Pai Gow table in this channel!",
+                    ephemeral=True,
+                )
+                return
 
         await queries.get_or_create_casino_wallet(str(interaction.user.id))
 

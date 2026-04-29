@@ -938,11 +938,15 @@ class NbaGuessCog(commands.Cog):
     async def nba(self, interaction: discord.Interaction, rounds: int = DEFAULT_ROUNDS) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:
-            await interaction.response.send_message(
-                "There's already an NBA guess game in this channel!",
-                ephemeral=True,
-            )
-            return
+            existing = self.active_tables[channel_id]
+            if getattr(existing, "phase", None) == "closed":
+                del self.active_tables[channel_id]
+            else:
+                await interaction.response.send_message(
+                    "There's already an NBA guess game in this channel!",
+                    ephemeral=True,
+                )
+                return
 
         rounds = max(1, min(rounds, MAX_ROUNDS_CAP))
 
