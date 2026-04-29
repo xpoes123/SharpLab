@@ -17,6 +17,7 @@ MAX_PLAYERS = 10
 TICK_INTERVAL = 1.5  # seconds between multiplier updates
 GROWTH_RATE = 0.08  # e^(rate * tick)
 AUTO_CASHOUT_MAX = 100.0
+TABLE_LIFETIME_SECS = 300  # hard 5-minute cap; not reset by button interactions
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -249,7 +250,35 @@ class CrashTableView(ui.View):
         super().__init__(timeout=300)
         self.table = table
         self.active_tables = active_tables
+        self._lifetime_task: asyncio.Task | None = None
         self._update_buttons()
+
+    def _start_lifetime_timer(self) -> None:
+        """Start the hard 5-minute table lifetime timer."""
+        self._lifetime_task = asyncio.create_task(self._lifetime_expire())
+
+    async def _lifetime_expire(self) -> None:
+        """Kill the table after TABLE_LIFETIME_SECS, regardless of phase."""
+        await asyncio.sleep(TABLE_LIFETIME_SECS)
+        if self.table.channel_id not in self.active_tables:
+            return  # already closed normally
+        if self.table.fly_task and not self.table.fly_task.done():
+            self.table.fly_task.cancel()
+        # Only refund if a round is actually in progress (not between rounds)
+        if self.table.phase in ("betting", "flying"):
+            await self._refund_active()
+        self.active_tables.pop(self.table.channel_id, None)
+        self.stop()
+        if self.table.message:
+            try:
+                embed = discord.Embed(
+                    title="Crash Table — Closed",
+                    description="Table automatically closed after 5 minutes.",
+                    colour=discord.Colour.dark_grey(),
+                )
+                await self.table.message.edit(embed=embed, view=None)
+            except Exception:
+                pass
 
     def _update_buttons(self) -> None:
         phase = self.table.phase
@@ -268,7 +297,7 @@ class CrashTableView(ui.View):
 
         # Row 2
         self.new_round_btn.disabled = not crashed
-        self.close_btn.disabled = flying
+        self.close_btn.disabled = False  # always enabled; host can force-close mid-flight
 
     # ── Row 0 ────────────────────────────────────────────────────────────────
 
@@ -459,18 +488,12 @@ class CrashTableView(ui.View):
                 "Only the host can close the table!", ephemeral=True,
             )
             return
-        if self.table.phase == "flying":
-            await interaction.response.send_message(
-                "Can't close mid-flight!", ephemeral=True,
-            )
-            return
-        if self.table.phase == "betting":
-            # Refund everyone
-            for p in self.table.players.values():
-                try:
-                    await queries.update_casino_balance(str(p.user_id), p.bet)
-                except Exception:
-                    pass
+        # Cancel fly task if running (mid-flight force-close)
+        if self.table.fly_task and not self.table.fly_task.done():
+            self.table.fly_task.cancel()
+        # Refund any player who hasn't cashed out
+        if self.table.phase in ("betting", "flying"):
+            await self._refund_active()
         await self._close(interaction, "Table closed by host.")
 
     # ── Flight logic ─────────────────────────────────────────────────────────
@@ -592,6 +615,8 @@ class CrashTableView(ui.View):
     async def _close(
         self, interaction: discord.Interaction, reason: str,
     ) -> None:
+        if self._lifetime_task and not self._lifetime_task.done():
+            self._lifetime_task.cancel()
         embed = discord.Embed(
             title="Crash Table — Closed",
             description=reason,
@@ -618,6 +643,9 @@ class CrashTableView(ui.View):
 
     async def on_timeout(self) -> None:
         table = self.table
+
+        if self._lifetime_task and not self._lifetime_task.done():
+            self._lifetime_task.cancel()
 
         # Cancel fly task if running
         if table.fly_task and not table.fly_task.done():
@@ -683,6 +711,7 @@ class CrashCog(commands.Cog):
         self.active_tables[channel_id] = table
 
         view = CrashTableView(table, self.active_tables)
+        view._start_lifetime_timer()
         embed = _betting_embed(table)
         await interaction.response.send_message(embed=embed, view=view)
         table.message = await interaction.original_response()
