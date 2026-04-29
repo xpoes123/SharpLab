@@ -1,6 +1,7 @@
 """Casino cog — multiplayer /crash rocket game."""
 
 import asyncio
+import logging
 import math
 import random
 from dataclasses import dataclass, field
@@ -10,6 +11,8 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
+
+log = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -277,8 +280,8 @@ class CrashTableView(ui.View):
                     colour=discord.Colour.dark_grey(),
                 )
                 await self.table.message.edit(embed=embed, view=None)
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("Failed to edit crash message on lifetime expire (channel %s): %s", self.table.channel_id, e)
 
     def _update_buttons(self) -> None:
         phase = self.table.phase
@@ -548,8 +551,9 @@ class CrashTableView(ui.View):
 
         except asyncio.CancelledError:
             pass
-        except Exception:
+        except Exception as e:
             # Unexpected error — refund and bail
+            log.error("Crash fly loop crashed unexpectedly (channel %s): %s", table.channel_id, e, exc_info=True)
             if table.phase == "flying":
                 table.phase = "crashed"
                 await self._refund_active()
@@ -609,8 +613,8 @@ class CrashTableView(ui.View):
             if not p.cashed_out:
                 try:
                     await queries.update_casino_balance(str(p.user_id), p.bet)
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.error("Failed to refund player %s bet %s: %s", p.user_id, p.bet, e)
 
     async def _close(
         self, interaction: discord.Interaction, reason: str,
@@ -631,15 +635,14 @@ class CrashTableView(ui.View):
     async def on_error(
         self, interaction: discord.Interaction, error: Exception, item: ui.Item,
     ) -> None:
-        import traceback
-        traceback.print_exception(type(error), error, error.__traceback__)
+        log.error("Crash view error (channel %s, item %s): %s", self.table.channel_id, item, error, exc_info=True)
         try:
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     f"Something went wrong: {error}", ephemeral=True,
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Failed to send error message to user: %s", e)
 
     async def on_timeout(self) -> None:
         table = self.table
@@ -662,8 +665,8 @@ class CrashTableView(ui.View):
                         colour=discord.Colour.dark_grey(),
                     )
                     await table.message.edit(embed=embed, view=None)
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.warning("Failed to edit crash message on timeout (channel %s): %s", table.channel_id, e)
             return
 
         # Betting or flying — refund active players
@@ -677,8 +680,8 @@ class CrashTableView(ui.View):
                     colour=discord.Colour.dark_grey(),
                 )
                 await table.message.edit(embed=embed, view=None)
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("Failed to edit crash message on timeout (channel %s): %s", table.channel_id, e)
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

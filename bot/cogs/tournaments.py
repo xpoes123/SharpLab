@@ -2,8 +2,11 @@
 
 import asyncio
 import json
+import logging
 import random
 from datetime import datetime, timezone
+
+log = logging.getLogger(__name__)
 
 import discord
 from discord import app_commands, ui
@@ -679,6 +682,21 @@ class TournamentsCog(commands.Cog):
         self, interaction: discord.Interaction, tournament_id: int,
     ) -> None:
         """Main tournament loop: build bracket, run matches, distribute prizes."""
+        try:
+            await self._run_tournament_inner(interaction, tournament_id)
+        except Exception as e:
+            log.error("Tournament %s crashed unexpectedly: %s", tournament_id, e, exc_info=True)
+            channel = interaction.channel
+            if channel:
+                try:
+                    await channel.send("⚠️ Tournament encountered an unexpected error and was stopped.")
+                except Exception:
+                    pass
+
+    async def _run_tournament_inner(
+        self, interaction: discord.Interaction, tournament_id: int,
+    ) -> None:
+        """Inner implementation of the tournament loop."""
         tourney = await queries.get_tournament(tournament_id)
         if tourney is None:
             return

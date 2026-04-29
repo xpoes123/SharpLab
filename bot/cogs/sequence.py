@@ -1,8 +1,11 @@
 """Casino cog — /sequence math pattern guessing game."""
 
 import asyncio
+import logging
 import random
 from dataclasses import dataclass, field
+
+log = logging.getLogger(__name__)
 
 import discord
 from discord import app_commands, ui
@@ -496,8 +499,8 @@ class SeqView(ui.View):
             for p in self.table.players.values():
                 try:
                     await queries.update_casino_balance(str(p.user_id), p.bet)
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.error("Failed to refund player %s in sequence close: %s", p.user_id, e)
         self.active_tables.pop(self.table.channel_id, None)
         embed = discord.Embed(
             title="\u2716 Sequence \u2014 Table Closed",
@@ -529,7 +532,8 @@ class SeqView(ui.View):
             embed = _round_embed(table, terms, ROUND_TIME)
             try:
                 await msg.edit(embed=embed, view=self)
-            except Exception:
+            except Exception as e:
+                log.error("Failed to edit sequence round embed (channel %s): %s", table.channel_id, e)
                 return
 
             # Wait for all answers or timeout
@@ -542,7 +546,8 @@ class SeqView(ui.View):
             embed = _round_result_embed(table, terms, answer, name)
             try:
                 await msg.edit(embed=embed, view=self)
-            except Exception:
+            except Exception as e:
+                log.error("Failed to edit sequence result embed (channel %s): %s", table.channel_id, e)
                 return
 
             await asyncio.sleep(4)
@@ -577,7 +582,8 @@ class SeqView(ui.View):
             finish_order = [p.user_id for p in sorted_players]
             try:
                 elo_changes = await update_elo_multiplayer(finish_order, "sequence", "sequence")
-            except Exception:
+            except Exception as e:
+                log.warning("Failed to update ELO for sequence game: %s", e)
                 elo_changes = {}
         else:
             elo_changes = {}

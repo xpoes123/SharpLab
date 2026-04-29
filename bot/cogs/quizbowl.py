@@ -8,6 +8,7 @@ endpoint handles fuzzy matching.  Game runs until the host ends it.
 import asyncio
 import difflib
 import html
+import logging
 import re
 import time
 from collections import deque
@@ -16,6 +17,8 @@ import discord
 import httpx
 from discord import app_commands, ui
 from discord.ext import commands
+
+log = logging.getLogger(__name__)
 
 from bot.cogs._elo_helpers import fmt_elo_change, update_elo_multiplayer
 
@@ -698,6 +701,7 @@ class QBLobbyView(ui.View):
         table = self.table
         try:
             consecutive_unanswered = 0
+            consecutive_fetch_errors = 0
             async with httpx.AsyncClient() as client:
                 while not table.stop_requested:
                     # Refill queue if empty
@@ -707,7 +711,19 @@ class QBLobbyView(ui.View):
                                 client, table.category, table.difficulty,
                             )
                             table.bonus_queue.extend(bonuses)
-                        except Exception:
+                            consecutive_fetch_errors = 0
+                        except Exception as e:
+                            consecutive_fetch_errors += 1
+                            log.warning(
+                                "Quizbowl fetch error #%d (channel %s): %s",
+                                consecutive_fetch_errors, table.channel_id, e,
+                            )
+                            if consecutive_fetch_errors >= 5:
+                                if table.thread:
+                                    await table.thread.send(
+                                        "⚠️ Failed to fetch questions after 5 attempts. Ending game."
+                                    )
+                                break
                             # API error — wait and retry
                             if table.thread:
                                 await table.thread.send(
@@ -836,7 +852,8 @@ class QBLobbyView(ui.View):
                     await table.thread.edit(archived=True)
                 except Exception:
                     pass
-        except Exception:
+        except Exception as e:
+            log.error("Quizbowl game loop crashed (channel %s): %s", table.channel_id, e, exc_info=True)
             table.phase = "closed"
             self.active_tables.pop(table.channel_id, None)
             if table.thread:
@@ -855,8 +872,8 @@ class QBLobbyView(ui.View):
             finish_order = [p.user_id for p in sorted_p]
             try:
                 elo_changes = await update_elo_multiplayer(finish_order, "quizbowl", "quizbowl")
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("Failed to update ELO for quizbowl game: %s", e)
 
         embed = _final_embed(table, elo_changes)
 

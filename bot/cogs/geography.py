@@ -1350,9 +1350,14 @@ def _stat_info(table: GeoTable) -> tuple[str, str, str]:
 def _fire_stat(discord_user: str, table: GeoTable, correct: bool) -> None:
     """Fire-and-forget a geo accuracy DB write."""
     country, region, category = _stat_info(table)
-    asyncio.create_task(
-        record_geo_attempt(discord_user, country, region, category, correct)
-    )
+
+    async def _write() -> None:
+        try:
+            await record_geo_attempt(discord_user, country, region, category, correct)
+        except Exception as e:
+            log.warning("Failed to record geo attempt for user %s: %s", discord_user, e)
+
+    asyncio.create_task(_write())
 
 
 # ── Cog ─────────────────────────────────────────────────────────────────────
