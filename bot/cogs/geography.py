@@ -1217,7 +1217,7 @@ class GeoTableView(ui.View):
                 try:
                     await table.thread.edit(archived=True)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in geography.py")
         except Exception:
             log.exception("_race_loop crashed for channel %s", table.channel_id)
             table.phase = "closed"
@@ -1226,7 +1226,7 @@ class GeoTableView(ui.View):
                 try:
                     await table.thread.edit(archived=True)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in geography.py")
 
     async def _end_game(self) -> None:
         """End the race: update ELO and show final results."""
@@ -1240,7 +1240,7 @@ class GeoTableView(ui.View):
             try:
                 elo_changes = await update_elo_multiplayer(finish_order, "geography", "geography")
             except Exception:
-                pass
+                log.exception("Unhandled error in geography.py")
 
         embed = _final_embed(table, elo_changes)
 
@@ -1309,13 +1309,13 @@ class GeoTableView(ui.View):
                 )
                 await table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in geography.py")
 
         if table.thread:
             try:
                 await table.thread.edit(archived=True)
             except Exception:
-                pass
+                log.exception("Unhandled error in geography.py")
 
 
 # ── Accuracy stat helpers ──────────────────────────────────────────────────

@@ -8,7 +8,9 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
+import logging
 
+log = logging.getLogger(__name__)
 # ── Card helpers ──────────────────────────────────────────────────────────────
 
 SUITS = ("♠", "♥", "♦", "♣")
@@ -600,7 +602,7 @@ class VPTableView(ui.View):
                 try:
                     await queries.update_casino_balance(str(p.user_id), p.bet)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in videopoker.py")
         embed = discord.Embed(
             title="Video Poker — Closed",
             description=reason,
@@ -639,7 +641,7 @@ class VPTableView(ui.View):
                     )
                     await table.message.edit(embed=embed, view=None)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in videopoker.py")
             return
         # Active phase — refund bets
         for p in table.players.values():
@@ -647,7 +649,7 @@ class VPTableView(ui.View):
                 try:
                     await queries.update_casino_balance(str(p.user_id), p.bet)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in videopoker.py")
         self.active_tables.pop(table.channel_id, None)
         if table.message:
             try:
@@ -658,7 +660,7 @@ class VPTableView(ui.View):
                 )
                 await table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in videopoker.py")
 
 
 # ── Cog ───────────────────────────────────────────────────────────────────────

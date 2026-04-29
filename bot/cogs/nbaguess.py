@@ -12,7 +12,9 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from bot.cogs._elo_helpers import fmt_elo_change, update_elo_multiplayer
+import logging
 
+log = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 ROUND_TIME = 45       # total round time in seconds
@@ -809,7 +811,7 @@ class NbaGuessView(ui.View):
                 try:
                     await table.thread.edit(archived=True)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in nbaguess.py")
         except Exception:
             table.phase = "closed"
             self.active_tables.pop(table.channel_id, None)
@@ -817,7 +819,7 @@ class NbaGuessView(ui.View):
                 try:
                     await table.thread.edit(archived=True)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in nbaguess.py")
 
     async def _clear_round_messages(self) -> None:
         messages = list(self.table.round_messages)
@@ -845,7 +847,7 @@ class NbaGuessView(ui.View):
             try:
                 elo_changes = await update_elo_multiplayer(finish_order, "nbaguess", "nbaguess")
             except Exception:
-                pass
+                log.exception("Unhandled error in nbaguess.py")
 
         embed = _final_embed(table, elo_changes)
 
@@ -913,13 +915,13 @@ class NbaGuessView(ui.View):
                 )
                 await table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in nbaguess.py")
 
         if table.thread:
             try:
                 await table.thread.edit(archived=True)
             except Exception:
-                pass
+                log.exception("Unhandled error in nbaguess.py")
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

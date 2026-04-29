@@ -19,7 +19,9 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
+import logging
 
+log = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 10
@@ -1350,7 +1352,7 @@ class SoccerSimTableView(ui.View):
                 try:
                     await queries.update_casino_balance(str(p.user_id), p.bet)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in soccersim.py")
         await self._close(interaction, "Table closed by host.")
 
     # ── Game logic ───────────────────────────────────────────────────────────
@@ -1496,7 +1498,7 @@ class SoccerSimTableView(ui.View):
             try:
                 await queries.update_casino_balance(str(p.user_id), p.bet)
             except Exception:
-                pass
+                log.exception("Unhandled error in soccersim.py")
 
     async def _close(
         self, interaction: discord.Interaction, reason: str,
@@ -1529,7 +1531,7 @@ class SoccerSimTableView(ui.View):
                     )
                     await table.message.edit(embed=embed, view=None)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in soccersim.py")
             return
 
         await self._refund_all()
@@ -1543,7 +1545,7 @@ class SoccerSimTableView(ui.View):
                 )
                 await table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in soccersim.py")
 
 
 # ── Tournament View ─────────────────────────────────────────────────────────
@@ -1679,7 +1681,7 @@ class TournamentView(ui.View):
                 try:
                     await queries.update_casino_balance(str(p.user_id), p.bet)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in soccersim.py")
         await self._close(interaction, "Tournament closed by host.")
 
     # ── Tournament logic ─────────────────────────────────────────────────────
@@ -1897,7 +1899,7 @@ class TournamentView(ui.View):
             try:
                 await queries.update_casino_balance(str(p.user_id), p.bet)
             except Exception:
-                pass
+                log.exception("Unhandled error in soccersim.py")
 
     async def _close(
         self, interaction: discord.Interaction, reason: str,
@@ -1930,7 +1932,7 @@ class TournamentView(ui.View):
                     )
                     await table.message.edit(embed=embed, view=None)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in soccersim.py")
             return
 
         await self._refund_all()
@@ -1944,7 +1946,7 @@ class TournamentView(ui.View):
                 )
                 await table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in soccersim.py")
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

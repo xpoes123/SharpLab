@@ -9,6 +9,8 @@ from shared.odds_utils import (
     decimal_to_american,
     parse_odds_input,
 )
+import logging
+log = logging.getLogger(__name__)
 
 
 def _parse_odds(raw: str) -> tuple[str, float, int, float]:

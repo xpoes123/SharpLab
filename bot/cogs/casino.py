@@ -1212,7 +1212,7 @@ class BlackjackTableView(ui.View):
                 refund = p.bet + p.split_bet + p.side_wager
                 await queries.update_casino_balance(str(p.user_id), refund)
             except Exception:
-                pass
+                log.exception("Unhandled error in casino.py")
         embed = discord.Embed(
             title="Blackjack Table — Closed",
             description=reason,
@@ -1251,7 +1251,7 @@ class BlackjackTableView(ui.View):
                     )
                     await table.message.edit(embed=embed, view=None)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in casino.py")
             return
         # Betting: refund main + split + side. Playing: side already resolved.
         for p in table.players.values():
@@ -1262,7 +1262,7 @@ class BlackjackTableView(ui.View):
                     refund = p.bet + p.split_bet  # split bet not yet resolved
                 await queries.update_casino_balance(str(p.user_id), refund)
             except Exception:
-                pass
+                log.exception("Unhandled error in casino.py")
         self.active_tables.pop(table.channel_id, None)
         if table.message:
             try:
@@ -1273,7 +1273,7 @@ class BlackjackTableView(ui.View):
                 )
                 await table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in casino.py")
 
 
 # ── Cog ───────────────────────────────────────────────────────────────────────
@@ -1353,7 +1353,7 @@ class CasinoCog(commands.Cog):
                         )
                         await thread.edit(archived=True)
                     except Exception:
-                        pass
+                        log.exception("Unhandled error in casino.py")
                 tables.pop(channel_id, None)
                 self._table_first_seen.pop(key, None)
                 killed += 1

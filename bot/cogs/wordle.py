@@ -14,7 +14,9 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from bot.cogs._elo_helpers import fmt_elo_change, update_elo_multiplayer
+import logging
 
+log = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 8
@@ -997,7 +999,7 @@ class WordleTableView(ui.View):
             try:
                 elo_changes = await update_elo_multiplayer(finish_order, "wordle", "wordle")
             except Exception:
-                pass
+                log.exception("Unhandled error in wordle.py")
 
         embed = _final_embed(table, elo_changes)
 
@@ -1058,7 +1060,7 @@ class WordleTableView(ui.View):
                 )
                 await table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in wordle.py")
 
 
 # ── Cog ─────────────────────────────────────────────────────────────────────

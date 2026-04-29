@@ -17,7 +17,9 @@ from db import queries
 from shared.models import get_team_abbr
 from shared.odds_utils import prob_to_american
 from .odds import KALSHI_SERIES, game_autocomplete, mlb_game_autocomplete
+import logging
 
+log = logging.getLogger(__name__)
 load_dotenv()
 
 KALSHI_API_KEY = os.getenv("KALSHI_API_KEY", "")

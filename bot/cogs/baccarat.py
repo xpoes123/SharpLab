@@ -7,7 +7,9 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
+import logging
 
+log = logging.getLogger(__name__)
 # ── Card helpers ──────────────────────────────────────────────────────────────
 
 SUITS = ("♠", "♥", "♦", "♣")
@@ -839,7 +841,7 @@ class BaccaratTableView(ui.View):
                             child.disabled = True  # type: ignore[union-attr]
                     await table.message.edit(view=self)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in baccarat.py")
             return
 
         # Hand still in progress — refund all wagers
@@ -849,7 +851,7 @@ class BaccaratTableView(ui.View):
                     str(seat.user_id), seat.total_wager,
                 )
             except Exception:
-                pass
+                log.exception("Unhandled error in baccarat.py")
         if table.message:
             try:
                 embed = discord.Embed(
@@ -859,7 +861,7 @@ class BaccaratTableView(ui.View):
                 )
                 await table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in baccarat.py")
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

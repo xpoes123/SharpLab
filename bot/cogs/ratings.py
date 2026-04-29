@@ -11,6 +11,8 @@ from bot.cogs._elo_helpers import (
     MIN_GAMES_FOR_LEADERBOARD,
     fmt_elo_change,
 )
+import logging
+log = logging.getLogger(__name__)
 
 COLOUR_GOLD = 0xF1C40F
 COLOUR_DARK = 0x2B2D31

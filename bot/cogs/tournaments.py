@@ -12,7 +12,9 @@ from discord.ext import commands
 from db import queries
 from bot.cogs._minigames import pick_games
 from bot.cogs._elo_helpers import update_elo_1v1, update_elo_draw, ELO_GAME_LABELS
+import logging
 
+log = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 REGISTRATION_TIMEOUT = 300  # 5 minutes
@@ -479,7 +481,7 @@ class RegistrationView(ui.View):
                             entry["discord_user"], tourney["buy_in"],
                         )
                     except Exception:
-                        pass
+                        log.exception("Unhandled error in tournaments.py")
 
             await queries.update_tournament(tid, status="cancelled")
 
@@ -914,7 +916,7 @@ class TournamentsCog(commands.Cog):
                     else:
                         await update_elo_draw(p1_id, p2_id, game.elo_key, "tournament")
                 except Exception:
-                    pass  # don't break the tournament over ELO errors
+                    log.warning("ELO update failed during tournament game", exc_info=True)
 
             await asyncio.sleep(1)  # pause between games
 

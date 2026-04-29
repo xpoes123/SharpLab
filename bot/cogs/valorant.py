@@ -17,7 +17,9 @@ from discord.ext import commands
 
 from db import queries
 from bot.cogs._elo_helpers import update_elo_multiplayer
+import logging
 
+log = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 8
@@ -1230,7 +1232,7 @@ class ValTableView(ui.View):
                 try:
                     await table.thread.edit(archived=True)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in valorant.py")
         except Exception:
             table.phase = "closed"
             self.active_tables.pop(table.channel_id, None)
@@ -1238,7 +1240,7 @@ class ValTableView(ui.View):
                 try:
                     await table.thread.edit(archived=True)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in valorant.py")
 
     async def _compute_and_apply_payouts(
         self,
@@ -1256,7 +1258,7 @@ class ValTableView(ui.View):
                         try:
                             await queries.update_casino_balance(str(uid), refund)
                         except Exception:
-                            pass
+                            log.exception("Unhandled error in valorant.py")
             else:
                 payouts = _compute_payouts(table.players, pot, n_players)
                 for uid, payout in payouts.items():
@@ -1264,7 +1266,7 @@ class ValTableView(ui.View):
                         try:
                             await queries.update_casino_balance(str(uid), payout)
                         except Exception:
-                            pass
+                            log.exception("Unhandled error in valorant.py")
         else:
             payouts = {uid: 0 for uid in table.players}
 
@@ -1296,7 +1298,7 @@ class ValTableView(ui.View):
             try:
                 await update_elo_multiplayer(finish_order, "valorant", "valorant")
             except Exception:
-                pass
+                log.exception("Unhandled error in valorant.py")
 
         embed = _final_embed(table, payouts=payouts, balances=balances)
 
@@ -1326,7 +1328,7 @@ class ValTableView(ui.View):
                     try:
                         await queries.update_casino_balance(str(p.user_id), p.bet)
                     except Exception:
-                        pass
+                        log.exception("Unhandled error in valorant.py")
             embed = discord.Embed(
                 title="\U0001f3ae Valorant Table \u2014 Closed",
                 description="Table closed. All bets refunded.",
@@ -1364,7 +1366,7 @@ class ValTableView(ui.View):
                 try:
                     await queries.update_casino_balance(str(p.user_id), p.bet)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in valorant.py")
 
         table.phase = "closed"
         self.active_tables.pop(table.channel_id, None)
@@ -1378,13 +1380,13 @@ class ValTableView(ui.View):
                 )
                 await table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in valorant.py")
 
         if table.thread:
             try:
                 await table.thread.edit(archived=True)
             except Exception:
-                pass
+                log.exception("Unhandled error in valorant.py")
 
 
 # ── Solo category choices ────────────────────────────────────────────────────

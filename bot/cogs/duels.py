@@ -502,13 +502,13 @@ class DuelView(ui.View):
                         str(state.challenger_id), state.wager,
                     )
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in duels.py")
                 try:
                     await queries.update_casino_balance(
                         str(state.opponent_id), state.wager,
                     )
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in duels.py")
 
             self.active_duels.pop(state.channel_id, None)
             await queries.update_duel(state.duel_id, status="expired")

@@ -229,12 +229,12 @@ async def trade_pick_autocomplete(
                 payload = json.loads(snap.payload) if isinstance(snap.payload, str) else snap.payload
                 break
             except Exception:
-                pass
+                log.exception("Unhandled error in trading.py")
     if not payload and snaps:
         try:
             payload = json.loads(snaps[0].payload) if isinstance(snaps[0].payload, str) else snaps[0].payload
         except Exception:
-            pass
+            log.exception("Unhandled error in trading.py")
 
     if market == "spread":
         spread = payload.get("spread")

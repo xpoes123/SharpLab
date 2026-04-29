@@ -11,7 +11,9 @@ from discord.ext import commands
 from db import queries
 from bot.cogs._elo_helpers import update_elo_multiplayer, fmt_elo_change
 from bot.cogs._pool import compute_side_pot_payouts
+import logging
 
+log = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 8
@@ -451,7 +453,7 @@ class PDView(ui.View):
                     try:
                         await queries.update_casino_balance(str(p.user_id), p.bet)
                     except Exception:
-                        pass
+                        log.exception("Unhandled error in prisoner.py")
         self.active_tables.pop(self.table.channel_id, None)
         embed = discord.Embed(
             title="\u2716 Prisoner's Dilemma \u2014 Table Closed",
@@ -572,7 +574,7 @@ class PDView(ui.View):
             try:
                 elo_changes = await update_elo_multiplayer(finish_order, "prisoner", "prisoner")
             except Exception:
-                pass
+                log.exception("Unhandled error in prisoner.py")
 
         embed = _final_embed(table, payouts)
 
@@ -590,7 +592,7 @@ class PDView(ui.View):
         try:
             await msg.edit(embed=embed, view=self)
         except Exception:
-            pass
+            log.exception("Unhandled error in prisoner.py")
 
     # ── Timeout ──────────────────────────────────────────────────────────
 
@@ -604,7 +606,7 @@ class PDView(ui.View):
                     try:
                         await queries.update_casino_balance(str(p.user_id), p.bet)
                     except Exception:
-                        pass
+                        log.exception("Unhandled error in prisoner.py")
 
         self.active_tables.pop(self.table.channel_id, None)
         if self.table.message:
@@ -616,7 +618,7 @@ class PDView(ui.View):
                 )
                 await self.table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in prisoner.py")
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

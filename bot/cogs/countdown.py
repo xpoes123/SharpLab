@@ -12,7 +12,9 @@ from discord.ext import commands
 from db import queries
 from bot.cogs._elo_helpers import update_elo_multiplayer
 from bot.cogs._pool import compute_side_pot_payouts
+import logging
 
+log = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 8
@@ -949,7 +951,7 @@ class CountdownTableView(ui.View):
                 try:
                     await queries.update_casino_balance(str(p.user_id), p.bet)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in countdown.py")
             await self._close(interaction, "Table closed by host. All bets refunded.")
             return
 
@@ -1081,7 +1083,7 @@ class CountdownTableView(ui.View):
             try:
                 await update_elo_multiplayer(finish_order, "countdown", "countdown")
             except Exception:
-                pass
+                log.exception("Unhandled error in countdown.py")
 
         embed = _final_embed(table, winner_uids, payouts, balances)
 
@@ -1118,7 +1120,7 @@ class CountdownTableView(ui.View):
             try:
                 await queries.update_casino_balance(str(p.user_id), p.bet)
             except Exception:
-                pass
+                log.exception("Unhandled error in countdown.py")
 
     async def _close(
         self, interaction: discord.Interaction, reason: str,
@@ -1151,7 +1153,7 @@ class CountdownTableView(ui.View):
                     )
                     await table.message.edit(embed=embed, view=None)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in countdown.py")
             return
 
         # Betting, picking, or playing — refund all
@@ -1166,7 +1168,7 @@ class CountdownTableView(ui.View):
                 )
                 await table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in countdown.py")
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

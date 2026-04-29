@@ -1105,7 +1105,7 @@ class RosterTableView(ui.View):
                 try:
                     await queries.update_casino_balance(str(uid), refund)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in roster.py")
         else:
             payouts = _compute_payouts(table.players, pot, n_players)
             for uid, payout in payouts.items():
@@ -1113,7 +1113,7 @@ class RosterTableView(ui.View):
                     try:
                         await queries.update_casino_balance(str(uid), payout)
                     except Exception:
-                        pass
+                        log.exception("Unhandled error in roster.py")
 
         balances: dict[int, int] = {}
         for uid in table.players:
@@ -1140,7 +1140,7 @@ class RosterTableView(ui.View):
             try:
                 await update_elo_multiplayer(finish_order, table.config.slug, table.config.slug)
             except Exception:
-                pass
+                log.exception("Unhandled error in roster.py")
 
         embed = _final_embed(table, payouts=payouts, balances=balances)
 
@@ -1163,7 +1163,7 @@ class RosterTableView(ui.View):
                 try:
                     await queries.update_casino_balance(str(p.user_id), p.bet)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in roster.py")
             embed = discord.Embed(
                 title=f"{table.config.emoji} {table.config.name} Trivia \u2014 Closed",
                 description="Table closed. All bets refunded.",
@@ -1199,7 +1199,7 @@ class RosterTableView(ui.View):
             try:
                 await queries.update_casino_balance(str(p.user_id), p.bet)
             except Exception:
-                pass
+                log.exception("Unhandled error in roster.py")
 
         table.phase = "closed"
         self.active_tables.pop(table.channel_id, None)
@@ -1213,7 +1213,7 @@ class RosterTableView(ui.View):
                 )
                 await table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in roster.py")
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

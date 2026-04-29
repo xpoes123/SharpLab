@@ -16,7 +16,9 @@ from discord.ext import commands
 
 from db import queries
 from shared.models import TEAM_ABBR_MLB
+import logging
 
+log = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 10
@@ -616,7 +618,7 @@ class MlbSimTableView(ui.View):
                 try:
                     await queries.update_casino_balance(str(p.user_id), p.bet)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in mlbsim.py")
         await self._close(interaction, "Table closed by host.")
 
     # ── Game logic ───────────────────────────────────────────────────────────
@@ -749,7 +751,7 @@ class MlbSimTableView(ui.View):
             try:
                 await queries.update_casino_balance(str(p.user_id), p.bet)
             except Exception:
-                pass
+                log.exception("Unhandled error in mlbsim.py")
 
     async def _close(
         self, interaction: discord.Interaction, reason: str,
@@ -782,7 +784,7 @@ class MlbSimTableView(ui.View):
                     )
                     await table.message.edit(embed=embed, view=None)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in mlbsim.py")
             return
 
         await self._refund_all()
@@ -796,7 +798,7 @@ class MlbSimTableView(ui.View):
                 )
                 await table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in mlbsim.py")
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

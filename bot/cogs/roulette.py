@@ -9,6 +9,8 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
+import logging
+log = logging.getLogger(__name__)
 
 # ── Wheel constants ────────────────────────────────────────────────────────
 
@@ -769,7 +771,7 @@ class RouletteView(ui.View):
                     try:
                         await queries.update_casino_balance(str(player.user_id), refund)
                     except Exception:
-                        pass
+                        log.exception("Unhandled error in roulette.py")
         embed = discord.Embed(
             title="Roulette \u2014 Table Closed",
             description="Thanks for playing!",
@@ -841,7 +843,7 @@ class RouletteView(ui.View):
                 try:
                     await queries.update_casino_balance(str(player.user_id), refund)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in roulette.py")
         embed = discord.Embed(
             title="Roulette \u2014 Closed",
             description=reason,
@@ -867,7 +869,7 @@ class RouletteView(ui.View):
                     )
                     await table.message.edit(embed=embed, view=None)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in roulette.py")
             return
         # Refund all bets
         for player in table.players.values():
@@ -876,7 +878,7 @@ class RouletteView(ui.View):
                 try:
                     await queries.update_casino_balance(str(player.user_id), refund)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in roulette.py")
         self.active_tables.pop(table.channel_id, None)
         if table.message:
             try:
@@ -887,7 +889,7 @@ class RouletteView(ui.View):
                 )
                 await table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in roulette.py")
 
 
 # ── Cog ────────────────────────────────────────────────────────────────────

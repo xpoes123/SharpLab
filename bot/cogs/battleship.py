@@ -11,7 +11,9 @@ from discord.ext import commands
 from db import queries
 from bot.cogs._elo_helpers import update_elo_1v1, update_elo_draw, fmt_elo_change
 from bot.cogs._pool import compute_side_pot_payouts
+import logging
 
+log = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 BOARD_SIZE = 10
@@ -762,7 +764,7 @@ class BSView(ui.View):
                     f"**{loser.display_name}**: {fmt_elo_change(lo, ln)}"
                 )
             except Exception:
-                pass
+                log.exception("Unhandled error in battleship.py")
 
         embed = _result_embed(game, winner, loser, payouts)
         if elo_text:
@@ -773,7 +775,7 @@ class BSView(ui.View):
         try:
             await game.message.edit(embed=embed, view=None)
         except Exception:
-            pass
+            log.exception("Unhandled error in battleship.py")
         self.stop()
 
     async def _timeout_game(self) -> None:
@@ -785,7 +787,7 @@ class BSView(ui.View):
                 try:
                     await queries.update_casino_balance(str(p.user_id), p.bet)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in battleship.py")
         self.active_games.pop(game.channel_id, None)
         embed = discord.Embed(
             title="\u2716 Battleship \u2014 Timed Out",
@@ -795,7 +797,7 @@ class BSView(ui.View):
         try:
             await game.message.edit(embed=embed, view=None)
         except Exception:
-            pass
+            log.exception("Unhandled error in battleship.py")
         self.stop()
 
     async def on_timeout(self) -> None:
@@ -807,14 +809,14 @@ class BSView(ui.View):
             try:
                 await queries.update_casino_balance(str(game.challenger_id), game.bet)
             except Exception:
-                pass
+                log.exception("Unhandled error in battleship.py")
         elif game.phase in ("placing", "playing"):
             for p in (game.p1, game.p2):
                 if p and not p.is_bot:
                     try:
                         await queries.update_casino_balance(str(p.user_id), p.bet)
                     except Exception:
-                        pass
+                        log.exception("Unhandled error in battleship.py")
 
         self.active_games.pop(game.channel_id, None)
         if game.message:
@@ -826,7 +828,7 @@ class BSView(ui.View):
                 )
                 await game.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in battleship.py")
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

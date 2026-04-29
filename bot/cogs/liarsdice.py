@@ -12,7 +12,9 @@ from discord.ext import commands
 from db import queries
 from bot.cogs._elo_helpers import update_elo_multiplayer
 from bot.cogs._pool import compute_side_pot_payouts
+import logging
 
+log = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 8
@@ -834,7 +836,7 @@ class LiarTableView(ui.View):
                 try:
                     await queries.update_casino_balance(str(p.user_id), p.bet)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in liarsdice.py")
         await self._close(interaction, "Table closed by host.")
 
     # ── Game logic ───────────────────────────────────────────────────────────
@@ -983,7 +985,7 @@ class LiarTableView(ui.View):
             try:
                 await update_elo_multiplayer(finish_order, "liarsdice", "liarsdice")
             except Exception:
-                pass
+                log.exception("Unhandled error in liarsdice.py")
 
         # Save last bets for re-bet
         for uid, player in table.players.items():
@@ -1034,7 +1036,7 @@ class LiarTableView(ui.View):
             try:
                 await queries.update_casino_balance(str(p.user_id), p.bet)
             except Exception:
-                pass
+                log.exception("Unhandled error in liarsdice.py")
 
     async def _close(
         self, interaction: discord.Interaction, reason: str,
@@ -1066,7 +1068,7 @@ class LiarTableView(ui.View):
                     )
                     await table.message.edit(embed=embed, view=None)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in liarsdice.py")
             return
 
         # Betting or playing — refund all
@@ -1081,7 +1083,7 @@ class LiarTableView(ui.View):
                 )
                 await table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in liarsdice.py")
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

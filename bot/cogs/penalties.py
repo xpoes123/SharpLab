@@ -10,7 +10,9 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
+import logging
 
+log = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 SHOT_CLOCK = 30  # seconds per pick
@@ -685,7 +687,7 @@ class PKDuelView(ui.View):
             try:
                 await queries.update_casino_balance(str(duel.challenger_id), duel.bet)
             except Exception:
-                pass
+                log.exception("Unhandled error in penalties.py")
             self.active_duels.pop(duel.channel_id, None)
             if duel.message:
                 try:
@@ -696,7 +698,7 @@ class PKDuelView(ui.View):
                     )
                     await duel.message.edit(embed=embed, view=None)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in penalties.py")
             return
 
         if duel.phase == "playing":
@@ -705,7 +707,7 @@ class PKDuelView(ui.View):
                 await queries.update_casino_balance(str(duel.challenger_id), duel.bet)
                 await queries.update_casino_balance(str(duel.opponent_id), duel.bet)
             except Exception:
-                pass
+                log.exception("Unhandled error in penalties.py")
 
         self.active_duels.pop(duel.channel_id, None)
         if duel.message:
@@ -717,7 +719,7 @@ class PKDuelView(ui.View):
                 )
                 await duel.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in penalties.py")
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

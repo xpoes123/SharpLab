@@ -9,6 +9,8 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
+import logging
+log = logging.getLogger(__name__)
 
 # ── Dice ────────────────────────────────────────────────────────────────────
 
@@ -916,7 +918,7 @@ class CrapsTableView(ui.View):
                 try:
                     await queries.update_casino_balance(str(player.user_id), refund)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in craps.py")
         embed = discord.Embed(
             title="Craps Table \u2014 Closed",
             description=reason,
@@ -939,7 +941,7 @@ class CrapsTableView(ui.View):
                 try:
                     await queries.update_casino_balance(str(player.user_id), refund)
                 except Exception:
-                    pass
+                    log.exception("Unhandled error in craps.py")
         self.active_tables.pop(table.channel_id, None)
         if table.message:
             try:
@@ -950,7 +952,7 @@ class CrapsTableView(ui.View):
                 )
                 await table.message.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("Unhandled error in craps.py")
 
 
 # ── Cog ─────────────────────────────────────────────────────────────────────
