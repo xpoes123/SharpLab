@@ -506,13 +506,16 @@ class RPSCog(commands.Cog):
 
         if channel_id in self.active_tables:
             existing = self.active_tables[channel_id]
-            if getattr(existing, "phase", None) == "closed":
-                del self.active_tables[channel_id]
-            else:
+            _has_running = any(
+                (t := getattr(existing, n, None)) is not None and not t.done()
+                for n in ("game_task", "race_task", "sim_task", "round_task", "_round_task", "trade_task", "fly_task", "_shot_clock_task", "_countdown_task")
+            )
+            if _has_running:
                 await interaction.response.send_message(
                     "There's already an RPS game in this channel!", ephemeral=True,
                 )
                 return
+            del self.active_tables[channel_id]
         if bet < 1:
             await interaction.response.send_message("Bet must be at least 1c.", ephemeral=True)
             return

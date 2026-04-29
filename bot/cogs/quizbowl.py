@@ -575,7 +575,6 @@ class QBLobbyView(ui.View):
     async def close_btn(
         self, interaction: discord.Interaction, button: ui.Button,
     ) -> None:
-        print(f"[QB] close_btn: phase={self.table.phase!r} channel={self.table.channel_id} tables={list(self.active_tables.keys())}", flush=True)
         if interaction.user.id != self.table.host_id:
             await interaction.response.send_message(
                 "Only the host can close the table!", ephemeral=True,
@@ -896,10 +895,7 @@ class QBLobbyView(ui.View):
         for child in self.children:
             child.disabled = True  # type: ignore[union-attr]
         self.stop()
-        before = table.channel_id in self.active_tables
         self.active_tables.pop(table.channel_id, None)
-        after = table.channel_id in self.active_tables
-        print(f"[QB] _close_table: channel={table.channel_id} before_pop={before} after_pop={after} remaining={list(self.active_tables.keys())}", flush=True)
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def on_timeout(self) -> None:
@@ -959,19 +955,18 @@ class QuizBowlCog(commands.Cog):
     )
     async def quizbowl(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
-        print(f"[QB] /quizbowl: channel={channel_id} tables={list(self.active_tables.keys())}", flush=True)
         if channel_id in self.active_tables:
             existing = self.active_tables[channel_id]
-            phase = getattr(existing, "phase", None)
-            print(f"[QB] /quizbowl: found existing table phase={phase!r} channel_id_on_table={getattr(existing, 'channel_id', '?')}", flush=True)
-            if phase == "closed":
-                del self.active_tables[channel_id]
-            else:
+            game_task = getattr(existing, "game_task", None)
+            if game_task is not None and not game_task.done():
+                # Game loop is actively running — block
                 await interaction.response.send_message(
-                    "There's already a quiz bowl table in this channel!",
+                    "There's already a quiz bowl game running in this channel!",
                     ephemeral=True,
                 )
                 return
+            # No active game loop (idle lobby or finished) — clean up
+            del self.active_tables[channel_id]
 
         table = QBTable(
             channel_id=channel_id,

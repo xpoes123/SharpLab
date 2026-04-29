@@ -1969,14 +1969,17 @@ class SoccerSimCog(commands.Cog):
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:
             existing = self.active_tables[channel_id]
-            if getattr(existing, "phase", None) == "closed":
-                del self.active_tables[channel_id]
-            else:
+            _has_running = any(
+                (t := getattr(existing, n, None)) is not None and not t.done()
+                for n in ("game_task", "race_task", "sim_task", "round_task", "_round_task", "trade_task", "fly_task", "_shot_clock_task", "_countdown_task")
+            )
+            if _has_running:
                 await interaction.response.send_message(
                     "There's already a Soccer Sim table in this channel!",
                     ephemeral=True,
                 )
                 return
+            del self.active_tables[channel_id]
 
         await queries.get_or_create_casino_wallet(str(interaction.user.id))
 
@@ -2046,14 +2049,17 @@ class SoccerSimCog(commands.Cog):
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:
             existing = self.active_tables[channel_id]
-            if getattr(existing, "phase", None) == "closed":
-                del self.active_tables[channel_id]
-            else:
+            _has_running = any(
+                (t := getattr(existing, n, None)) is not None and not t.done()
+                for n in ("game_task", "race_task", "sim_task", "round_task", "_round_task", "trade_task", "fly_task", "_shot_clock_task", "_countdown_task")
+            )
+            if _has_running:
                 await interaction.response.send_message(
                     "There's already a Soccer Sim table in this channel!",
                     ephemeral=True,
                 )
                 return
+            del self.active_tables[channel_id]
 
         await queries.get_or_create_casino_wallet(str(interaction.user.id))
 
