@@ -43,6 +43,7 @@ ELO_GAME_LABELS: dict[str, str] = {
     "sequence": "Sequence",
     "prisoner": "Prisoner's Dilemma",
     "indian_poker": "Indian Poker",
+    "blotto": "Colonel Blotto",
 }
 
 MIN_GAMES_FOR_LEADERBOARD = 5

@@ -20,6 +20,7 @@ from web.bingo import router as bingo_router, bingo_websocket, cleanup_stale_bin
 from web.trading_floor import router as tf_router, tf_websocket, cleanup_stale_tf_rooms
 from web.solitairechess import router as sc_router, solchess_websocket, cleanup_stale_solchess_rooms
 from web.minesweeper import router as minesweeper_router, minesweeper_websocket, cleanup_stale_minesweeper_rooms
+from web.blotto import router as blotto_router, blotto_websocket, cleanup_stale_blotto_rooms
 
 DB_PATH = os.environ.get("SHARPLAB_DB_PATH", "data/sharplab.db")
 
@@ -33,6 +34,7 @@ async def lifespan(app: FastAPI):
     tf_cleanup_task = asyncio.create_task(cleanup_stale_tf_rooms())
     sc_cleanup_task = asyncio.create_task(cleanup_stale_solchess_rooms())
     ms_cleanup_task = asyncio.create_task(cleanup_stale_minesweeper_rooms())
+    blotto_cleanup_task = asyncio.create_task(cleanup_stale_blotto_rooms())
     yield
     cleanup_task.cancel()
     figgie_cleanup_task.cancel()
@@ -40,6 +42,7 @@ async def lifespan(app: FastAPI):
     tf_cleanup_task.cancel()
     sc_cleanup_task.cancel()
     ms_cleanup_task.cancel()
+    blotto_cleanup_task.cancel()
 
 
 app = FastAPI(title="SharpLab", docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -58,6 +61,7 @@ app.include_router(bingo_router)
 app.include_router(tf_router)
 app.include_router(sc_router)
 app.include_router(minesweeper_router)
+app.include_router(blotto_router)
 
 
 # WebSocket endpoint (not on the API router — different path pattern)
@@ -89,6 +93,11 @@ async def ws_solitairechess(websocket: WebSocket, room_id: str):
 @app.websocket("/ws/minesweeper/{room_id}")
 async def ws_minesweeper(websocket: WebSocket, room_id: str):
     await minesweeper_websocket(websocket, room_id)
+
+
+@app.websocket("/ws/blotto/{room_id}")
+async def ws_blotto(websocket: WebSocket, room_id: str):
+    await blotto_websocket(websocket, room_id)
 
 # ── Static data (replicated from bot cogs to avoid importing bot deps) ───────
 
@@ -132,6 +141,7 @@ GAME_LABELS: dict[str, str] = {
     "tradingfloor": "Trading Floor",
     "solitaire-chess": "Solitaire Chess",
     "minesweeper": "Minesweeper Race",
+    "blotto": "Colonel Blotto",
 }
 
 ALL_ACHIEVEMENTS = [
@@ -190,6 +200,7 @@ ELO_GAME_LABELS: dict[str, str] = {
     "figgie": "Figgie",
     "tradingfloor": "Trading Floor",
     "minesweeper": "Minesweeper Race",
+    "blotto": "Colonel Blotto",
 }
 
 MIN_ELO_GAMES = 5

@@ -100,6 +100,7 @@ COGS = [
     "bot.cogs.prisoner",
     "bot.cogs.indianpoker",
     "bot.cogs.battleship",
+    "bot.cogs.blotto",
 ]
 
 GUILD_IDS = [int(g.strip()) for g in os.environ["DISCORD_GUILD_ID"].split(",") if g.strip()]

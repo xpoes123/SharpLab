@@ -78,6 +78,7 @@ GAME_LABELS: dict[str, str] = {
     "prisoner": "Prisoner's Dilemma",
     "indian-poker": "Indian Poker",
     "battleship": "Battleship",
+    "blotto": "Colonel Blotto",
 }
 
 GAME_CATEGORIES: list[tuple[str, str]] = [
@@ -2212,6 +2213,7 @@ CASINO_GAMES: list[tuple[str, str, str, str]] = [
     ("minesweeper", "Minesweeper Race \u2014 clear the board fastest", "Brain Games", "party"),
     ("sequence", "Guess the next number in the sequence", "Brain Games", "party"),
     ("battleship", "Battleship \u2014 sink the enemy fleet", "Brain Games", "duo"),
+    ("blotto", "Colonel Blotto \u2014 deploy armies across battlefields", "Brain Games", "party"),
     # ── Sports Sim
     ("nbasim", "Simulated NBA game betting", "Sports Sim", "solo"),
     ("nflsim", "Simulated NFL game betting", "Sports Sim", "solo"),

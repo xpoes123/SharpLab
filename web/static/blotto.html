@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Colonel Blotto — SharpLab</title>
+    <link rel="stylesheet" href="/style.css">
+    <style>
+        .blotto-container {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 24px 16px;
+            min-height: 100vh;
+        }
+        .blotto-container h1 {
+            text-align: center;
+            color: var(--accent);
+            font-size: 1.6rem;
+            margin-bottom: 4px;
+        }
+        .subtitle {
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            margin-bottom: 20px;
+        }
+        .phase { display: none; }
+        .phase.active { display: block; }
+
+        /* ── Lobby ────────────────────────────────────────── */
+        .lobby-info {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+        .lobby-info .pot {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--accent);
+            text-align: center;
+            font-family: 'SF Mono', 'Cascadia Code', monospace;
+        }
+        .lobby-info .pot-label {
+            text-align: center;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .player-list {
+            list-style: none;
+            margin: 16px 0;
+            padding: 0;
+        }
+        .player-list li {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            margin-bottom: 6px;
+            font-size: 0.9rem;
+        }
+        .player-list .host-badge {
+            background: var(--accent);
+            color: var(--bg);
+            font-size: 0.7rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+        .player-list .wager {
+            color: var(--text-muted);
+            font-family: 'SF Mono', 'Cascadia Code', monospace;
+        }
+        .player-list .connected { color: var(--green); }
+        .player-list .disconnected { color: var(--text-muted); }
+
+        .btn-primary {
+            display: block;
+            width: 100%;
+            padding: 14px;
+            font-size: 1rem;
+            font-weight: 600;
+            font-family: inherit;
+            background: var(--accent);
+            color: var(--bg);
+            border: none;
+            border-radius: var(--radius);
+            cursor: pointer;
+            transition: opacity 0.15s;
+        }
+        .btn-primary:hover { opacity: 0.9; }
+        .btn-primary:disabled { opacity: 0.3; cursor: not-allowed; }
+        .waiting-text {
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            margin-top: 12px;
+        }
+
+        /* ── Game Header ──────────────────────────────────── */
+        .game-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            padding: 12px 16px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+        }
+        .round-info { font-weight: 600; font-size: 0.9rem; }
+        .timer {
+            font-size: 1.8rem;
+            font-weight: 700;
+            font-family: 'SF Mono', 'Cascadia Code', monospace;
+            color: var(--accent);
+            min-width: 60px;
+            text-align: center;
+        }
+        .timer.urgent { color: var(--red); animation: pulse 1s infinite; }
+        @keyframes pulse { 50% { opacity: 0.5; } }
+
+        /* ── Scoreboard ──────────────────────────────────── */
+        .scoreboard {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 16px;
+        }
+        .score-chip {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 6px 12px;
+            font-size: 0.8rem;
+            flex: 1;
+            min-width: 80px;
+            text-align: center;
+        }
+        .score-chip .score-name {
+            color: var(--text-muted);
+            font-size: 0.7rem;
+            margin-bottom: 2px;
+        }
+        .score-chip .score-val {
+            font-weight: 700;
+            color: var(--accent);
+            font-family: 'SF Mono', 'Cascadia Code', monospace;
+        }
+        .score-chip.winner-chip {
+            border-color: var(--accent);
+            background: rgba(241, 196, 15, 0.1);
+        }
+
+        /* ── Battlefield Cards ───────────────────────────── */
+        .battlefields {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+        @media (max-width: 600px) {
+            .battlefields {
+                grid-template-columns: 1fr;
+                gap: 8px;
+            }
+            .bf-card { flex-direction: row; align-items: center; gap: 12px; }
+            .bf-card .bf-header { min-width: 70px; }
+            .bf-card .bf-input-area { flex: 1; }
+        }
+        .bf-card {
+            display: flex;
+            flex-direction: column;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 12px;
+            text-align: center;
+            transition: border-color 0.3s, box-shadow 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+        .bf-card.bf-won {
+            border-color: var(--accent);
+            box-shadow: 0 0 12px rgba(241, 196, 15, 0.3);
+        }
+        .bf-card.bf-lost {
+            border-color: var(--red);
+            opacity: 0.7;
+        }
+        .bf-card.bf-tie {
+            border-color: var(--text-muted);
+            opacity: 0.8;
+        }
+        .bf-card.bf-unrevealed {
+            opacity: 0.5;
+        }
+        .bf-header {
+            margin-bottom: 8px;
+        }
+        .bf-name {
+            font-weight: 700;
+            font-size: 0.85rem;
+            color: var(--text);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .bf-icon {
+            font-size: 1.2rem;
+            margin-bottom: 4px;
+        }
+        .bf-input-area {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+        }
+        .bf-input {
+            width: 70px;
+            padding: 8px;
+            font-size: 1.2rem;
+            font-weight: 700;
+            font-family: 'SF Mono', 'Cascadia Code', monospace;
+            text-align: center;
+            background: var(--bg);
+            color: var(--text);
+            border: 2px solid var(--border);
+            border-radius: var(--radius);
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .bf-input:focus { border-color: var(--accent); }
+        .bf-input:disabled { opacity: 0.5; cursor: not-allowed; }
+        .bf-slider {
+            width: 100%;
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+        .bf-slider:disabled { opacity: 0.3; cursor: not-allowed; }
+
+        /* ── Fill bar ───────────────────────────────────── */
+        .bf-fill {
+            height: 4px;
+            background: var(--border);
+            border-radius: 2px;
+            overflow: hidden;
+            width: 100%;
+        }
+        .bf-fill-inner {
+            height: 100%;
+            background: var(--accent);
+            transition: width 0.2s;
+            border-radius: 2px;
+        }
+
+        /* ── Allocation status ──────────────────────────── */
+        .alloc-status {
+            text-align: center;
+            margin-bottom: 16px;
+            padding: 12px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+        }
+        .alloc-remaining {
+            font-size: 1.3rem;
+            font-weight: 700;
+            font-family: 'SF Mono', 'Cascadia Code', monospace;
+        }
+        .alloc-remaining.valid { color: var(--green); }
+        .alloc-remaining.invalid { color: var(--red); }
+        .alloc-label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+        .lock-status {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: center;
+            margin-top: 8px;
+        }
+        .lock-chip {
+            font-size: 0.75rem;
+            padding: 3px 8px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+        .lock-chip.locked { background: rgba(63, 185, 80, 0.2); border-color: var(--green); color: var(--green); }
+        .lock-chip.unlocked { color: var(--text-muted); }
+
+        /* ── Reveal ──────────────────────────────────────── */
+        .reveal-allocs {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-top: 8px;
+        }
+        .reveal-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            background: rgba(255,255,255,0.03);
+            transition: background 0.3s;
+        }
+        .reveal-row.row-winner {
+            background: rgba(241, 196, 15, 0.15);
+            font-weight: 700;
+        }
+        .reveal-row .rv-name { flex: 1; }
+        .reveal-row .rv-count {
+            font-family: 'SF Mono', 'Cascadia Code', monospace;
+            font-weight: 700;
+            min-width: 30px;
+            text-align: right;
+        }
+
+        /* ── Round result banner ─────────────────────────── */
+        .round-banner {
+            text-align: center;
+            padding: 16px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            margin-bottom: 16px;
+        }
+        .round-banner.win { border-color: var(--accent); background: rgba(241,196,15,0.08); }
+        .round-banner h3 { margin: 0 0 4px; font-size: 1.1rem; }
+        .round-banner p { margin: 0; color: var(--text-muted); font-size: 0.85rem; }
+
+        /* ── Results ─────────────────────────────────────── */
+        .results-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+            margin-top: 16px;
+        }
+        .results-table th {
+            text-align: left;
+            padding: 8px 10px;
+            border-bottom: 2px solid var(--border);
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            text-transform: uppercase;
+        }
+        .results-table td {
+            padding: 10px;
+            border-bottom: 1px solid var(--border);
+        }
+        .results-table tr:first-child td {
+            color: var(--accent);
+            font-weight: 600;
+        }
+        .net-positive { color: var(--green); }
+        .net-negative { color: var(--red); }
+        .net-zero { color: var(--text-muted); }
+
+        /* ── Misc ────────────────────────────────────────── */
+        .status-msg {
+            text-align: center;
+            color: var(--text-muted);
+            padding: 40px 20px;
+            font-size: 0.9rem;
+        }
+        .reconnect-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.85);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            color: var(--text);
+            font-size: 1.1rem;
+        }
+        .reconnect-overlay.hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="blotto-container">
+        <h1>&#9876;&#65039; Colonel Blotto</h1>
+        <p class="subtitle">Deploy 100 soldiers across 5 battlefields</p>
+
+        <!-- ── Lobby Phase ─────────────────────────────── -->
+        <div id="phase-lobby" class="phase active">
+            <div class="lobby-info">
+                <div class="pot-label">Prize Pool</div>
+                <div class="pot" id="lobby-pot">0c</div>
+            </div>
+            <ul class="player-list" id="lobby-players"></ul>
+            <button class="btn-primary" id="btn-start" disabled>Start Game</button>
+            <p class="waiting-text" id="lobby-status">Waiting for players...</p>
+        </div>
+
+        <!-- ── Game Phase ──────────────────────────────── -->
+        <div id="phase-game" class="phase">
+            <div class="game-header">
+                <span class="round-info" id="round-label">Round 1</span>
+                <span class="timer" id="timer">60</span>
+                <span class="round-info" id="score-summary"></span>
+            </div>
+
+            <div class="scoreboard" id="scoreboard"></div>
+
+            <div class="battlefields" id="battlefields"></div>
+
+            <div class="alloc-status">
+                <div class="alloc-remaining" id="alloc-remaining">100</div>
+                <div class="alloc-label">soldiers remaining</div>
+                <div class="lock-status" id="lock-status"></div>
+            </div>
+
+            <button class="btn-primary" id="btn-lock" disabled>Lock In</button>
+        </div>
+
+        <!-- ── Round Result ────────────────────────────── -->
+        <div id="phase-round-result" class="phase">
+            <div class="round-banner" id="round-banner">
+                <h3 id="round-result-title"></h3>
+                <p id="round-result-sub"></p>
+            </div>
+            <div class="scoreboard" id="result-scoreboard"></div>
+            <p class="waiting-text">Next round starting soon...</p>
+        </div>
+
+        <!-- ── Game Over ───────────────────────────────── -->
+        <div id="phase-results" class="phase">
+            <div class="round-banner win">
+                <h3 id="final-title">Game Over</h3>
+                <p id="final-sub"></p>
+            </div>
+            <table class="results-table" id="results-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Player</th>
+                        <th>Rounds</th>
+                        <th>BFs</th>
+                        <th>Net</th>
+                    </tr>
+                </thead>
+                <tbody id="results-body"></tbody>
+            </table>
+        </div>
+
+        <div class="reconnect-overlay hidden" id="reconnect">
+            Reconnecting...
+        </div>
+    </div>
+
+<script>
+(function() {
+    'use strict';
+
+    // ── Parse URL ─────────────────────────────────────
+    const pathParts = location.pathname.split('/');
+    const roomId = pathParts[pathParts.length - 1] || pathParts[pathParts.length - 2];
+    const token = new URLSearchParams(location.search).get('t');
+
+    // ── State ─────────────────────────────────────────
+    let ws = null;
+    let myId = null;
+    let isHost = false;
+    let allocation = [20, 20, 20, 20, 20];
+    let lockedIn = false;
+    let currentPhase = 'lobby';
+    let timerInterval = null;
+    let timerVal = 60;
+    let revealData = {};  // bf_idx -> {allocations, winner_id}
+
+    const BF_ICONS = ['&#9876;', '&#127969;', '&#9968;', '&#128737;', '&#9875;'];
+    const BF_NAMES = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo'];
+
+    // ── DOM refs ──────────────────────────────────────
+    const $ = id => document.getElementById(id);
+    const phases = ['phase-lobby', 'phase-game', 'phase-round-result', 'phase-results'];
+    function showPhase(id) {
+        currentPhase = id;
+        phases.forEach(p => $(p).classList.toggle('active', p === id));
+    }
+
+    // ── WebSocket ─────────────────────────────────────
+    function connect() {
+        const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+        const wsUrl = `${proto}://${location.host}/ws/blotto/${roomId}?t=${token}`;
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+            $('reconnect').classList.add('hidden');
+        };
+
+        ws.onclose = () => {
+            $('reconnect').classList.remove('hidden');
+            setTimeout(connect, 2000);
+        };
+
+        ws.onmessage = (e) => {
+            const msg = JSON.parse(e.data);
+            handleMessage(msg);
+        };
+    }
+
+    function send(msg) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(msg));
+        }
+    }
+
+    // Keep-alive
+    setInterval(() => send({type: 'ping'}), 30000);
+
+    // ── Message Handler ──────────────────────────────
+    function handleMessage(msg) {
+        switch (msg.type) {
+            case 'room_state': onRoomState(msg); break;
+            case 'round_start': onRoundStart(msg); break;
+            case 'timer': onTimer(msg); break;
+            case 'player_locked': onPlayerLocked(msg); break;
+            case 'allocation_accepted': break; // already tracked locally
+            case 'reveal_battlefield': onRevealBattlefield(msg); break;
+            case 'round_result': onRoundResult(msg); break;
+            case 'game_over': onGameOver(msg); break;
+            case 'error': console.warn('Server error:', msg.message); break;
+        }
+    }
+
+    // ── Room State ───────────────────────────────────
+    function onRoomState(msg) {
+        myId = msg.you;
+        const me = msg.players.find(p => p.id === myId);
+        isHost = me && me.is_host;
+
+        if (msg.phase === 'waiting') {
+            showPhase('phase-lobby');
+            renderLobby(msg);
+        }
+    }
+
+    function renderLobby(msg) {
+        $('lobby-pot').textContent = msg.prize_pool + 'c';
+        const list = $('lobby-players');
+        list.innerHTML = '';
+        msg.players.forEach(p => {
+            const li = document.createElement('li');
+            const left = document.createElement('span');
+            left.innerHTML = (p.connected
+                ? '<span class="connected">&#9679;</span> '
+                : '<span class="disconnected">&#9675;</span> ')
+                + p.name
+                + (p.is_host ? '<span class="host-badge">HOST</span>' : '');
+            const right = document.createElement('span');
+            right.className = 'wager';
+            right.textContent = p.wager > 0 ? p.wager + 'c' : '';
+            li.appendChild(left);
+            li.appendChild(right);
+            list.appendChild(li);
+        });
+        $('btn-start').disabled = !isHost || msg.players.length < 2;
+        $('lobby-status').textContent = isHost
+            ? (msg.players.length < 2 ? 'Need at least 2 players' : 'Ready to start!')
+            : 'Waiting for host to start...';
+    }
+
+    // ── Round Start ──────────────────────────────────
+    function onRoundStart(msg) {
+        showPhase('phase-game');
+        lockedIn = false;
+        allocation = [20, 20, 20, 20, 20];
+        revealData = {};
+        timerVal = msg.time_limit;
+        $('round-label').textContent = `Round ${msg.round_num}`;
+        renderScoreboard(msg.scoreboard, 'scoreboard');
+        renderBattlefields('allocating');
+        updateAllocStatus(msg.scoreboard);
+        $('btn-lock').disabled = false;
+        $('btn-lock').textContent = 'Lock In';
+        startTimer(msg.time_limit);
+    }
+
+    function startTimer(secs) {
+        clearInterval(timerInterval);
+        timerVal = secs;
+        $('timer').textContent = timerVal;
+        $('timer').classList.remove('urgent');
+        timerInterval = setInterval(() => {
+            timerVal--;
+            if (timerVal < 0) timerVal = 0;
+            $('timer').textContent = timerVal;
+            if (timerVal <= 10) $('timer').classList.add('urgent');
+        }, 1000);
+    }
+
+    function onTimer(msg) {
+        timerVal = msg.remaining;
+        $('timer').textContent = timerVal;
+        if (timerVal <= 10) $('timer').classList.add('urgent');
+    }
+
+    // ── Battlefield Rendering ────────────────────────
+    function renderBattlefields(mode) {
+        const container = $('battlefields');
+        container.innerHTML = '';
+
+        for (let i = 0; i < 5; i++) {
+            const card = document.createElement('div');
+            card.className = 'bf-card';
+            card.id = `bf-${i}`;
+
+            if (mode === 'allocating') {
+                const pct = (allocation[i] / 100) * 100;
+                card.innerHTML = `
+                    <div class="bf-header">
+                        <div class="bf-icon">${BF_ICONS[i]}</div>
+                        <div class="bf-name">${BF_NAMES[i]}</div>
+                    </div>
+                    <div class="bf-input-area">
+                        <input type="number" class="bf-input" id="bf-input-${i}"
+                            value="${allocation[i]}" min="0" max="100"
+                            ${lockedIn ? 'disabled' : ''}>
+                        <input type="range" class="bf-slider" id="bf-slider-${i}"
+                            value="${allocation[i]}" min="0" max="100"
+                            ${lockedIn ? 'disabled' : ''}>
+                        <div class="bf-fill">
+                            <div class="bf-fill-inner" style="width: ${pct}%"></div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                card.classList.add('bf-unrevealed');
+                card.innerHTML = `
+                    <div class="bf-header">
+                        <div class="bf-icon">${BF_ICONS[i]}</div>
+                        <div class="bf-name">${BF_NAMES[i]}</div>
+                    </div>
+                    <div class="reveal-allocs" id="bf-reveal-${i}">
+                        <div style="color:var(--text-muted); font-size:0.8rem">Waiting...</div>
+                    </div>
+                `;
+            }
+            container.appendChild(card);
+        }
+
+        if (mode === 'allocating') {
+            // Attach input event listeners
+            for (let i = 0; i < 5; i++) {
+                const inp = $(`bf-input-${i}`);
+                const slider = $(`bf-slider-${i}`);
+                inp.addEventListener('input', () => {
+                    let v = parseInt(inp.value) || 0;
+                    if (v < 0) v = 0;
+                    if (v > 100) v = 100;
+                    allocation[i] = v;
+                    slider.value = v;
+                    updateFills();
+                });
+                slider.addEventListener('input', () => {
+                    let v = parseInt(slider.value) || 0;
+                    allocation[i] = v;
+                    inp.value = v;
+                    updateFills();
+                });
+            }
+        }
+    }
+
+    function updateFills() {
+        const total = allocation.reduce((a, b) => a + b, 0);
+        const remaining = 100 - total;
+        const el = $('alloc-remaining');
+        el.textContent = remaining;
+        el.className = 'alloc-remaining ' + (remaining === 0 ? 'valid' : 'invalid');
+        $('btn-lock').disabled = lockedIn || remaining !== 0;
+
+        for (let i = 0; i < 5; i++) {
+            const fill = document.querySelector(`#bf-${i} .bf-fill-inner`);
+            if (fill) fill.style.width = `${(allocation[i] / 100) * 100}%`;
+        }
+    }
+
+    function updateAllocStatus(scoreboard) {
+        // Show lock status of all players
+        const lockDiv = $('lock-status');
+        if (!lockDiv) return;
+        // We'll update this when we get player_locked messages
+        lockDiv.innerHTML = '';
+
+        // Build score summary
+        if (scoreboard && scoreboard.length > 0) {
+            const parts = scoreboard.map(s => `${s.name}: ${s.rounds_won}W`);
+            $('score-summary').textContent = parts.join(' | ').substring(0, 30);
+        }
+    }
+
+    // ── Lock In ──────────────────────────────────────
+    function onPlayerLocked(msg) {
+        // Show lock indicator
+        const lockDiv = $('lock-status');
+        const chip = document.createElement('span');
+        chip.className = 'lock-chip locked';
+        chip.textContent = msg.player_name + ' \u2714';
+        lockDiv.appendChild(chip);
+    }
+
+    // ── Reveal ───────────────────────────────────────
+    function onRevealBattlefield(msg) {
+        const idx = msg.battlefield;
+        revealData[idx] = msg;
+
+        const card = $(`bf-${idx}`);
+        if (!card) return;
+
+        card.classList.remove('bf-unrevealed');
+        if (msg.winner_id === myId) {
+            card.classList.add('bf-won');
+        } else if (msg.winner_id === null) {
+            card.classList.add('bf-tie');
+        } else {
+            card.classList.add('bf-lost');
+        }
+
+        // Render allocations
+        const revealDiv = card.querySelector('.reveal-allocs') || card.querySelector('.bf-input-area');
+        if (revealDiv) {
+            revealDiv.innerHTML = '';
+            revealDiv.className = 'reveal-allocs';
+
+            // Sort: winner first, then descending by count
+            const entries = Object.entries(msg.allocations)
+                .map(([uid, data]) => ({uid, name: data.name, count: data.soldiers}))
+                .sort((a, b) => b.count - a.count);
+
+            entries.forEach(e => {
+                const row = document.createElement('div');
+                row.className = 'reveal-row' + (e.uid === msg.winner_id ? ' row-winner' : '');
+                row.innerHTML = `
+                    <span class="rv-name">${e.name}</span>
+                    <span class="rv-count">${e.count}</span>
+                `;
+                revealDiv.appendChild(row);
+            });
+        }
+
+        // Update header during reveal
+        if (msg.winner_name) {
+            $('round-label').textContent += '';
+        }
+    }
+
+    // ── Round Result ─────────────────────────────────
+    function onRoundResult(msg) {
+        clearInterval(timerInterval);
+
+        // Show round result briefly before next round
+        showPhase('phase-round-result');
+        const banner = $('round-banner');
+        const title = $('round-result-title');
+        const sub = $('round-result-sub');
+
+        if (msg.round_winner_id === myId) {
+            banner.className = 'round-banner win';
+            title.textContent = `You won Round ${msg.round_num}!`;
+        } else if (msg.round_winner_name) {
+            banner.className = 'round-banner';
+            title.textContent = `${msg.round_winner_name} won Round ${msg.round_num}`;
+        } else {
+            banner.className = 'round-banner';
+            title.textContent = `Round ${msg.round_num} — Draw`;
+        }
+
+        // Show battlefield breakdown
+        const bfParts = [];
+        for (const [uid, count] of Object.entries(msg.battlefields_won || {})) {
+            if (count > 0) bfParts.push(`${count} BF`);
+        }
+        sub.textContent = bfParts.length > 0
+            ? 'Battlefields: ' + Object.entries(msg.battlefields_won).map(([uid, c]) => c).join('-')
+            : 'No battlefields won';
+
+        renderScoreboard(msg.scoreboard, 'result-scoreboard');
+    }
+
+    // ── Game Over ────────────────────────────────────
+    function onGameOver(msg) {
+        clearInterval(timerInterval);
+        showPhase('phase-results');
+
+        const results = msg.results || [];
+        if (results.length > 0) {
+            const winner = results[0];
+            $('final-title').textContent = winner.discord_user === myId
+                ? 'You Win!'
+                : `${winner.display_name} Wins!`;
+            $('final-sub').textContent = `${winner.rounds_won} rounds won`;
+        }
+
+        const tbody = $('results-body');
+        tbody.innerHTML = '';
+        const medals = ['\u{1F947}', '\u{1F948}', '\u{1F949}'];
+        results.forEach((r, i) => {
+            const tr = document.createElement('tr');
+            const netClass = r.net > 0 ? 'net-positive' : r.net < 0 ? 'net-negative' : 'net-zero';
+            const netStr = r.net > 0 ? `+${r.net}` : `${r.net}`;
+            tr.innerHTML = `
+                <td>${i < 3 ? medals[i] : i + 1}</td>
+                <td>${r.display_name}${r.discord_user === myId ? ' (you)' : ''}</td>
+                <td>${r.rounds_won}W</td>
+                <td>${r.battlefields_won_total}</td>
+                <td class="${netClass}">${r.wager > 0 ? netStr + 'c' : '-'}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
+
+    // ── Scoreboard ───────────────────────────────────
+    function renderScoreboard(data, containerId) {
+        const container = $(containerId);
+        if (!container || !data) return;
+        container.innerHTML = '';
+        data.forEach(s => {
+            const chip = document.createElement('div');
+            chip.className = 'score-chip' + (s.rounds_won >= 3 ? ' winner-chip' : '');
+            chip.innerHTML = `
+                <div class="score-name">${s.name}${s.id === myId ? ' (you)' : ''}</div>
+                <div class="score-val">${s.rounds_won}W / ${s.battlefields_won_total}BF</div>
+            `;
+            container.appendChild(chip);
+        });
+    }
+
+    // ── Button Handlers ──────────────────────────────
+    $('btn-start').addEventListener('click', () => {
+        send({type: 'start'});
+        $('btn-start').disabled = true;
+    });
+
+    $('btn-lock').addEventListener('click', () => {
+        const total = allocation.reduce((a, b) => a + b, 0);
+        if (total !== 100) return;
+        // Send allocation first, then lock
+        send({type: 'allocate', soldiers: allocation});
+        send({type: 'lock_in'});
+        lockedIn = true;
+        $('btn-lock').disabled = true;
+        $('btn-lock').textContent = 'Locked In \u2714';
+        // Disable all inputs
+        for (let i = 0; i < 5; i++) {
+            const inp = $(`bf-input-${i}`);
+            const slider = $(`bf-slider-${i}`);
+            if (inp) inp.disabled = true;
+            if (slider) slider.disabled = true;
+        }
+    });
+
+    // ── Init ─────────────────────────────────────────
+    connect();
+})();
+</script>
+</body>
+</html>
