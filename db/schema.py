@@ -180,8 +180,9 @@ CREATE INDEX IF NOT EXISTS idx_paper_bets_game ON paper_bets(game_id);
 CREATE INDEX IF NOT EXISTS idx_paper_bets_user_status ON paper_bets(discord_user, status);
 
 CREATE TABLE IF NOT EXISTS user_settings (
-    discord_user       TEXT PRIMARY KEY,
-    craps_default_bet  INTEGER
+    discord_user          TEXT PRIMARY KEY,
+    craps_default_bet     INTEGER,
+    crapless_default_bet  INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS discord_users (
