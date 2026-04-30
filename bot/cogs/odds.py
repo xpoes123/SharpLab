@@ -221,7 +221,7 @@ async def _fetch_scores_espn(dates: list[str], sport: str) -> list[dict]:
                     team = c.get("team", {})
                     abbr = team.get("abbreviation", "???")
                     full_name = team.get("displayName", abbr)
-                    score = int(c.get("score", "0"))
+                    score = int(c.get("score", "0") or "0")
                     if c.get("homeAway") == "home":
                         game["home_team"] = {"abbreviation": abbr, "full_name": full_name}
                         game["home_team_score"] = score

@@ -133,8 +133,11 @@ class InjuryCog(commands.Cog):
                 if game else []
             )
             embed = _build_injury_embed(alert, game, snapshots)
-            await channel.send(embed=embed)
+            # Mark notified before sending so a crash between these two lines
+            # results in a missed post (recoverable) rather than a duplicate
+            # notification on the next loop tick (annoying, not recoverable).
             await queries.mark_injury_notified(alert.record_id)
+            await channel.send(embed=embed)
 
     @injury_check.before_loop
     async def before_injury_check(self) -> None:
