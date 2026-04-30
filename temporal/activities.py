@@ -73,6 +73,7 @@ def _extract_payload(bookmaker: dict, home_team: str) -> dict[str, Any]:
             payload["spread_odds"] = home.get("price")
             if away:
                 payload["spread_away"] = away[0].get("point")
+                payload["spread_away_odds"] = away[0].get("price")
 
         elif key == "h2h":
             home = outcomes.get(home_team, {})
@@ -494,6 +495,9 @@ async def fetch_kalshi_close_snapshot(inp: FetchCloseSnapshotInput) -> list[Odds
             timeout=10.0,
         )
         if resp.status_code != 200:
+            activity.logger.warning(
+                f"[fetch_kalshi_close_snapshot] HTTP {resp.status_code} for {game.game_id}"
+            )
             return []
         markets = resp.json().get("markets", [])
 
@@ -650,7 +654,8 @@ async def _fetch_espn_scores(dates: list[str], sport: str) -> list[GameResult]:
                 if resp.status_code != 200:
                     continue
                 data = resp.json()
-            except Exception:
+            except Exception as e:
+                activity.logger.warning(f"[_fetch_espn_scores] {sport} {date_str} fetch failed: {e}")
                 continue
 
             for event in data.get("events", []):
@@ -663,7 +668,7 @@ async def _fetch_espn_scores(dates: list[str], sport: str) -> list[GameResult]:
                 home_score = away_score = 0
                 for c in competitors:
                     team_name = c.get("team", {}).get("displayName", "")
-                    score = int(c.get("score", "0"))
+                    score = int(c.get("score", "0") or "0")
                     if c.get("homeAway") == "home":
                         home_name = team_name
                         home_score = score

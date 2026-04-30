@@ -50,6 +50,7 @@ def test_extract_payload_spread():
     assert payload["spread"] == -4.5
     assert payload["spread_odds"] == -110
     assert payload["spread_away"] == 4.5
+    assert payload["spread_away_odds"] == -110
 
 
 def test_extract_payload_moneyline():
@@ -381,3 +382,27 @@ def test_resolve_mlb_total_over():
 def test_resolve_mlb_total_under():
     # O/U 8.5, final 3-2 = 5 → under hits
     assert _resolve_bet(_bet(market="total", side="under", line=8.5), MLB_HOME, MLB_AWAY, 3, 2) == "won"
+
+
+# ── ESPN score parsing guard ───────────────────────────────────────────────────
+
+def test_espn_score_none_guard():
+    """Regression: ESPN sometimes returns None for score. int(None or '0') must not crash."""
+    # Simulates the parse expression used in _fetch_espn_scores for each competitor
+    competitor = {"score": None, "homeAway": "home", "team": {"displayName": "Los Angeles Lakers"}}
+    score = int(competitor.get("score", "0") or "0")
+    assert score == 0
+
+
+def test_espn_score_empty_string_guard():
+    """ESPN may return empty string for in-progress scores."""
+    competitor = {"score": "", "homeAway": "away", "team": {"displayName": "Boston Celtics"}}
+    score = int(competitor.get("score", "0") or "0")
+    assert score == 0
+
+
+def test_espn_score_normal():
+    """Normal case still works after guard."""
+    competitor = {"score": "112", "homeAway": "home", "team": {"displayName": "Miami Heat"}}
+    score = int(competitor.get("score", "0") or "0")
+    assert score == 112
