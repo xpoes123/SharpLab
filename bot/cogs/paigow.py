@@ -1124,11 +1124,14 @@ class PaiGowTableView(ui.View):
         table.round_num += 1
 
     async def _abort(self, interaction: discord.Interaction, reason: str) -> None:
+        # Mark finished BEFORE refunds and stop so on_timeout() can't double-refund
+        # if it fires concurrently.
+        self.table.phase = "finished"
         for seat in self.table.players.values():
             try:
                 await queries.update_casino_balance(str(seat.user_id), seat.total_wager)
             except Exception:
-                log.exception("Unhandled error in paigow.py")
+                log.exception("paigow: failed to refund player %s in _abort", seat.user_id)
         embed = discord.Embed(
             title="Pai Gow Table — Closed",
             description=reason,
@@ -1138,7 +1141,10 @@ class PaiGowTableView(ui.View):
             if hasattr(child, "disabled"):
                 child.disabled = True  # type: ignore[union-attr]
         self.stop()
-        self.active_tables.pop(self.table.channel_id, None)
+        # Only evict if active_tables still points to THIS table — a new /paigow
+        # call may have already replaced the entry.
+        if self.active_tables.get(self.table.channel_id) is self.table:
+            self.active_tables.pop(self.table.channel_id, None)
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def _close(self, interaction: discord.Interaction) -> None:
@@ -1151,13 +1157,19 @@ class PaiGowTableView(ui.View):
             if hasattr(child, "disabled"):
                 child.disabled = True  # type: ignore[union-attr]
         self.stop()
-        self.active_tables.pop(self.table.channel_id, None)
+        # Only evict if active_tables still points to THIS table — a new /paigow
+        # call may have already replaced the entry.
+        if self.active_tables.get(self.table.channel_id) is self.table:
+            self.active_tables.pop(self.table.channel_id, None)
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def on_timeout(self) -> None:
         table = self.table
         if table.phase == "finished":
-            self.active_tables.pop(table.channel_id, None)
+            # Only evict if active_tables still maps to THIS table — a new /paigow
+            # call may have already replaced the entry with a different table.
+            if self.active_tables.get(table.channel_id) is table:
+                self.active_tables.pop(table.channel_id, None)
             if table.message:
                 try:
                     embed = discord.Embed(
@@ -1172,7 +1184,8 @@ class PaiGowTableView(ui.View):
         # Betting or setting — mark finished and remove from active_tables
         # BEFORE refunds so the table can't get stuck if a refund throws.
         table.phase = "finished"
-        self.active_tables.pop(table.channel_id, None)
+        if self.active_tables.get(table.channel_id) is table:
+            self.active_tables.pop(table.channel_id, None)
         for seat in table.players.values():
             try:
                 await queries.update_casino_balance(str(seat.user_id), seat.total_wager)
