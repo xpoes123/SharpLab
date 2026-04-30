@@ -781,6 +781,7 @@ class NbaSimTableView(ui.View):
         except asyncio.CancelledError:
             pass
         except Exception:
+            log.exception("NBASimView game loop crashed")
             if table.phase == "playing":
                 table.phase = "finished"
                 await self._refund_all()

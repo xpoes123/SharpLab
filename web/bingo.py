@@ -2,11 +2,14 @@
 
 import asyncio
 import json
+import logging
 import os
 import random
 import secrets
 import time
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Header, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
@@ -457,14 +460,17 @@ def _cards_msg(player: WebBingoPlayer, room: BingoRoom) -> dict:
 async def cleanup_stale_bingo_rooms() -> None:
     while True:
         await asyncio.sleep(60)
-        now = time.time()
-        stale = [
-            rid for rid, room in rooms.items()
-            if room.phase == "waiting" and (now - room.created_at) > ROOM_TTL
-        ]
-        for rid in stale:
-            room = rooms.pop(rid, None)
-            if room:
-                for p in room.players.values():
-                    await queries.update_casino_balance(p.discord_user, p.wager)
-                    await _send(p.ws, {"type": "error", "message": "Room expired. Bet refunded."})
+        try:
+            now = time.time()
+            stale = [
+                rid for rid, room in rooms.items()
+                if room.phase == "waiting" and (now - room.created_at) > ROOM_TTL
+            ]
+            for rid in stale:
+                room = rooms.pop(rid, None)
+                if room:
+                    for p in room.players.values():
+                        await queries.update_casino_balance(p.discord_user, p.wager)
+                        await _send(p.ws, {"type": "error", "message": "Room expired. Bet refunded."})
+        except Exception:
+            logger.exception("cleanup_stale_bingo_rooms error — loop continues")
