@@ -1300,6 +1300,12 @@ class CasinoCog(commands.Cog):
     @tasks.loop(seconds=_CLEANUP_INTERVAL_SECS)
     async def _cleanup_orphaned_games(self) -> None:
         """Periodically scan all cogs and kill games stuck in active_tables."""
+        try:
+            await self._cleanup_orphaned_games_inner()
+        except Exception:
+            log.exception("Orphaned game cleanup failed")
+
+    async def _cleanup_orphaned_games_inner(self) -> None:
         now = time.monotonic()
         killed = 0
         for cog in self.bot.cogs.values():

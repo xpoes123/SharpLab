@@ -705,50 +705,11 @@ def _resolve_bet(
     bet: Bet, home_team: str, away_team: str, home_score: int, away_score: int
 ) -> str:
     """Return won/lost/push/void for a bet given the final score."""
-    side = bet.side.lower()
-    market = bet.market.lower()
-    home_l = home_team.lower()
-    away_l = away_team.lower()
-
-    def _is_home(s: str) -> bool:
-        return s in home_l or home_l.split()[-1] in s
-
-    def _is_away(s: str) -> bool:
-        return s in away_l or away_l.split()[-1] in s
-
-    if market in ("moneyline", "kalshi"):
-        if side == "yes" or _is_home(side):
-            return "won" if home_score > away_score else "lost"
-        if side == "no" or _is_away(side):
-            return "won" if away_score > home_score else "lost"
-
-    elif market == "spread":
-        if bet.line is None:
-            return "void"
-        if _is_home(side):
-            side_score, opp_score = home_score, away_score
-        elif _is_away(side):
-            side_score, opp_score = away_score, home_score
-        else:
-            return "void"
-        margin = (side_score - opp_score) + bet.line
-        if abs(margin) < 0.01:
-            return "push"
-        return "won" if margin > 0 else "lost"
-
-    elif market == "total":
-        if bet.line is None:
-            return "void"
-        total = home_score + away_score
-        diff = total - bet.line
-        if abs(diff) < 0.01:
-            return "push"
-        if side == "over":
-            return "won" if diff > 0 else "lost"
-        if side == "under":
-            return "won" if diff < 0 else "lost"
-
-    return "void"
+    from shared.resolution import resolve_outcome
+    return resolve_outcome(
+        bet.side, bet.market, bet.line,
+        home_team, away_team, home_score, away_score,
+    )
 
 
 @activity.defn

@@ -306,54 +306,12 @@ async def void_trade_autocomplete(
 def _resolve_paper_bet(
     pb: dict, home_team: str, away_team: str, home_score: int, away_score: int,
 ) -> str:
-    """Return won/lost/push/void for a paper bet given the final score.
-
-    Same logic as temporal.activities._resolve_bet, adapted for dict input.
-    """
-    side = pb["side"].lower()
-    market = pb["market"].lower()
-    home_l = home_team.lower()
-    away_l = away_team.lower()
-
-    def _is_home(s: str) -> bool:
-        return s in home_l or home_l.split()[-1] in s
-
-    def _is_away(s: str) -> bool:
-        return s in away_l or away_l.split()[-1] in s
-
-    if market == "moneyline":
-        if _is_home(side):
-            return "won" if home_score > away_score else "lost"
-        if _is_away(side):
-            return "won" if away_score > home_score else "lost"
-
-    elif market == "spread":
-        if pb["line"] is None:
-            return "void"
-        if _is_home(side):
-            side_score, opp_score = home_score, away_score
-        elif _is_away(side):
-            side_score, opp_score = away_score, home_score
-        else:
-            return "void"
-        margin = (side_score - opp_score) + pb["line"]
-        if abs(margin) < 0.01:
-            return "push"
-        return "won" if margin > 0 else "lost"
-
-    elif market == "total":
-        if pb["line"] is None:
-            return "void"
-        total = home_score + away_score
-        diff = total - pb["line"]
-        if abs(diff) < 0.01:
-            return "push"
-        if side == "over":
-            return "won" if diff > 0 else "lost"
-        if side == "under":
-            return "won" if diff < 0 else "lost"
-
-    return "void"
+    """Return won/lost/push/void for a paper bet given the final score."""
+    from shared.resolution import resolve_outcome
+    return resolve_outcome(
+        pb["side"], pb["market"], pb["line"],
+        home_team, away_team, home_score, away_score,
+    )
 
 
 def _close_odds_for_paper_bet(pb: dict, home_team: str, away_team: str, payload: dict) -> int | None:

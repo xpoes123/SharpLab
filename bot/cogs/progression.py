@@ -309,28 +309,18 @@ class ProgressionCog(commands.Cog):
     @tasks.loop(minutes=30)
     async def sync_discord_users(self) -> None:
         """Populate discord_users cache for the web leaderboard."""
-        from db.schema import DB_PATH
-        import aiosqlite
-        async with aiosqlite.connect(DB_PATH) as db:
-            cursor = await db.execute(
-                """SELECT DISTINCT discord_user FROM (
-                    SELECT discord_user FROM casino_wallets
-                    UNION
-                    SELECT discord_user FROM user_xp
-                    UNION
-                    SELECT discord_user FROM paper_bets
-                )"""
-            )
-            all_users = [row[0] for row in await cursor.fetchall()]
-
-        for uid in all_users:
-            try:
-                user = await self.bot.fetch_user(int(uid))
-                await queries.upsert_discord_user(
-                    uid, user.display_name, str(user.display_avatar.url),
-                )
-            except Exception:
-                log.warning("Failed to sync Discord user %s", uid, exc_info=True)
+        try:
+            all_users = await queries.get_all_active_discord_users()
+            for uid in all_users:
+                try:
+                    user = await self.bot.fetch_user(int(uid))
+                    await queries.upsert_discord_user(
+                        uid, user.display_name, str(user.display_avatar.url),
+                    )
+                except Exception:
+                    log.warning("Failed to sync Discord user %s", uid, exc_info=True)
+        except Exception:
+            log.exception("Discord user sync failed")
 
     @sync_discord_users.before_loop
     async def before_sync(self) -> None:
@@ -340,13 +330,16 @@ class ProgressionCog(commands.Cog):
 
     @tasks.loop(seconds=30)
     async def check_achievements(self) -> None:
-        new_entries = await queries.get_casino_history_since(self._last_check_id)
-        if not new_entries:
-            return
-        self._last_check_id = new_entries[-1]["id"]
-        users = {e["discord_user"] for e in new_entries}
-        for uid in users:
-            await self._check_user_achievements(uid)
+        try:
+            new_entries = await queries.get_casino_history_since(self._last_check_id)
+            if not new_entries:
+                return
+            self._last_check_id = new_entries[-1]["id"]
+            users = {e["discord_user"] for e in new_entries}
+            for uid in users:
+                await self._check_user_achievements(uid)
+        except Exception:
+            log.exception("Achievement check failed")
 
     @check_achievements.before_loop
     async def before_check(self) -> None:

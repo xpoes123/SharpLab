@@ -121,23 +121,29 @@ class InjuryCog(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def injury_check(self) -> None:
-        channel = self.bot.get_channel(INJURY_CHANNEL_ID)
-        if channel is None:
-            return
+        try:
+            channel = self.bot.get_channel(INJURY_CHANNEL_ID)
+            if channel is None:
+                return
 
-        alerts = await queries.get_unnotified_injuries()
-        for alert in alerts:
-            game = await queries.get_todays_game_for_team(alert.team)
-            snapshots = (
-                await queries.get_latest_snapshots_for_game(game.game_id)
-                if game else []
-            )
-            embed = _build_injury_embed(alert, game, snapshots)
-            # Mark notified before sending so a crash between these two lines
-            # results in a missed post (recoverable) rather than a duplicate
-            # notification on the next loop tick (annoying, not recoverable).
-            await queries.mark_injury_notified(alert.record_id)
-            await channel.send(embed=embed)
+            alerts = await queries.get_unnotified_injuries()
+            for alert in alerts:
+                try:
+                    game = await queries.get_todays_game_for_team(alert.team)
+                    snapshots = (
+                        await queries.get_latest_snapshots_for_game(game.game_id)
+                        if game else []
+                    )
+                    embed = _build_injury_embed(alert, game, snapshots)
+                    # Mark notified before sending so a crash between these two lines
+                    # results in a missed post (recoverable) rather than a duplicate
+                    # notification on the next loop tick (annoying, not recoverable).
+                    await queries.mark_injury_notified(alert.record_id)
+                    await channel.send(embed=embed)
+                except Exception:
+                    log.exception("Injury alert failed for %s", alert.record_id)
+        except Exception:
+            log.exception("Injury check loop failed")
 
     @injury_check.before_loop
     async def before_injury_check(self) -> None:

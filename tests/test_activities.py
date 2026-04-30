@@ -13,6 +13,7 @@ from temporal.activities import (
 )
 from shared.models import Bet, TEAM_ABBR_NBA, TEAM_ABBR_MLB, get_team_abbr
 from shared.odds_utils import prob_to_american, american_to_prob, american_to_decimal
+from shared.resolution import resolve_outcome
 
 
 # ── _extract_payload ───────────────────────────────────────────────────────────
@@ -382,6 +383,71 @@ def test_resolve_mlb_total_over():
 def test_resolve_mlb_total_under():
     # O/U 8.5, final 3-2 = 5 → under hits
     assert _resolve_bet(_bet(market="total", side="under", line=8.5), MLB_HOME, MLB_AWAY, 3, 2) == "won"
+
+
+# ── shared.resolution.resolve_outcome (canonical, directly tested) ────────────
+
+def test_resolve_outcome_delegates_moneyline():
+    assert resolve_outcome("celtics", "moneyline", None, HOME, AWAY, 110, 100) == "won"
+    assert resolve_outcome("celtics", "moneyline", None, HOME, AWAY, 100, 110) == "lost"
+    assert resolve_outcome("lakers", "moneyline", None, HOME, AWAY, 100, 110) == "won"
+
+def test_resolve_outcome_kalshi_yes_no():
+    assert resolve_outcome("yes", "kalshi", None, HOME, AWAY, 110, 100) == "won"
+    assert resolve_outcome("no", "kalshi", None, HOME, AWAY, 100, 110) == "won"
+
+def test_resolve_outcome_spread():
+    assert resolve_outcome("celtics", "spread", -4.5, HOME, AWAY, 110, 100) == "won"
+    assert resolve_outcome("celtics", "spread", -4.5, HOME, AWAY, 103, 100) == "lost"
+    assert resolve_outcome("celtics", "spread", -3.0, HOME, AWAY, 103, 100) == "push"
+    assert resolve_outcome("celtics", "spread", None, HOME, AWAY, 110, 100) == "void"
+
+def test_resolve_outcome_total():
+    assert resolve_outcome("over", "total", 220.5, HOME, AWAY, 115, 110) == "won"
+    assert resolve_outcome("under", "total", 220.5, HOME, AWAY, 100, 110) == "won"
+    assert resolve_outcome("over", "total", 210.0, HOME, AWAY, 100, 110) == "push"
+    assert resolve_outcome("over", "total", None, HOME, AWAY, 110, 100) == "void"
+
+def test_resolve_outcome_unknown_side_voids():
+    assert resolve_outcome("unknown_team", "moneyline", None, HOME, AWAY, 110, 100) == "void"
+
+def test_resolve_outcome_substring_ambiguity():
+    """A side string that is a substring of BOTH team names should resolve to void, not a false match.
+
+    Example: 'red' appears in 'Boston Red Sox' (away). 'red' does NOT appear in
+    'Cleveland Guardians' (home), so it should correctly route to away.
+    This guards against the case where a short token could match both teams.
+    """
+    home = "Portland Trail Blazers"
+    away = "Sacramento Kings"
+    # 'kings' only matches away — should resolve correctly
+    assert resolve_outcome("kings", "moneyline", None, home, away, 95, 108) == "won"
+    # 'blazers' only matches home — should resolve correctly
+    assert resolve_outcome("blazers", "moneyline", None, home, away, 108, 95) == "won"
+
+def test_resolve_outcome_team_name_contained_in_other():
+    """Guard: a last-word suffix that appears in the opposing team's name does not false-match.
+
+    'Heat' (Miami Heat) last word is 'heat'. 'Oklahoma City Thunder' does not contain 'heat',
+    so side='heat' should correctly resolve to home (Miami Heat).
+    """
+    home = "Miami Heat"
+    away = "Oklahoma City Thunder"
+    assert resolve_outcome("heat", "moneyline", None, home, away, 105, 98) == "won"
+    assert resolve_outcome("thunder", "moneyline", None, home, away, 98, 105) == "won"
+
+def test_resolve_outcome_temporal_delegation():
+    """_resolve_bet in activities.py delegates correctly to resolve_outcome."""
+    bet = _bet(market="spread", side="celtics", line=-4.5)
+    assert _resolve_bet(bet, HOME, AWAY, 110, 100) == "won"
+
+def test_resolve_outcome_paper_bet_delegation():
+    """_resolve_paper_bet in trading.py delegates correctly to resolve_outcome."""
+    from bot.cogs.trading import _resolve_paper_bet
+    pb = {"side": "celtics", "market": "spread", "line": -4.5}
+    assert _resolve_paper_bet(pb, HOME, AWAY, 110, 100) == "won"
+    pb_kalshi = {"side": "yes", "market": "kalshi", "line": None}
+    assert _resolve_paper_bet(pb_kalshi, HOME, AWAY, 110, 100) == "won"
 
 
 # ── ESPN score parsing guard ───────────────────────────────────────────────────

@@ -2254,3 +2254,18 @@ async def cleanup_stale_game_sessions() -> int:
             cleaned += 1
         await db.commit()
     return cleaned
+
+
+async def get_all_active_discord_users() -> list[str]:
+    """Return distinct discord_user IDs across casino_wallets, user_xp, and paper_bets."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """SELECT DISTINCT discord_user FROM (
+                SELECT discord_user FROM casino_wallets
+                UNION
+                SELECT discord_user FROM user_xp
+                UNION
+                SELECT discord_user FROM paper_bets
+            )"""
+        )
+        return [row[0] for row in await cursor.fetchall()]
