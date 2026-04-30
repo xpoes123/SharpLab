@@ -1420,6 +1420,7 @@ class SoccerSimTableView(ui.View):
         except asyncio.CancelledError:
             pass
         except Exception:
+            log.exception("SoccerSimView game loop crashed")
             if table.phase == "playing":
                 table.phase = "finished"
                 await self._refund_all()
@@ -1890,6 +1891,7 @@ class TournamentView(ui.View):
         except asyncio.CancelledError:
             pass
         except Exception:
+            log.exception("SoccerSimTournamentView game loop crashed")
             if table.phase == "playing":
                 table.phase = "finished"
                 await self._refund_all()

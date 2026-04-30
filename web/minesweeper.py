@@ -2,10 +2,13 @@
 
 import asyncio
 import json
+import logging
 import os
 import secrets
 import time
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Header, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
@@ -526,17 +529,20 @@ async def cleanup_stale_minesweeper_rooms() -> None:
     """Background task: refund and remove rooms that sat idle too long."""
     while True:
         await asyncio.sleep(60)
-        now = time.time()
-        stale = [
-            rid for rid, room in rooms.items()
-            if room.phase == "waiting" and (now - room.created_at) > ROOM_TTL
-        ]
-        for rid in stale:
-            room = rooms.pop(rid, None)
-            if room:
-                for p in room.players.values():
-                    await queries.update_casino_balance(p.discord_user, p.wager)
-                    await _send(p.ws, {
-                        "type": "error",
-                        "message": "Room expired. Your bet has been refunded.",
-                    })
+        try:
+            now = time.time()
+            stale = [
+                rid for rid, room in rooms.items()
+                if room.phase == "waiting" and (now - room.created_at) > ROOM_TTL
+            ]
+            for rid in stale:
+                room = rooms.pop(rid, None)
+                if room:
+                    for p in room.players.values():
+                        await queries.update_casino_balance(p.discord_user, p.wager)
+                        await _send(p.ws, {
+                            "type": "error",
+                            "message": "Room expired. Your bet has been refunded.",
+                        })
+        except Exception:
+            logger.exception("cleanup_stale_minesweeper_rooms error — loop continues")
