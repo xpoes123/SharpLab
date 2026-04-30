@@ -638,9 +638,16 @@ class CrapsTableView(ui.View):
             for child in self.children:
                 if hasattr(child, "disabled"):
                     child.disabled = False  # type: ignore[union-attr]
-            await interaction.edit_original_response(
-                embed=_table_embed(self.table), view=self,
-            )
+            try:
+                await interaction.edit_original_response(
+                    embed=_table_embed(self.table), view=self,
+                )
+            except Exception:
+                # If we can't re-enable the buttons, abort so the table doesn't
+                # get permanently stuck with all controls disabled.
+                log.exception("craps: failed to re-enable controls after roll — aborting table")
+                self.stop()
+                self.active_tables.pop(self.table.channel_id, None)
 
     @ui.button(label="Place Odds", style=discord.ButtonStyle.success, emoji="\U0001f4b0", row=0)
     async def odds_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
@@ -882,32 +889,41 @@ class CrapsTableView(ui.View):
         table = self.table
         balances: dict[int, int] = {}
 
-        for player in table.players.values():
-            refund = _refund_player(player)
-            total_credit = player.payout + refund
-            player.coins_out += total_credit
-            if total_credit > 0:
-                balances[player.user_id] = await queries.update_casino_balance(
-                    str(player.user_id), total_credit,
-                )
-            else:
-                balances[player.user_id] = (
-                    await queries.get_casino_balance(str(player.user_id))
-                ) or 0
-            await queries.log_casino_result(
-                str(player.user_id), "craps", player.coins_in, player.coins_out,
-            )
-
-        embed = _table_embed(table, balances=balances)
+        # Always clean up first — prevents stuck tables even if DB calls fail.
         for child in self.children:
             if hasattr(child, "disabled"):
                 child.disabled = True  # type: ignore[union-attr]
         self.stop()
         self.active_tables.pop(table.channel_id, None)
-        if followup:
-            await interaction.edit_original_response(embed=embed, view=self)
-        else:
-            await interaction.response.edit_message(embed=embed, view=self)
+
+        for player in table.players.values():
+            refund = _refund_player(player)
+            total_credit = player.payout + refund
+            player.coins_out += total_credit
+            try:
+                if total_credit > 0:
+                    balances[player.user_id] = await queries.update_casino_balance(
+                        str(player.user_id), total_credit,
+                    )
+                else:
+                    balances[player.user_id] = (
+                        await queries.get_casino_balance(str(player.user_id))
+                    ) or 0
+                await queries.log_casino_result(
+                    str(player.user_id), "craps", player.coins_in, player.coins_out,
+                )
+            except Exception:
+                log.exception("craps: failed to settle player %s", player.user_id)
+                balances[player.user_id] = 0
+
+        embed = _table_embed(table, balances=balances)
+        try:
+            if followup:
+                await interaction.edit_original_response(embed=embed, view=self)
+            else:
+                await interaction.response.edit_message(embed=embed, view=self)
+        except Exception:
+            log.exception("craps: failed to update message after finish")
 
     async def _abort(self, interaction: discord.Interaction, reason: str) -> None:
         """End table early, refund everyone."""
@@ -935,14 +951,15 @@ class CrapsTableView(ui.View):
         table = self.table
         if table.phase == Phase.FINISHED:
             return
+        table.phase = Phase.FINISHED
+        self.active_tables.pop(table.channel_id, None)
         for player in table.players.values():
             refund = player.bet + player.odds_bet + sum(sb.amount for sb in player.side_bets)
             if refund > 0:
                 try:
                     await queries.update_casino_balance(str(player.user_id), refund)
                 except Exception:
-                    log.exception("Unhandled error in craps.py")
-        self.active_tables.pop(table.channel_id, None)
+                    log.exception("craps: failed to refund player %s on timeout", player.user_id)
         if table.message:
             try:
                 embed = discord.Embed(
@@ -952,7 +969,7 @@ class CrapsTableView(ui.View):
                 )
                 await table.message.edit(embed=embed, view=None)
             except Exception:
-                log.exception("Unhandled error in craps.py")
+                log.exception("craps: failed to update message on timeout")
 
 
 # ── Cog ─────────────────────────────────────────────────────────────────────
@@ -997,6 +1014,45 @@ class CrapsCog(commands.Cog):
         )
         await interaction.response.send_message(embed=embed, view=view)
         table.message = await interaction.original_response()
+
+    @craps_group.command(name="close", description="Force-close a stuck craps table and refund all players (admin only)")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def craps_close(self, interaction: discord.Interaction) -> None:
+        channel_id = interaction.channel_id
+        table = self.active_tables.get(channel_id)
+        if table is None:
+            await interaction.response.send_message(
+                "No active craps table in this channel.", ephemeral=True,
+            )
+            return
+
+        # Mark finished and remove before any async work
+        table.phase = Phase.FINISHED
+        del self.active_tables[channel_id]
+
+        for player in table.players.values():
+            refund = player.bet + player.odds_bet + sum(sb.amount for sb in player.side_bets)
+            if refund > 0:
+                try:
+                    await queries.update_casino_balance(str(player.user_id), refund)
+                except Exception:
+                    log.exception("craps close: failed to refund player %s", player.user_id)
+
+        if table.message:
+            try:
+                embed = discord.Embed(
+                    title="Craps Table \u2014 Closed by Admin",
+                    description=f"Table force-closed by {interaction.user.display_name}. All bets refunded.",
+                    colour=discord.Colour.dark_grey(),
+                )
+                await table.message.edit(embed=embed, view=None)
+            except Exception:
+                log.exception("craps close: failed to update table message")
+
+        await interaction.response.send_message(
+            f"Craps table closed. All bets refunded to {len(table.players)} player(s).",
+            ephemeral=True,
+        )
 
     @craps_group.command(name="setdefault", description="Set your default craps bet amount")
     @app_commands.describe(amount="Default bet in coins (1–100 000)")
