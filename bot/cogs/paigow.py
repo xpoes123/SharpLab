@@ -1074,20 +1074,9 @@ class PaiGowTableView(ui.View):
                     seat.cards, seat.fortune_bet,
                 )
 
-            # Credit winnings
-            credit = seat.main_payout + seat.fortune_win
-            if credit > 0:
-                balances[seat.user_id] = await queries.update_casino_balance(
-                    str(seat.user_id), credit,
-                )
-            else:
-                balances[seat.user_id] = (
-                    await queries.get_casino_balance(str(seat.user_id))
-                ) or 0
-
-            await queries.log_casino_result(
-                str(seat.user_id), "paigow", seat.total_wager, credit,
-            )
+        # Mark finished and update buttons BEFORE DB calls so the table
+        # can't get stuck if a DB call throws.
+        table.phase = "finished"
 
         # Save last bets for re-bet
         for seat in table.players.values():
@@ -1095,7 +1084,25 @@ class PaiGowTableView(ui.View):
                 seat.display_name, seat.wager, seat.fortune_bet,
             )
 
-        table.phase = "finished"
+        for seat in table.players.values():
+            # Credit winnings — catch per-player so one failure doesn't block others.
+            credit = seat.main_payout + seat.fortune_win
+            try:
+                if credit > 0:
+                    balances[seat.user_id] = await queries.update_casino_balance(
+                        str(seat.user_id), credit,
+                    )
+                else:
+                    balances[seat.user_id] = (
+                        await queries.get_casino_balance(str(seat.user_id))
+                    ) or 0
+
+                await queries.log_casino_result(
+                    str(seat.user_id), "paigow", seat.total_wager, credit,
+                )
+            except Exception:
+                log.exception("paigow: failed to settle player %s", seat.user_id)
+                balances[seat.user_id] = 0
         self._update_buttons()
         if table.message:
             try:
@@ -1162,13 +1169,15 @@ class PaiGowTableView(ui.View):
                 except Exception:
                     log.exception("Unhandled error in paigow.py")
             return
-        # Betting or setting — refund all
+        # Betting or setting — mark finished and remove from active_tables
+        # BEFORE refunds so the table can't get stuck if a refund throws.
+        table.phase = "finished"
+        self.active_tables.pop(table.channel_id, None)
         for seat in table.players.values():
             try:
                 await queries.update_casino_balance(str(seat.user_id), seat.total_wager)
             except Exception:
-                log.exception("Unhandled error in paigow.py")
-        self.active_tables.pop(table.channel_id, None)
+                log.exception("paigow: failed to refund player %s on timeout", seat.user_id)
         if table.message:
             try:
                 embed = discord.Embed(
@@ -1194,11 +1203,7 @@ class PaiGowCog(commands.Cog):
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:
             existing = self.active_tables[channel_id]
-            _has_running = any(
-                (t := getattr(existing, n, None)) is not None and not t.done()
-                for n in ("game_task", "race_task", "sim_task", "round_task", "_round_task", "trade_task", "fly_task", "_shot_clock_task", "_countdown_task")
-            )
-            if _has_running:
+            if existing.phase != "finished":
                 await interaction.response.send_message(
                     "There's already a Pai Gow table in this channel!",
                     ephemeral=True,
