@@ -14,7 +14,7 @@ load_dotenv()
 # Game commands that must not be started inside threads (they create their own threads)
 _THREAD_BLOCKED_COMMANDS: set[str] = {
     "blackjack", "baccarat", "paigow", "uth", "videopoker", "hilo",
-    "roulette", "craps", "crash", "plinko", "slots", "bingo",
+    "roulette", "craps", "crapless", "crash", "plinko", "slots", "bingo",
     "horserace", "stockmarket", "stockguess", "math24", "countdown",
     "mastermind", "geography", "wordle", "nba-trivia", "nfl-trivia",
     "sudoku", "tictactoe", "rps", "figgie", "mathsprint", "pokemon",
@@ -54,6 +54,7 @@ COGS = [
     "bot.cogs.trading",
     "bot.cogs.baccarat",
     "bot.cogs.craps",
+    "bot.cogs.crapless",
     "bot.cogs.paigow",
     "bot.cogs.uth",
     "bot.cogs.crash",

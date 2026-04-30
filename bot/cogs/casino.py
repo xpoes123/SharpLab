@@ -34,6 +34,7 @@ GAME_LABELS: dict[str, str] = {
     "blackjack": "Blackjack",
     "plinko": "Plinko",
     "craps": "Craps",
+    "crapless": "Crapless Craps",
     "hilo": "Hi-Lo",
     "roulette": "Roulette",
     "crash": "Crash",
@@ -2182,6 +2183,7 @@ CASINO_GAMES: list[tuple[str, str, str, str]] = [
     # ── Table & Arcade
     ("roulette", "American roulette", "Table & Arcade", "solo"),
     ("craps", "Craps with full side bets", "Table & Arcade", "solo"),
+    ("crapless", "Crapless craps variant — no craps on come-out", "Table & Arcade", "solo"),
     ("crash", "Crash rocket game", "Table & Arcade", "solo"),
     ("plinko", "Plinko ball-drop game", "Table & Arcade", "solo"),
     ("slots", "Fortune Reels \u2014 slots & bonus rounds", "Table & Arcade", "solo"),

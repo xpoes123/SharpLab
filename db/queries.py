@@ -1858,6 +1858,32 @@ async def set_craps_default_bet(discord_user: str, amount: int) -> None:
         await db.commit()
 
 
+async def get_crapless_default_bet(discord_user: str) -> int | None:
+    """Return the user's saved default crapless craps bet, or None if not set."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT crapless_default_bet FROM user_settings WHERE discord_user = ?",
+            (discord_user,),
+        )
+        row = await cursor.fetchone()
+    return row["crapless_default_bet"] if row else None
+
+
+async def set_crapless_default_bet(discord_user: str, amount: int) -> None:
+    """Save the user's default crapless craps bet amount (upsert)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO user_settings (discord_user, crapless_default_bet)
+            VALUES (?, ?)
+            ON CONFLICT(discord_user) DO UPDATE SET crapless_default_bet = excluded.crapless_default_bet
+            """,
+            (discord_user, amount),
+        )
+        await db.commit()
+
+
 # ── Discord User Cache (for web leaderboard) ────────────────────────────────
 
 
