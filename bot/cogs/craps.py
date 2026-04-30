@@ -970,11 +970,7 @@ class CrapsCog(commands.Cog):
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:
             existing = self.active_tables[channel_id]
-            _has_running = any(
-                (t := getattr(existing, n, None)) is not None and not t.done()
-                for n in ("game_task", "race_task", "sim_task", "round_task", "_round_task", "trade_task", "fly_task", "_shot_clock_task", "_countdown_task")
-            )
-            if _has_running:
+            if existing.phase != Phase.FINISHED:
                 await interaction.response.send_message(
                     "There's already a craps table in this channel! Use the buttons to join.",
                     ephemeral=True,
