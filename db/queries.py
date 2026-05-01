@@ -949,6 +949,20 @@ async def give_casino_coins(discord_user: str, amount: int) -> int:
         return new_balance
 
 
+async def tip_casino_coins(from_user: str, to_user: str, amount: int) -> tuple[int, int]:
+    """Transfer casino coins from one user to another.
+
+    Returns (sender_new_balance, recipient_new_balance).
+    Raises ValueError if sender has insufficient funds.
+    """
+    sender_new_balance = await update_casino_balance(from_user, -amount)
+    await get_or_create_casino_wallet(to_user)
+    recipient_new_balance = await update_casino_balance(to_user, amount)
+    await log_casino_result(from_user, "tip", amount, 0)
+    await log_casino_result(to_user, "tip", 0, amount)
+    return sender_new_balance, recipient_new_balance
+
+
 # ── Casino History ────────────────────────────────────────────────────────────
 
 

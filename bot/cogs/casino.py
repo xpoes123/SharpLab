@@ -85,6 +85,7 @@ GAME_LABELS: dict[str, str] = {
     "indian-poker": "Indian Poker",
     "battleship": "Battleship",
     "blotto": "Colonel Blotto",
+    "tip": "Tip",
 }
 
 GAME_CATEGORIES: list[tuple[str, str]] = [
@@ -1557,6 +1558,34 @@ class CasinoCog(commands.Cog):
         await interaction.response.send_message(
             f"Gave **{amount}** casino coins to **{user.display_name}**. "
             f"Their balance: **{new_balance}** coins."
+        )
+
+    @app_commands.command(name="tip", description="Send casino coins to another player")
+    @app_commands.describe(user="Player to tip", amount="Number of coins to send")
+    async def tip(self, interaction: discord.Interaction, user: discord.User, amount: int) -> None:
+        if amount < 1:
+            await interaction.response.send_message("Amount must be at least 1.", ephemeral=True)
+            return
+        if user.bot:
+            await interaction.response.send_message("You can't tip a bot.", ephemeral=True)
+            return
+        if user.id == interaction.user.id:
+            await interaction.response.send_message("You can't tip yourself.", ephemeral=True)
+            return
+        try:
+            sender_bal, recipient_bal = await queries.tip_casino_coins(
+                str(interaction.user.id), str(user.id), amount
+            )
+        except ValueError:
+            await interaction.response.send_message(
+                "You don't have enough coins for that tip.", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            f"**{interaction.user.display_name}** tipped **{user.display_name}** "
+            f"**{amount:,}** casino coins! 💰\n"
+            f"{interaction.user.display_name}: **{sender_bal:,}** coins | "
+            f"{user.display_name}: **{recipient_bal:,}** coins"
         )
 
     @app_commands.command(name="status", description="Dump active game state (admin)")
