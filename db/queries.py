@@ -949,6 +949,71 @@ async def give_casino_coins(discord_user: str, amount: int) -> int:
         return new_balance
 
 
+async def tip_casino_coins(from_user: str, to_user: str, amount: int) -> tuple[int, int]:
+    """Transfer casino coins from one user to another atomically.
+
+    Returns (sender_new_balance, recipient_new_balance).
+    Raises ValueError if sender has insufficient funds (must keep >= CASINO_MIN_BALANCE after tip).
+
+    The wallet creation, deduction, credit, and history inserts all happen in a
+    single connection and are committed together — a crash at any point leaves
+    both balances unchanged.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        # Ensure recipient wallet exists within the same transaction
+        await db.execute(
+            "INSERT OR IGNORE INTO casino_wallets (discord_user, balance) VALUES (?, ?)",
+            (to_user, CASINO_MIN_BALANCE),
+        )
+        # Deduct from sender; the WHERE clause enforces the min-balance floor atomically
+        cursor = await db.execute(
+            "UPDATE casino_wallets SET balance = balance - ? "
+            "WHERE discord_user = ? AND balance - ? >= ?",
+            (amount, from_user, amount, CASINO_MIN_BALANCE),
+        )
+        if cursor.rowcount == 0:
+            check = await db.execute(
+                "SELECT balance FROM casino_wallets WHERE discord_user = ?",
+                (from_user,),
+            )
+            row = await check.fetchone()
+            if row is None:
+                raise ValueError("No casino wallet found")
+            raise ValueError(
+                f"Insufficient casino coins (have {row['balance']}, need {amount} + keep {CASINO_MIN_BALANCE} minimum)"
+            )
+        # Credit recipient
+        await db.execute(
+            "UPDATE casino_wallets SET balance = balance + ? WHERE discord_user = ?",
+            (amount, to_user),
+        )
+        # Fetch both new balances before committing
+        sender_row = await (await db.execute(
+            "SELECT balance FROM casino_wallets WHERE discord_user = ?", (from_user,)
+        )).fetchone()
+        recipient_row = await (await db.execute(
+            "SELECT balance FROM casino_wallets WHERE discord_user = ?", (to_user,)
+        )).fetchone()
+        sender_new_balance = sender_row["balance"]
+        recipient_new_balance = recipient_row["balance"]
+        # Log history for both within the same transaction so records are never
+        # written without the corresponding balance changes
+        await db.execute(
+            "INSERT INTO casino_history (discord_user, game, wagered, payout, played_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (from_user, "tip", amount, 0, now_iso),
+        )
+        await db.execute(
+            "INSERT INTO casino_history (discord_user, game, wagered, payout, played_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (to_user, "tip", 0, amount, now_iso),
+        )
+        await db.commit()
+    return sender_new_balance, recipient_new_balance
+
+
 # ── Casino History ────────────────────────────────────────────────────────────
 
 
