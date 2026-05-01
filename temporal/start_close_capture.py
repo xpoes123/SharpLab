@@ -1,8 +1,10 @@
 import asyncio
+import logging
 from temporalio.client import Client
 from datetime import datetime, timezone, timedelta
 
 TASK_QUEUE = "sports-quant-lab"
+log = logging.getLogger(__name__)
 
 async def main() -> None:
     client = await Client.connect("localhost:7233")
@@ -17,9 +19,9 @@ async def main() -> None:
         task_queue=TASK_QUEUE,
     )
 
-    print("Started CloseCaptureWorkflow:", handle.id)
+    log.info('Started CloseCaptureWorkflow: %s', handle.id)
     await handle.result()
-    print("Close capture completed")
+    log.info('Close capture completed')
 
 
 if __name__ == "__main__":

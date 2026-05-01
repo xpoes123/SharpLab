@@ -1,8 +1,10 @@
 import asyncio
+import logging
 import sys
 from temporalio.client import Client
 
 TASK_QUEUE = "sports-quant-lab"
+log = logging.getLogger(__name__)
 
 async def main() -> None:
     sport = sys.argv[1] if len(sys.argv) > 1 else "nba"
@@ -15,7 +17,7 @@ async def main() -> None:
         task_queue=TASK_QUEUE,
     )
 
-    print(f"Started OddsPollingWorkflow ({sport}):", handle.id)
+    log.info('Started OddsPollingWorkflow (%s): %s', sport, handle.id)
 
 if __name__ == "__main__":
     asyncio.run(main())

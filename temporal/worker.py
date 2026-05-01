@@ -24,6 +24,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+log = logging.getLogger(__name__)
 
 TASK_QUEUE = "sports-quant-lab"
 
@@ -52,7 +53,7 @@ async def main() -> None:
         ],
     )
 
-    print(f"Worker started on task queue: {TASK_QUEUE}")
+    log.info('Worker started on task queue: %s', TASK_QUEUE)
     await worker.run()
 
 
