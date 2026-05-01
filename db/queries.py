@@ -953,9 +953,36 @@ async def tip_casino_coins(from_user: str, to_user: str, amount: int) -> tuple[i
     """Transfer casino coins from one user to another.
 
     Returns (sender_new_balance, recipient_new_balance).
-    Raises ValueError if sender has insufficient funds.
+    Raises ValueError if sender has insufficient funds (must keep >= CASINO_MIN_BALANCE after tip).
     """
-    sender_new_balance = await update_casino_balance(from_user, -amount)
+    # Deduct from sender with a stricter WHERE than update_casino_balance uses:
+    # we require balance - amount >= CASINO_MIN_BALANCE, not just >= 0.
+    # This prevents the min-balance floor from silently minting coins.
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "UPDATE casino_wallets SET balance = balance - ? "
+            "WHERE discord_user = ? AND balance - ? >= ?",
+            (amount, from_user, amount, CASINO_MIN_BALANCE),
+        )
+        if cursor.rowcount == 0:
+            check = await db.execute(
+                "SELECT balance FROM casino_wallets WHERE discord_user = ?",
+                (from_user,),
+            )
+            row = await check.fetchone()
+            if row is None:
+                raise ValueError("No casino wallet found")
+            raise ValueError(
+                f"Insufficient casino coins (have {row['balance']}, need {amount} + keep {CASINO_MIN_BALANCE} minimum)"
+            )
+        row = await (await db.execute(
+            "SELECT balance FROM casino_wallets WHERE discord_user = ?",
+            (from_user,),
+        )).fetchone()
+        sender_new_balance = row["balance"]
+        await db.commit()
+
     await get_or_create_casino_wallet(to_user)
     recipient_new_balance = await update_casino_balance(to_user, amount)
     await log_casino_result(from_user, "tip", amount, 0)
