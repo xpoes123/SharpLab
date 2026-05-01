@@ -57,6 +57,7 @@ COGS = [
     "bot.cogs.markets",
     "bot.cogs.clv",
     "bot.cogs.injuries",
+    "bot.cogs.bot_logs",
     "bot.cogs.history",
     "bot.cogs.rosters",
     "bot.cogs.prefix",
