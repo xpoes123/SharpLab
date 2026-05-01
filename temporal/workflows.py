@@ -264,8 +264,9 @@ class InjuryPollingWorkflow:
                 )
 
                 if changes:
-                    # Persist alerts before re-polling odds (idempotent write,
-                    # safe to retry independently of fetch_injuries).
+                    # Persist ALL status changes (including silent recoveries) so
+                    # future Out detections see the correct previous status and
+                    # Out → Active → Out correctly re-alerts.
                     await workflow.execute_activity(
                         record_injury_changes,
                         changes,
@@ -273,6 +274,9 @@ class InjuryPollingWorkflow:
                         retry_policy=RetryPolicy(maximum_attempts=3),
                     )
 
+                # Re-poll odds only for alert-worthy changes (Out events move
+                # lines; recoveries typically don't need a fresh snapshot).
+                if any(c.should_notify for c in changes):
                     # Re-poll odds so the notification shows lines post-news
                     game_ids = [g.game_id for g in games]
                     batch = await workflow.execute_activity(

@@ -9,12 +9,15 @@ do the DB writes and are safe to retry.  These tests verify:
 3. record_injury_alert with the same status a second time preserves notified state
    (idempotency — the key safety property we rely on for retry correctness).
 4. record_injury_alert with a different status resets notified=0.
-5. The change-detection logic (the _PREVIOUSLY_INJURED threshold) is correct:
+5. The change-detection (should_notify) logic is correct:
    - New player + Out → alert
-   - New player + non-Out → no alert
+   - New player + non-Out → no alert (but still written to DB)
    - Previously healthy + Out → alert
    - Already injured + Out → no alert (already compromised)
    - Out → Out (stable) → no alert
+6. Recovery round-trip at the DB level:
+   - Out → Active persists Active to DB (silent, no alert)
+   - After that, Active → Out correctly re-alerts (the bug that was fixed)
 """
 import aiosqlite
 import pytest
@@ -219,3 +222,88 @@ def test_out_to_out_stable_no_alert():
 def test_out_to_active_no_alert():
     """Recovery is not an alert condition."""
     assert _should_alert("Out", "Active") is False
+
+
+# ── DB-level round-trip: Out → Active → Out ──────────────────────────────────
+# These tests verify that recovery statuses ARE written back to the DB so that
+# a re-injury later produces a fresh alert.  This is the scenario that was
+# broken before: Out stayed in the DB forever, so the second Out was a no-op.
+
+async def test_recovery_persists_active_status(tmp_path):
+    """Out → Active: DB must be updated to Active (silent, no Discord alert)."""
+    db_path = await _make_db(tmp_path)
+
+    # Step 1: player goes Out
+    await _record_alert(db_path, _ALERT)
+    row = await _get_status(db_path, "123")
+    assert row[0] == "Out"
+
+    # Step 2: player recovers to Active (should_notify=False, but DB must update)
+    recovery = InjuryAlert(
+        record_id="123",
+        player_name="LeBron James",
+        team="Los Angeles Lakers",
+        status="Active",
+        prev_status="Out",
+        detail=None,
+        updated_at_utc_iso="2026-01-02T00:00:00+00:00",
+        should_notify=False,
+    )
+    await _record_alert(db_path, recovery)
+
+    row = await _get_status(db_path, "123")
+    assert row[0] == "Active", "DB must reflect recovery so re-injury can be detected"
+
+
+async def test_out_active_out_round_trip_re_alerts(tmp_path):
+    """
+    Full Out → Active → Out round-trip.
+
+    After recovery is written back to DB as Active, a subsequent Out listing
+    must be treated as a fresh injury and should_notify must be True.
+    This was the silent-drop bug: if Active was never persisted the second Out
+    hit current=="Out" == status and produced no alert.
+    """
+    db_path = await _make_db(tmp_path)
+
+    # Step 1: first injury
+    await _record_alert(db_path, _ALERT)
+
+    # Step 2: recovery — write Active to DB (the fix)
+    recovery = InjuryAlert(
+        record_id="123",
+        player_name="LeBron James",
+        team="Los Angeles Lakers",
+        status="Active",
+        prev_status="Out",
+        detail=None,
+        updated_at_utc_iso="2026-01-02T00:00:00+00:00",
+        should_notify=False,
+    )
+    await _record_alert(db_path, recovery)
+    row = await _get_status(db_path, "123")
+    assert row[0] == "Active"
+
+    # Step 3: re-injury — must trigger alert
+    # Simulate what fetch_injuries computes: current="Active" → new_status="Out"
+    current_in_db = row[0]  # "Active"
+    should_notify = _should_alert(current_in_db, "Out")
+    assert should_notify is True, (
+        "Out → Active → Out must re-alert; Active is not in _PREVIOUSLY_INJURED"
+    )
+
+    # Also verify the DB write lands correctly
+    re_injury = InjuryAlert(
+        record_id="123",
+        player_name="LeBron James",
+        team="Los Angeles Lakers",
+        status="Out",
+        prev_status="Active",
+        detail="Ankle",
+        updated_at_utc_iso="2026-01-03T00:00:00+00:00",
+        should_notify=True,
+    )
+    await _record_alert(db_path, re_injury)
+    row = await _get_status(db_path, "123")
+    assert row[0] == "Out"
+    assert row[1] == 0  # notified reset for new alert

@@ -454,19 +454,21 @@ async def fetch_injuries() -> list[InjuryAlert]:
     for record_id, player_name, team, status, detail in entries:
         current = await queries.get_injury_status(record_id)
         if current is None:
-            # New player — notify only if Out (surprise listing)
-            if status == "Out":
-                changes.append(InjuryAlert(
-                    record_id=record_id,
-                    player_name=player_name,
-                    team=team,
-                    status=status,
-                    prev_status=None,
-                    detail=detail,
-                    updated_at_utc_iso=now_iso,
-                ))
-        elif current != status and status == "Out" and current not in _PREVIOUSLY_INJURED:
-            # Previously healthy → now Out
+            # New player — alert only if Out (surprise listing); always track in DB
+            changes.append(InjuryAlert(
+                record_id=record_id,
+                player_name=player_name,
+                team=team,
+                status=status,
+                prev_status=None,
+                detail=detail,
+                updated_at_utc_iso=now_iso,
+                should_notify=status == "Out",
+            ))
+        elif current != status:
+            # Status changed — alert if transitioning to Out from a healthy state;
+            # always persist so future Out detections see the correct previous status.
+            should_notify = status == "Out" and current not in _PREVIOUSLY_INJURED
             changes.append(InjuryAlert(
                 record_id=record_id,
                 player_name=player_name,
@@ -475,6 +477,7 @@ async def fetch_injuries() -> list[InjuryAlert]:
                 prev_status=current,
                 detail=detail,
                 updated_at_utc_iso=now_iso,
+                should_notify=should_notify,
             ))
 
     activity.logger.info(f"[fetch_injuries] {len(changes)} status changes detected")
