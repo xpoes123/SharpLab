@@ -147,3 +147,4 @@ class InjuryAlert:
     prev_status: str | None  # None = new listing; old value = status change
     detail: str | None       # e.g. "Ankle - Left - Sprain"
     updated_at_utc_iso: str
+    should_notify: bool = True  # False = silent DB update only (e.g. recovery)

@@ -417,15 +417,25 @@ def _parse_espn_injuries_response(
     return results
 
 
-# ── ESPN injuries activity ────────────────────────────────────────────────────
+# ── ESPN injuries activities ──────────────────────────────────────────────────
+
+# Mirror of the threshold set in db/queries.py — statuses where a player is
+# already known to be compromised (no new alert needed).
+_PREVIOUSLY_INJURED = {"Out", "Doubtful", "Questionable", "Day-To-Day"}
+
 
 @activity.defn
 async def fetch_injuries() -> list[InjuryAlert]:
     """
     Poll ESPN unofficial API for NBA injury updates.
-    Detects status changes vs. what's stored in the DB.
-    Returns InjuryAlert entries only for players whose status changed (or new
-    significant listings). The bot's InjuryCog handles Discord notifications.
+    Detects status changes vs. what's stored in the DB and returns only
+    actionable InjuryAlert entries (new Out listings or healthy→Out transitions).
+
+    This activity is READ-ONLY — it never writes to the DB.  Call
+    record_injury_changes() afterward to persist the results.  Keeping reads
+    and writes in separate activities makes each one safely idempotent: if
+    fetch_injuries is retried after a transient failure the DB state is
+    unchanged, so it returns the same result every time.
     """
     await schema.init_db()
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -442,20 +452,49 @@ async def fetch_injuries() -> list[InjuryAlert]:
 
     changes: list[InjuryAlert] = []
     for record_id, player_name, team, status, detail in entries:
-        prev = await queries.upsert_injury_status(record_id, player_name, team, status, detail, now_iso)
-        if prev is not None:
+        current = await queries.get_injury_status(record_id)
+        if current is None:
+            # New player — alert only if Out (surprise listing); always track in DB
             changes.append(InjuryAlert(
                 record_id=record_id,
                 player_name=player_name,
                 team=team,
                 status=status,
-                prev_status=prev if prev else None,
+                prev_status=None,
                 detail=detail,
                 updated_at_utc_iso=now_iso,
+                should_notify=status == "Out",
+            ))
+        elif current != status:
+            # Status changed — alert if transitioning to Out from a healthy state;
+            # always persist so future Out detections see the correct previous status.
+            should_notify = status == "Out" and current not in _PREVIOUSLY_INJURED
+            changes.append(InjuryAlert(
+                record_id=record_id,
+                player_name=player_name,
+                team=team,
+                status=status,
+                prev_status=current,
+                detail=detail,
+                updated_at_utc_iso=now_iso,
+                should_notify=should_notify,
             ))
 
     activity.logger.info(f"[fetch_injuries] {len(changes)} status changes detected")
     return changes
+
+
+@activity.defn
+async def record_injury_changes(changes: list[InjuryAlert]) -> None:
+    """
+    Persist detected injury alerts to DB.
+    Idempotent — safe to retry; a duplicate write for the same alert is a no-op
+    that preserves whatever notified state the InjuryCog may have already set.
+    """
+    await schema.init_db()
+    for alert in changes:
+        await queries.record_injury_alert(alert)
+    activity.logger.info(f"[record_injury_changes] {len(changes)} alerts persisted")
 
 
 @activity.defn

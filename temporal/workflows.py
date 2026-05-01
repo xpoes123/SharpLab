@@ -8,6 +8,7 @@ with workflow.unsafe.imports_passed_through():
         fetch_games_for_today,
         fetch_odds_batch,
         fetch_injuries,
+        record_injury_changes,
         upsert_odds_snapshot,
         fetch_close_odds_snapshot,
         fetch_kalshi_odds_batch,
@@ -263,6 +264,19 @@ class InjuryPollingWorkflow:
                 )
 
                 if changes:
+                    # Persist ALL status changes (including silent recoveries) so
+                    # future Out detections see the correct previous status and
+                    # Out → Active → Out correctly re-alerts.
+                    await workflow.execute_activity(
+                        record_injury_changes,
+                        changes,
+                        start_to_close_timeout=timedelta(seconds=30),
+                        retry_policy=RetryPolicy(maximum_attempts=3),
+                    )
+
+                # Re-poll odds only for alert-worthy changes (Out events move
+                # lines; recoveries typically don't need a fresh snapshot).
+                if any(c.should_notify for c in changes):
                     # Re-poll odds so the notification shows lines post-news
                     game_ids = [g.game_id for g in games]
                     batch = await workflow.execute_activity(
