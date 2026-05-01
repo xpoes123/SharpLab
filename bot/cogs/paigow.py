@@ -200,12 +200,7 @@ def _hand_name_2(score: tuple[int, ...]) -> str:
 
 def _valid_setting(high: list[str], low: list[str]) -> bool:
     """High hand must rank at least as high as low hand."""
-    h = _evaluate_5(high)
-    lo = _evaluate_2(low)
-    # Foul: low is a pair but high has no pair
-    if lo[0] == 1 and h[0] == 0:
-        return False
-    return True
+    return _evaluate_5(high) >= _evaluate_2(low)
 
 
 def _house_way(cards: list[str]) -> tuple[list[str], list[str]]:
