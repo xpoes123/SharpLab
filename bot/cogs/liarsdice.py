@@ -533,7 +533,10 @@ class LiarTableView(ui.View):
         if self.table.phase != "playing":
             return
         self.table.shot_clock_expires = None
-        await self._handle_timeout()
+        try:
+            await self._handle_timeout()
+        except Exception:
+            log.exception("Unhandled error in liarsdice shot clock timeout")
 
     async def _handle_timeout(self) -> None:
         """Handle shot clock expiry for current player."""
