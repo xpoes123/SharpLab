@@ -1589,6 +1589,9 @@ class ValorantCog(commands.Cog):
                             pass
                     break
 
+        except Exception:
+            log.exception("Unexpected error in Valorant _solo_loop for user %s", session.user_id)
+            raise
         except asyncio.CancelledError:
             pass
         finally:
