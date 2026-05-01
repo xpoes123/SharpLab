@@ -960,6 +960,7 @@ class Math24TableView(ui.View):
         except asyncio.CancelledError:
             pass
         except Exception:
+            log.exception("Unexpected error in Math24 _game_loop for channel %s", table.channel_id)
             table.phase = "closed"
             self.active_tables.pop(table.channel_id, None)
 

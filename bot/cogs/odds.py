@@ -209,6 +209,7 @@ async def _fetch_scores_espn(dates: list[str], sport: str) -> list[dict]:
                     continue
                 data = resp.json()
             except Exception:
+                log.warning("Failed to fetch ESPN scores for date %s", date_str, exc_info=True)
                 continue
             for event in data.get("events", []):
                 status_obj = event.get("status", {})

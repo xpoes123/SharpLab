@@ -1,9 +1,12 @@
 """All DB access lives here. No raw SQL anywhere else."""
 from __future__ import annotations
 import json
+import logging
 import math
 from datetime import datetime, timezone
 import aiosqlite
+
+log = logging.getLogger(__name__)
 from shared.models import Bet, Game, InjuryAlert, OddsSnapshot
 from db.schema import DB_PATH
 
@@ -2232,7 +2235,7 @@ async def cleanup_stale_tournaments() -> int:
                             (t["buy_in"], entry["discord_user"]),
                         )
                     except Exception:
-                        pass
+                        log.warning("Failed to refund tournament buy-in for user %s (tournament %s)", entry["discord_user"], t["tournament_id"], exc_info=True)
             await db.execute(
                 "UPDATE tournaments SET status = 'cancelled', finished_at = ? "
                 "WHERE tournament_id = ?",
@@ -2271,7 +2274,7 @@ async def cleanup_stale_game_sessions() -> int:
                             (tok["wager"], tok["discord_user"]),
                         )
                     except Exception:
-                        pass
+                        log.warning("Failed to refund game token wager for user %s (room %s)", tok["discord_user"], s["room_id"], exc_info=True)
             await db.execute(
                 "UPDATE game_sessions SET status = 'finished', finished_at = ? "
                 "WHERE room_id = ?",

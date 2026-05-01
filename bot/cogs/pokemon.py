@@ -3397,6 +3397,9 @@ class PokemonCog(commands.Cog):
                             pass
                     break
 
+        except Exception:
+            log.exception("Unexpected error in Pokémon _solo_loop for user %s", session.user_id)
+            raise
         except asyncio.CancelledError:
             pass
         finally:
