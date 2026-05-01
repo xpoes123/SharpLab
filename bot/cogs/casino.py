@@ -1557,6 +1557,30 @@ class CasinoCog(commands.Cog):
             f"Their balance: **{new_balance}** coins."
         )
 
+    @app_commands.command(name="tip", description="Send casino coins to another player")
+    @app_commands.describe(user="Player to tip", amount="Number of coins to send")
+    async def tip(self, interaction: discord.Interaction, user: discord.User, amount: int) -> None:
+        if amount < 1:
+            await interaction.response.send_message("Amount must be at least 1.", ephemeral=True)
+            return
+        if user.id == interaction.user.id:
+            await interaction.response.send_message("You can't tip yourself.", ephemeral=True)
+            return
+        if user.bot:
+            await interaction.response.send_message("You can't tip bots.", ephemeral=True)
+            return
+        try:
+            sender_bal, recipient_bal = await queries.transfer_casino_coins(
+                str(interaction.user.id), str(user.id), amount
+            )
+        except ValueError as e:
+            await interaction.response.send_message(str(e), ephemeral=True)
+            return
+        await interaction.response.send_message(
+            f"**{interaction.user.display_name}** tipped **{amount}** coins to **{user.display_name}**! "
+            f"Sender balance: **{sender_bal}**, Recipient balance: **{recipient_bal}**."
+        )
+
     @app_commands.command(name="games", description="List all available casino games")
     async def games(self, interaction: discord.Interaction) -> None:
         total_pages = len(GAME_CATEGORIES)

@@ -949,6 +949,49 @@ async def give_casino_coins(discord_user: str, amount: int) -> int:
         return new_balance
 
 
+async def transfer_casino_coins(sender: str, recipient: str, amount: int) -> tuple[int, int]:
+    """Transfer coins from sender to recipient atomically.
+
+    Raises ValueError if sender has insufficient funds (balance - amount < CASINO_MIN_BALANCE).
+    Creates recipient wallet if it doesn't exist.
+    Returns (sender_new_balance, recipient_new_balance).
+    """
+    await get_or_create_casino_wallet(recipient)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN")
+        cursor = await db.execute(
+            "SELECT balance FROM casino_wallets WHERE discord_user = ?",
+            (sender,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            raise ValueError("No casino wallet found for sender")
+        sender_balance = row["balance"]
+        if sender_balance - amount < CASINO_MIN_BALANCE:
+            raise ValueError(
+                f"Insufficient funds (have {sender_balance}, need {amount} + {CASINO_MIN_BALANCE} floor)"
+            )
+        await db.execute(
+            "UPDATE casino_wallets SET balance = balance - ? WHERE discord_user = ?",
+            (amount, sender),
+        )
+        await db.execute(
+            "UPDATE casino_wallets SET balance = balance + ? WHERE discord_user = ?",
+            (amount, recipient),
+        )
+        await db.commit()
+        s_cur = await db.execute(
+            "SELECT balance FROM casino_wallets WHERE discord_user = ?", (sender,)
+        )
+        r_cur = await db.execute(
+            "SELECT balance FROM casino_wallets WHERE discord_user = ?", (recipient,)
+        )
+        sender_new = (await s_cur.fetchone())["balance"]
+        recipient_new = (await r_cur.fetchone())["balance"]
+    return sender_new, recipient_new
+
+
 # ── Casino History ────────────────────────────────────────────────────────────
 
 
