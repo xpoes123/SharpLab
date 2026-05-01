@@ -885,13 +885,16 @@ class BaccaratCog(commands.Cog):
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:
             existing = self.active_tables[channel_id]
-            _has_running = any(
-                (t := getattr(existing, n, None)) is not None and not t.done()
-                for n in ("game_task", "race_task", "sim_task", "round_task", "_round_task", "trade_task", "fly_task", "_shot_clock_task", "_countdown_task")
+            # Baccarat is button-driven with no background tasks, so the
+            # generic task-based _has_running check always returns False.
+            # Instead, detect an active game by game state: bets are placed
+            # or cards are mid-reveal (dealt but not fully revealed yet).
+            _is_active = bool(existing.players) or (
+                existing.dealt and not existing.all_revealed
             )
-            if _has_running:
+            if _is_active:
                 await interaction.response.send_message(
-                    "There's already a baccarat table in this channel!",
+                    "There's already a baccarat table in this channel! Use the buttons to bet.",
                     ephemeral=True,
                 )
                 return
