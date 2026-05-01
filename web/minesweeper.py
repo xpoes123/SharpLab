@@ -376,6 +376,7 @@ async def _race_loop(room: MinesweeperRoom) -> None:
     except asyncio.CancelledError:
         pass
     except Exception:
+        logger.exception("_race_loop crashed in room %s", room.room_id)
         room.phase = "finished"
 
 
