@@ -218,7 +218,7 @@ def _house_way(cards: list[str]) -> tuple[list[str], list[str]]:
 
         lo_score = _evaluate_2(low)
         hi_score = _evaluate_5(high)
-        score = (lo_score, hi_score)
+        score = (hi_score, lo_score)
 
         if best_score is None or score > best_score:
             best_score = score
