@@ -1347,8 +1347,9 @@ class CasinoCog(commands.Cog):
                         break
                 if hasattr(table, "phase"):
                     table.phase = "closed"
-                # Archive thread if it exists
+                # Archive thread if it exists; otherwise edit the message
                 thread = getattr(table, "thread", None)
+                message = getattr(table, "message", None)
                 if thread is not None:
                     try:
                         await thread.send(
@@ -1357,8 +1358,23 @@ class CasinoCog(commands.Cog):
                         await thread.edit(archived=True)
                     except Exception:
                         log.exception("Unhandled error in casino.py")
+                elif message is not None:
+                    try:
+                        closed_embed = discord.Embed(
+                            title="Table Auto-Closed",
+                            description="\u23f9\ufe0f This table was automatically closed after 15 minutes of inactivity.",
+                            colour=discord.Colour.dark_grey(),
+                        )
+                        await message.edit(embed=closed_embed, view=None)
+                    except Exception:
+                        log.exception("Unhandled error in casino.py")
                 tables.pop(channel_id, None)
                 self._table_first_seen.pop(key, None)
+                # Remove from DB persistence so startup cleanup won't re-fire
+                try:
+                    await queries.unregister_discord_table(channel_id)
+                except Exception:
+                    log.exception("Unhandled error in casino.py")
                 killed += 1
         # Clean stale first-seen entries for games that ended normally
         stale_keys = [

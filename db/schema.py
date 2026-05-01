@@ -252,6 +252,13 @@ CREATE TABLE IF NOT EXISTS geo_accuracy (
     PRIMARY KEY (discord_user, country, category)
 );
 CREATE INDEX IF NOT EXISTS idx_geo_accuracy_user ON geo_accuracy(discord_user);
+
+CREATE TABLE IF NOT EXISTS active_discord_tables (
+    channel_id   INTEGER PRIMARY KEY,
+    message_id   INTEGER,
+    game_type    TEXT NOT NULL,
+    created_at   TEXT NOT NULL
+);
 """
 
 
@@ -306,6 +313,16 @@ async def init_db() -> None:
                 "CREATE TABLE IF NOT EXISTS discord_users "
                 "(discord_user TEXT PRIMARY KEY, username TEXT NOT NULL, "
                 "avatar_url TEXT, updated_at TEXT NOT NULL)"
+            )
+            await db.commit()
+        except Exception:
+            pass
+        # Migration: add active_discord_tables for cross-session table cleanup
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS active_discord_tables "
+                "(channel_id INTEGER PRIMARY KEY, message_id INTEGER, "
+                "game_type TEXT NOT NULL, created_at TEXT NOT NULL)"
             )
             await db.commit()
         except Exception:

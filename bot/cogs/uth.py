@@ -868,6 +868,7 @@ class UTHTableView(ui.View):
                 child.disabled = True  # type: ignore[union-attr]
         self.stop()
         self.active_tables.pop(self.table.channel_id, None)
+        await queries.unregister_discord_table(self.table.channel_id)
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def _close(self, interaction: discord.Interaction) -> None:
@@ -881,12 +882,18 @@ class UTHTableView(ui.View):
                 child.disabled = True  # type: ignore[union-attr]
         self.stop()
         self.active_tables.pop(self.table.channel_id, None)
+        await queries.unregister_discord_table(self.table.channel_id)
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def on_timeout(self) -> None:
         table = self.table
+        # Identity check: don't touch a replacement table that was opened in
+        # the same channel after this view's table was superseded.
+        if self.active_tables.get(table.channel_id) is not table:
+            return
+        self.active_tables.pop(table.channel_id, None)
+        await queries.unregister_discord_table(table.channel_id)
         if table.phase == "finished":
-            self.active_tables.pop(table.channel_id, None)
             if table.message:
                 try:
                     embed = discord.Embed(
@@ -906,7 +913,6 @@ class UTHTableView(ui.View):
                     await queries.update_casino_balance(str(p.user_id), refund)
                 except Exception:
                     log.exception("Unhandled error in uth.py")
-        self.active_tables.pop(table.channel_id, None)
         if table.message:
             try:
                 embed = discord.Embed(
@@ -927,16 +933,43 @@ class UTHCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, UTHTable] = {}
 
+    @commands.Cog.listener()
+    async def on_ready(self) -> None:
+        """On bot startup, close any UTH tables left open from a previous session."""
+        stale = await queries.get_stale_discord_tables("uth")
+        for row in stale:
+            channel_id = row["channel_id"]
+            message_id = row["message_id"]
+            try:
+                channel = self.bot.get_channel(channel_id)
+                if channel is None:
+                    channel = await self.bot.fetch_channel(channel_id)
+                if channel is not None and message_id is not None:
+                    try:
+                        msg = await channel.fetch_message(message_id)
+                        await msg.edit(
+                            embed=discord.Embed(
+                                title="UTH Table — Closed",
+                                description="Table closed: bot restarted.",
+                                colour=discord.Colour.dark_grey(),
+                            ),
+                            view=None,
+                        )
+                    except Exception:
+                        log.warning("Could not edit stale UTH message in channel %s", channel_id)
+            except Exception:
+                log.warning("Could not fetch channel %s during UTH startup cleanup", channel_id)
+            finally:
+                await queries.unregister_discord_table(channel_id)
+
     @app_commands.command(name="uth", description="Open an Ultimate Texas Hold'em table (multiplayer)")
     async def uth(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:
             existing = self.active_tables[channel_id]
-            _has_running = any(
-                (t := getattr(existing, n, None)) is not None and not t.done()
-                for n in ("game_task", "race_task", "sim_task", "round_task", "_round_task", "trade_task", "fly_task", "_shot_clock_task", "_countdown_task")
-            )
-            if _has_running:
+            # Only allow replacing a fully-finished table; block everything else
+            # to prevent silently overwriting an active game mid-round.
+            if existing.phase != "finished":
                 await interaction.response.send_message(
                     "There's already a UTH table in this channel! Use the buttons to join.",
                     ephemeral=True,
@@ -957,6 +990,7 @@ class UTHCog(commands.Cog):
         embed = _table_embed(table)
         await interaction.response.send_message(embed=embed, view=view)
         table.message = await interaction.original_response()
+        await queries.register_discord_table(channel_id, table.message.id, "uth")
 
 
 async def setup(bot: commands.Bot) -> None:
