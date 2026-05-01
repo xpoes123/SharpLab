@@ -354,6 +354,35 @@ class TestValidSetting:
         low = ["7♠", "3♥"]
         assert _valid_setting(high, low) is True
 
+    def test_foul_9high_five_card_vs_ace_high_two_card(self):
+        """Regression: 9-high 5-card with ace-high 2-card is a foul (reported bug)."""
+        high = ["2♦", "3♥", "5♣", "6♠", "9♦"]  # 9-high
+        low = ["A♥", "K♠"]                        # ace-high
+        assert _valid_setting(high, low) is False
+
+    def test_foul_low_high_card_outranks_five_card(self):
+        """Any 2-card high-card hand that beats the 5-card high card is a foul."""
+        high = ["2♦", "3♥", "5♣", "6♠", "8♦"]  # 8-high
+        low = ["9♥", "K♠"]                        # king-high
+        assert _valid_setting(high, low) is False
+
+
+class TestHouseWayNoFoul:
+    def test_house_way_never_fouls(self):
+        """house_way must always produce a valid (non-foul) setting."""
+        import random
+        from bot.cogs.paigow import _new_deck
+        rng = random.Random(42)
+        deck = _new_deck()
+        rng.shuffle(deck)
+        for _ in range(200):
+            rng.shuffle(deck)
+            cards = deck[:7]
+            high, low = _house_way(cards)
+            assert _valid_setting(high, low), (
+                f"Foul produced by house_way: high={high}, low={low}"
+            )
+
 
 # ── House way ────────────────────────────────────────────────────────────────
 
