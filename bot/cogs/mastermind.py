@@ -633,13 +633,16 @@ class MastermindTableView(ui.View):
 
         # Time's up — find closest player
         # Check if anyone solved during the wait
-        solvers = [uid for uid, p in table.players.items() if p.solved]
-        if solvers:
-            min_count = min(table.players[uid].solve_count for uid in solvers)
-            winners = [uid for uid in solvers if table.players[uid].solve_count == min_count]
-            await self._finish_round(winners)
-        else:
-            await self._finish_by_proximity()
+        try:
+            solvers = [uid for uid, p in table.players.items() if p.solved]
+            if solvers:
+                min_count = min(table.players[uid].solve_count for uid in solvers)
+                winners = [uid for uid in solvers if table.players[uid].solve_count == min_count]
+                await self._finish_round(winners)
+            else:
+                await self._finish_by_proximity()
+        except Exception:
+            log.exception("Unhandled error in mastermind round timer")
 
     # ── Row 0 ────────────────────────────────────────────────────────────────
 

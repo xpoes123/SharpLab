@@ -383,7 +383,10 @@ class PKDuelView(ui.View):
         if self.duel.phase != "playing":
             return
         self.duel.shot_clock_expires = None
-        await self._handle_timeout()
+        try:
+            await self._handle_timeout()
+        except Exception:
+            log.exception("Unhandled error in penalties shot clock timeout")
 
     async def _handle_timeout(self) -> None:
         """Auto-pick random zones for anyone who hasn't chosen."""

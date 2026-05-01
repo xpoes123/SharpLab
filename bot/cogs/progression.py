@@ -340,13 +340,19 @@ class ProgressionCog(commands.Cog):
 
     @tasks.loop(seconds=30)
     async def check_achievements(self) -> None:
-        new_entries = await queries.get_casino_history_since(self._last_check_id)
-        if not new_entries:
-            return
-        self._last_check_id = new_entries[-1]["id"]
-        users = {e["discord_user"] for e in new_entries}
-        for uid in users:
-            await self._check_user_achievements(uid)
+        try:
+            new_entries = await queries.get_casino_history_since(self._last_check_id)
+            if not new_entries:
+                return
+            self._last_check_id = new_entries[-1]["id"]
+            users = {e["discord_user"] for e in new_entries}
+            for uid in users:
+                try:
+                    await self._check_user_achievements(uid)
+                except Exception:
+                    log.warning("Failed to check achievements for user %s", uid, exc_info=True)
+        except Exception:
+            log.exception("Unhandled error in check_achievements loop")
 
     @check_achievements.before_loop
     async def before_check(self) -> None:
