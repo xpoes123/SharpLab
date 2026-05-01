@@ -985,8 +985,20 @@ class WordleTableView(ui.View):
         except asyncio.CancelledError:
             pass
         except Exception:
+            log.exception("Unexpected error in _game_loop — closing table")
             table.phase = "closed"
             self.active_tables.pop(table.channel_id, None)
+            self.stop()
+            if table.message:
+                try:
+                    embed = discord.Embed(
+                        title="Wordle — Error",
+                        description="An unexpected error occurred. The game has been closed.",
+                        colour=discord.Colour.red(),
+                    )
+                    await table.message.edit(embed=embed, view=None)
+                except discord.HTTPException:
+                    pass
 
     async def _end_game(self) -> None:
         table = self.table
