@@ -440,6 +440,29 @@ class TestHouseWay:
             f"Expected full house in high hand, got tier {hi_score[0]} ({_hand_name_5(hi_score)})"
         )
 
+    def test_no_pair_maximises_low_hand(self):
+        """Regression: dealer was keeping the 6 as a kicker in the high hand
+        (A Q J 10 6 / 5-3) instead of maximising the low hand.
+
+        With A♣ Q♣ J♠ 10♥ 6♠ 5♦ 3♥, all valid splits produce ace-high in the
+        5-card hand.  The correct house way puts the two highest non-ace cards
+        (Q-J) in the low hand, giving A 10 6 5 3 / Q-J.  This is far stronger
+        than the buggy A Q J 10 6 / 5-3 split.
+        """
+        cards = ["A♣", "Q♣", "J♠", "10♥", "6♠", "5♦", "3♥"]
+        high, low = _house_way(cards)
+        lo_score = _evaluate_2(low)
+        # Best possible valid low is Q-J = (0, 12, 11)
+        assert lo_score == (0, 12, 11), (
+            f"Expected low hand Q-J but got {low} = {_hand_name_2(lo_score)}"
+        )
+        # High hand must still be ace-high (tier 0) and valid
+        hi_score = _evaluate_5(high)
+        assert hi_score[0] == 0 and hi_score[1] == 14, (
+            f"Expected ace-high 5-card hand, got {_hand_name_5(hi_score)}"
+        )
+        assert _valid_setting(high, low)
+
     def test_with_joker(self):
         cards = ["A♠", JOKER, "Q♦", "J♣", "9♠", "7♥", "3♦"]
         high, low = _house_way(cards)
