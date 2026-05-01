@@ -36,13 +36,18 @@ class SharpTree(app_commands.CommandTree):
         if (
             isinstance(interaction.channel, discord.Thread)
             and interaction.command is not None
-            and getattr(interaction.command, "name", None) in _THREAD_BLOCKED_COMMANDS
         ):
-            await interaction.response.send_message(
-                "Games can't be started in threads! Use a regular channel.",
-                ephemeral=True,
-            )
-            return False
+            cmd = interaction.command
+            cmd_name = getattr(cmd, "name", None)
+            # For group subcommands (e.g. /crapless play), cmd.name is "play"
+            # but the blocked set contains "crapless", so also check the parent.
+            parent_name = getattr(getattr(cmd, "parent", None), "name", None)
+            if cmd_name in _THREAD_BLOCKED_COMMANDS or parent_name in _THREAD_BLOCKED_COMMANDS:
+                await interaction.response.send_message(
+                    "Games can't be started in threads! Use a regular channel.",
+                    ephemeral=True,
+                )
+                return False
         return True
 
 COGS = [
