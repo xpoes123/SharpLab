@@ -882,7 +882,9 @@ class BlackjackTableView(ui.View):
             return
 
         # Determine which bet to double
-        if player.has_split and player.active_hand == 1:
+        # Capture which hand is active *before* hit_active can call _advance()
+        was_on_split = player.has_split and player.active_hand == 1
+        if was_on_split:
             cost = player.split_bet
         else:
             cost = player.bet
@@ -895,7 +897,7 @@ class BlackjackTableView(ui.View):
             )
             return
 
-        if player.has_split and player.active_hand == 1:
+        if was_on_split:
             player.split_bet *= 2
         else:
             player.bet *= 2
@@ -903,11 +905,13 @@ class BlackjackTableView(ui.View):
 
         # Draw one card, auto-stand (or bust)
         player.hit_active(self.table.draw())
-        # hit_active handles bust/21/advance, but if not busted we force stand
-        if player.has_split and player.active_hand == 1:
+        # Force-stand only the hand that was doubled. hit_active may call _advance()
+        # which changes active_hand, so we use was_on_split (captured before the hit)
+        # to avoid accidentally auto-standing the *other* split hand.
+        if was_on_split:
             if not player.split_busted and not player.split_stood:
                 player.stand_active()
-        elif player.active_hand == 0 or not player.has_split:
+        else:
             if not player.busted and not player.stood:
                 player.stand_active()
 
