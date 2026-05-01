@@ -68,6 +68,7 @@ class CrashTable:
     round_num: int = 1
     last_bets: dict[int, tuple[str, int, float]] = field(default_factory=dict)
     fly_task: asyncio.Task | None = field(default=None, repr=False)
+    view: "CrashTableView | None" = field(default=None, repr=False)
 
 
 # ── Embeds ───────────────────────────────────────────────────────────────────
@@ -253,6 +254,7 @@ class CrashTableView(ui.View):
         self.table = table
         self.active_tables = active_tables
         self._lifetime_task: asyncio.Task | None = None
+        table.view = self
         self._update_buttons()
 
     def _start_lifetime_timer(self) -> None:
@@ -262,8 +264,9 @@ class CrashTableView(ui.View):
     async def _lifetime_expire(self) -> None:
         """Kill the table after TABLE_LIFETIME_SECS, regardless of phase."""
         await asyncio.sleep(TABLE_LIFETIME_SECS)
-        if self.table.channel_id not in self.active_tables:
-            return  # already closed normally
+        # Identity check: if the slot was replaced by a new table, don't touch it
+        if self.active_tables.get(self.table.channel_id) is not self.table:
+            return  # already closed or replaced by a newer table
         if self.table.fly_task and not self.table.fly_task.done():
             self.table.fly_task.cancel()
         # Only refund if a round is actually in progress (not between rounds)
@@ -662,6 +665,10 @@ class CrashTableView(ui.View):
         if self._lifetime_task and not self._lifetime_task.done():
             self._lifetime_task.cancel()
 
+        # Identity check: don't touch active_tables if this table was replaced
+        if self.active_tables.get(table.channel_id) is not table:
+            return
+
         # Cancel fly task if running
         if table.fly_task and not table.fly_task.done():
             table.fly_task.cancel()
@@ -711,11 +718,12 @@ class CrashCog(commands.Cog):
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:
             existing = self.active_tables[channel_id]
-            _has_running = any(
-                (t := getattr(existing, n, None)) is not None and not t.done()
-                for n in ("game_task", "race_task", "sim_task", "round_task", "_round_task", "trade_task", "fly_task", "_shot_clock_task", "_countdown_task")
-            )
-            if _has_running:
+            # A table is only stale once the round fully ended (crashed) and
+            # no fly loop is still running.  Betting-phase tables have players
+            # with locked coins — never replace them silently.
+            fly_done = existing.fly_task is None or existing.fly_task.done()
+            is_stale = existing.phase == "crashed" and fly_done
+            if not is_stale:
                 await interaction.response.send_message(
                     "There's already a Crash table in this channel!",
                     ephemeral=True,
@@ -737,6 +745,61 @@ class CrashCog(commands.Cog):
         embed = _betting_embed(table)
         await interaction.response.send_message(embed=embed, view=view)
         table.message = await interaction.original_response()
+
+
+    @app_commands.command(
+        name="crashclose",
+        description="[Admin] Force-close a stuck Crash table in this channel and refund active bets",
+    )
+    @app_commands.default_permissions(manage_guild=True)
+    async def crashclose(self, interaction: discord.Interaction) -> None:
+        channel_id = interaction.channel_id
+        table = self.active_tables.get(channel_id)
+        if table is None:
+            await interaction.response.send_message(
+                "No active Crash table in this channel.", ephemeral=True,
+            )
+            return
+
+        # Cancel the flight loop if it's running
+        if table.fly_task and not table.fly_task.done():
+            table.fly_task.cancel()
+
+        # Refund any players still in (non-cashed-out bets)
+        refunded: list[str] = []
+        for p in table.players.values():
+            if not p.cashed_out:
+                try:
+                    await queries.update_casino_balance(str(p.user_id), p.bet)
+                    refunded.append(f"{p.display_name} ({p.bet}c)")
+                except Exception:
+                    log.exception("crashclose: error refunding %s", p.user_id)
+
+        # Stop the view so buttons go dark immediately
+        if table.view is not None:
+            table.view.stop()
+
+        self.active_tables.pop(channel_id, None)
+
+        refund_str = ", ".join(refunded) if refunded else "none"
+        embed = discord.Embed(
+            title="Crash Table — Force Closed",
+            description=f"Closed by {interaction.user.mention}.\nRefunded: {refund_str}",
+            colour=discord.Colour.orange(),
+        )
+        await interaction.response.send_message(embed=embed)
+
+        # Update the original table message so it shows closed
+        if table.message:
+            try:
+                closed_embed = discord.Embed(
+                    title="Crash Table — Closed",
+                    description=f"Force-closed by admin {interaction.user.display_name}. Active bets refunded.",
+                    colour=discord.Colour.dark_grey(),
+                )
+                await table.message.edit(embed=closed_embed, view=None)
+            except discord.HTTPException:
+                pass
 
 
 async def setup(bot: commands.Bot) -> None:
