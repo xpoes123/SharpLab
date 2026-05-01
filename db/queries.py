@@ -516,6 +516,58 @@ async def upsert_injury_status(
         return current_status if going_out else None
 
 
+async def get_injury_status(record_id: str) -> str | None:
+    """Return the current tracked status for a player, or None if not in DB."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT status FROM injuries WHERE record_id = ?", (record_id,)
+        )
+        row = await cursor.fetchone()
+    return row[0] if row else None
+
+
+async def record_injury_alert(alert: InjuryAlert) -> None:
+    """
+    Persist an injury alert to DB with notified=0.
+    Idempotent: if the exact same status is already stored the notified flag
+    is preserved unchanged, so a retry never resets an already-processed alert.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT status FROM injuries WHERE record_id = ?", (alert.record_id,)
+        )
+        row = await cursor.fetchone()
+
+        if row is None:
+            await db.execute(
+                """
+                INSERT INTO injuries
+                    (record_id, player_name, team, status, prev_status, detail, updated_at, notified)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                """,
+                (
+                    alert.record_id, alert.player_name, alert.team, alert.status,
+                    alert.prev_status, alert.detail, alert.updated_at_utc_iso,
+                ),
+            )
+        elif row["status"] != alert.status:
+            # Status changed — reset notification flag so Discord gets alerted
+            await db.execute(
+                """
+                UPDATE injuries
+                SET player_name=?, team=?, status=?, prev_status=?, detail=?, updated_at=?, notified=0
+                WHERE record_id=?
+                """,
+                (
+                    alert.player_name, alert.team, alert.status, alert.prev_status,
+                    alert.detail, alert.updated_at_utc_iso, alert.record_id,
+                ),
+            )
+        # else: status unchanged — leave notified flag alone (may already be processed)
+        await db.commit()
+
+
 async def get_unnotified_injuries() -> list[InjuryAlert]:
     """Return injury alerts that haven't been posted to Discord yet."""
     async with aiosqlite.connect(DB_PATH) as db:

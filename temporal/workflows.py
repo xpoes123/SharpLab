@@ -8,6 +8,7 @@ with workflow.unsafe.imports_passed_through():
         fetch_games_for_today,
         fetch_odds_batch,
         fetch_injuries,
+        record_injury_changes,
         upsert_odds_snapshot,
         fetch_close_odds_snapshot,
         fetch_kalshi_odds_batch,
@@ -263,6 +264,15 @@ class InjuryPollingWorkflow:
                 )
 
                 if changes:
+                    # Persist alerts before re-polling odds (idempotent write,
+                    # safe to retry independently of fetch_injuries).
+                    await workflow.execute_activity(
+                        record_injury_changes,
+                        changes,
+                        start_to_close_timeout=timedelta(seconds=30),
+                        retry_policy=RetryPolicy(maximum_attempts=3),
+                    )
+
                     # Re-poll odds so the notification shows lines post-news
                     game_ids = [g.game_id for g in games]
                     batch = await workflow.execute_activity(
