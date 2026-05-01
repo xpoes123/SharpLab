@@ -294,6 +294,12 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        # Migration: add crapless_default_bet column (missing from initial user_settings migration)
+        try:
+            await db.execute("ALTER TABLE user_settings ADD COLUMN crapless_default_bet INTEGER")
+            await db.commit()
+        except Exception:
+            pass  # column already exists
         # Migration: add discord_users cache table for web leaderboard
         try:
             await db.execute(
