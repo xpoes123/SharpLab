@@ -2188,7 +2188,7 @@ async def cleanup_stale_duels() -> int:
                             (d["wager"], uid),
                         )
                     except Exception:
-                        pass  # wallet may not exist; best-effort
+                        log.warning("Failed to refund duel wager for user %s (duel %s)", uid, d["duel_id"], exc_info=True)
             await db.execute(
                 "UPDATE duels SET status = 'expired', finished_at = ? "
                 "WHERE duel_id = ?",

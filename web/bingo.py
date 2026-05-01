@@ -346,6 +346,7 @@ async def _call_loop(room: BingoRoom) -> None:
     except asyncio.CancelledError:
         pass
     except Exception:
+        logger.exception("_call_loop crashed in room %s", room.room_id)
         room.phase = "finished"
 
 
