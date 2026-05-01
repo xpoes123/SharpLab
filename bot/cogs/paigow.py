@@ -781,7 +781,7 @@ class PaiGowTableView(ui.View):
 
         # Row 3: New Round, Close Table
         self.new_round_btn.disabled = not finished
-        self.close_btn.disabled = setting
+        self.close_btn.disabled = False
 
     # ── Row 0: Deal, Join, Re-bet, Leave ─────────────────────
 
@@ -1005,12 +1005,7 @@ class PaiGowTableView(ui.View):
                 "Only the table opener can close!", ephemeral=True,
             )
             return
-        if self.table.phase == "setting":
-            await interaction.response.send_message(
-                "Can't close mid-round! Wait for everyone to set.", ephemeral=True,
-            )
-            return
-        if self.table.phase == "betting":
+        if self.table.phase in ("betting", "setting"):
             await self._abort(interaction, "Table closed by dealer. All bets refunded.")
         else:
             await self._close(interaction)
