@@ -2348,3 +2348,53 @@ async def cleanup_stale_game_sessions() -> int:
             cleaned += 1
         await db.commit()
     return cleaned
+
+
+# ── Active Discord table tracking (cross-session cleanup) ────────────────────
+
+
+async def register_discord_table(channel_id: int, message_id: int | None, game_type: str) -> None:
+    """Record that a Discord game table is open in channel_id.
+
+    Called when a table is created. Persists across bot restarts so that
+    on_ready can close orphaned tables from the previous session.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO active_discord_tables "
+            "(channel_id, message_id, game_type, created_at) VALUES (?, ?, ?, ?)",
+            (channel_id, message_id, game_type, now_iso),
+        )
+        await db.commit()
+
+
+async def unregister_discord_table(channel_id: int) -> None:
+    """Remove the table record when a game closes normally."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "DELETE FROM active_discord_tables WHERE channel_id = ?",
+            (channel_id,),
+        )
+        await db.commit()
+
+
+async def get_stale_discord_tables(game_type: str | None = None) -> list[dict]:
+    """Return records for tables still in the DB (orphaned from a previous session).
+
+    Pass game_type to filter by game, or None to return all.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        if game_type is not None:
+            cursor = await db.execute(
+                "SELECT channel_id, message_id, game_type FROM active_discord_tables "
+                "WHERE game_type = ?",
+                (game_type,),
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT channel_id, message_id, game_type FROM active_discord_tables",
+            )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
