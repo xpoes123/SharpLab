@@ -85,7 +85,6 @@ GAME_LABELS: dict[str, str] = {
     "indian-poker": "Indian Poker",
     "battleship": "Battleship",
     "blotto": "Colonel Blotto",
-    "tip": "Tip",
 }
 
 GAME_CATEGORIES: list[tuple[str, str]] = [
