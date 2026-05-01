@@ -106,7 +106,7 @@ class TestSendLogEmbed:
         self.handler = DiscordLogHandler(cog_ref=MagicMock())
 
     def _run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return asyncio.run(coro)
 
     def test_warning_only_uses_orange(self):
         channel = AsyncMock()
