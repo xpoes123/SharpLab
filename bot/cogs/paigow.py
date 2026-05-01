@@ -218,7 +218,12 @@ def _house_way(cards: list[str]) -> tuple[list[str], list[str]]:
 
         lo_score = _evaluate_2(low)
         hi_score = _evaluate_5(high)
-        score = (hi_score, lo_score)
+        # Primary: maximise 5-card tier; secondary: maximise 2-card hand;
+        # tertiary: maximise 5-card kickers.  This ensures that when all valid
+        # splits share the same 5-card tier (e.g. all ace-high no-pair), the
+        # algorithm picks the split with the strongest low hand rather than
+        # greedily hoarding high kickers in the 5-card hand.
+        score = (hi_score[0], lo_score, hi_score)
 
         if best_score is None or score > best_score:
             best_score = score
