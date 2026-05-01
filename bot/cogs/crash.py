@@ -551,10 +551,23 @@ class CrashTableView(ui.View):
         except asyncio.CancelledError:
             pass
         except Exception:
+            log.exception("Unexpected error in _fly_loop — refunding bets and closing table")
             # Unexpected error — refund and bail
             if table.phase == "flying":
                 table.phase = "crashed"
                 await self._refund_active()
+            self.active_tables.pop(table.channel_id, None)
+            self.stop()
+            if table.message:
+                try:
+                    embed = discord.Embed(
+                        title="Crash Table — Error",
+                        description="An unexpected error occurred. All active bets have been refunded.",
+                        colour=discord.Colour.red(),
+                    )
+                    await table.message.edit(embed=embed, view=None)
+                except discord.HTTPException:
+                    pass
 
     async def _cashout_player(
         self, player: CrashPlayer, *, mult_override: float | None = None,

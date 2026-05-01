@@ -641,9 +641,22 @@ class HorseRaceTableView(ui.View):
         except asyncio.CancelledError:
             pass
         except Exception:
+            log.exception("Unexpected error in _race_loop — refunding bets and closing table")
             if table.phase == "racing":
                 table.phase = "finished"
                 await self._refund_all()
+            self.active_tables.pop(table.channel_id, None)
+            self.stop()
+            if table.message:
+                try:
+                    embed = discord.Embed(
+                        title="Horse Race — Error",
+                        description="An unexpected error occurred. All active bets have been refunded.",
+                        colour=discord.Colour.red(),
+                    )
+                    await table.message.edit(embed=embed, view=None)
+                except discord.HTTPException:
+                    pass
 
     async def _resolve_win(self) -> None:
         table = self.table
