@@ -1048,6 +1048,9 @@ class QuizBowlCog(commands.Cog):
             return
         if table.part_winner is not None or captured_part_idx in table.bonus_part_results:
             return
+        # If the game closed while the API call was in-flight, discard.
+        if table.phase == "closed":
+            return
 
         if directive == "accept":
             player = table.players[uid]
