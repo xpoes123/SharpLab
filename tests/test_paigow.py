@@ -405,21 +405,40 @@ class TestHouseWay:
         high, low = _house_way(cards)
         assert _valid_setting(high, low) is True
 
-    def test_splits_full_house(self):
-        """House way should split a full house: trips in high, pair in low."""
+    def test_keeps_full_house_intact(self):
+        """House way should keep a full house in the 5-card high hand (stronger than splitting)."""
         cards = ["Q♠", "Q♥", "Q♦", "7♣", "7♠", "3♥", "2♦"]
         high, low = _house_way(cards)
-        lo_score = _evaluate_2(low)
-        # Low hand should have a pair (the 7s)
-        assert lo_score[0] == 1  # pair in low hand
+        hi_score = _evaluate_5(high)
+        # Full house (tier 6) must be in the high hand, not split
+        assert hi_score[0] == 6, (
+            f"Expected full house in high hand, got tier {hi_score[0]} ({_hand_name_5(hi_score)})"
+        )
 
-    def test_splits_two_pair(self):
-        """With two pair, house way should split them."""
+    def test_keeps_both_pairs_in_high(self):
+        """House way should keep both pairs in the 5-card high hand (two pair > one pair)."""
         cards = ["A♠", "A♥", "5♦", "5♣", "9♠", "7♥", "3♦"]
         high, low = _house_way(cards)
-        lo_score = _evaluate_2(low)
-        # Should put one pair in low hand
-        assert lo_score[0] == 1  # pair
+        hi_score = _evaluate_5(high)
+        # Two pair (tier 2) must be in the high hand
+        assert hi_score[0] == 2, (
+            f"Expected two pair in high hand, got tier {hi_score[0]} ({_hand_name_5(hi_score)})"
+        )
+
+    def test_prioritises_high_hand_over_low_hand(self):
+        """5-card high hand must be maximised first; low hand is secondary.
+
+        K♠K♥K♦Q♣Q♠J♥10♦ — the split choice reveals the ordering:
+          Bug  (lo first): keeps trips+J-10 in high, puts pair-Q in low  → three-of-a-kind high
+          Fix  (hi first): keeps full-house K/Q in high, puts J-10 in low → full-house high
+        """
+        cards = ["K♠", "K♥", "K♦", "Q♣", "Q♠", "J♥", "10♦"]
+        high, low = _house_way(cards)
+        hi_score = _evaluate_5(high)
+        # The 5-card hand must be a full house (tier 6), not three-of-a-kind (tier 3)
+        assert hi_score[0] == 6, (
+            f"Expected full house in high hand, got tier {hi_score[0]} ({_hand_name_5(hi_score)})"
+        )
 
     def test_with_joker(self):
         cards = ["A♠", JOKER, "Q♦", "J♣", "9♠", "7♥", "3♦"]
