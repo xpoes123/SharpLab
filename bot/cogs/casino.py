@@ -1587,6 +1587,7 @@ class CasinoCog(commands.Cog):
     async def casino_stats(
         self, interaction: discord.Interaction, user: discord.User | None = None,
     ) -> None:
+        await interaction.response.defer()
         target = user or interaction.user
         uid = str(target.id)
 
@@ -1594,7 +1595,7 @@ class CasinoCog(commands.Cog):
         by_game = await queries.get_casino_stats_by_game(uid)
 
         if overall["rounds"] == 0:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"**{target.display_name}** hasn't played any casino games yet.",
                 ephemeral=True,
             )
@@ -1633,13 +1634,28 @@ class CasinoCog(commands.Cog):
                 lines.append(
                     f"{dot} **{label}** — {row['rounds']} rounds — {g_net:+,}c"
                 )
-            embed.add_field(name="Per Game", value="\n".join(lines), inline=False)
+            # Discord embed field values are limited to 1024 characters
+            text = "\n".join(lines)
+            if len(text) > 1024:
+                truncated = []
+                length = 0
+                for i, line in enumerate(lines):
+                    needed = len(line) + (1 if truncated else 0)  # +1 for newline
+                    remaining = len(lines) - i
+                    suffix = f"\n*...and {remaining} more*"
+                    if length + needed + len(suffix) > 1024:
+                        truncated.append(f"*...and {remaining} more*")
+                        break
+                    truncated.append(line)
+                    length += needed
+                text = "\n".join(truncated)
+            embed.add_field(name="Per Game", value=text, inline=False)
 
         bal = await queries.get_casino_balance(uid)
         if bal is not None:
             embed.set_footer(text=f"Current balance: {bal:,}c")
 
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
 
     @app_commands.command(
