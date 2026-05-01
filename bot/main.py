@@ -1,5 +1,6 @@
 """SharpLab Discord bot — entrypoint."""
 import asyncio
+import logging
 import os
 
 import discord
@@ -8,8 +9,12 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 from db import schema, queries
+from shared.log_config import setup_logging
 
 load_dotenv()
+setup_logging()
+
+log = logging.getLogger(__name__)
 
 # Game commands that must not be started inside threads (they create their own threads)
 _THREAD_BLOCKED_COMMANDS: set[str] = {
@@ -122,20 +127,20 @@ class SharpBot(commands.Bot):
         sessions = await queries.cleanup_stale_game_sessions()
         total = duels + tournaments + sessions
         if total:
-            print(f"Startup cleanup: {duels} duels, {tournaments} tournaments, {sessions} web sessions expired+refunded.")
+            log.info(f"Startup cleanup: {duels} duels, {tournaments} tournaments, {sessions} web sessions expired+refunded.")
         for cog in COGS:
             try:
                 await self.load_extension(cog)
             except Exception as e:
-                print(f"Failed to load cog {cog}: {e}")
+                log.error(f"Failed to load cog {cog}", exc_info=e)
         for gid in GUILD_IDS:
             guild = discord.Object(id=gid)
             self.tree.copy_global_to(guild=guild)
             await self.tree.sync(guild=guild)
-        print(f"Slash commands synced to {len(GUILD_IDS)} guild(s).")
+        log.info(f"Slash commands synced to {len(GUILD_IDS)} guild(s).")
 
     async def on_ready(self) -> None:
-        print(f"Logged in as {self.user} (id={self.user.id})")
+        log.info(f"Logged in as {self.user} (id={self.user.id})")
 
 
 async def main() -> None:

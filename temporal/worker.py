@@ -5,6 +5,7 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from db.schema import init_db
+from shared.log_config import setup_logging
 from .workflows import OddsPollingWorkflow, CloseCaptureWorkflow, InjuryPollingWorkflow, BetResolutionWorkflow
 from .activities import (
     fetch_games_for_today,
@@ -20,10 +21,9 @@ from .activities import (
     resolve_bets_for_game,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
+setup_logging()
+
+log = logging.getLogger(__name__)
 
 TASK_QUEUE = "sports-quant-lab"
 
@@ -52,7 +52,7 @@ async def main() -> None:
         ],
     )
 
-    print(f"Worker started on task queue: {TASK_QUEUE}")
+    log.info(f"Worker started on task queue: {TASK_QUEUE}")
     await worker.run()
 
 
