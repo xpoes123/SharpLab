@@ -889,9 +889,7 @@ class BaccaratCog(commands.Cog):
             # generic task-based _has_running check always returns False.
             # Instead, detect an active game by game state: bets are placed
             # or cards are mid-reveal (dealt but not fully revealed yet).
-            _is_active = bool(existing.players) or (
-                existing.dealt and not existing.all_revealed
-            )
+            _is_active = bool(existing.players) and not existing.all_revealed
             if _is_active:
                 await interaction.response.send_message(
                     "There's already a baccarat table in this channel! Use the buttons to bet.",

@@ -141,14 +141,19 @@ class TestBaccaratTableGuard:
         assert cog.active_tables[42] is not table
 
     def test_allows_when_hand_fully_revealed(self):
-        """A finished hand (all_revealed=True, no pending bets) can be replaced."""
+        """A finished hand (all_revealed=True) can be replaced even with players still seated.
+
+        _finish() does NOT clear players — they persist until "New Hand" is clicked.
+        The guard must allow /baccarat once all cards are revealed.
+        """
         cog = _make_cog()
         table = _make_table()
         table.dealt = True
         table.player_revealed = len(table.player_hand)  # all player cards shown
         table.banker_revealed = len(table.banker_hand)  # all banker cards shown
-        # No players left (they all left or closed)
-        assert not table.players
+        # Players still seated — this is the real post-_finish() state
+        table.players[1] = _make_seat(user_id=1)
+        assert table.all_revealed  # confirm the state is truly finished
         cog.active_tables[42] = table
 
         interaction = _make_interaction(channel_id=42)
