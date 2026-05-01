@@ -1,4 +1,9 @@
 """Tests for Pai Gow Poker hand evaluation, house way, and fortune bonus."""
+import asyncio
+import sys
+
+sys.path.insert(0, ".")
+
 from bot.cogs.paigow import (
     JOKER,
     _best_5_from_7,
@@ -12,6 +17,125 @@ from bot.cogs.paigow import (
     _new_deck,
     _valid_setting,
 )
+
+
+def run(coro):
+    return asyncio.run(coro)
+
+
+# ── /paigow close command ────────────────────────────────────────────────────
+
+
+class TestPaiGowCloseCommand:
+    """Force-close command should refund players and remove table from active_tables."""
+
+    def _make_table(self):
+        from bot.cogs.paigow import PaiGowTable
+        return PaiGowTable(channel_id=5, opener_id=10, opener_name="Alice")
+
+    def test_close_removes_table(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from bot.cogs.paigow import PaiGowCog
+
+        table = self._make_table()
+        cog = PaiGowCog.__new__(PaiGowCog)
+        cog.active_tables = {5: table}
+
+        interaction = MagicMock()
+        interaction.channel_id = 5
+        interaction.user = MagicMock()
+        interaction.user.display_name = "Admin"
+        interaction.response = MagicMock()
+        interaction.response.send_message = AsyncMock()
+
+        async def _run():
+            with patch("bot.cogs.paigow.queries") as mock_q:
+                mock_q.update_casino_balance = AsyncMock(return_value=1000)
+                table.message = None
+                await cog.paigow_close.callback(cog, interaction)
+
+        run(_run())
+        assert 5 not in cog.active_tables
+        assert table.phase == "finished"
+
+    def test_close_no_table_in_channel(self):
+        from unittest.mock import AsyncMock, MagicMock
+        from bot.cogs.paigow import PaiGowCog
+
+        cog = PaiGowCog.__new__(PaiGowCog)
+        cog.active_tables = {}
+
+        interaction = MagicMock()
+        interaction.channel_id = 99
+        interaction.response = MagicMock()
+        interaction.response.send_message = AsyncMock()
+
+        run(cog.paigow_close.callback(cog, interaction))
+        interaction.response.send_message.assert_called_once()
+        call_kwargs = interaction.response.send_message.call_args
+        assert call_kwargs.kwargs.get("ephemeral") is True
+
+    def test_close_refunds_players(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from bot.cogs.paigow import PaiGowCog, PaiGowTable, PaiGowSeat
+
+        table = PaiGowTable(channel_id=7, opener_id=1, opener_name="Dealer")
+        table.players[42] = PaiGowSeat(user_id=42, display_name="Bob", wager=100, fortune_bet=20)
+        table.players[43] = PaiGowSeat(user_id=43, display_name="Carol", wager=50)
+
+        cog = PaiGowCog.__new__(PaiGowCog)
+        cog.active_tables = {7: table}
+
+        refunded: dict[str, int] = {}
+
+        async def fake_update(uid, amount):
+            refunded[uid] = amount
+            return 1000
+
+        interaction = MagicMock()
+        interaction.channel_id = 7
+        interaction.user = MagicMock()
+        interaction.user.display_name = "Admin"
+        interaction.response = MagicMock()
+        interaction.response.send_message = AsyncMock()
+
+        async def _run():
+            with patch("bot.cogs.paigow.queries") as mock_q:
+                mock_q.update_casino_balance = AsyncMock(side_effect=fake_update)
+                table.message = None
+                await cog.paigow_close.callback(cog, interaction)
+
+        run(_run())
+        assert refunded.get("42") == 120  # wager + fortune_bet
+        assert refunded.get("43") == 50
+        assert 7 not in cog.active_tables
+
+    def test_close_removes_table_even_if_db_fails(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from bot.cogs.paigow import PaiGowCog, PaiGowTable, PaiGowSeat
+
+        table = PaiGowTable(channel_id=8, opener_id=1, opener_name="Dealer")
+        table.players[99] = PaiGowSeat(user_id=99, display_name="Eve", wager=200)
+
+        cog = PaiGowCog.__new__(PaiGowCog)
+        cog.active_tables = {8: table}
+
+        interaction = MagicMock()
+        interaction.channel_id = 8
+        interaction.user = MagicMock()
+        interaction.user.display_name = "Admin"
+        interaction.response = MagicMock()
+        interaction.response.send_message = AsyncMock()
+
+        async def _run():
+            with patch("bot.cogs.paigow.queries") as mock_q:
+                mock_q.update_casino_balance = AsyncMock(side_effect=RuntimeError("DB down"))
+                table.message = None
+                await cog.paigow_close.callback(cog, interaction)
+
+        run(_run())
+        assert 8 not in cog.active_tables
+        assert table.phase == "finished"
 
 
 # ── Deck ─────────────────────────────────────────────────────────────────────

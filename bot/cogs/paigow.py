@@ -1206,14 +1206,17 @@ class PaiGowCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, PaiGowTable] = {}
 
-    @app_commands.command(name="paigow", description="Open a Pai Gow Poker table (multiplayer)")
+    paigow_group = app_commands.Group(name="paigow", description="Pai Gow Poker commands")
+
+    @paigow_group.command(name="play", description="Open a Pai Gow Poker table (multiplayer)")
     async def paigow(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:
             existing = self.active_tables[channel_id]
             if existing.phase != "finished":
                 await interaction.response.send_message(
-                    "There's already a Pai Gow table in this channel!",
+                    "There's already a Pai Gow table in this channel! "
+                    "The opener can click **Close Table**, or an admin can run `/paigow close`.",
                     ephemeral=True,
                 )
                 return
@@ -1232,6 +1235,48 @@ class PaiGowCog(commands.Cog):
         embed = _betting_embed(table)
         await interaction.response.send_message(embed=embed, view=view)
         table.message = await interaction.original_response()
+
+    @paigow_group.command(
+        name="close",
+        description="Force-close a stuck Pai Gow table and refund all players (admin only)",
+    )
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def paigow_close(self, interaction: discord.Interaction) -> None:
+        channel_id = interaction.channel_id
+        table = self.active_tables.get(channel_id)
+        if table is None:
+            await interaction.response.send_message(
+                "No active Pai Gow table in this channel.", ephemeral=True,
+            )
+            return
+
+        # Mark finished and remove BEFORE any async work so the table can't stay stuck
+        table.phase = "finished"
+        del self.active_tables[channel_id]
+
+        for seat in table.players.values():
+            try:
+                await queries.update_casino_balance(str(seat.user_id), seat.total_wager)
+            except Exception:
+                log.exception("paigow close: failed to refund player %s", seat.user_id)
+
+        if table.message:
+            try:
+                embed = discord.Embed(
+                    title="Pai Gow Table \u2014 Closed by Admin",
+                    description=(
+                        f"Table force-closed by {interaction.user.display_name}. "
+                        "All bets refunded."
+                    ),
+                    colour=discord.Colour.dark_grey(),
+                )
+                await table.message.edit(embed=embed, view=None)
+            except Exception:
+                log.exception("paigow close: failed to edit message")
+
+        await interaction.response.send_message(
+            "Pai Gow table closed and all bets refunded.", ephemeral=True,
+        )
 
 
 async def setup(bot: commands.Bot) -> None:
