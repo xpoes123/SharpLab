@@ -302,7 +302,10 @@ def _table_embed(
                 bal = balances.get(p.user_id, 0)
                 line += f"\n\u2003\u2192 **{sign}{net}c** (bal: {bal}c)"
             lines.append(line)
-        embed.add_field(name="Players", value="\n".join(lines[:8]), inline=False)
+        players_value = "\n".join(lines[:8])
+        if len(players_value) > 1024:
+            players_value = players_value[:1021] + "…"
+        embed.add_field(name="Players", value=players_value, inline=False)
     else:
         embed.add_field(
             name="Players",
@@ -649,8 +652,12 @@ class CraplessTableView(ui.View):
         if len(self.table.players) >= MAX_PLAYERS and uid not in self.table.players:
             await interaction.response.send_message("Table is full!", ephemeral=True)
             return
-        bal = await queries.get_or_create_casino_wallet(str(uid))
-        default_bet = await queries.get_crapless_default_bet(str(uid))
+        # Run both DB lookups in parallel so the combined latency doesn't
+        # push us past Discord's 3-second interaction response deadline.
+        bal, default_bet = await asyncio.gather(
+            queries.get_or_create_casino_wallet(str(uid)),
+            queries.get_crapless_default_bet(str(uid)),
+        )
         await interaction.response.send_modal(JoinModal(self.table, self, bal, default_bet))
 
     @ui.button(label="Leave", style=discord.ButtonStyle.secondary, emoji="\U0001f6aa", row=1)
