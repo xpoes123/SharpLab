@@ -4,6 +4,7 @@ import sys
 from temporalio.client import Client
 
 TASK_QUEUE = "sports-quant-lab"
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 log = logging.getLogger(__name__)
 
 async def main() -> None:
