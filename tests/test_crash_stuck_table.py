@@ -26,6 +26,9 @@ _queries_stub.get_or_create_casino_wallet = AsyncMock(return_value=1000)
 _queries_stub.update_casino_balance = AsyncMock()
 _queries_stub.get_casino_balance = AsyncMock(return_value=1000)
 _queries_stub.log_casino_result = AsyncMock()
+_queries_stub.record_geo_attempt = AsyncMock()
+_queries_stub.get_geo_stats_by_region = AsyncMock(return_value=[])
+_queries_stub.get_elo_rating = AsyncMock(return_value={"rating": 1000, "games_played": 0})
 sys.modules.setdefault("db", types.ModuleType("db"))
 sys.modules["db.queries"] = _queries_stub
 
