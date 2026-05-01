@@ -275,6 +275,7 @@ class JoinHiLoModal(ui.Modal):
             display_name=interaction.user.display_name,
             bet=amt,
         )
+        log.info('bet_placed game=%s channel=%d user=%d amount=%d', 'hilo', self.table.channel_id, interaction.user.id, amt)
         self.table_view._update_buttons()
         await interaction.response.edit_message(
             embed=_betting_embed(self.table), view=self.table_view,
@@ -417,6 +418,7 @@ class HiLoTableView(ui.View):
         self.table.players[uid] = HiLoPlayer(
             user_id=uid, display_name=name, bet=amt,
         )
+        log.info('bet_placed game=%s channel=%d user=%d amount=%d', 'hilo', self.table.channel_id, uid, amt)
         self._update_buttons()
         await interaction.response.edit_message(
             embed=_betting_embed(self.table), view=self,
@@ -698,6 +700,7 @@ class HiLoTableView(ui.View):
             bal = await queries.get_casino_balance(str(p.user_id))
             balances[p.user_id] = bal or 0
 
+        log.info('game_end game=%s channel=%d players=%d', 'hilo', table.channel_id, len(table.players))
         self._update_buttons()
         await interaction.response.edit_message(
             embed=_finished_embed(table, balances=balances), view=self,
@@ -766,6 +769,7 @@ class HiLoTableView(ui.View):
                     log.exception("Unhandled error in hilo.py")
 
         self.active_tables.pop(table.channel_id, None)
+        log.info('game_cleanup game=%s channel=%d reason=%s', 'hilo', table.channel_id, 'timeout')
         if table.message:
             try:
                 embed = discord.Embed(
@@ -814,6 +818,7 @@ class HiLoCog(commands.Cog):
             host_name=interaction.user.display_name,
         )
         self.active_tables[channel_id] = table
+        log.info('game_start game=%s channel=%d creator=%d', 'hilo', channel_id, interaction.user.id)
 
         view = HiLoTableView(table, self.active_tables)
         embed = _betting_embed(table)

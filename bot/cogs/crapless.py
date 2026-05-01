@@ -383,6 +383,7 @@ class JoinModal(ui.Modal):
                 user_id=uid, display_name=interaction.user.display_name,
                 bet_type=BetType.PASS_LINE, bet=amt, coins_in=amt,
             )
+        log.info('bet_placed game=%s channel=%d user=%d amount=%d', 'crapless', self.table.channel_id, interaction.user.id, amt)
         await interaction.response.edit_message(embed=_table_embed(self.table), view=self.table_view)
 
 
@@ -414,6 +415,7 @@ class OddsBetModal(ui.Modal):
             return
         self.player.odds_bet = amt
         self.player.coins_in += amt
+        log.info('bet_placed game=%s channel=%d user=%d amount=%d', 'crapless', self.table.channel_id, interaction.user.id, amt)
         await interaction.response.edit_message(embed=_table_embed(self.table), view=self.table_view)
 
 
@@ -448,6 +450,7 @@ class SideBetModal(ui.Modal):
             self.table.players[uid] = player
         player.side_bets.append(SideBet(kind=self.kind, amount=amt))
         player.coins_in += amt
+        log.info('bet_placed game=%s channel=%d user=%d amount=%d', 'crapless', self.table.channel_id, interaction.user.id, amt)
         await interaction.response.edit_message(embed=_table_embed(self.table), view=self.table_view)
 
 
@@ -532,6 +535,7 @@ class PlaceHardwayModal(ui.Modal):
         for kind, amt in bets:
             player.side_bets.append(SideBet(kind=kind, amount=amt))
         player.coins_in += total_cost
+        log.info('bet_placed game=%s channel=%d user=%d amount=%d', 'crapless', self.table.channel_id, interaction.user.id, total_cost)
         await interaction.response.edit_message(
             embed=_table_embed(self.table), view=self.table_view,
         )
@@ -857,6 +861,7 @@ class CraplessTableView(ui.View):
                 log.exception("crapless: failed to settle player %s", player.user_id)
                 balances[player.user_id] = 0
 
+        log.info('game_end game=%s channel=%d players=%d', 'crapless', table.channel_id, len(table.players))
         embed = _table_embed(table, balances=balances)
         try:
             if followup:
@@ -886,6 +891,7 @@ class CraplessTableView(ui.View):
                 child.disabled = True  # type: ignore[union-attr]
         self.stop()
         self.active_tables.pop(table.channel_id, None)
+        log.info('game_cleanup game=%s channel=%d reason=%s', 'crapless', table.channel_id, 'abort')
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def on_timeout(self) -> None:
@@ -894,6 +900,7 @@ class CraplessTableView(ui.View):
             return
         table.phase = Phase.FINISHED
         self.active_tables.pop(table.channel_id, None)
+        log.info('game_cleanup game=%s channel=%d reason=%s', 'crapless', table.channel_id, 'timeout')
         for player in table.players.values():
             refund = player.bet + player.odds_bet + sum(sb.amount for sb in player.side_bets)
             if refund > 0:
@@ -944,6 +951,7 @@ class CraplessCrapsCog(commands.Cog):
             shooter_name=interaction.user.display_name,
         )
         self.active_tables[channel_id] = table
+        log.info('game_start game=%s channel=%d creator=%d', 'crapless', channel_id, interaction.user.id)
 
         view = CraplessTableView(table, self.active_tables)
         embed = _table_embed(table)

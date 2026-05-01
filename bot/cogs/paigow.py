@@ -521,6 +521,7 @@ class JoinPaiGowModal(ui.Modal):
         self.table.players[uid] = PaiGowSeat(
             user_id=uid, display_name=interaction.user.display_name, wager=amt,
         )
+        log.info('bet_placed game=%s channel=%d user=%d amount=%d', 'paigow', self.table.channel_id, uid, amt)
         self.table_view._update_buttons()
         await interaction.response.edit_message(
             embed=_betting_embed(self.table), view=self.table_view,
@@ -1098,6 +1099,7 @@ class PaiGowTableView(ui.View):
             except Exception:
                 log.exception("paigow: failed to settle player %s", seat.user_id)
                 balances[seat.user_id] = 0
+        log.info('game_end game=%s channel=%d players=%d', 'paigow', table.channel_id, len(table.players))
         self._update_buttons()
         if table.message:
             try:
@@ -1140,6 +1142,7 @@ class PaiGowTableView(ui.View):
         # call may have already replaced the entry.
         if self.active_tables.get(self.table.channel_id) is self.table:
             self.active_tables.pop(self.table.channel_id, None)
+        log.info('game_cleanup game=%s channel=%d reason=%s', 'paigow', self.table.channel_id, 'abort')
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def _close(self, interaction: discord.Interaction) -> None:
@@ -1160,6 +1163,7 @@ class PaiGowTableView(ui.View):
 
     async def on_timeout(self) -> None:
         table = self.table
+        log.info('game_cleanup game=%s channel=%d reason=%s', 'paigow', table.channel_id, 'timeout')
         if table.phase == "finished":
             # Only evict if active_tables still maps to THIS table — a new /paigow
             # call may have already replaced the entry with a different table.
@@ -1230,6 +1234,7 @@ class PaiGowCog(commands.Cog):
             opener_name=interaction.user.display_name,
         )
         self.active_tables[channel_id] = table
+        log.info('game_start game=%s channel=%d creator=%d', 'paigow', channel_id, interaction.user.id)
 
         view = PaiGowTableView(table, self.active_tables)
         embed = _betting_embed(table)

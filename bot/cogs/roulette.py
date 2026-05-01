@@ -312,6 +312,7 @@ class OutsideBetModal(ui.Modal):
             await interaction.response.send_message(f"Not enough coins! (have {bal})", ephemeral=True)
             return
 
+        log.info('bet_placed game=%s channel=%d user=%d amount=%d', 'roulette', self.table.channel_id, uid, amt)
         player = self.table.players.get(uid)
         if player is None:
             player = RoulettePlayer(user_id=uid, display_name=interaction.user.display_name)
@@ -365,6 +366,7 @@ class StraightBetModal(ui.Modal):
             await interaction.response.send_message(f"Not enough coins! (have {bal})", ephemeral=True)
             return
 
+        log.info('bet_placed game=%s channel=%d user=%d amount=%d', 'roulette', self.table.channel_id, uid, amt)
         player = self.table.players.get(uid)
         if player is None:
             player = RoulettePlayer(user_id=uid, display_name=interaction.user.display_name)
@@ -434,6 +436,7 @@ class SplitBetModal(ui.Modal):
             await interaction.response.send_message(f"Not enough coins! (have {bal})", ephemeral=True)
             return
 
+        log.info('bet_placed game=%s channel=%d user=%d amount=%d', 'roulette', self.table.channel_id, uid, amt)
         player = self.table.players.get(uid)
         if player is None:
             player = RoulettePlayer(user_id=uid, display_name=interaction.user.display_name)
@@ -492,6 +495,7 @@ class StreetBetModal(ui.Modal):
             await interaction.response.send_message(f"Not enough coins! (have {bal})", ephemeral=True)
             return
 
+        log.info('bet_placed game=%s channel=%d user=%d amount=%d', 'roulette', self.table.channel_id, uid, amt)
         nums = frozenset(str(n) for n in range(start, start + 3))
         label = f"St {start}-{start + 2}"
         player = self.table.players.get(uid)
@@ -784,6 +788,7 @@ class RouletteView(ui.View):
                 child.disabled = True  # type: ignore[union-attr]
         self.stop()
         self.active_tables.pop(self.table.channel_id, None)
+        log.info('game_cleanup game=%s channel=%d reason=%s', 'roulette', self.table.channel_id, 'close')
         await interaction.response.edit_message(embed=embed, view=self)
 
     # ── Helpers ──────────────────────────────────────────────────────
@@ -830,6 +835,7 @@ class RouletteView(ui.View):
                 str(player.user_id), "roulette", total_wagered, total_payout,
             )
 
+        log.info('game_end game=%s channel=%d players=%d', 'roulette', table.channel_id, len(table.players))
         self._update_buttons()
         await interaction.edit_original_response(
             embed=_table_embed(table, balances=balances), view=self,
@@ -854,12 +860,14 @@ class RouletteView(ui.View):
                 child.disabled = True  # type: ignore[union-attr]
         self.stop()
         self.active_tables.pop(table.channel_id, None)
+        log.info('game_cleanup game=%s channel=%d reason=%s', 'roulette', table.channel_id, 'abort')
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def on_timeout(self) -> None:
         table = self.table
         if table.phase == "finished":
             self.active_tables.pop(table.channel_id, None)
+            log.info('game_cleanup game=%s channel=%d reason=%s', 'roulette', table.channel_id, 'timeout')
             if table.message:
                 try:
                     embed = discord.Embed(
@@ -880,6 +888,7 @@ class RouletteView(ui.View):
                 except Exception:
                     log.exception("Unhandled error in roulette.py")
         self.active_tables.pop(table.channel_id, None)
+        log.info('game_cleanup game=%s channel=%d reason=%s', 'roulette', table.channel_id, 'timeout')
         if table.message:
             try:
                 embed = discord.Embed(
@@ -925,6 +934,7 @@ class RouletteCog(commands.Cog):
             host_name=interaction.user.display_name,
         )
         self.active_tables[channel_id] = table
+        log.info('game_start game=%s channel=%d creator=%d', 'roulette', channel_id, interaction.user.id)
 
         view = RouletteView(table, self.active_tables)
         embed = _table_embed(table)

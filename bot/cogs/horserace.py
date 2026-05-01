@@ -370,6 +370,7 @@ class JoinRaceModal(ui.Modal):
             bet=amt,
             horse_index=horse_idx,
         )
+        log.info('bet_placed game=%s channel=%d user=%d amount=%d', 'horserace', self.table.channel_id, uid, amt)
 
         self.table_view._update_buttons()
         await interaction.response.edit_message(
@@ -699,6 +700,7 @@ class HorseRaceTableView(ui.View):
                 player.display_name, player.bet, player.horse_index,
             )
 
+        log.info('game_end game=%s channel=%d players=%d', 'horserace', table.channel_id, len(table.players))
         self._update_buttons()
         if table.message:
             try:
@@ -740,10 +742,12 @@ class HorseRaceTableView(ui.View):
             child.disabled = True  # type: ignore[union-attr]
         self.stop()
         self.active_tables.pop(self.table.channel_id, None)
+        log.info('game_cleanup game=%s channel=%d reason=%s', 'horserace', self.table.channel_id, 'abort')
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def on_timeout(self) -> None:
         table = self.table
+        log.info('game_cleanup game=%s channel=%d reason=%s', 'horserace', table.channel_id, 'timeout')
 
         if table.race_task and not table.race_task.done():
             table.race_task.cancel()
@@ -812,6 +816,7 @@ class HorseRaceCog(commands.Cog):
             host_name=interaction.user.display_name,
         )
         self.active_tables[channel_id] = table
+        log.info('game_start game=%s channel=%d creator=%d', 'horserace', channel_id, interaction.user.id)
 
         view = HorseRaceTableView(table, self.active_tables)
         embed = _betting_embed(table)

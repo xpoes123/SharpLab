@@ -229,6 +229,7 @@ class JoinCrashModal(ui.Modal):
             )
             return
 
+        log.info('bet_placed game=%s channel=%d user=%d amount=%d', 'crash', self.table.channel_id, uid, amt)
         self.table.players[uid] = CrashPlayer(
             user_id=uid,
             display_name=interaction.user.display_name,
@@ -270,6 +271,7 @@ class CrashTableView(ui.View):
         if self.table.phase in ("betting", "flying"):
             await self._refund_active()
         self.active_tables.pop(self.table.channel_id, None)
+        log.info('game_cleanup game=%s channel=%d reason=%s', 'crash', self.table.channel_id, 'abort')
         self.stop()
         if self.table.message:
             try:
@@ -598,6 +600,7 @@ class CrashTableView(ui.View):
             bal = await queries.get_casino_balance(str(p.user_id))
             balances[p.user_id] = bal or 0
 
+        log.info('game_end game=%s channel=%d players=%d', 'crash', table.channel_id, len(table.players))
         self._update_buttons()
         if table.message:
             try:
@@ -669,6 +672,7 @@ class CrashTableView(ui.View):
         if table.phase == "crashed":
             # Between rounds — just clean up
             self.active_tables.pop(table.channel_id, None)
+            log.info('game_cleanup game=%s channel=%d reason=%s', 'crash', table.channel_id, 'timeout')
             if table.message:
                 try:
                     embed = discord.Embed(
@@ -684,6 +688,7 @@ class CrashTableView(ui.View):
         # Betting or flying — refund active players
         await self._refund_active()
         self.active_tables.pop(table.channel_id, None)
+        log.info('game_cleanup game=%s channel=%d reason=%s', 'crash', table.channel_id, 'timeout')
         if table.message:
             try:
                 embed = discord.Embed(
@@ -731,6 +736,7 @@ class CrashCog(commands.Cog):
             host_name=interaction.user.display_name,
         )
         self.active_tables[channel_id] = table
+        log.info('game_start game=%s channel=%d creator=%d', 'crash', channel_id, interaction.user.id)
 
         view = CrashTableView(table, self.active_tables)
         view._start_lifetime_timer()

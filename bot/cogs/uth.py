@@ -397,6 +397,7 @@ class JoinUTHModal(ui.Modal):
             blind=ante,
             trips_bet=trips,
         )
+        log.info('bet_placed game=%s channel=%d user=%d amount=%d', 'uth', self.table.channel_id, uid, total_cost)
         self.table_view._update_buttons()
         await interaction.response.edit_message(
             embed=_table_embed(self.table), view=self.table_view,
@@ -835,6 +836,7 @@ class UTHTableView(ui.View):
         for p in table.players.values():
             table.last_bets[p.user_id] = (p.display_name, p.ante, p.trips_bet)
 
+        log.info('game_end game=%s channel=%d players=%d', 'uth', table.channel_id, len(table.players))
         self._update_buttons()
         await interaction.response.edit_message(
             embed=_table_embed(table, balances=balances), view=self,
@@ -868,6 +870,7 @@ class UTHTableView(ui.View):
                 child.disabled = True  # type: ignore[union-attr]
         self.stop()
         self.active_tables.pop(self.table.channel_id, None)
+        log.info('game_cleanup game=%s channel=%d reason=%s', 'uth', self.table.channel_id, 'abort')
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def _close(self, interaction: discord.Interaction) -> None:
@@ -885,6 +888,7 @@ class UTHTableView(ui.View):
 
     async def on_timeout(self) -> None:
         table = self.table
+        log.info('game_cleanup game=%s channel=%d reason=%s', 'uth', table.channel_id, 'timeout')
         if table.phase == "finished":
             self.active_tables.pop(table.channel_id, None)
             if table.message:
@@ -952,6 +956,7 @@ class UTHCog(commands.Cog):
             dealer_name=interaction.user.display_name,
         )
         self.active_tables[channel_id] = table
+        log.info('game_start game=%s channel=%d creator=%d', 'uth', channel_id, interaction.user.id)
 
         view = UTHTableView(table, self.active_tables)
         embed = _table_embed(table)

@@ -417,6 +417,7 @@ class BetModal(ui.Modal):
             bet_type=self.bet_type,
             wager=amt,
         )
+        log.info('bet_placed game=%s channel=%d user=%d amount=%d', 'baccarat', self.table.channel_id, uid, amt)
         self.table_view._update_buttons()
         await interaction.response.edit_message(
             embed=_table_embed(self.table), view=self.table_view,
@@ -810,6 +811,7 @@ class BaccaratTableView(ui.View):
                 str(seat.user_id), "baccarat", seat.total_wager, total_payout,
             )
 
+        log.info('game_end game=%s channel=%d players=%d', 'baccarat', table.channel_id, len(table.players))
         embed = _table_embed(table, balances=balances)
         self._update_buttons()
         await interaction.response.edit_message(embed=embed, view=self)
@@ -826,11 +828,13 @@ class BaccaratTableView(ui.View):
                 child.disabled = True  # type: ignore[union-attr]
         self.stop()
         self.active_tables.pop(self.table.channel_id, None)
+        log.info('game_cleanup game=%s channel=%d reason=%s', 'baccarat', self.table.channel_id, 'abort')
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def on_timeout(self) -> None:
         table = self.table
         self.active_tables.pop(table.channel_id, None)
+        log.info('game_cleanup game=%s channel=%d reason=%s', 'baccarat', table.channel_id, 'timeout')
 
         if table.all_revealed:
             # Hand was finished — just close the table quietly
@@ -910,6 +914,7 @@ class BaccaratCog(commands.Cog):
             banker_hand=banker_hand,
         )
         self.active_tables[channel_id] = table
+        log.info('game_start game=%s channel=%d creator=%d', 'baccarat', channel_id, interaction.user.id)
 
         view = BaccaratTableView(table, self.active_tables, self)
         embed = _table_embed(table)

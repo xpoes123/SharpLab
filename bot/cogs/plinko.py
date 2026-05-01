@@ -239,6 +239,7 @@ class JoinPlinkoModal(ui.Modal):
             display_name=interaction.user.display_name,
             bet=amt,
         )
+        log.info('bet_placed game=%s channel=%d user=%d amount=%d', 'plinko', self.table.channel_id, interaction.user.id, amt)
 
         self.table_view._update_buttons()
         await interaction.response.edit_message(
@@ -357,6 +358,7 @@ class PlinkoTableView(ui.View):
         self.table.players[uid] = PlinkoPlayer(
             user_id=uid, display_name=name, bet=amt,
         )
+        log.info('bet_placed game=%s channel=%d user=%d amount=%d', 'plinko', self.table.channel_id, uid, amt)
         self._update_buttons()
         await interaction.response.edit_message(
             embed=_betting_embed(self.table), view=self,
@@ -497,6 +499,7 @@ class PlinkoTableView(ui.View):
         # Final frame: full trail + results
         await asyncio.sleep(ANIM_DELAY)
         table.phase = "finished"
+        log.info('game_end game=%s channel=%d players=%d', 'plinko', table.channel_id, len(table.players))
 
         balances: dict[int, int] = {}
         for p in table.players.values():
@@ -538,6 +541,7 @@ class PlinkoTableView(ui.View):
             child.disabled = True  # type: ignore[union-attr]
         self.stop()
         self.active_tables.pop(self.table.channel_id, None)
+        log.info('game_cleanup game=%s channel=%d reason=%s', 'plinko', self.table.channel_id, 'close')
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def on_timeout(self) -> None:
@@ -562,6 +566,7 @@ class PlinkoTableView(ui.View):
                 except Exception:
                     log.exception("Unhandled error in plinko.py")
         self.active_tables.pop(table.channel_id, None)
+        log.info('game_cleanup game=%s channel=%d reason=%s', 'plinko', table.channel_id, 'timeout')
         if table.message:
             try:
                 embed = discord.Embed(
@@ -610,6 +615,7 @@ class PlinkoCog(commands.Cog):
             host_name=interaction.user.display_name,
         )
         self.active_tables[channel_id] = table
+        log.info('game_start game=%s channel=%d creator=%d', 'plinko', channel_id, interaction.user.id)
 
         view = PlinkoTableView(table, self.active_tables)
         embed = _betting_embed(table)

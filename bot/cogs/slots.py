@@ -719,6 +719,7 @@ class SlotsMainView(ui.View):
                 s.auto_spins_left = 0
                 return
             s.total_wagered += s.bet
+            log.info('bet_placed game=%s channel=%d user=%d amount=%d', 'slots', s.channel_id, s.user_id, s.bet)
         else:
             s.free_spins_left -= 1
 
@@ -851,6 +852,7 @@ class SlotsMainView(ui.View):
                 s.auto_spins_left = 0
                 return
             s.total_wagered += s.bet
+            log.info('bet_placed game=%s channel=%d user=%d amount=%d', 'slots', s.channel_id, s.user_id, s.bet)
 
         s.total_spins += 1
         grid = _spin_reels(free_spin=in_free)
@@ -982,11 +984,13 @@ class SlotsMainView(ui.View):
                 child.disabled = True  # type: ignore[union-attr]
         self.stop()
         self.active.pop(s.channel_id, None)
+        log.info('game_end game=%s channel=%d players=%d', 'slots', s.channel_id, 1)
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def on_timeout(self) -> None:
         s = self.session
         self.active.pop(s.channel_id, None)
+        log.info('game_cleanup game=%s channel=%d reason=%s', 'slots', s.channel_id, 'timeout')
         if s.message:
             try:
                 bal = await queries.get_casino_balance(str(s.user_id)) or 0
@@ -1395,6 +1399,7 @@ class SlotsCog(commands.Cog):
             channel_id=channel_id,
         )
         self.active_sessions[channel_id] = session
+        log.info('game_start game=%s channel=%d creator=%d', 'slots', channel_id, interaction.user.id)
 
         view = SlotsMainView(session, self.active_sessions, self)
         embed = _idle_embed(session, bal)
