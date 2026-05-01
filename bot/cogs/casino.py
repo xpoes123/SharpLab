@@ -17,6 +17,11 @@ log = logging.getLogger(__name__)
 _CLEANUP_INTERVAL_SECS = 120
 # Kill any game that has been in active_tables longer than this (seconds)
 _MAX_GAME_AGE_SECS = 900  # 15 minutes
+# Task attribute names to check/cancel when cleaning up a stuck game
+_TASK_NAMES = (
+    "game_task", "race_task", "sim_task", "round_task", "_round_task",
+    "trade_task", "fly_task", "_shot_clock_task", "_countdown_task",
+)
 
 # ── Card helpers ──────────────────────────────────────────────────────────────
 
@@ -1335,10 +1340,7 @@ class CasinoCog(commands.Cog):
                         evt.set()
                         break
                 # Cancel any task
-                for task_name in ("game_task", "race_task", "sim_task",
-                                  "round_task", "_round_task", "trade_task",
-                                  "fly_task", "_shot_clock_task",
-                                  "_countdown_task"):
+                for task_name in _TASK_NAMES:
                     task = getattr(table, task_name, None)
                     if task is not None and not task.done():
                         task.cancel()
@@ -1556,6 +1558,121 @@ class CasinoCog(commands.Cog):
             f"Gave **{amount}** casino coins to **{user.display_name}**. "
             f"Their balance: **{new_balance}** coins."
         )
+
+    @app_commands.command(name="status", description="Dump active game state (admin)")
+    async def status(self, interaction: discord.Interaction) -> None:
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Admin only.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        now = time.monotonic()
+
+        def _cog_label(cog: commands.Cog) -> str:
+            key = type(cog).__name__.removesuffix("Cog").lower()
+            return GAME_LABELS.get(key, type(cog).__name__)
+
+        table_lines: list[str] = []
+        solo_lines: list[str] = []
+        duel_lines: list[str] = []
+        tourn_lines: list[str] = []
+        total_tables = 0
+        total_solos = 0
+        total_duels = 0
+        total_tourns = 0
+
+        for cog in self.bot.cogs.values():
+            tables = getattr(cog, "active_tables", None)
+            if isinstance(tables, dict) and tables:
+                for channel_id, table in tables.items():
+                    total_tables += 1
+                    label = _cog_label(cog)
+                    players = len(table.players) if hasattr(table, "players") else "N/A"
+                    phase = getattr(table, "phase", "—")
+                    running = [
+                        t for t in _TASK_NAMES
+                        if (task := getattr(table, t, None)) is not None and not task.done()
+                    ]
+                    task_str = ", ".join(running) if running else "none"
+                    key = (id(cog), channel_id)
+                    if key in self._table_first_seen:
+                        age_secs = int(now - self._table_first_seen[key])
+                        age_str = f"{age_secs // 60}m {age_secs % 60}s"
+                    else:
+                        age_str = "new"
+                    table_lines.append(
+                        f"**{label}** <#{channel_id}> | players={players}"
+                        f" | phase={phase} | tasks={task_str} | age={age_str}"
+                    )
+
+            solos = getattr(cog, "active_solos", None)
+            if isinstance(solos, dict) and solos:
+                label = _cog_label(cog)
+                for user_id in solos:
+                    total_solos += 1
+                    solo_lines.append(f"<@{user_id}> — {label}")
+
+            duels = getattr(cog, "active_duels", None)
+            if isinstance(duels, dict) and duels:
+                for channel_id, duel_id in duels.items():
+                    total_duels += 1
+                    duel_lines.append(f"<#{channel_id}> → duel #{duel_id}")
+
+            tourns = getattr(cog, "active_tournaments", None)
+            if isinstance(tourns, dict) and tourns:
+                for channel_id, tourn_id in tourns.items():
+                    total_tourns += 1
+                    tourn_lines.append(f"<#{channel_id}> → tournament #{tourn_id}")
+
+        tracked = len(self._table_first_seen)
+        pending_kills = sum(
+            1 for first_seen in self._table_first_seen.values()
+            if (now - first_seen) > _MAX_GAME_AGE_SECS
+        )
+        loop_running = self._cleanup_orphaned_games.is_running()
+
+        embed = discord.Embed(title="Game Status", colour=discord.Colour.blurple())
+        embed.timestamp = discord.utils.utcnow()
+        embed.add_field(
+            name="Summary",
+            value=(
+                f"{total_tables} active tables | {total_solos} solo sessions"
+                f" | {total_duels} duels | {total_tourns} tournaments"
+            ),
+            inline=False,
+        )
+
+        # Truncate table list to avoid hitting the 6000-char embed limit
+        _MAX_TABLE_LINES = 12
+        overflow = max(0, len(table_lines) - _MAX_TABLE_LINES)
+        display_lines = table_lines[:_MAX_TABLE_LINES]
+        if overflow:
+            display_lines.append(f"…and {overflow} more")
+        embed.add_field(
+            name="Active Tables",
+            value="\n".join(display_lines) if display_lines else "None",
+            inline=False,
+        )
+        embed.add_field(
+            name="Solo Sessions",
+            value="\n".join(solo_lines) if solo_lines else "None",
+            inline=False,
+        )
+        embed.add_field(
+            name="Duels & Tournaments",
+            value="\n".join(duel_lines + tourn_lines) if (duel_lines or tourn_lines) else "None",
+            inline=False,
+        )
+        embed.add_field(
+            name="Cleanup Loop",
+            value=(
+                f"Running: {'yes' if loop_running else 'no'}\n"
+                f"Tracked entries: {tracked}\n"
+                f"Pending kills: {pending_kills}"
+            ),
+            inline=False,
+        )
+        embed.set_footer(text="Status generated")
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="games", description="List all available casino games")
     async def games(self, interaction: discord.Interaction) -> None:
