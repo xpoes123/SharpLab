@@ -756,10 +756,10 @@ def _resolve_bet(
     away_l = away_team.lower()
 
     def _is_home(s: str) -> bool:
-        return s in home_l or home_l.split()[-1] in s
+        return s in home_l
 
     def _is_away(s: str) -> bool:
-        return s in away_l or away_l.split()[-1] in s
+        return s in away_l
 
     if market in ("moneyline", "kalshi"):
         if side == "yes" or _is_home(side):
@@ -807,7 +807,7 @@ async def resolve_bets_for_game(result: GameResult) -> int:
 
     game = await queries.get_game_by_team_suffixes(result.home_last, result.away_last, cutoff)
     if game is None:
-        activity.logger.debug(
+        activity.logger.warning(
             f"[resolve_bets_for_game] No unresolved DB game for "
             f"{result.away_last} @ {result.home_last}"
         )

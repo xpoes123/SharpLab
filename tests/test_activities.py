@@ -358,6 +358,55 @@ def test_resolve_total_no_line_voids():
 def test_resolve_unknown_side_voids():
     assert _resolve_bet(_bet(market="moneyline", side="unknown_team"), HOME, AWAY, 110, 100) == "void"
 
+# ── Shared-suffix team resolution (White Sox / Red Sox) ─────────────────────
+# Regression tests for the `_is_home`/`_is_away` inverted-suffix bug.
+# Before the fix, `home_l.split()[-1] in s` meant "sox" in "red sox" was True,
+# so a bet side="red sox" would incorrectly match the White Sox home team.
+
+WS_HOME = "Chicago White Sox"
+RS_AWAY = "Boston Red Sox"
+
+
+def test_resolve_shared_suffix_away_wins_ml():
+    """Red Sox (away), side='red sox', Red Sox wins — must be 'won' not 'lost'."""
+    assert (
+        _resolve_bet(_bet(market="moneyline", side="red sox"), WS_HOME, RS_AWAY, 3, 5)
+        == "won"
+    )
+
+
+def test_resolve_shared_suffix_away_loses_ml():
+    """Red Sox (away), side='red sox', Red Sox loses — must be 'lost'."""
+    assert (
+        _resolve_bet(_bet(market="moneyline", side="red sox"), WS_HOME, RS_AWAY, 5, 3)
+        == "lost"
+    )
+
+
+def test_resolve_shared_suffix_home_wins_ml():
+    """White Sox (home), side='white sox', White Sox wins — must be 'won'."""
+    assert (
+        _resolve_bet(_bet(market="moneyline", side="white sox"), WS_HOME, RS_AWAY, 5, 3)
+        == "won"
+    )
+
+
+def test_resolve_shared_suffix_spread_away_covers():
+    """Red Sox +1.5 (away), Red Sox wins 5-3: margin=(5-3)+1.5=3.5 → won."""
+    assert (
+        _resolve_bet(_bet(market="spread", side="red sox", line=1.5), WS_HOME, RS_AWAY, 3, 5)
+        == "won"
+    )
+
+
+def test_resolve_shared_suffix_spread_home_covers():
+    """White Sox -1.5 (home), White Sox wins 5-3: margin=(5-3)+(-1.5)=0.5 → won."""
+    assert (
+        _resolve_bet(_bet(market="spread", side="white sox", line=-1.5), WS_HOME, RS_AWAY, 5, 3)
+        == "won"
+    )
+
+
 # ── MLB-flavored bet resolution ─────────────────────────────────────────────
 
 MLB_HOME = "New York Yankees"
