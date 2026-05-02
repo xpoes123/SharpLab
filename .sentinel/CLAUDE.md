@@ -1,42 +1,42 @@
 # Sentinel Learnings for xpoes123/SharpLab
 
-Auto-maintained by Sentinel's memory system. Last updated: 2026-05-02 09:18 UTC
+Auto-maintained by Sentinel's memory system. Last updated: 2026-05-02 15:43 UTC
 
 These are patterns learned from completed tasks on this repo.
 Claude Code loads this file automatically.
 
 ## Warnings (avoid these)
 
-- Task loops swallow exceptions silently—unhandled errors kill loops permanently (confidence: 136)
-- Temporal workflows should guard against replay of partial side effects (confidence: 106)
+- Task loops swallow exceptions silently—unhandled errors kill loops permanently (confidence: 140)
+- Temporal workflows should guard against replay of partial side effects (confidence: 107)
+- Validate line data completeness before processing (confidence: 79)
 - Test with realistic data volumes; unit tests may miss batch edge cases (confidence: 76)
-- Validate line data completeness before processing (confidence: 73)
 - Don't mutate embeds mid-loop without prior bounds checking (confidence: 59)
 - Discord API calls should be idempotent or preceded by state checks (confidence: 58)
 - Race condition: bot restart between send() and DB mark causes dupes (confidence: 56)
 - Generic code requires explicit per-instance startup calls (confidence: 54)
-- Rate-limit API calls to avoid odds provider blocking (confidence: 50)
-- Avoid assuming code is broken if infrastructure exists (confidence: 49)
+- Avoid assuming code is broken if infrastructure exists (confidence: 52)
+- Same bug pattern exists in /odds and /best-line endpoints (confidence: 50)
 
 ## Conventions & Preferences
 
-- Document intentional trade-offs when reordering state updates and side effects (confidence: 86)
+- Document intentional trade-offs when reordering state updates and side effects (confidence: 88)
 - Consider transaction-like patterns for multi-step operations (confidence: 67)
+- Test edge cases where filters exclude all data sources (confidence: 62)
+- Extract repeated filter patterns into reusable utility functions (confidence: 61)
 - Use Discord embeds for rich, scannable alert formatting (confidence: 60)
-- Extract repeated filter patterns into reusable utility functions (confidence: 60)
-- Test edge cases where filters exclude all data sources (confidence: 59)
-- Document why fallback behavior is acceptable in code comments (confidence: 58)
-- Scan for duplicated code blocks during review (confidence: 54)
-- Use try-except with fallback when filtering empty sequences (confidence: 48)
+- Scan for duplicated code blocks during review (confidence: 59)
+- Document why fallback behavior is acceptable in code comments (confidence: 59)
+- Use try-except with fallback when filtering empty sequences (confidence: 50)
 - Document which dirs are packages vs data/docs in discovery config (confidence: 48)
 - Provide user feedback when data is incomplete or pending (confidence: 46)
 
 ## Learned Patterns
 
 - Async crash windows between message send and state persistence (confidence: 115)
-- Copy-pasted error handling in similar code paths (confidence: 100)
+- Copy-pasted error handling in similar code paths (confidence: 106)
 - DB state updates after external API calls should be atomic or pre-committed (confidence: 69)
-- Test with boundary cases (24, 25, 26, 50 items) before deployment (confidence: 59)
+- Test with boundary cases (24, 25, 26, 50 items) before deployment (confidence: 62)
 - Chunk overflow data into continuation messages with consistent naming (confidence: 54)
 - Stage data into collections before mutating embeds to enable slicing (confidence: 52)
 - Discord embed field limit (25) requires pre-validation before send() (confidence: 49)
