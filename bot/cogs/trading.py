@@ -181,9 +181,9 @@ def _pick_odds_from_snapshots(
     away_l = away_team.lower()
 
     if market == "moneyline":
-        if side_l in home_l or home_l.split()[-1] in side_l:
+        if side_l in home_l and side_l not in away_l:
             return payload.get("ml_home")
-        if side_l in away_l or away_l.split()[-1] in side_l:
+        if side_l in away_l and side_l not in home_l:
             return payload.get("ml_away")
 
     elif market == "spread":
@@ -316,10 +316,10 @@ def _resolve_paper_bet(
     away_l = away_team.lower()
 
     def _is_home(s: str) -> bool:
-        return s in home_l or home_l.split()[-1] in s
+        return s in home_l and s not in away_l
 
     def _is_away(s: str) -> bool:
-        return s in away_l or away_l.split()[-1] in s
+        return s in away_l and s not in home_l
 
     if market == "moneyline":
         if _is_home(side):
@@ -364,9 +364,9 @@ def _close_odds_for_paper_bet(pb: dict, home_team: str, away_team: str, payload:
     away = away_team.lower()
 
     if market == "moneyline":
-        if side in home or home.split()[-1] in side:
+        if side in home and side not in away:
             return payload.get("ml_home")
-        if side in away or away.split()[-1] in side:
+        if side in away and side not in home:
             return payload.get("ml_away")
     elif market == "spread":
         return payload.get("spread_odds")

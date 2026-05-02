@@ -190,9 +190,9 @@ def _get_current_odds_for_bet(
     payload = snap.payload
 
     if market in ("moneyline", "kalshi"):
-        if side in ("yes",) or side in home or home.split()[-1] in side:
+        if side in ("yes",) or (side in home and side not in away):
             return payload.get("ml_home")
-        if side in ("no",) or side in away or away.split()[-1] in side:
+        if side in ("no",) or (side in away and side not in home):
             return payload.get("ml_away")
 
     elif market == "spread":

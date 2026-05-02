@@ -756,10 +756,10 @@ def _resolve_bet(
     away_l = away_team.lower()
 
     def _is_home(s: str) -> bool:
-        return s in home_l
+        return s in home_l and s not in away_l
 
     def _is_away(s: str) -> bool:
-        return s in away_l
+        return s in away_l and s not in home_l
 
     if market in ("moneyline", "kalshi"):
         if side == "yes" or _is_home(side):

@@ -33,6 +33,16 @@ class TestSideIsHome:
     def test_case_insensitive(self):
         assert side_is_home("cavaliers", "Cleveland Cavaliers", "Toronto Raptors") is True
 
+    def test_shared_suffix_home(self):
+        assert side_is_home("White Sox", "Chicago White Sox", "Boston Red Sox") is True
+
+    def test_shared_suffix_away(self):
+        assert side_is_home("Red Sox", "Chicago White Sox", "Boston Red Sox") is False
+
+    def test_shared_suffix_ambiguous(self):
+        """Bare 'sox' matches both teams — must return None."""
+        assert side_is_home("Sox", "Chicago White Sox", "Boston Red Sox") is None
+
 
 # ── compute_clv: moneyline (juice-only) ──────────────────────────────────────
 

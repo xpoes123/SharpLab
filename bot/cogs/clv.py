@@ -31,15 +31,15 @@ def _close_odds_for_bet(bet: Bet, game: Game, payload: dict) -> int | None:
     away = game.away_team.lower()
 
     if market == "moneyline":
-        if side in home or home.split()[-1] in side:
+        if side in home and side not in away:
             return payload.get("ml_home")
-        if side in away or away.split()[-1] in side:
+        if side in away and side not in home:
             return payload.get("ml_away")
 
     elif market == "spread":
-        if side in home or home.split()[-1] in side:
+        if side in home and side not in away:
             return payload.get("spread_odds")
-        if side in away or away.split()[-1] in side:
+        if side in away and side not in home:
             return payload.get("spread_odds")  # away_odds not stored separately; juice is typically identical
 
     elif market == "total":
