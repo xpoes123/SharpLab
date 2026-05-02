@@ -3,8 +3,10 @@ Unit tests for activity helper logic.
 These test pure functions with no API calls or DB access.
 """
 import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 from temporal.activities import (
     _extract_payload,
+    _fetch_espn_scores,
     _kalshi_ml_from_markets,
     _kalshi_mid,
     _parse_espn_detail,
@@ -406,3 +408,97 @@ def test_espn_score_normal():
     competitor = {"score": "112", "homeAway": "home", "team": {"displayName": "Miami Heat"}}
     score = int(competitor.get("score", "0") or "0")
     assert score == 112
+
+
+# ── _fetch_espn_scores integration ────────────────────────────────────────────
+
+def _espn_event(home_name: str, away_name: str,
+                home_score: str | None, away_score: str | None,
+                status: str = "STATUS_FINAL") -> dict:
+    return {
+        "status": {"type": {"name": status}},
+        "competitions": [{
+            "competitors": [
+                {
+                    "homeAway": "home",
+                    "team": {"displayName": home_name},
+                    "score": home_score,
+                },
+                {
+                    "homeAway": "away",
+                    "team": {"displayName": away_name},
+                    "score": away_score,
+                },
+            ]
+        }]
+    }
+
+
+def _mock_espn_client(data: dict):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = data
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_resp)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=mock_client)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    return ctx
+
+
+@pytest.mark.asyncio
+async def test_fetch_espn_scores_normal_game():
+    """Normal final game is included in results."""
+    espn_data = {"events": [_espn_event("New York Yankees", "Boston Red Sox", "5", "3")]}
+    with patch("httpx.AsyncClient", return_value=_mock_espn_client(espn_data)):
+        results = await _fetch_espn_scores(["2026-04-15"], "mlb")
+    assert len(results) == 1
+    assert results[0].home_last == "yankees"
+    assert results[0].away_last == "sox"
+    assert results[0].home_score == 5
+    assert results[0].away_score == 3
+
+
+@pytest.mark.asyncio
+async def test_fetch_espn_scores_zero_zero_skipped():
+    """STATUS_FINAL with 0-0 scores (postponed/unpopulated) must be skipped.
+
+    Regression: without the zero-score guard, all open bets on the game
+    would be incorrectly resolved as 'lost' for both sides.
+    """
+    espn_data = {"events": [_espn_event("New York Yankees", "Boston Red Sox", "0", "0")]}
+    with patch("httpx.AsyncClient", return_value=_mock_espn_client(espn_data)):
+        results = await _fetch_espn_scores(["2026-04-15"], "mlb")
+    assert results == [], "0-0 STATUS_FINAL game must not produce a GameResult"
+
+
+@pytest.mark.asyncio
+async def test_fetch_espn_scores_none_score_skipped():
+    """ESPN returning None for scores must not crash and must skip the game.
+
+    Regression: without try/except, int(None or '0') works, but
+    int('N/A' or '0') raises ValueError, crashing the activity.
+    """
+    espn_data = {"events": [_espn_event("New York Yankees", "Boston Red Sox", None, None)]}
+    with patch("httpx.AsyncClient", return_value=_mock_espn_client(espn_data)):
+        results = await _fetch_espn_scores(["2026-04-15"], "mlb")
+    assert results == [], "None scores yield 0-0, must be skipped by zero-score guard"
+
+
+@pytest.mark.asyncio
+async def test_fetch_espn_scores_nonnumeric_score_skipped():
+    """Non-numeric score string (e.g. 'N/A') must not raise and must skip the game."""
+    espn_data = {"events": [_espn_event("New York Yankees", "Boston Red Sox", "N/A", "N/A")]}
+    with patch("httpx.AsyncClient", return_value=_mock_espn_client(espn_data)):
+        results = await _fetch_espn_scores(["2026-04-15"], "mlb")
+    assert results == [], "Non-numeric scores must not raise ValueError"
+
+
+@pytest.mark.asyncio
+async def test_fetch_espn_scores_in_progress_skipped():
+    """In-progress games (non-FINAL status) must not be included."""
+    espn_data = {"events": [_espn_event("New York Yankees", "Boston Red Sox", "3", "2",
+                                        status="STATUS_IN_PROGRESS")]}
+    with patch("httpx.AsyncClient", return_value=_mock_espn_client(espn_data)):
+        results = await _fetch_espn_scores(["2026-04-15"], "mlb")
+    assert results == []
