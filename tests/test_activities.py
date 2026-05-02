@@ -407,6 +407,14 @@ def test_resolve_shared_suffix_spread_home_covers():
     )
 
 
+def test_resolve_shared_suffix_bare_suffix_voids():
+    """Bare 'sox' is ambiguous between White Sox and Red Sox — must void."""
+    assert (
+        _resolve_bet(_bet(market="moneyline", side="sox"), WS_HOME, RS_AWAY, 5, 3)
+        == "void"
+    )
+
+
 # ── MLB-flavored bet resolution ─────────────────────────────────────────────
 
 MLB_HOME = "New York Yankees"

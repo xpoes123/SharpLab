@@ -66,13 +66,22 @@ _PP_PER_HALF_POINT_TOTAL = 1.0
 
 
 def side_is_home(side: str, home_team: str, away_team: str) -> bool | None:
-    """Determine if a bet side matches the home team, away team, or neither."""
+    """Determine if a bet side matches the home team, away team, or neither.
+
+    Uses substring containment (side ⊆ team name) for matching.  When both
+    teams match (e.g. side="sox" with Red Sox vs White Sox), returns None
+    (ambiguous) instead of silently picking home.
+    """
     s = side.lower()
     home = home_team.lower()
     away = away_team.lower()
-    if s in home or home.split()[-1] in s:
+    home_match = s in home
+    away_match = s in away
+    if home_match and away_match:
+        return None  # ambiguous — shared substring
+    if home_match:
         return True
-    if s in away or away.split()[-1] in s:
+    if away_match:
         return False
     return None
 
