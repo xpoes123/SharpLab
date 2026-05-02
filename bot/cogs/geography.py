@@ -1233,6 +1233,17 @@ class GeoTableView(ui.View):
         table = self.table
         table.phase = "closed"
 
+        # Deregister and stop the view synchronously before any awaits so that
+        # /geography can open a new table immediately while ELO is computed and
+        # the final embed is posted.  Doing this after update_elo_multiplayer
+        # was the bug: the table stayed in active_tables across the ELO await,
+        # causing a false "already a table" error for anyone who ran /geography
+        # during that window.
+        for child in self.children:
+            child.disabled = True  # type: ignore[union-attr]
+        self.stop()
+        self.active_tables.pop(table.channel_id, None)
+
         elo_changes: dict[int, tuple[float, float]] = {}
         if len(table.players) >= 2:
             sorted_p = sorted(table.players.values(), key=lambda p: p.rounds_won, reverse=True)
@@ -1243,11 +1254,6 @@ class GeoTableView(ui.View):
                 log.exception("Unhandled error in geography.py")
 
         embed = _final_embed(table, elo_changes)
-
-        for child in self.children:
-            child.disabled = True  # type: ignore[union-attr]
-        self.stop()
-        self.active_tables.pop(table.channel_id, None)
 
         if table.message:
             try:
@@ -1298,7 +1304,10 @@ class GeoTableView(ui.View):
 
         await self._clear_round_messages()
         table.phase = "closed"
-        self.active_tables.pop(table.channel_id, None)
+        # Identity check: only evict our own table, not a replacement that was
+        # created for this channel after our game ended.
+        if self.active_tables.get(table.channel_id) is table:
+            self.active_tables.pop(table.channel_id, None)
 
         if table.message:
             try:
