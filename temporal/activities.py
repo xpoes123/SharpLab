@@ -707,20 +707,26 @@ async def _fetch_espn_scores(dates: list[str], sport: str) -> list[GameResult]:
                 home_score = away_score = 0
                 for c in competitors:
                     team_name = c.get("team", {}).get("displayName", "")
-                    score = int(c.get("score", "0") or "0")
+                    try:
+                        score = int(c.get("score", "0") or "0")
+                    except (ValueError, TypeError):
+                        score = 0
                     if c.get("homeAway") == "home":
                         home_name = team_name
                         home_score = score
                     else:
                         away_name = team_name
                         away_score = score
-                if home_name and away_name:
-                    results.append(GameResult(
-                        home_last=home_name.split()[-1].lower(),
-                        away_last=away_name.split()[-1].lower(),
-                        home_score=home_score,
-                        away_score=away_score,
-                    ))
+                if not home_name or not away_name:
+                    continue
+                if home_score == 0 and away_score == 0:
+                    continue  # scores not yet populated despite STATUS_FINAL
+                results.append(GameResult(
+                    home_last=home_name.split()[-1].lower(),
+                    away_last=away_name.split()[-1].lower(),
+                    home_score=home_score,
+                    away_score=away_score,
+                ))
     return results
 
 
