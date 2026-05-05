@@ -466,7 +466,8 @@ class GeoTable:
     host_name: str
     phase: str = "betting"  # betting | playing | between_rounds | closed
     players: dict[int, GeoPlayer] = field(default_factory=dict)
-    message: discord.Message | None = None
+    message: discord.Message | None = None          # current thread message (round embed)
+    lobby_message: discord.Message | None = None     # original channel message (buttons)
     round_num: int = 0
     # Category: mixed | country_capitals | state_capitals | country_flags | state_flags
     category: str = "mixed"
@@ -487,6 +488,7 @@ class GeoTable:
     round_messages: list[discord.Message] = field(default_factory=list)
     stop_requested: bool = False
     last_activity: float = field(default_factory=time.monotonic)
+    wins_to_win: int = WINS_TO_WIN  # configurable by host
 
 
 # ── Embeds ──────────────────────────────────────────────────────────────────
@@ -500,8 +502,8 @@ def _scoreboard(table: GeoTable) -> str:
     lines: list[str] = []
     for i, p in enumerate(sorted_players):
         prefix = MEDALS[i] if i < len(MEDALS) and p.rounds_won > 0 else "\u25aa\ufe0f"
-        line = f"{prefix} **{p.display_name}** \u2014 {p.rounds_won}/{WINS_TO_WIN}"
-        if p.rounds_won == WINS_TO_WIN - 1:
+        line = f"{prefix} **{p.display_name}** \u2014 {p.rounds_won}/{table.wins_to_win}"
+        if p.rounds_won == table.wins_to_win - 1:
             line += " *(match point!)*"
         lines.append(line)
     return "\n".join(lines) if lines else "No scores yet"
@@ -520,17 +522,18 @@ _CATEGORY_LABELS: dict[str, str] = {
 def _betting_embed(table: GeoTable) -> discord.Embed:
     cat_label = _CATEGORY_LABELS.get(table.category, table.category)
 
+    goal = table.wins_to_win
     embed = discord.Embed(
         title="\U0001f30d Speed Geography",
         description=(
             f"**Category:** {cat_label}\n"
-            f"**First to {WINS_TO_WIN} wins** wins!\n"
+            f"**First to {goal} wins** wins!\n"
             "Type your answer directly in chat \u2014 fastest correct answer wins each round!"
         ),
         colour=discord.Colour.blue(),
     )
 
-    embed.add_field(name="Goal", value=f"First to {WINS_TO_WIN}", inline=True)
+    embed.add_field(name="Goal", value=f"First to {goal}", inline=True)
 
     if table.players:
         lines = [
@@ -556,7 +559,7 @@ def _betting_embed(table: GeoTable) -> discord.Embed:
 
 def _playing_embed(table: GeoTable, remaining: int | None = None) -> discord.Embed:
     embed = discord.Embed(
-        title=f"\U0001f30d Round {table.round_num} (First to {WINS_TO_WIN})",
+        title=f"\U0001f30d Round {table.round_num} (First to {table.wins_to_win})",
         colour=discord.Colour.gold(),
     )
 
@@ -579,7 +582,7 @@ def _playing_embed(table: GeoTable, remaining: int | None = None) -> discord.Emb
 def _round_result_embed(table: GeoTable) -> discord.Embed:
     winner = table.players[table.round_winner]
     solve_time = winner.answer_time - table.round_start_time
-    is_last = winner.rounds_won >= WINS_TO_WIN or table.round_num >= MAX_ROUNDS
+    is_last = winner.rounds_won >= table.wins_to_win or table.round_num >= MAX_ROUNDS
 
     embed = discord.Embed(
         title=f"\U0001f30d Round {table.round_num} \u2705",
@@ -606,7 +609,7 @@ def _round_result_embed(table: GeoTable) -> discord.Embed:
 
 def _timeout_embed(table: GeoTable) -> discord.Embed:
     max_wins = max((p.rounds_won for p in table.players.values()), default=0)
-    is_last = max_wins >= WINS_TO_WIN or table.round_num >= MAX_ROUNDS
+    is_last = max_wins >= table.wins_to_win or table.round_num >= MAX_ROUNDS
 
     embed = discord.Embed(
         title=f"\U0001f30d Round {table.round_num} (Time's Up!)",
@@ -724,6 +727,14 @@ _CATEGORY_OPTIONS = [
 ]
 
 
+_GOAL_OPTIONS = [
+    discord.SelectOption(label="First to 3", value="3", description="Quick game", default=True),
+    discord.SelectOption(label="First to 5", value="5", description="Standard game"),
+    discord.SelectOption(label="First to 10", value="10", description="Long game"),
+    discord.SelectOption(label="First to 15", value="15", description="Marathon"),
+]
+
+
 class GeoEndGameView(ui.View):
     """Button posted in the thread so any player can stop the game early."""
 
@@ -783,6 +794,7 @@ class GeoTableView(ui.View):
         self.leave_btn.disabled = not betting
         self.close_btn.disabled = phase == "closed"
         self.category_select.disabled = not betting
+        self.goal_select.disabled = not betting
 
     # ── Row 0: Betting ──────────────────────────────────────────────────
 
@@ -928,6 +940,37 @@ class GeoTableView(ui.View):
             embed=_betting_embed(self.table), view=self,
         )
 
+    # ── Goal select ───────────────────────────────────────────────────
+
+    @ui.select(
+        placeholder="Goal: First to 3",
+        options=_GOAL_OPTIONS,
+        row=3,
+    )
+    async def goal_select(
+        self, interaction: discord.Interaction, select: ui.Select,
+    ) -> None:
+        if interaction.user.id != self.table.host_id:
+            await interaction.response.send_message(
+                "Only the host can change the goal!", ephemeral=True,
+            )
+            return
+        if self.table.phase != "betting":
+            await interaction.response.send_message(
+                "Can't change goal once the race has started!", ephemeral=True,
+            )
+            return
+        self.table.wins_to_win = int(select.values[0])
+        chosen = next(
+            (o for o in _GOAL_OPTIONS if o.value == select.values[0]), None,
+        )
+        select.placeholder = f"Goal: {chosen.label}" if chosen else "Goal"
+        for opt in select.options:
+            opt.default = opt.value == select.values[0]
+        await interaction.response.edit_message(
+            embed=_betting_embed(self.table), view=self,
+        )
+
     # ── Race logic ──────────────────────────────────────────────────────
 
     def _pick_question(self) -> tuple[str, str, list[str], str | None]:
@@ -1045,6 +1088,7 @@ class GeoTableView(ui.View):
         await interaction.response.edit_message(embed=in_progress, view=self)
 
         msg = await interaction.original_response()
+        table.lobby_message = msg  # keep ref so we can update it on game end
         thread = await msg.create_thread(name=f"Geography \u2014 {table.host_name}")
         table.thread = thread
 
@@ -1191,7 +1235,7 @@ class GeoTableView(ui.View):
                     break
 
                 # Check if someone hit the win target or safety cap
-                if any(p.rounds_won >= WINS_TO_WIN for p in table.players.values()):
+                if any(p.rounds_won >= table.wins_to_win for p in table.players.values()):
                     break
                 if rnd >= MAX_ROUNDS:
                     break
@@ -1221,20 +1265,31 @@ class GeoTableView(ui.View):
         except asyncio.CancelledError:
             table.phase = "closed"
             self.active_tables.pop(table.channel_id, None)
-            if table.thread:
-                try:
-                    await table.thread.edit(archived=True)
-                except Exception:
-                    log.exception("Unhandled error in geography.py")
+            await self._cleanup_lobby("Game cancelled.")
         except Exception:
             log.exception("_race_loop crashed for channel %s", table.channel_id)
             table.phase = "closed"
             self.active_tables.pop(table.channel_id, None)
-            if table.thread:
-                try:
-                    await table.thread.edit(archived=True)
-                except Exception:
-                    log.exception("Unhandled error in geography.py")
+            await self._cleanup_lobby("Game ended due to an error.")
+
+    async def _cleanup_lobby(self, reason: str = "Game ended.") -> None:
+        """Update the lobby message and archive the thread on abnormal exit."""
+        table = self.table
+        if table.lobby_message:
+            embed = discord.Embed(
+                title="\U0001f30d Geography \u2014 Finished",
+                description=reason,
+                colour=discord.Colour.dark_grey(),
+            )
+            try:
+                await table.lobby_message.edit(embed=embed, view=None)
+            except Exception:
+                pass
+        if table.thread:
+            try:
+                await table.thread.edit(archived=True)
+            except Exception:
+                pass
 
     async def _end_game(self) -> None:
         """End the race: update ELO and show final results."""
@@ -1266,6 +1321,18 @@ class GeoTableView(ui.View):
         if table.message:
             try:
                 await table.message.edit(embed=embed)
+            except discord.HTTPException:
+                pass
+
+        # Update the original lobby message so buttons don't show "interaction failed"
+        if table.lobby_message:
+            lobby_embed = discord.Embed(
+                title="\U0001f30d Geography \u2014 Finished",
+                description="Game complete! See results in the thread.",
+                colour=discord.Colour.dark_grey(),
+            )
+            try:
+                await table.lobby_message.edit(embed=lobby_embed, view=None)
             except discord.HTTPException:
                 pass
 
@@ -1308,6 +1375,9 @@ class GeoTableView(ui.View):
             table.race_task.cancel()
 
         if table.phase == "closed":
+            # Still clean up active_tables in case _end_game missed it
+            if self.active_tables.get(table.channel_id) is table:
+                self.active_tables.pop(table.channel_id, None)
             return
 
         await self._clear_round_messages()
@@ -1327,6 +1397,18 @@ class GeoTableView(ui.View):
                 await table.message.edit(embed=embed, view=None)
             except Exception:
                 log.exception("Unhandled error in geography.py")
+
+        # Also update the lobby message
+        if table.lobby_message:
+            lobby_embed = discord.Embed(
+                title="\U0001f30d Geography \u2014 Timed Out",
+                description="Table timed out.",
+                colour=discord.Colour.dark_grey(),
+            )
+            try:
+                await table.lobby_message.edit(embed=lobby_embed, view=None)
+            except Exception:
+                pass
 
         if table.thread:
             try:
@@ -1410,7 +1492,9 @@ class GeographyCog(commands.Cog):
         view = GeoTableView(table, self.active_tables)
         embed = _betting_embed(table)
         await interaction.response.send_message(embed=embed, view=view)
-        table.message = await interaction.original_response()
+        msg = await interaction.original_response()
+        table.message = msg
+        table.lobby_message = msg
 
     @app_commands.command(
         name="geo-stats",

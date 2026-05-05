@@ -835,27 +835,12 @@ class QBLobbyView(ui.View):
         except asyncio.CancelledError:
             table.phase = "closed"
             self.active_tables.pop(table.channel_id, None)
-            await self._update_lobby(
-                "\U0001f9e0 Quiz Bowl \u2014 Cancelled",
-                "Game was cancelled.",
-            )
-            if table.thread:
-                try:
-                    await table.thread.edit(archived=True)
-                except Exception:
-                    log.exception("Unhandled error in quizbowl.py")
+            await self._cleanup_lobby("Game was cancelled.")
         except Exception:
+            log.exception("_game_loop crashed for channel %s", table.channel_id)
             table.phase = "closed"
             self.active_tables.pop(table.channel_id, None)
-            await self._update_lobby(
-                "\U0001f9e0 Quiz Bowl \u2014 Error",
-                "Game ended due to an error.",
-            )
-            if table.thread:
-                try:
-                    await table.thread.edit(archived=True)
-                except Exception:
-                    log.exception("Unhandled error in quizbowl.py")
+            await self._cleanup_lobby("Game ended due to an error.")
 
     async def _update_lobby(self, title: str, description: str) -> None:
         """Edit the original channel lobby message (not the thread)."""
@@ -867,6 +852,25 @@ class QBLobbyView(ui.View):
             )
             try:
                 await table.lobby_message.edit(embed=embed, view=None)
+            except Exception:
+                pass
+
+    async def _cleanup_lobby(self, reason: str = "Game ended.") -> None:
+        """Update the lobby message and archive the thread on abnormal exit."""
+        table = self.table
+        if table.lobby_message:
+            embed = discord.Embed(
+                title="\U0001f9e0 Quiz Bowl \u2014 Finished",
+                description=reason,
+                colour=discord.Colour.dark_grey(),
+            )
+            try:
+                await table.lobby_message.edit(embed=embed, view=None)
+            except Exception:
+                pass
+        if table.thread:
+            try:
+                await table.thread.edit(archived=True)
             except Exception:
                 pass
 
@@ -941,20 +945,19 @@ class QBLobbyView(ui.View):
             if table.thread:
                 try:
                     await table.thread.send(embed=embed)
-                    await table.thread.edit(archived=True)
                 except discord.HTTPException:
                     pass
 
         table.phase = "closed"
         self.active_tables.pop(table.channel_id, None)
 
-        # Also update the lobby message
+        # Update lobby message and archive thread
         desc = (
             "Table timed out. Scores settled."
             if table.total_parts_played > 0
             else "Table timed out."
         )
-        await self._update_lobby("\U0001f9e0 Quiz Bowl \u2014 Timed Out", desc)
+        await self._cleanup_lobby(desc)
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

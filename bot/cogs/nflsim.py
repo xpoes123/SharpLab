@@ -290,6 +290,7 @@ class NflSimTable:
     ot_count: int = 0
     sim_task: asyncio.Task | None = field(default=None, repr=False)
     thread: discord.Thread | None = field(default=None, repr=False)
+    lobby_message: discord.Message | None = None  # original channel message (buttons)
 
 
 # ── Embeds ───────────────────────────────────────────────────────────────────
@@ -828,6 +829,21 @@ class NflSimTableView(ui.View):
                     log.exception("Unhandled error in nflsim.py")
         await self._close(interaction, "Table closed by host.")
 
+    # ── Lobby cleanup ─────────────────────────────────────────────────────────
+
+    async def _update_lobby(self, title: str, description: str) -> None:
+        """Update the original channel message so stale buttons don't linger."""
+        table = self.table
+        if table.lobby_message:
+            embed = discord.Embed(
+                title=title, description=description,
+                colour=discord.Colour.dark_grey(),
+            )
+            try:
+                await table.lobby_message.edit(embed=embed, view=None)
+            except discord.HTTPException:
+                pass
+
     # ── Game logic ───────────────────────────────────────────────────────────
 
     async def _start_sim(self, interaction: discord.Interaction) -> None:
@@ -852,6 +868,7 @@ class NflSimTableView(ui.View):
         await interaction.response.edit_message(embed=in_progress, view=self)
 
         msg = await interaction.original_response()
+        table.lobby_message = msg  # keep ref so we can update it on game end
         thread = await msg.create_thread(
             name=f"NFL Sim \u2014 {away_name} @ {home_name}"
         )
@@ -914,13 +931,17 @@ class NflSimTableView(ui.View):
             if table.message:
                 try:
                     embed = discord.Embed(
-                        title="🏈 NFL Sim — Error",
+                        title="\U0001f3c8 NFL Sim \u2014 Error",
                         description="An unexpected error occurred. All active bets have been refunded.",
                         colour=discord.Colour.red(),
                     )
                     await table.message.edit(embed=embed, view=None)
                 except discord.HTTPException:
                     pass
+            await self._update_lobby(
+                "\U0001f3c8 NFL Sim \u2014 Error",
+                "Game ended due to an error. Bets refunded.",
+            )
 
     async def _resolve(self) -> None:
         table = self.table
@@ -978,6 +999,13 @@ class NflSimTableView(ui.View):
             except discord.HTTPException:
                 pass
 
+        _, home_abbr = table.home_team
+        _, away_abbr = table.away_team
+        await self._update_lobby(
+            "\U0001f3c8 NFL Sim \u2014 Final",
+            f"{away_abbr} {table.away_score} \u2014 {table.home_score} {home_abbr}  \u2022  See thread for details.",
+        )
+
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
     def _start_new_round(self) -> None:
@@ -1028,6 +1056,7 @@ class NflSimTableView(ui.View):
         self.stop()
         self.active_tables.pop(self.table.channel_id, None)
         await interaction.response.edit_message(embed=embed, view=self)
+        await self._update_lobby("\U0001f3c8 NFL Sim \u2014 Closed", reason)
 
     async def on_timeout(self) -> None:
         table = self.table
@@ -1047,6 +1076,10 @@ class NflSimTableView(ui.View):
                     await table.message.edit(embed=embed, view=None)
                 except Exception:
                     log.exception("Unhandled error in nflsim.py")
+            await self._update_lobby(
+                "\U0001f3c8 NFL Sim \u2014 Timed Out",
+                "Table timed out between rounds.",
+            )
             if table.thread:
                 try:
                     await table.thread.edit(archived=True)
@@ -1066,6 +1099,11 @@ class NflSimTableView(ui.View):
                 await table.message.edit(embed=embed, view=None)
             except Exception:
                 log.exception("Unhandled error in nflsim.py")
+
+        await self._update_lobby(
+            "\U0001f3c8 NFL Sim \u2014 Timed Out",
+            "Table timed out. All bets refunded.",
+        )
 
         if table.thread:
             try:
@@ -1131,7 +1169,9 @@ class NflSimCog(commands.Cog):
         view = NflSimTableView(table, self.active_tables)
         embed = _betting_embed(table)
         await interaction.response.send_message(embed=embed, view=view)
-        table.message = await interaction.original_response()
+        msg = await interaction.original_response()
+        table.message = msg
+        table.lobby_message = msg
 
 
 async def setup(bot: commands.Bot) -> None:
