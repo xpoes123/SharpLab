@@ -2198,6 +2198,7 @@ class PokeTable:
     phase: str = "betting"  # betting | playing | between_rounds | closed
     players: dict[int, PokePlayer] = field(default_factory=dict)
     message: discord.Message | None = None
+    lobby_message: discord.Message | None = None  # original channel message (buttons)
     round_num: int = 0
     category: str = "all"  # all | gen1 | gen2to4 | gen5plus | legendary
     current_entry: tuple | None = None
@@ -2869,6 +2870,7 @@ class PokeTableView(ui.View):
         await interaction.response.edit_message(embed=in_progress, view=self)
 
         msg = await interaction.original_response()
+        table.lobby_message = msg  # keep ref so we can update it on game end
         thread = await msg.create_thread(name=f"Pokémon Trivia \u2014 {table.host_name}")
         table.thread = thread
 
@@ -3029,6 +3031,10 @@ class PokeTableView(ui.View):
         except asyncio.CancelledError:
             table.phase = "closed"
             self.active_tables.pop(table.channel_id, None)
+            await self._update_lobby(
+                "\u2753 Who's That Pokemon? \u2014 Cancelled",
+                "Game was cancelled.",
+            )
             if table.thread:
                 try:
                     await table.thread.edit(archived=True)
@@ -3037,11 +3043,28 @@ class PokeTableView(ui.View):
         except Exception:
             table.phase = "closed"
             self.active_tables.pop(table.channel_id, None)
+            await self._update_lobby(
+                "\u2753 Who's That Pokemon? \u2014 Error",
+                "Game ended due to an error.",
+            )
             if table.thread:
                 try:
                     await table.thread.edit(archived=True)
                 except Exception:
                     log.exception("Unhandled error in pokemon.py")
+
+    async def _update_lobby(self, title: str, description: str) -> None:
+        """Edit the original channel lobby message (not the thread)."""
+        table = self.table
+        if table.lobby_message:
+            embed = discord.Embed(
+                title=title, description=description,
+                colour=discord.Colour.dark_grey(),
+            )
+            try:
+                await table.lobby_message.edit(embed=embed, view=None)
+            except Exception:
+                pass
 
     async def _end_game(self) -> None:
         table = self.table
@@ -3074,6 +3097,12 @@ class PokeTableView(ui.View):
                 await table.message.edit(embed=embed)
             except discord.HTTPException:
                 pass
+
+        # Update the original lobby message so buttons don't show "interaction failed"
+        await self._update_lobby(
+            "\u2753 Who's That Pokemon? \u2014 Finished",
+            "Game complete! See results in the thread.",
+        )
 
         if table.thread:
             try:
@@ -3129,6 +3158,12 @@ class PokeTableView(ui.View):
                 await table.message.edit(embed=embed, view=None)
             except Exception:
                 log.exception("Unhandled error in pokemon.py")
+
+        # Also update the lobby message
+        await self._update_lobby(
+            "\u2753 Who's That Pokemon? \u2014 Timed Out",
+            "Table timed out.",
+        )
 
         if table.thread:
             try:
@@ -3212,7 +3247,9 @@ class PokemonCog(commands.Cog):
         view = PokeTableView(table, self.active_tables)
         embed = _betting_embed(table)
         await interaction.response.send_message(embed=embed, view=view)
-        table.message = await interaction.original_response()
+        msg = await interaction.original_response()
+        table.message = msg
+        table.lobby_message = msg
 
     @app_commands.command(
         name="pokemon-solo",

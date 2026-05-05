@@ -182,6 +182,7 @@ class QBTable:
     phase: str = "betting"  # betting | playing | between_parts | between_bonuses | closed
     players: dict[int, QBPlayer] = field(default_factory=dict)
     message: discord.Message | None = None
+    lobby_message: discord.Message | None = None  # original channel message (buttons)
     thread: discord.Thread | None = None
     category: str = "all"
     difficulty: str = "all"
@@ -680,6 +681,7 @@ class QBLobbyView(ui.View):
 
         # Create thread
         msg = await interaction.original_response()
+        table.lobby_message = msg  # keep ref so we can update it on game end
         thread = await msg.create_thread(
             name=f"Quiz Bowl \u2014 {_cat_label(table.category)}",
         )
@@ -833,6 +835,10 @@ class QBLobbyView(ui.View):
         except asyncio.CancelledError:
             table.phase = "closed"
             self.active_tables.pop(table.channel_id, None)
+            await self._update_lobby(
+                "\U0001f9e0 Quiz Bowl \u2014 Cancelled",
+                "Game was cancelled.",
+            )
             if table.thread:
                 try:
                     await table.thread.edit(archived=True)
@@ -841,11 +847,28 @@ class QBLobbyView(ui.View):
         except Exception:
             table.phase = "closed"
             self.active_tables.pop(table.channel_id, None)
+            await self._update_lobby(
+                "\U0001f9e0 Quiz Bowl \u2014 Error",
+                "Game ended due to an error.",
+            )
             if table.thread:
                 try:
                     await table.thread.edit(archived=True)
                 except Exception:
                     log.exception("Unhandled error in quizbowl.py")
+
+    async def _update_lobby(self, title: str, description: str) -> None:
+        """Edit the original channel lobby message (not the thread)."""
+        table = self.table
+        if table.lobby_message:
+            embed = discord.Embed(
+                title=title, description=description,
+                colour=discord.Colour.dark_grey(),
+            )
+            try:
+                await table.lobby_message.edit(embed=embed, view=None)
+            except Exception:
+                pass
 
     async def _end_game(self) -> None:
         table = self.table
@@ -879,11 +902,11 @@ class QBLobbyView(ui.View):
         self.stop()
         self.active_tables.pop(table.channel_id, None)
 
-        if table.message:
-            try:
-                await table.message.edit(embed=embed, view=self)
-            except discord.HTTPException:
-                pass
+        # Update the original lobby message so buttons don't show "interaction failed"
+        await self._update_lobby(
+            "\U0001f9e0 Quiz Bowl \u2014 Finished",
+            "Game complete! See results in the thread.",
+        )
 
     async def _close_table(self, interaction: discord.Interaction) -> None:
         table = self.table
@@ -925,18 +948,13 @@ class QBLobbyView(ui.View):
         table.phase = "closed"
         self.active_tables.pop(table.channel_id, None)
 
-        if table.message:
-            try:
-                embed = discord.Embed(
-                    title="\U0001f9e0 Quiz Bowl \u2014 Timed Out",
-                    description="Table timed out. Scores settled."
-                    if table.total_parts_played > 0
-                    else "Table timed out.",
-                    colour=discord.Colour.dark_grey(),
-                )
-                await table.message.edit(embed=embed, view=None)
-            except Exception:
-                log.exception("Unhandled error in quizbowl.py")
+        # Also update the lobby message
+        desc = (
+            "Table timed out. Scores settled."
+            if table.total_parts_played > 0
+            else "Table timed out."
+        )
+        await self._update_lobby("\U0001f9e0 Quiz Bowl \u2014 Timed Out", desc)
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────
@@ -980,7 +998,9 @@ class QuizBowlCog(commands.Cog):
         view = QBLobbyView(table, self.active_tables)
         embed = _betting_embed(table)
         await interaction.response.send_message(embed=embed, view=view)
-        table.message = await interaction.original_response()
+        msg = await interaction.original_response()
+        table.message = msg
+        table.lobby_message = msg
 
     @commands.Cog.listener("on_message")
     async def on_message(self, message: discord.Message) -> None:

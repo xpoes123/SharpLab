@@ -238,6 +238,7 @@ class SprintTable:
     phase: str = "betting"  # betting | playing | between | closed
     players: dict[int, SprintPlayer] = field(default_factory=dict)
     message: discord.Message | None = None
+    lobby_message: discord.Message | None = None  # original channel message (buttons)
     thread: discord.Thread | None = None
     current_thread_msg: discord.Message | None = None
     round_num: int = 0
@@ -629,6 +630,7 @@ class SprintTableView(ui.View):
 
         # Create thread from the lobby message, then start the clock
         if table.message:
+            table.lobby_message = table.message  # keep ref so we can update it on game end
             thread = await table.message.create_thread(name="Math Sprint")
             table.thread = thread
             await thread.send(
@@ -744,6 +746,10 @@ class SprintTableView(ui.View):
         except asyncio.CancelledError:
             table.phase = "closed"
             self.active_tables.pop(table.channel_id, None)
+            await self._update_lobby(
+                "\U0001f9e0 Math Sprint \u2014 Cancelled",
+                "Game was cancelled.",
+            )
             if table.thread:
                 try:
                     await table.thread.edit(archived=True)
@@ -752,6 +758,10 @@ class SprintTableView(ui.View):
         except Exception:
             table.phase = "closed"
             self.active_tables.pop(table.channel_id, None)
+            await self._update_lobby(
+                "\U0001f9e0 Math Sprint \u2014 Error",
+                "Game ended due to an error.",
+            )
             if table.thread:
                 try:
                     await table.thread.edit(archived=True)
@@ -789,6 +799,19 @@ class SprintTableView(ui.View):
 
         return payouts, balances
 
+    async def _update_lobby(self, title: str, description: str) -> None:
+        """Edit the original channel lobby message (not the thread)."""
+        table = self.table
+        if table.lobby_message:
+            embed = discord.Embed(
+                title=title, description=description,
+                colour=discord.Colour.dark_grey(),
+            )
+            try:
+                await table.lobby_message.edit(embed=embed, view=None)
+            except Exception:
+                pass
+
     async def _end_game(self) -> None:
         table = self.table
         table.phase = "closed"
@@ -819,11 +842,12 @@ class SprintTableView(ui.View):
             child.disabled = True  # type: ignore[union-attr]
         self.stop()
         self.active_tables.pop(table.channel_id, None)
-        if table.message:
-            try:
-                await table.message.edit(embed=embed, view=self)
-            except discord.HTTPException:
-                pass
+
+        # Update the original lobby message so buttons don't show "interaction failed"
+        await self._update_lobby(
+            "\U0001f9e0 Math Sprint \u2014 Finished",
+            "Game complete! See results in the thread.",
+        )
 
     async def _close_table(self, interaction: discord.Interaction) -> None:
         table = self.table
@@ -878,18 +902,11 @@ class SprintTableView(ui.View):
                 log.exception("Unhandled error in mathsprint.py")
         table.phase = "closed"
         self.active_tables.pop(table.channel_id, None)
-        if table.message:
-            try:
-                await table.message.edit(
-                    embed=discord.Embed(
-                        title="\U0001f9e0 Math Sprint \u2014 Timed Out",
-                        description="Table timed out. All bets refunded.",
-                        colour=discord.Colour.dark_grey(),
-                    ),
-                    view=None,
-                )
-            except Exception:
-                log.exception("Unhandled error in mathsprint.py")
+        # Also update the lobby message
+        await self._update_lobby(
+            "\U0001f9e0 Math Sprint \u2014 Timed Out",
+            "Table timed out. All bets refunded.",
+        )
 
         if table.thread:
             try:
@@ -1001,7 +1018,9 @@ class MathSprintCog(commands.Cog):
         self.active_tables[channel_id] = table
         view = SprintTableView(table, self.active_tables)
         await interaction.response.send_message(embed=_betting_embed(table), view=view)
-        table.message = await interaction.original_response()
+        msg = await interaction.original_response()
+        table.message = msg
+        table.lobby_message = msg
 
 
 async def setup(bot: commands.Bot) -> None:
