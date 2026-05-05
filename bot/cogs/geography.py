@@ -586,9 +586,13 @@ def _round_result_embed(table: GeoTable) -> discord.Embed:
         colour=discord.Colour.green(),
     )
     canonical = table.current_answers[0]
+    if table.current_q_type in ("country_flag", "state_flag"):
+        subject_line = f"\U0001f3f3\ufe0f Answer: **{canonical}**"
+    else:
+        subject_line = f"\U0001f1fa\U0001f1f3 {table.current_subject} \u2192 **{canonical}**"
     embed.description = (
         f"\U0001f3c6 **{winner.display_name}** got it in **{solve_time:.1f}s**!\n\n"
-        f"\U0001f1fa\U0001f1f3 {table.current_subject} \u2192 **{canonical}**"
+        f"{subject_line}"
     )
     if table.current_image_url:
         embed.set_image(url=table.current_image_url)
@@ -609,9 +613,13 @@ def _timeout_embed(table: GeoTable) -> discord.Embed:
         colour=discord.Colour.dark_grey(),
     )
     canonical = table.current_answers[0]
+    if table.current_q_type in ("country_flag", "state_flag"):
+        subject_line = f"\U0001f3f3\ufe0f Answer: **{canonical}**"
+    else:
+        subject_line = f"\U0001f1fa\U0001f1f3 {table.current_subject} \u2192 **{canonical}**"
     embed.description = (
         f"Nobody got it in {ROUND_TIME} seconds!\n\n"
-        f"\U0001f1fa\U0001f1f3 {table.current_subject} \u2192 **{canonical}**"
+        f"{subject_line}"
     )
     if table.current_image_url:
         embed.set_image(url=table.current_image_url)

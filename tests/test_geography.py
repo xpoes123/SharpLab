@@ -450,3 +450,77 @@ class TestLandmarks:
                 assert "upload.wikimedia.org" in url, (
                     f"{name} ({country}): source URL should be a direct Wikimedia URL"
                 )
+
+
+# ── Round result / timeout embed subject line ─────────────────────────────────
+
+class TestRoundEmbedSubjectLine:
+    """Flag rounds must not display 'France → France' (subject == answer)."""
+
+    def _capital_table(self) -> geo.GeoTable:
+        t = _make_table()
+        t.round_num = 1
+        t.current_q_type = "country_cap"
+        t.current_subject = "France"
+        t.current_answers = ["Paris"]
+        t.current_image_url = None
+        t.round_start_time = 0.0
+        p = GeoPlayer(user_id=1, display_name="Alice", rounds_won=1, answer="Paris", answer_time=5.0)
+        t.players = {1: p}
+        t.round_winner = 1
+        return t
+
+    def _flag_table(self, q_type: str = "country_flag") -> geo.GeoTable:
+        t = _make_table()
+        t.round_num = 1
+        t.current_q_type = q_type
+        t.current_subject = "France"
+        t.current_answers = ["France"]  # same as subject — the display bug
+        t.current_image_url = "https://flagcdn.com/w320/fr.png"
+        t.round_start_time = 0.0
+        p = GeoPlayer(user_id=1, display_name="Alice", rounds_won=1, answer="France", answer_time=5.0)
+        t.players = {1: p}
+        t.round_winner = 1
+        return t
+
+    def test_capital_result_shows_subject_arrow_answer(self):
+        t = self._capital_table()
+        embed = geo._round_result_embed(t)
+        assert "France" in embed.description
+        assert "Paris" in embed.description
+        assert "→" in embed.description
+
+    def test_flag_result_does_not_show_redundant_arrow(self):
+        t = self._flag_table("country_flag")
+        embed = geo._round_result_embed(t)
+        # Should NOT show "France → France" or "France → **France**"
+        assert "France → " not in embed.description, (
+            "Flag round result shows 'France → France' — subject same as answer"
+        )
+        # Answer should still be shown
+        assert "France" in embed.description
+
+    def test_state_flag_result_does_not_show_redundant_arrow(self):
+        t = self._flag_table("state_flag")
+        t.current_subject = "California"
+        t.current_answers = ["California"]
+        t.players[1].answer = "California"
+        embed = geo._round_result_embed(t)
+        assert "California → " not in embed.description
+        assert "California" in embed.description
+
+    def test_flag_timeout_does_not_show_redundant_arrow(self):
+        t = self._flag_table("country_flag")
+        t.round_winner = None
+        t.players[1].rounds_won = 0
+        embed = geo._timeout_embed(t)
+        assert "France → " not in embed.description
+        assert "France" in embed.description
+
+    def test_capital_timeout_shows_subject_arrow_answer(self):
+        t = self._capital_table()
+        t.round_winner = None
+        embed = geo._timeout_embed(t)
+        assert "France" in embed.description
+        assert "Paris" in embed.description
+        assert "→" in embed.description
