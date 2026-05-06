@@ -133,15 +133,9 @@ class ErrorHandlerCog(commands.Cog):
             await msg.edit(embed=embed)
 
         elif action == "deduped":
-            # Try to edit the existing alert message
-            row = await queries.get_recent_errors(limit=1, resolved=False)
-            ticket_id = None
-            occurrence_count = 1
-            for r in row:
-                if r["id"] == error_id:
-                    ticket_id = r.get("ticket_id")
-                    occurrence_count = r.get("occurrence_count", 1)
-                    break
+            # ticket_id and occurrence_count are threaded through from _log_error
+            ticket_id = result.get("ticket_id")
+            occurrence_count = result.get("occurrence_count", 1)
 
             if ticket_id:
                 try:
@@ -255,6 +249,7 @@ class ErrorHandlerCog(commands.Cog):
                     "error_id": existing["id"],
                     "severity": severity,
                     "occurrence_count": existing["occurrence_count"] + 1,
+                    "ticket_id": existing.get("ticket_id"),
                 }
         else:
             error_id = await queries.insert_error_log(

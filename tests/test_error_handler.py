@@ -309,7 +309,7 @@ async def test_send_alert_dedup_edits_existing():
     except RuntimeError:
         pass
 
-    result = {"action": "deduped", "error_id": error_id, "severity": "high", "occurrence_count": 2}
+    result = {"action": "deduped", "error_id": error_id, "severity": "high", "occurrence_count": 2, "ticket_id": "12345678"}
 
     await cog._send_alert(result, error, "odds", "high")
 
