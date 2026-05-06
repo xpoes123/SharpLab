@@ -58,6 +58,7 @@ COGS = [
     "bot.cogs.clv",
     "bot.cogs.injuries",
     "bot.cogs.bot_logs",
+    "bot.cogs.error_handler",
     "bot.cogs.history",
     "bot.cogs.rosters",
     "bot.cogs.prefix",
