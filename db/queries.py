@@ -2450,3 +2450,144 @@ async def get_stale_discord_tables(game_type: str | None = None) -> list[dict]:
             )
         rows = await cursor.fetchall()
     return [dict(r) for r in rows]
+
+
+# ── Error Logs ──────────────────────────────────────────────────────────────
+
+
+async def insert_error_log(
+    timestamp: str,
+    error_type: str,
+    command: str | None,
+    user_id: str | None,
+    guild_id: str | None,
+    channel_id: str | None,
+    stack_trace: str | None,
+    severity: str,
+    error_signature: str,
+    ticket_id: str | None = None,
+) -> int:
+    """Insert a new error log row and return the id."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """
+            INSERT INTO error_logs
+                (timestamp, error_type, command, user_id, guild_id, channel_id,
+                 stack_trace, severity, error_signature, ticket_id, last_occurred)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (timestamp, error_type, command, user_id, guild_id, channel_id,
+             stack_trace, severity, error_signature, ticket_id, timestamp),
+        )
+        await db.commit()
+        return cursor.lastrowid  # type: ignore[return-value]
+
+
+async def find_recent_error_by_signature(
+    error_signature: str, window_minutes: int = 5,
+) -> dict | None:
+    """Find an error with the same signature within the dedup window."""
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=window_minutes)).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM error_logs
+            WHERE error_signature = ? AND last_occurred >= ?
+            ORDER BY last_occurred DESC LIMIT 1
+            """,
+            (error_signature, cutoff),
+        )
+        row = await cursor.fetchone()
+    return dict(row) if row else None
+
+
+async def increment_error_occurrence(error_id: int, timestamp: str) -> None:
+    """Increment occurrence_count and update last_occurred."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE error_logs SET occurrence_count = occurrence_count + 1, "
+            "last_occurred = ? WHERE id = ?",
+            (timestamp, error_id),
+        )
+        await db.commit()
+
+
+async def get_recent_errors(
+    limit: int = 20,
+    severity: str | None = None,
+    command: str | None = None,
+    resolved: bool | None = None,
+) -> list[dict]:
+    """Query recent errors with optional filters."""
+    conditions: list[str] = []
+    params: list[object] = []
+    if severity is not None:
+        conditions.append("severity = ?")
+        params.append(severity)
+    if command is not None:
+        conditions.append("command = ?")
+        params.append(command)
+    if resolved is not None:
+        conditions.append("resolved = ?")
+        params.append(1 if resolved else 0)
+    where = " AND ".join(conditions)
+    sql = "SELECT * FROM error_logs"
+    if where:
+        sql += f" WHERE {where}"
+    sql += " ORDER BY last_occurred DESC LIMIT ?"
+    params.append(limit)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(sql, params)
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_unresolved_high_severity(limit: int = 20) -> list[dict]:
+    """Return unresolved high-severity errors."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM error_logs WHERE resolved = 0 AND severity = 'high' "
+            "ORDER BY last_occurred DESC LIMIT ?",
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def resolve_error(
+    error_id: int, resolved_by: str, resolution_note: str,
+) -> None:
+    """Mark an error as resolved."""
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE error_logs SET resolved = 1, resolved_at = ?, "
+            "resolved_by = ?, resolution_note = ? WHERE id = ?",
+            (now, resolved_by, resolution_note, error_id),
+        )
+        await db.commit()
+
+
+async def reopen_error(error_id: int) -> None:
+    """Reopen a resolved error (fix verification failed)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE error_logs SET resolved = 0, resolved_at = NULL, "
+            "reopen_count = reopen_count + 1 WHERE id = ?",
+            (error_id,),
+        )
+        await db.commit()
+
+
+async def update_error_ticket_id(error_id: int, ticket_id: str) -> None:
+    """Associate an error with a ticket."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE error_logs SET ticket_id = ? WHERE id = ?",
+            (ticket_id, error_id),
+        )
+        await db.commit()
