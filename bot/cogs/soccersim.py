@@ -2029,11 +2029,13 @@ class SoccerSimCog(commands.Cog):
             away_team=away,
             home_prob=_generate_win_prob(home, away),
         )
-        self.active_tables[channel_id] = table
-
         view = SoccerSimTableView(table, self.active_tables)
         embed = _betting_embed(table)
-        await interaction.response.send_message(embed=embed, view=view)
+        try:
+            await interaction.response.send_message(embed=embed, view=view)
+        except discord.NotFound:
+            return  # interaction expired — don't leave a ghost table
+        self.active_tables[channel_id] = table
         table.message = await interaction.original_response()
 
     @app_commands.command(
@@ -2085,11 +2087,13 @@ class SoccerSimCog(commands.Cog):
             teams=teams,
             groups=groups,
         )
-        self.active_tables[channel_id] = table
-
         view = TournamentView(table, self.active_tables)
         embed = _tournament_group_embed(table)
-        await interaction.response.send_message(embed=embed, view=view)
+        try:
+            await interaction.response.send_message(embed=embed, view=view)
+        except discord.NotFound:
+            return  # interaction expired — don't leave a ghost table
+        self.active_tables[channel_id] = table
         table.message = await interaction.original_response()
 
 

@@ -818,11 +818,15 @@ class StockGuessCog(commands.Cog):
             bet=bet,
         )
 
-        self.active_tables[cid] = table
         view = BettingView(table, self.active_tables)
-        await interaction.response.send_message(
-            embed=_betting_embed(table), view=view,
-        )
+        try:
+            await interaction.response.send_message(
+                embed=_betting_embed(table), view=view,
+            )
+        except discord.NotFound:
+            await queries.update_casino_balance(str(uid), total_cost)
+            return  # interaction expired — don't leave a ghost table
+        self.active_tables[cid] = table
 
 
 async def setup(bot: commands.Bot) -> None:

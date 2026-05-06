@@ -943,8 +943,6 @@ class CraplessCrapsCog(commands.Cog):
             shooter_id=interaction.user.id,
             shooter_name=interaction.user.display_name,
         )
-        self.active_tables[channel_id] = table
-
         view = CraplessTableView(table, self.active_tables)
         embed = _table_embed(table)
         embed.description = (
@@ -952,7 +950,11 @@ class CraplessCrapsCog(commands.Cog):
             "All other numbers (2\u201312) establish a point. No Don't Pass.\n"
             "Join with Pass Line, then the shooter rolls!"
         )
-        await interaction.response.send_message(embed=embed, view=view)
+        try:
+            await interaction.response.send_message(embed=embed, view=view)
+        except discord.NotFound:
+            return  # interaction expired — don't leave a ghost table
+        self.active_tables[channel_id] = table
         table.message = await interaction.original_response()
 
     @crapless_group.command(

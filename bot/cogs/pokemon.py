@@ -3242,11 +3242,13 @@ class PokemonCog(commands.Cog):
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
         )
-        self.active_tables[channel_id] = table
-
         view = PokeTableView(table, self.active_tables)
         embed = _betting_embed(table)
-        await interaction.response.send_message(embed=embed, view=view)
+        try:
+            await interaction.response.send_message(embed=embed, view=view)
+        except discord.NotFound:
+            return  # interaction expired — don't leave a ghost table
+        self.active_tables[channel_id] = table
         msg = await interaction.original_response()
         table.message = msg
         table.lobby_message = msg

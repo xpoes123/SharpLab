@@ -1423,11 +1423,13 @@ class CasinoCog(commands.Cog):
             shoe=shoe,
             total_cards=len(shoe),
         )
-        self.active_tables[channel_id] = table
-
         view = BlackjackTableView(table, self.active_tables)
         embed = _table_embed(table)
-        await interaction.response.send_message(embed=embed, view=view)
+        try:
+            await interaction.response.send_message(embed=embed, view=view)
+        except discord.NotFound:
+            return  # interaction expired — don't leave a ghost table
+        self.active_tables[channel_id] = table
         table.message = await interaction.original_response()
 
     @app_commands.command(name="stop", description="Force-stop any active game in this channel")

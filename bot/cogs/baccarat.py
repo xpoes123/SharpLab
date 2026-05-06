@@ -910,11 +910,13 @@ class BaccaratCog(commands.Cog):
             player_hand=player_hand,
             banker_hand=banker_hand,
         )
-        self.active_tables[channel_id] = table
-
         view = BaccaratTableView(table, self.active_tables, self)
         embed = _table_embed(table)
-        await interaction.response.send_message(embed=embed, view=view)
+        try:
+            await interaction.response.send_message(embed=embed, view=view)
+        except discord.NotFound:
+            return  # interaction expired — don't leave a ghost table
+        self.active_tables[channel_id] = table
         table.message = await interaction.original_response()
 
 

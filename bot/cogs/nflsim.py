@@ -1139,8 +1139,6 @@ class NflSimCog(commands.Cog):
                 return
             del self.active_tables[channel_id]
 
-        await queries.get_or_create_casino_wallet(str(interaction.user.id))
-
         home, away = _pick_matchup()
         h_off, h_def, h_coa = _generate_ratings(home[1])
         a_off, a_def, a_coa = _generate_ratings(away[1])
@@ -1164,11 +1162,13 @@ class NflSimCog(commands.Cog):
             spread=spread,
             total=total,
         )
-        self.active_tables[channel_id] = table
-
         view = NflSimTableView(table, self.active_tables)
         embed = _betting_embed(table)
-        await interaction.response.send_message(embed=embed, view=view)
+        try:
+            await interaction.response.send_message(embed=embed, view=view)
+        except discord.NotFound:
+            return  # interaction expired — don't leave a ghost table
+        self.active_tables[channel_id] = table
         msg = await interaction.original_response()
         table.message = msg
         table.lobby_message = msg

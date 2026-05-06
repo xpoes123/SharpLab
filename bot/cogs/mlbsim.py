@@ -839,11 +839,13 @@ class MlbSimCog(commands.Cog):
             away_team=away,
             home_prob=_generate_win_prob(),
         )
-        self.active_tables[channel_id] = table
-
         view = MlbSimTableView(table, self.active_tables)
         embed = _betting_embed(table)
-        await interaction.response.send_message(embed=embed, view=view)
+        try:
+            await interaction.response.send_message(embed=embed, view=view)
+        except discord.NotFound:
+            return  # interaction expired — don't leave a ghost table
+        self.active_tables[channel_id] = table
         table.message = await interaction.original_response()
 
 

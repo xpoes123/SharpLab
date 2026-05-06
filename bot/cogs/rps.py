@@ -556,10 +556,14 @@ class RPSCog(commands.Cog):
                 vs_bot=True,
                 phase="playing",
             )
-            self.active_tables[channel_id] = game
             view = RPSView(game, self.active_tables)
             embed = _playing_embed(game)
-            await interaction.response.send_message(embed=embed, view=view)
+            try:
+                await interaction.response.send_message(embed=embed, view=view)
+            except discord.NotFound:
+                await queries.update_casino_balance(str(uid), bet)
+                return  # interaction expired — don't leave a ghost table
+            self.active_tables[channel_id] = game
             game.message = await interaction.original_response()
         else:
             await queries.get_or_create_casino_wallet(str(opponent.id))
@@ -572,12 +576,16 @@ class RPSCog(commands.Cog):
                 bet=bet,
                 best_of=bo,
             )
-            self.active_tables[channel_id] = game
             view = RPSView(game, self.active_tables)
             embed = _pending_embed(game)
-            await interaction.response.send_message(
-                content=f"<@{opponent.id}>", embed=embed, view=view,
-            )
+            try:
+                await interaction.response.send_message(
+                    content=f"<@{opponent.id}>", embed=embed, view=view,
+                )
+            except discord.NotFound:
+                await queries.update_casino_balance(str(uid), bet)
+                return  # interaction expired — don't leave a ghost table
+            self.active_tables[channel_id] = game
             game.message = await interaction.original_response()
 
 

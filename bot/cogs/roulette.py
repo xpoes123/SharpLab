@@ -924,8 +924,6 @@ class RouletteCog(commands.Cog):
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
         )
-        self.active_tables[channel_id] = table
-
         view = RouletteView(table, self.active_tables)
         embed = _table_embed(table)
         embed.description = (
@@ -934,7 +932,11 @@ class RouletteCog(commands.Cog):
             "**Inside:** Straight (35:1) \u2022 Split (17:1) \u2022 Street (11:1)\n"
             "**Outside:** Red/Black \u2022 Odd/Even \u2022 High/Low (1:1) \u2022 Dozens/Columns (2:1)"
         )
-        await interaction.response.send_message(embed=embed, view=view)
+        try:
+            await interaction.response.send_message(embed=embed, view=view)
+        except discord.NotFound:
+            return  # interaction expired — don't leave a ghost table
+        self.active_tables[channel_id] = table
         table.message = await interaction.original_response()
 
 

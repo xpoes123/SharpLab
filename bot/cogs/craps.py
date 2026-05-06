@@ -1003,8 +1003,6 @@ class CrapsCog(commands.Cog):
             shooter_id=interaction.user.id,
             shooter_name=interaction.user.display_name,
         )
-        self.active_tables[channel_id] = table
-
         view = CrapsTableView(table, self.active_tables)
         embed = _table_embed(table)
         embed.description = (
@@ -1012,7 +1010,11 @@ class CrapsCog(commands.Cog):
             "then the shooter rolls!\n"
             "Side bets available to everyone via the buttons below."
         )
-        await interaction.response.send_message(embed=embed, view=view)
+        try:
+            await interaction.response.send_message(embed=embed, view=view)
+        except discord.NotFound:
+            return  # interaction expired — don't leave a ghost table
+        self.active_tables[channel_id] = table
         table.message = await interaction.original_response()
 
     @craps_group.command(name="close", description="Force-close a stuck craps table and refund all players (admin only)")
