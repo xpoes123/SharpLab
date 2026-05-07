@@ -16,6 +16,14 @@ Core loop:
 
 All trading/paper-trading happens on **Kalshi** and **sportsbooks**. Polymarket is a secondary market signal.
 
+### Local Copies
+
+This project has two local checkouts (same repo, same code):
+- **`C:\Users\David\CS\SharpLab\`** — primary
+- **`C:\Users\David\CS\hobbies\sports\betlab\`** — alternate working directory
+
+Both point to the same GitHub repo (`xpoes123/sharplab`). Changes in one should be committed+pushed so the other stays in sync.
+
 ---
 
 ## Repository Layout
@@ -222,6 +230,22 @@ CREATE TABLE bets (
 
 ---
 
+## VPS Deployment
+
+SharpLab runs on a shared Hetzner VPS (`87.99.136.82`). Full details in [`docs/vps-hosting.md`](docs/vps-hosting.md).
+
+**Quick reference:**
+- **SSH**: `ssh root@87.99.136.82`
+- **Install dir**: `/opt/sharplab/` (venv, .env, data/)
+- **Services**: `temporal.service` → `sharplab-worker.service` + `sharplab-bot.service`
+- **Deploy**: `git pull` → `pip install -e .` → restart services (temporal first, wait 3s, then bot+worker)
+- **Logs**: `journalctl -u sharplab-bot.service -n 50 --no-pager`
+- **DB**: SQLite at `/opt/sharplab/data/sharplab.db`
+
+**Rules**: Never restart sentinel/guardian/stavid. Always restart temporal before bot+worker. Verify with status + logs after deploy.
+
+---
+
 ## Skills
 
 Slash commands in `.claude/commands/`. Type to invoke.
@@ -231,6 +255,7 @@ Slash commands in `.claude/commands/`. Type to invoke.
 - `/new-game` — scaffold a new casino game cog. **Always run this when adding a game.** Reads `GAMES.md` checklist.
 - `/clv-check` — compute CLV for recent bets against close snapshots.
 - `/sanity-check` — adversarial data quality pass before trusting results.
+- `/vps` — VPS operations: pull logs, deploy, check status, troubleshoot.
 
 ---
 
@@ -269,6 +294,16 @@ Slash commands in `.claude/commands/`. Type to invoke.
 - **Validate after wiring a new source.** Are prices in range? Are game IDs consistent with what's in the `games` table?
 - **If CLV is consistently > 10%, something is broken**, not your edge.
 - **Discord slash commands must be synced** after adding new ones: `await bot.tree.sync()`. Don't forget this or the commands won't appear.
+
+---
+
+## Documentation
+
+- [`docs/vps-hosting.md`](docs/vps-hosting.md) — VPS deployment: services, deploy flow, logs, troubleshooting
+- [`SPEC.md`](SPEC.md) — Technical specification for the trading pipeline
+- [`TRADING_FLOOR.md`](TRADING_FLOOR.md) — Sports betting concepts and strategies
+- [`GAMES.md`](GAMES.md) — Checklist for adding new casino games
+- [`FUTURE_GAMES.md`](FUTURE_GAMES.md) — Backlog of games to implement
 
 ---
 
