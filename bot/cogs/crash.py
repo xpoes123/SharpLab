@@ -3,6 +3,7 @@
 import asyncio
 import math
 import random
+import time
 from dataclasses import dataclass, field
 
 import discord
@@ -20,6 +21,7 @@ TICK_INTERVAL = 1.5  # seconds between multiplier updates
 GROWTH_RATE = 0.08  # e^(rate * tick)
 AUTO_CASHOUT_MAX = 100.0
 TABLE_LIFETIME_SECS = 300  # hard 5-minute cap; not reset by button interactions
+IDLE_REPLACE_SECS = 90  # /crash may take over a table idle this long (refunds locked bets)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -69,6 +71,7 @@ class CrashTable:
     last_bets: dict[int, tuple[str, int, float]] = field(default_factory=dict)
     fly_task: asyncio.Task | None = field(default=None, repr=False)
     view: "CrashTableView | None" = field(default=None, repr=False)
+    last_activity_at: float = field(default_factory=time.monotonic)
 
 
 # ── Embeds ───────────────────────────────────────────────────────────────────
@@ -236,6 +239,7 @@ class JoinCrashModal(ui.Modal):
             bet=amt,
             auto_cashout=auto_co,
         )
+        self.table.last_activity_at = time.monotonic()
 
         self.table_view._update_buttons()
         await interaction.response.edit_message(
@@ -260,6 +264,11 @@ class CrashTableView(ui.View):
     def _start_lifetime_timer(self) -> None:
         """Start the hard 5-minute table lifetime timer."""
         self._lifetime_task = asyncio.create_task(self._lifetime_expire())
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        # Track user activity so /crash can detect abandoned tables.
+        self.table.last_activity_at = time.monotonic()
+        return True
 
     async def _lifetime_expire(self) -> None:
         """Kill the table after TABLE_LIFETIME_SECS, regardless of phase."""
@@ -711,6 +720,34 @@ class CrashCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, CrashTable] = {}
 
+    async def _force_close_table(self, table: CrashTable, reason: str) -> None:
+        """Cleanly tear down a table: cancel tasks, refund locked bets, close UI."""
+        if table.fly_task and not table.fly_task.done():
+            table.fly_task.cancel()
+        if table.view is not None:
+            lt = table.view._lifetime_task
+            if lt and not lt.done():
+                lt.cancel()
+            table.view.stop()
+        # Refund any player whose bet is still locked
+        if table.phase in ("betting", "flying"):
+            for p in table.players.values():
+                if not p.cashed_out:
+                    try:
+                        await queries.update_casino_balance(str(p.user_id), p.bet)
+                    except Exception:
+                        log.exception("force_close: refund failed for %s", p.user_id)
+        if table.message:
+            try:
+                embed = discord.Embed(
+                    title="Crash Table — Closed",
+                    description=reason,
+                    colour=discord.Colour.dark_grey(),
+                )
+                await table.message.edit(embed=embed, view=None)
+            except discord.HTTPException:
+                pass
+
     @app_commands.command(
         name="crash", description="Open a Crash table (multiplayer rocket game)",
     )
@@ -718,18 +755,31 @@ class CrashCog(commands.Cog):
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:
             existing = self.active_tables[channel_id]
-            # A table is only stale once the round fully ended (crashed) and
-            # no fly loop is still running.  Betting-phase tables have players
-            # with locked coins — never replace them silently.
             fly_done = existing.fly_task is None or existing.fly_task.done()
-            is_stale = existing.phase == "crashed" and fly_done
-            if not is_stale:
+            idle_secs = time.monotonic() - existing.last_activity_at
+
+            # Replaceable conditions:
+            #  - Round fully ended (crashed phase, no flight running) — bets settled
+            #  - Zombie flight: phase=flying but task already done without resolving
+            #  - Idle: no user button click for IDLE_REPLACE_SECS (locked bets get refunded)
+            crashed_done = existing.phase == "crashed" and fly_done
+            zombie_flight = existing.phase == "flying" and fly_done
+            idle_too_long = idle_secs >= IDLE_REPLACE_SECS
+
+            if not (crashed_done or zombie_flight or idle_too_long):
+                wait_secs = max(0, int(IDLE_REPLACE_SECS - idle_secs))
                 await interaction.response.send_message(
-                    "There's already a Crash table in this channel!",
+                    f"There's already an active Crash table in this channel. "
+                    f"It will be replaceable in {wait_secs}s if idle, or use "
+                    f"the Close Table button.",
                     ephemeral=True,
                 )
                 return
-            del self.active_tables[channel_id]
+            # Tear down the stale table (refunds any locked bets) before replacing
+            await self._force_close_table(
+                existing, "Replaced — table was idle or finished.",
+            )
+            self.active_tables.pop(channel_id, None)
 
         await queries.get_or_create_casino_wallet(str(interaction.user.id))
 

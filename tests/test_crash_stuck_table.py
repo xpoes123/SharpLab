@@ -47,6 +47,13 @@ from bot.cogs.crash import (  # noqa: E402
     TABLE_LIFETIME_SECS,
 )
 
+# Force the crash module's `queries` reference to the stub. Without this,
+# when this file runs after another test that imported the real db.queries,
+# the `from db import queries` inside crash.py resolves to the real module
+# and tests that exercise refund logic try to open the real SQLite file.
+import bot.cogs.crash as _crash_mod  # noqa: E402
+_crash_mod.queries = _queries_stub
+
 
 def _make_table(channel_id: int = 1, phase: str = "betting") -> CrashTable:
     return CrashTable(channel_id=channel_id, host_id=42, host_name="Host", phase=phase)
@@ -111,37 +118,55 @@ async def test_lifetime_expire_pops_its_own_table_when_still_active():
 # ---------------------------------------------------------------------------
 
 
-def test_crash_command_blocks_betting_phase_table():
-    """/crash must block when existing table is in 'betting' phase."""
-    active_tables: dict[int, CrashTable] = {}
+def _staleness(existing: CrashTable, idle_secs: float) -> bool:
+    """Mirror of the staleness check in CrashCog.crash."""
+    fly_done = existing.fly_task is None or existing.fly_task.done()
+    crashed_done = existing.phase == "crashed" and fly_done
+    zombie_flight = existing.phase == "flying" and fly_done
+    from bot.cogs.crash import IDLE_REPLACE_SECS
+    idle_too_long = idle_secs >= IDLE_REPLACE_SECS
+    return crashed_done or zombie_flight or idle_too_long
 
+
+def test_crash_command_blocks_recent_betting_table():
+    """/crash blocks a recently-active betting table (locked bets, not idle)."""
     existing = _make_table(channel_id=3, phase="betting")
     existing.fly_task = None
-    active_tables[3] = existing
-
-    fly_done = existing.fly_task is None or existing.fly_task.done()
-    is_stale = existing.phase == "crashed" and fly_done
-
-    assert not is_stale, (
-        "betting-phase table should NOT be considered stale — /crash would "
-        "silently eat players' locked bets"
+    assert not _staleness(existing, idle_secs=5), (
+        "recently-active betting-phase table should block /crash"
     )
 
 
-def test_crash_command_blocks_flying_phase_table():
-    """/crash must block when existing table is in 'flying' phase."""
-    active_tables: dict[int, CrashTable] = {}
+def test_crash_command_replaces_idle_betting_table():
+    """/crash takes over a betting-phase table that has been idle too long."""
+    from bot.cogs.crash import IDLE_REPLACE_SECS
+    existing = _make_table(channel_id=3, phase="betting")
+    existing.fly_task = None
+    assert _staleness(existing, idle_secs=IDLE_REPLACE_SECS + 1), (
+        "idle betting-phase table should be replaceable (force_close refunds bets)"
+    )
 
+
+def test_crash_command_blocks_active_flying_table():
+    """/crash must block when existing table is actively flying."""
     existing = _make_table(channel_id=4, phase="flying")
     mock_task = MagicMock()
     mock_task.done.return_value = False
     existing.fly_task = mock_task
-    active_tables[4] = existing
+    assert not _staleness(existing, idle_secs=5), (
+        "actively-flying table must block new /crash"
+    )
 
-    fly_done = existing.fly_task is None or existing.fly_task.done()
-    is_stale = existing.phase == "crashed" and fly_done
 
-    assert not is_stale, "flying-phase table must block new /crash"
+def test_crash_command_replaces_zombie_flight():
+    """/crash takes over a flying table whose fly_task already finished."""
+    existing = _make_table(channel_id=4, phase="flying")
+    mock_task = MagicMock()
+    mock_task.done.return_value = True  # task ended but phase never advanced
+    existing.fly_task = mock_task
+    assert _staleness(existing, idle_secs=1), (
+        "zombie flight (fly_task done, phase still 'flying') should be replaceable"
+    )
 
 
 def test_crash_command_allows_replacing_crashed_phase_table():
@@ -164,11 +189,76 @@ def test_crash_command_allows_replacing_crashed_phase_no_task():
     """/crash may replace a crashed table where fly_task is None."""
     existing = _make_table(channel_id=6, phase="crashed")
     existing.fly_task = None
+    assert _staleness(existing, idle_secs=0), (
+        "crashed-phase table with fly_task=None should always be replaceable"
+    )
 
-    fly_done = existing.fly_task is None or existing.fly_task.done()
-    is_stale = existing.phase == "crashed" and fly_done
 
-    assert is_stale
+@pytest.mark.asyncio
+async def test_force_close_refunds_locked_bets():
+    """When /crash takes over an idle betting table, locked bets must be refunded."""
+    from bot.cogs.crash import CrashCog, CrashPlayer
+
+    # Reset the mock so this test owns the call history
+    _queries_stub.update_casino_balance.reset_mock()
+
+    bot = MagicMock()
+    cog = CrashCog(bot)
+
+    table = _make_table(channel_id=10, phase="betting")
+    table.players[111] = CrashPlayer(
+        user_id=111, display_name="A", bet=50, cashed_out=False,
+    )
+    table.players[222] = CrashPlayer(
+        user_id=222, display_name="B", bet=75, cashed_out=True,  # already paid
+    )
+    # Give the table a stub view so _force_close_table can stop() it
+    table.view = MagicMock()
+    table.view._lifetime_task = None
+    table.message = None  # skip message edit
+
+    await cog._force_close_table(table, "test")
+
+    # Player A's locked bet refunded; player B (already cashed out) not touched
+    calls = _queries_stub.update_casino_balance.call_args_list
+    refunded = {(c.args[0], c.args[1]) for c in calls}
+    assert ("111", 50) in refunded, "non-cashed-out player must be refunded"
+    assert ("222", 75) not in refunded, "cashed-out player must NOT be refunded"
+
+
+@pytest.mark.asyncio
+async def test_crash_takes_over_idle_table_via_force_close():
+    """/crash should detect an idle betting table and take it over after refund."""
+    import time
+    from bot.cogs.crash import CrashCog, CrashPlayer, IDLE_REPLACE_SECS
+
+    _queries_stub.update_casino_balance.reset_mock()
+
+    bot = MagicMock()
+    cog = CrashCog(bot)
+
+    stuck = _make_table(channel_id=20, phase="betting")
+    stuck.players[333] = CrashPlayer(
+        user_id=333, display_name="Stuck", bet=100, cashed_out=False,
+    )
+    stuck.last_activity_at = time.monotonic() - (IDLE_REPLACE_SECS + 10)
+    stuck.view = MagicMock()
+    stuck.view._lifetime_task = None
+    stuck.message = None
+    cog.active_tables[20] = stuck
+
+    # Directly exercise the staleness path the /crash command uses
+    idle_secs = time.monotonic() - stuck.last_activity_at
+    assert idle_secs >= IDLE_REPLACE_SECS
+
+    await cog._force_close_table(stuck, "idle replace")
+    cog.active_tables.pop(20, None)
+
+    # Locked bet refunded
+    calls = _queries_stub.update_casino_balance.call_args_list
+    assert ("333", 100) in {(c.args[0], c.args[1]) for c in calls}
+    # Slot freed
+    assert 20 not in cog.active_tables
 
 
 # ---------------------------------------------------------------------------
