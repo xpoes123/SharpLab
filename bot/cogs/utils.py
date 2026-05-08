@@ -25,9 +25,11 @@ class UtilsCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
-    # ── /convert ──────────────────────────────────────────────────────────────
+    calc = app_commands.Group(name="calc", description="Betting math utilities (no API calls)")
 
-    @app_commands.command(name="convert", description="Convert odds between American, decimal, cents, and implied %")
+    # ── /calc convert ────────────────────────────────────────────────────────
+
+    @calc.command(name="convert", description="Convert odds between American, decimal, cents, and implied %")
     @app_commands.describe(odds="Odds to convert: American (-110), decimal (1.91), cents (52), or probability (0.52 / 52%)")
     async def convert(self, interaction: discord.Interaction, odds: str) -> None:
         try:
@@ -46,9 +48,9 @@ class UtilsCog(commands.Cog):
         embed.add_field(name="Implied %", value=f"`{prob * 100:.2f}%`", inline=True)
         await interaction.response.send_message(embed=embed)
 
-    # ── /ev ───────────────────────────────────────────────────────────────────
+    # ── /calc ev ─────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="ev", description="Expected value per unit staked")
+    @calc.command(name="ev", description="Expected value per unit staked")
     @app_commands.describe(
         odds="American odds (e.g. -110 or +150)",
         true_prob="Your estimated win probability (0–1 or 0–100)",
@@ -77,9 +79,9 @@ class UtilsCog(commands.Cog):
         embed.add_field(name="EV / unit", value=f"`{ev_per_unit:+.4f}u`", inline=True)
         await interaction.response.send_message(embed=embed)
 
-    # ── /kelly ─────────────────────────────────────────────────────────────────
+    # ── /calc kelly ──────────────────────────────────────────────────────────
 
-    @app_commands.command(name="kelly", description="Kelly criterion stake sizing")
+    @calc.command(name="kelly", description="Kelly criterion stake sizing")
     @app_commands.describe(
         bankroll="Bankroll in units",
         odds="American odds (e.g. -110 or +150)",
@@ -116,9 +118,9 @@ class UtilsCog(commands.Cog):
         embed.add_field(name="Half Kelly", value=f"`{half_stake:.2f}u`", inline=True)
         await interaction.response.send_message(embed=embed)
 
-    # ── /parlay ────────────────────────────────────────────────────────────────
+    # ── /calc parlay ─────────────────────────────────────────────────────────
 
-    @app_commands.command(name="parlay", description="Parlay odds calculator")
+    @calc.command(name="parlay", description="Parlay odds calculator")
     @app_commands.describe(legs="Space-separated American odds (e.g. -110 -110 +150)")
     async def parlay(self, interaction: discord.Interaction, legs: str) -> None:
         try:
@@ -163,28 +165,40 @@ class UtilsCog(commands.Cog):
         embed.add_field(
             name="Odds & Lines",
             value=(
-                "`/odds [game]` — Live lines across all books\n"
-                "`/best-line [game]` — Best number available per market\n"
-                "`/line-move [game]` — How lines have moved since open\n"
-                "`/scores` — Live scores for today's slate"
+                "`/odds nba lines [game]` · `/odds mlb lines [game]`\n"
+                "`/odds nba best [game]` — best number per market\n"
+                "`/odds nba move [game]` — line movement since open\n"
+                "`/odds nba scores` — live scores"
             ),
             inline=False,
         )
         embed.add_field(
             name="Bet Tracking",
             value=(
-                "`/log` — Log a bet to your record\n"
-                "`/record [@user]` — W/L record and ROI"
+                "`/bet log nba …` · `/bet log mlb …` — log a bet\n"
+                "`/bet view` — open + graded bets\n"
+                "`/bet record [@user]` — W/L and ROI\n"
+                "`/bet clv [@user]` — CLV breakdown\n"
+                "`/bet void <bet_id>`"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Paper Trading",
+            value=(
+                "`/paper trade nba …` · `/paper trade mlb …`\n"
+                "`/paper portfolio` · `/paper profile`\n"
+                "`/paper leaderboard` · `/paper cashout <trade_id>`"
             ),
             inline=False,
         )
         embed.add_field(
             name="Math",
             value=(
-                "`/ev [odds] [true_prob]` — Expected value per unit\n"
-                "`/kelly [bankroll] [odds] [edge]` — Kelly stake sizing\n"
-                "`/parlay [legs]` — Parlay odds calculator\n"
-                "`/convert [odds]` — American ↔ decimal ↔ implied %"
+                "`/calc ev <odds> <true_prob>` — expected value\n"
+                "`/calc kelly <bankroll> <odds> <edge>` — Kelly stake\n"
+                "`/calc parlay <legs>` — parlay calculator\n"
+                "`/calc convert <odds>` — American ↔ decimal ↔ %"
             ),
             inline=False,
         )

@@ -625,29 +625,34 @@ class TradingCog(commands.Cog):
         wager=f"Coins to risk (min {MIN_BET})",
     )
 
-    @app_commands.command(name="trade", description="Paper trade on an NBA game with coins")
+    # ── /paper group ──────────────────────────────────────────────────────
+
+    paper_group = app_commands.Group(name="paper", description="Paper trading with coins")
+    trade_group = app_commands.Group(name="trade", description="Open a paper trade", parent=paper_group)
+
+    @trade_group.command(name="nba", description="Paper trade on an NBA game with coins")
     @app_commands.autocomplete(game=game_autocomplete, pick=trade_pick_autocomplete)
     @app_commands.describe(**_TRADE_DESCRIBE)
     @app_commands.choices(market=MARKET_CHOICES)
-    async def trade(
+    async def trade_nba(
         self, interaction: discord.Interaction,
         game: str, market: str, pick: str, wager: int,
     ) -> None:
         await self._trade_impl(interaction, game, market, pick, wager)
 
-    @app_commands.command(name="mlb-trade", description="Paper trade on an MLB game with coins")
+    @trade_group.command(name="mlb", description="Paper trade on an MLB game with coins")
     @app_commands.autocomplete(game=mlb_game_autocomplete, pick=trade_pick_autocomplete)
     @app_commands.describe(**_TRADE_DESCRIBE)
     @app_commands.choices(market=MARKET_CHOICES)
-    async def mlb_trade(
+    async def trade_mlb(
         self, interaction: discord.Interaction,
         game: str, market: str, pick: str, wager: int,
     ) -> None:
         await self._trade_impl(interaction, game, market, pick, wager)
 
-    # ── /portfolio ────────────────────────────────────────────────────────
+    # ── /paper portfolio ──────────────────────────────────────────────────
 
-    @app_commands.command(name="portfolio", description="View your open paper trades")
+    @paper_group.command(name="portfolio", description="View your open paper trades")
     @app_commands.describe(user="Check another user's portfolio")
     async def portfolio(
         self, interaction: discord.Interaction,
@@ -707,9 +712,9 @@ class TradingCog(commands.Cog):
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    # ── /profile ──────────────────────────────────────────────────────────
+    # ── /paper profile ────────────────────────────────────────────────────
 
-    @app_commands.command(name="profile", description="Paper trading stats and history")
+    @paper_group.command(name="profile", description="Paper trading stats and history")
     @app_commands.describe(user="Check another user's profile")
     async def profile(
         self, interaction: discord.Interaction,
@@ -833,9 +838,9 @@ class TradingCog(commands.Cog):
 
         await interaction.followup.send(content=daily_note or None, embed=embed)
 
-    # ── /leaderboard ──────────────────────────────────────────────────────
+    # ── /paper leaderboard ────────────────────────────────────────────────
 
-    @app_commands.command(name="leaderboard", description="Paper trading leaderboard")
+    @paper_group.command(name="leaderboard", description="Paper trading leaderboard")
     async def leaderboard(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer()
 
@@ -874,9 +879,9 @@ class TradingCog(commands.Cog):
         embed.description = "\n".join(lines)
         await interaction.followup.send(content=daily_note or None, embed=embed)
 
-    # ── /cashout ──────────────────────────────────────────────────────────
+    # ── /paper cashout ────────────────────────────────────────────────────
 
-    @app_commands.command(name="cashout", description="Cash out an open paper trade at current odds")
+    @paper_group.command(name="cashout", description="Cash out an open paper trade at current odds")
     @app_commands.describe(trade_id="Select a trade to cash out")
     @app_commands.autocomplete(trade_id=void_trade_autocomplete)
     async def cashout(self, interaction: discord.Interaction, trade_id: str) -> None:

@@ -389,23 +389,28 @@ class BetsCog(commands.Cog):
         notes="Optional notes",
     )
 
-    @app_commands.command(name="log", description="Log an NBA bet to your record")
+    # ── /bet group ────────────────────────────────────────────────────────────
+
+    bet_group = app_commands.Group(name="bet", description="Bet tracking — log, view, void, record, CLV")
+    log_group = app_commands.Group(name="log", description="Log a bet to your record", parent=bet_group)
+
+    @log_group.command(name="nba", description="Log an NBA bet to your record")
     @app_commands.autocomplete(game=game_autocomplete, pick=pick_autocomplete)
     @app_commands.describe(**_LOG_DESCRIBE)
     @app_commands.choices(book=BOOK_CHOICES, market=MARKET_CHOICES)
-    async def log(self, interaction: discord.Interaction, game: str, book: str, market: str, pick: str, odds: str, units: float, line: float | None = None, notes: str | None = None) -> None:
+    async def bet_log_nba(self, interaction: discord.Interaction, game: str, book: str, market: str, pick: str, odds: str, units: float, line: float | None = None, notes: str | None = None) -> None:
         await self._log_impl(interaction, game, book, market, pick, odds, units, line, notes)
 
-    @app_commands.command(name="mlb-log", description="Log an MLB bet to your record")
+    @log_group.command(name="mlb", description="Log an MLB bet to your record")
     @app_commands.autocomplete(game=mlb_game_autocomplete, pick=pick_autocomplete)
     @app_commands.describe(**_LOG_DESCRIBE)
     @app_commands.choices(book=BOOK_CHOICES, market=MARKET_CHOICES)
-    async def mlb_log(self, interaction: discord.Interaction, game: str, book: str, market: str, pick: str, odds: str, units: float, line: float | None = None, notes: str | None = None) -> None:
+    async def bet_log_mlb(self, interaction: discord.Interaction, game: str, book: str, market: str, pick: str, odds: str, units: float, line: float | None = None, notes: str | None = None) -> None:
         await self._log_impl(interaction, game, book, market, pick, odds, units, line, notes)
 
-    # ── /open ─────────────────────────────────────────────────────────────────
+    # ── /bet view ─────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="bets", description="View your open and graded bets")
+    @bet_group.command(name="view", description="View your open and graded bets")
     async def open_bets(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
 
@@ -496,9 +501,9 @@ class BetsCog(commands.Cog):
         embed.set_footer(text=footer_text)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    # ── /clv-summary ──────────────────────────────────────────────────────────
+    # ── /bet clv ──────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="clv-summary", description="CLV breakdown and EV gained from beating the closing line")
+    @bet_group.command(name="clv", description="CLV breakdown and EV gained from beating the closing line")
     @app_commands.describe(user="User to look up (defaults to you)")
     async def clv_summary(
         self,
@@ -573,9 +578,9 @@ class BetsCog(commands.Cog):
         embed.set_footer(text="EV gained = Σ (units × CLV / 100) — theoretical edge vs. closing line")
         await interaction.followup.send(embed=embed)
 
-    # ── /void ─────────────────────────────────────────────────────────────────
+    # ── /bet void ─────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="void", description="Void a bet you logged (cancelled game or entry error)")
+    @bet_group.command(name="void", description="Void a bet you logged (cancelled game or entry error)")
     @app_commands.describe(bet_id="Your open bet — select from autocomplete or type the ID")
     @app_commands.autocomplete(bet_id=void_autocomplete)
     async def void_bet(self, interaction: discord.Interaction, bet_id: str) -> None:
@@ -620,9 +625,9 @@ class BetsCog(commands.Cog):
         embed.set_footer(text=f"Bet ID: {bid} — was {bet.status}")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    # ── /record ───────────────────────────────────────────────────────────────
+    # ── /bet record ───────────────────────────────────────────────────────────
 
-    @app_commands.command(name="record", description="View bet record and ROI")
+    @bet_group.command(name="record", description="View bet record and ROI")
     @app_commands.describe(user="User to look up (defaults to you)")
     async def record(
         self,

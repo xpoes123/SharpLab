@@ -100,32 +100,47 @@ uv run pytest
 
 The bot serves two purposes: **info** (what are the lines, what's the market saying) and **tracking** (logging bets, computing CLV, quick math). No social features.
 
-### Odds & Lines
-| Command | What it does |
-|---|---|
-| `/odds [game]` | Live lines for a game across all major books (spread, ML, total) |
-| `/line-move [game]` | How the line has moved since open — reads from `odds_snapshots` history |
-| `/best-line [game]` | Surfaces the best number available across all tracked books |
+Most commands are organized into subcommand groups (`/odds`, `/bet`, `/paper`, `/calc`) to stay under Discord's 100-command-per-guild cap. The `<sport>` slot is `nba` or `mlb`.
 
-### Bet Tracking
+### Odds & Lines — `/odds <sport> ...`
 | Command | What it does |
 |---|---|
-| `/log [game] [book] [market] [side] [line] [odds] [units]` | Log a bet to the DB |
-| `/record [@user]` | Pull up a user's W/L record and ROI |
+| `/odds <sport> lines [game]` | Live lines for a game across all major books (spread, ML, total) |
+| `/odds <sport> move [game]` | How the line has moved since open — reads from `odds_snapshots` history |
+| `/odds <sport> best [game]` | Surfaces the best number available across all tracked books |
+| `/odds <sport> scores` | Live scores for today's slate |
+
+### Bet Tracking — `/bet ...`
+| Command | What it does |
+|---|---|
+| `/bet log <sport> [game] [book] [market] [pick] [odds] [units]` | Log a bet to the DB |
+| `/bet view` | Open + graded bets with live CLV |
+| `/bet void <bet_id>` | Void a logged bet (cancelled game / entry error) |
+| `/bet record [@user]` | Pull up a user's W/L record and ROI |
+| `/bet clv [@user]` | CLV breakdown and EV gained from beating the closing line |
+
+### Paper Trading — `/paper ...`
+| Command | What it does |
+|---|---|
+| `/paper trade <sport> [game] [market] [pick] [wager]` | Open a paper trade with coins |
+| `/paper portfolio` | Open trades + at-risk |
+| `/paper profile` | Stats and history |
+| `/paper leaderboard` | Top paper traders |
+| `/paper cashout <trade_id>` | Cash out an open trade at current odds |
 
 ### Kalshi / Prediction Markets
 | Command | What it does |
 |---|---|
-| `/kalshi [market]` | Current yes/no price on a Kalshi contract |
+| `/kalshi [market]` / `/mlb-kalshi [market]` | Current yes/no price + market depth on a Kalshi contract |
 | CLV (auto) | When a game closes, bot posts CLV for anyone who logged a bet on it |
 
-### Utilities (pure math, no API needed)
+### Math — `/calc ...`
 | Command | What it does |
 |---|---|
-| `/ev [odds] [true-prob]` | Expected value calculator |
-| `/kelly [bankroll] [odds] [edge]` | Kelly criterion stake sizing |
-| `/parlay [leg1] [leg2] ...` | Parlay odds calculator |
-| `/convert [odds]` | Odds format converter: American ↔ decimal ↔ implied % |
+| `/calc ev [odds] [true_prob]` | Expected value calculator |
+| `/calc kelly [bankroll] [odds] [edge]` | Kelly criterion stake sizing |
+| `/calc parlay [legs]` | Parlay odds calculator |
+| `/calc convert [odds]` | Odds format converter: American ↔ decimal ↔ implied % |
 
 ---
 

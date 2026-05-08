@@ -521,52 +521,58 @@ class OddsCog(commands.Cog):
         embed = discord.Embed(title=f"{label} Scores — {day_str}", description="```\n" + "\n".join(lines) + "\n```", color=0xE67E22)
         await interaction.followup.send(embed=embed)
 
-    # ── NBA commands ─────────────────────────────────────────────────────────
+    # ── /odds group ──────────────────────────────────────────────────────────
 
-    @app_commands.command(name="odds", description="NBA lines for a game across all books")
+    odds_group = app_commands.Group(name="odds", description="Live lines, scores, and movement")
+    nba_group = app_commands.Group(name="nba", description="NBA odds commands", parent=odds_group)
+    mlb_group = app_commands.Group(name="mlb", description="MLB odds commands", parent=odds_group)
+
+    # ── NBA subcommands ──────────────────────────────────────────────────────
+
+    @nba_group.command(name="lines", description="NBA lines for a game across all books")
     @app_commands.describe(game="Select a game")
     @app_commands.autocomplete(game=game_autocomplete)
-    async def odds(self, interaction: discord.Interaction, game: str) -> None:
+    async def odds_nba_lines(self, interaction: discord.Interaction, game: str) -> None:
         await self._odds_impl(interaction, game, "nba")
 
-    @app_commands.command(name="best-line", description="Best available NBA number across all books")
+    @nba_group.command(name="best", description="Best available NBA number across all books")
     @app_commands.describe(game="Select a game")
     @app_commands.autocomplete(game=game_autocomplete)
-    async def best_line(self, interaction: discord.Interaction, game: str) -> None:
+    async def odds_nba_best(self, interaction: discord.Interaction, game: str) -> None:
         await self._best_line_impl(interaction, game, "nba")
 
-    @app_commands.command(name="line-move", description="NBA line movement — Kalshi/Polymarket ML + DK spread")
+    @nba_group.command(name="move", description="NBA line movement — Kalshi/Polymarket ML + DK spread")
     @app_commands.describe(game="Select a game (type team name or paste ID from /db)")
     @app_commands.autocomplete(game=historical_game_autocomplete)
-    async def line_move(self, interaction: discord.Interaction, game: str) -> None:
+    async def odds_nba_move(self, interaction: discord.Interaction, game: str) -> None:
         await self._line_move_impl(interaction, game)
 
-    @app_commands.command(name="scores", description="Live NBA scores")
-    async def scores(self, interaction: discord.Interaction) -> None:
+    @nba_group.command(name="scores", description="Live NBA scores")
+    async def odds_nba_scores(self, interaction: discord.Interaction) -> None:
         await self._scores_impl(interaction, "nba")
 
-    # ── MLB commands ─────────────────────────────────────────────────────────
+    # ── MLB subcommands ──────────────────────────────────────────────────────
 
-    @app_commands.command(name="mlb-odds", description="MLB lines for a game across all books")
+    @mlb_group.command(name="lines", description="MLB lines for a game across all books")
     @app_commands.describe(game="Select a game")
     @app_commands.autocomplete(game=mlb_game_autocomplete)
-    async def mlb_odds(self, interaction: discord.Interaction, game: str) -> None:
+    async def odds_mlb_lines(self, interaction: discord.Interaction, game: str) -> None:
         await self._odds_impl(interaction, game, "mlb")
 
-    @app_commands.command(name="mlb-best-line", description="Best available MLB number across all books")
+    @mlb_group.command(name="best", description="Best available MLB number across all books")
     @app_commands.describe(game="Select a game")
     @app_commands.autocomplete(game=mlb_game_autocomplete)
-    async def mlb_best_line(self, interaction: discord.Interaction, game: str) -> None:
+    async def odds_mlb_best(self, interaction: discord.Interaction, game: str) -> None:
         await self._best_line_impl(interaction, game, "mlb")
 
-    @app_commands.command(name="mlb-line-move", description="MLB line movement — Kalshi/Polymarket ML + DK spread")
+    @mlb_group.command(name="move", description="MLB line movement — Kalshi/Polymarket ML + DK spread")
     @app_commands.describe(game="Select a game (type team name or paste ID from /mlb-db)")
     @app_commands.autocomplete(game=mlb_historical_game_autocomplete)
-    async def mlb_line_move(self, interaction: discord.Interaction, game: str) -> None:
+    async def odds_mlb_move(self, interaction: discord.Interaction, game: str) -> None:
         await self._line_move_impl(interaction, game)
 
-    @app_commands.command(name="mlb-scores", description="Live MLB scores")
-    async def mlb_scores(self, interaction: discord.Interaction) -> None:
+    @mlb_group.command(name="scores", description="Live MLB scores")
+    async def odds_mlb_scores(self, interaction: discord.Interaction) -> None:
         await self._scores_impl(interaction, "mlb")
 
 
