@@ -2591,3 +2591,64 @@ async def update_error_ticket_id(error_id: int, ticket_id: str) -> None:
             (ticket_id, error_id),
         )
         await db.commit()
+
+
+# ── Stock holdings ──────────────────────────────────────────────────────────
+
+
+async def upsert_stock_holding(
+    discord_user: str, ticker: str, shares: float, dca_price: float
+) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO stock_holdings (discord_user, ticker, shares, dca_price, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(discord_user, ticker) DO UPDATE SET
+                shares     = excluded.shares,
+                dca_price  = excluded.dca_price,
+                updated_at = excluded.updated_at
+            """,
+            (discord_user, ticker.upper(), shares, dca_price, now),
+        )
+        await db.commit()
+
+
+async def remove_stock_holding(discord_user: str, ticker: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "DELETE FROM stock_holdings WHERE discord_user = ? AND ticker = ?",
+            (discord_user, ticker.upper()),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def get_stock_holdings(discord_user: str) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT ticker, shares, dca_price FROM stock_holdings "
+            "WHERE discord_user = ? ORDER BY ticker",
+            (discord_user,),
+        )
+        rows = await cur.fetchall()
+        return [
+            {"ticker": r["ticker"], "shares": r["shares"], "dca_price": r["dca_price"]}
+            for r in rows
+        ]
+
+
+async def get_stock_holding(discord_user: str, ticker: str) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT ticker, shares, dca_price FROM stock_holdings "
+            "WHERE discord_user = ? AND ticker = ?",
+            (discord_user, ticker.upper()),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        return {"ticker": row["ticker"], "shares": row["shares"], "dca_price": row["dca_price"]}

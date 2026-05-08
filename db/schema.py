@@ -285,6 +285,15 @@ CREATE INDEX IF NOT EXISTS idx_error_logs_resolved ON error_logs(resolved);
 CREATE INDEX IF NOT EXISTS idx_error_logs_signature ON error_logs(error_signature);
 CREATE INDEX IF NOT EXISTS idx_error_logs_timestamp ON error_logs(timestamp);
 CREATE INDEX IF NOT EXISTS idx_error_logs_command ON error_logs(command);
+
+CREATE TABLE IF NOT EXISTS stock_holdings (
+    discord_user TEXT NOT NULL,
+    ticker       TEXT NOT NULL,
+    shares       REAL NOT NULL,
+    dca_price    REAL NOT NULL,
+    updated_at   TEXT NOT NULL,
+    PRIMARY KEY (discord_user, ticker)
+);
 """
 
 
@@ -364,6 +373,17 @@ async def init_db() -> None:
                 "resolution_note TEXT, ticket_id TEXT, error_signature TEXT NOT NULL, "
                 "occurrence_count INTEGER NOT NULL DEFAULT 1, last_occurred TEXT NOT NULL, "
                 "reopen_count INTEGER NOT NULL DEFAULT 0)"
+            )
+            await db.commit()
+        except Exception:
+            pass
+        # Migration: add stock_holdings for /stock_portfolio
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS stock_holdings "
+                "(discord_user TEXT NOT NULL, ticker TEXT NOT NULL, "
+                "shares REAL NOT NULL, dca_price REAL NOT NULL, "
+                "updated_at TEXT NOT NULL, PRIMARY KEY (discord_user, ticker))"
             )
             await db.commit()
         except Exception:
