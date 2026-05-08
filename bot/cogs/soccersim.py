@@ -1959,13 +1959,6 @@ class SoccerSimCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, SoccerSimTable | TournamentTable] = {}
 
-    @app_commands.command(
-        name="soccersim", description="Bet on a simulated soccer match (casino)",
-    )
-    @app_commands.describe(
-        team1="Home team name or abbreviation (random if omitted)",
-        team2="Away team name or abbreviation (random if omitted)",
-    )
     async def soccersim(
         self, interaction: discord.Interaction,
         team1: str | None = None, team2: str | None = None,

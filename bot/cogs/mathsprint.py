@@ -994,7 +994,6 @@ class MathSprintCog(commands.Cog):
             except discord.HTTPException:
                 pass
 
-    @app_commands.command(name="mathsprint", description="Mental Math Sprint \u2014 10 rapid-fire problems, fastest wins!")
     async def mathsprint(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

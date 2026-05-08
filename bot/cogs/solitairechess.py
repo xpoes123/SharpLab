@@ -44,12 +44,6 @@ class SolChessCog(commands.Cog):
     async def cog_unload(self) -> None:
         self._poll_web_results.cancel()
 
-    @app_commands.command(
-        name="solitaire-chess",
-        description="Solitaire Chess puzzle race \u2014 plays in your browser",
-    )
-    @app_commands.describe(difficulty="Puzzle difficulty (number of pieces)")
-    @app_commands.choices(difficulty=DIFFICULTY_CHOICES)
     async def solitaire_chess(
         self,
         interaction: discord.Interaction,

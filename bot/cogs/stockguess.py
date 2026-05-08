@@ -757,14 +757,6 @@ class StockGuessCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, StockGuessTable] = {}
 
-    @app_commands.command(
-        name="stockguess",
-        description="Guess stocks' YTD performance across multiple rounds \u2014 closest wins!",
-    )
-    @app_commands.describe(
-        bet="Your bet amount in coins per round (default 10)",
-        rounds=f"Number of rounds (default {DEFAULT_ROUNDS}, max 10)",
-    )
     async def stockguess(
         self,
         interaction: discord.Interaction,

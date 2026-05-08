@@ -115,6 +115,7 @@ COGS = [
     "bot.cogs.battleship",
     "bot.cogs.blotto",
     "bot.cogs.stream",
+    "bot.cogs.game_menu",
 ]
 
 GUILD_IDS = [int(g.strip()) for g in os.environ["DISCORD_GUILD_ID"].split(",") if g.strip()]

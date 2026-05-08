@@ -582,10 +582,6 @@ class PlinkoCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, PlinkoTable] = {}
 
-    @app_commands.command(
-        name="plinko",
-        description="Open a Plinko table (multiplayer ball-drop game)",
-    )
     async def plinko(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

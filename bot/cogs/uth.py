@@ -962,7 +962,6 @@ class UTHCog(commands.Cog):
             finally:
                 await queries.unregister_discord_table(channel_id)
 
-    @app_commands.command(name="uth", description="Open an Ultimate Texas Hold'em table (multiplayer)")
     async def uth(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

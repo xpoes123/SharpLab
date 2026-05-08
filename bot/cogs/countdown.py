@@ -1179,10 +1179,6 @@ class CountdownCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, CountdownTable] = {}
 
-    @app_commands.command(
-        name="countdown",
-        description="Open a Countdown Numbers table (multiplayer math game)",
-    )
     async def countdown(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

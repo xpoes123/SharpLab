@@ -629,10 +629,6 @@ class PrisonerCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, PDTable] = {}
 
-    @app_commands.command(
-        name="prisoner",
-        description="Iterated Prisoner's Dilemma tournament \u2014 cooperate or betray?",
-    )
     async def prisoner(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

@@ -900,7 +900,6 @@ class RouletteCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, RouletteTable] = {}
 
-    @app_commands.command(name="roulette", description="Open an American roulette table")
     async def roulette(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

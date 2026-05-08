@@ -842,14 +842,6 @@ class BattleshipCog(commands.Cog):
         self.bot = bot
         self.active_games: dict[int, BSGame] = {}
 
-    @app_commands.command(
-        name="battleship",
-        description="Challenge someone to Battleship \u2014 sink the enemy fleet!",
-    )
-    @app_commands.describe(
-        opponent="Who to challenge (leave empty for solo vs bot)",
-        bet="Coin wager (1-500)",
-    )
     async def battleship(
         self,
         interaction: discord.Interaction,

@@ -30,10 +30,6 @@ class FiggieCog(commands.Cog):
     async def cog_unload(self) -> None:
         self._poll_web_results.cancel()
 
-    @app_commands.command(
-        name="figgie",
-        description="Open a Figgie trading game (plays in your browser)",
-    )
     async def figgie(self, interaction: discord.Interaction) -> None:
         uid = str(interaction.user.id)
         channel_id = str(interaction.channel_id)

@@ -932,11 +932,6 @@ class NbaGuessCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, NbaGuessTable] = {}
 
-    @app_commands.command(
-        name="nba",
-        description="NBA Player Guess \u2014 name the player from their career teams!",
-    )
-    @app_commands.describe(rounds="Number of rounds (5-20, default 10)")
     async def nba(self, interaction: discord.Interaction, rounds: int = DEFAULT_ROUNDS) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

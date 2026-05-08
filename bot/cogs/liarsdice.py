@@ -1097,9 +1097,6 @@ class LiarDiceCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, LiarTable] = {}
 
-    @app_commands.command(
-        name="liarsdice", description="Open a Liar's Dice table (multiplayer)",
-    )
     async def liarsdice(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

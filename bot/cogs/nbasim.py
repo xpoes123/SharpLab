@@ -933,9 +933,6 @@ class NbaSimCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, NbaSimTable] = {}
 
-    @app_commands.command(
-        name="nbasim", description="Bet on a simulated NBA game (casino)",
-    )
     async def nbasim(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

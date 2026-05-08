@@ -809,9 +809,6 @@ class MlbSimCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, MlbSimTable] = {}
 
-    @app_commands.command(
-        name="mlbsim", description="Bet on a simulated MLB game (casino)",
-    )
     async def mlbsim(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

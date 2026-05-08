@@ -483,19 +483,6 @@ class RPSCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, RPSGame] = {}
 
-    @app_commands.command(
-        name="rps",
-        description="Rock Paper Scissors \u2014 challenge a player or the bot!",
-    )
-    @app_commands.describe(
-        opponent="Who to challenge (omit to play vs bot)",
-        bet="Coin amount to wager (1-500)",
-        best_of="Best of 3 or 5 (default: 3)",
-    )
-    @app_commands.choices(best_of=[
-        app_commands.Choice(name="Best of 3", value=3),
-        app_commands.Choice(name="Best of 5", value=5),
-    ])
     async def rps(
         self,
         interaction: discord.Interaction,

@@ -1409,10 +1409,6 @@ class ValorantCog(commands.Cog):
         self.active_tables: dict[int, ValTable] = {}
         self.active_solos: dict[int, SoloSession] = {}
 
-    @app_commands.command(
-        name="valorant",
-        description="Guess the Valorant agent, weapon, or map from hints!",
-    )
     async def valorant(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

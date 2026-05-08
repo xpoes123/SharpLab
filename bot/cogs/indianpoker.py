@@ -883,10 +883,6 @@ class IndianPokerCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, IPTable] = {}
 
-    @app_commands.command(
-        name="indian-poker",
-        description="Indian Poker sit-and-go \u2014 see everyone's card but your own!",
-    )
     async def indian_poker(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

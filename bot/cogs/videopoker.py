@@ -671,10 +671,6 @@ class VideoPokerCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, VPTable] = {}
 
-    @app_commands.command(
-        name="videopoker",
-        description="Open a Video Poker (Jacks or Better) table",
-    )
     async def videopoker(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

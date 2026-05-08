@@ -1083,10 +1083,6 @@ class WordleCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, WordleTable] = {}
 
-    @app_commands.command(
-        name="wordle",
-        description="Open a Wordle Race table (multiplayer)",
-    )
     async def wordle(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

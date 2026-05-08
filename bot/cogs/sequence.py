@@ -637,10 +637,6 @@ class SequenceCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, SeqTable] = {}
 
-    @app_commands.command(
-        name="sequence",
-        description="Guess the next number in mathematical sequences!",
-    )
     async def sequence(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

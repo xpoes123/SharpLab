@@ -972,10 +972,6 @@ class QuizBowlCog(commands.Cog):
     async def cog_unload(self) -> None:
         await self._http.aclose()
 
-    @app_commands.command(
-        name="quizbowl",
-        description="Open a Quiz Bowl table (multiplayer bonus rounds)",
-    )
     async def quizbowl(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

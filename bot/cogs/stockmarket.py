@@ -1243,10 +1243,6 @@ class StockMarketCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, StockTable] = {}
 
-    @app_commands.command(
-        name="stockmarket",
-        description="Open a Stock Market table (multiplayer investment game)",
-    )
     async def stockmarket(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

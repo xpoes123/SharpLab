@@ -1051,9 +1051,6 @@ class Math24Cog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, Math24Table] = {}
 
-    @app_commands.command(
-        name="math24", description="Open a Math 24 race table (multiplayer)",
-    )
     async def math24(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

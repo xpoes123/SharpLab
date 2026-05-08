@@ -30,10 +30,6 @@ class SudokuCog(commands.Cog):
     async def cog_unload(self) -> None:
         self._poll_web_results.cancel()
 
-    @app_commands.command(
-        name="sudoku",
-        description="Open a Sudoku Sprint game (plays in your browser)",
-    )
     async def sudoku(self, interaction: discord.Interaction) -> None:
         uid = str(interaction.user.id)
         channel_id = str(interaction.channel_id)

@@ -3217,10 +3217,6 @@ class PokemonCog(commands.Cog):
         self.active_tables: dict[int, PokeTable] = {}
         self.active_solos: dict[int, SoloSession] = {}  # keyed by user_id
 
-    @app_commands.command(
-        name="pokemon",
-        description="Who's That Pokemon? Guess from progressive hints!",
-    )
     async def pokemon(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

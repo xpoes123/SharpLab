@@ -32,10 +32,6 @@ class BingoCog(commands.Cog):
     async def cog_unload(self) -> None:
         self._poll_web_results.cancel()
 
-    @app_commands.command(
-        name="bingo",
-        description="Open a Bingo game (plays in your browser)",
-    )
     async def bingo(self, interaction: discord.Interaction) -> None:
         uid = str(interaction.user.id)
         channel_id = str(interaction.channel_id)

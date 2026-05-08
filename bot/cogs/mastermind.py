@@ -1016,10 +1016,6 @@ class MastermindCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, MastermindTable] = {}
 
-    @app_commands.command(
-        name="mastermind",
-        description="Open a Mastermind code-breaking table (multiplayer)",
-    )
     async def mastermind(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

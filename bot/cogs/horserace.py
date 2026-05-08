@@ -785,9 +785,6 @@ class HorseRaceCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, HorseRaceTable] = {}
 
-    @app_commands.command(
-        name="horserace", description="Open a Horse Race table (multiplayer)",
-    )
     async def horserace(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

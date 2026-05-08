@@ -899,9 +899,6 @@ class TennisSimCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, TennisSimTable] = {}
 
-    @app_commands.command(
-        name="tennissim", description="Bet on a simulated tennis match (casino)",
-    )
     async def tennissim(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

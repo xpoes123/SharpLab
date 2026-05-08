@@ -1263,17 +1263,9 @@ class RosterCog(commands.Cog):
         self.active_tables[channel_id] = table
         table.message = await interaction.original_response()
 
-    @app_commands.command(
-        name="nba-trivia",
-        description="Open an NBA Roster Trivia table (multiplayer)",
-    )
     async def nba_trivia(self, interaction: discord.Interaction) -> None:
         await self._open_table(interaction, NBA_CONFIG)
 
-    @app_commands.command(
-        name="nfl-trivia",
-        description="Open an NFL Roster Trivia table (multiplayer)",
-    )
     async def nfl_trivia(self, interaction: discord.Interaction) -> None:
         await self._open_table(interaction, NFL_CONFIG)
 

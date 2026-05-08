@@ -1462,10 +1462,6 @@ class GeographyCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, GeoTable] = {}
 
-    @app_commands.command(
-        name="geography",
-        description="Open a Speed Geography table (multiplayer)",
-    )
     async def geography(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

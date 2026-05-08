@@ -30,10 +30,6 @@ class BlottoCog(commands.Cog):
     async def cog_unload(self) -> None:
         self._poll_web_results.cancel()
 
-    @app_commands.command(
-        name="blotto",
-        description="Open a Colonel Blotto game (plays in your browser)",
-    )
     async def blotto(self, interaction: discord.Interaction) -> None:
         uid = str(interaction.user.id)
         channel_id = str(interaction.channel_id)

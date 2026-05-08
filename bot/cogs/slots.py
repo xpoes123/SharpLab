@@ -1373,10 +1373,6 @@ class SlotsCog(commands.Cog):
         self.bot = bot
         self.active_sessions: dict[int, SlotsSession] = {}
 
-    @app_commands.command(
-        name="slots",
-        description="Play Fortune Reels \u2014 interactive slots with free spins & bonus rounds!",
-    )
     async def slots(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_sessions:

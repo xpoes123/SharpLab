@@ -786,10 +786,6 @@ class HiLoCog(commands.Cog):
         self.bot = bot
         self.active_tables: dict[int, HiLoTable] = {}
 
-    @app_commands.command(
-        name="hilo",
-        description="Open a Hi-Lo table (guess if the next card is higher or lower)",
-    )
     async def hilo(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:

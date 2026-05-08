@@ -878,9 +878,6 @@ class BaccaratCog(commands.Cog):
             self.shoe = _new_shoe()
         return self.shoe
 
-    @app_commands.command(
-        name="baccarat", description="Open a baccarat table (multiplayer)",
-    )
     async def baccarat(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:
