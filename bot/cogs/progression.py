@@ -324,6 +324,8 @@ class ProgressionCog(commands.Cog):
             all_users = [row[0] for row in await cursor.fetchall()]
 
         for uid in all_users:
+            if not uid.isdigit():
+                continue  # skip web session IDs like 'web_90c4adcbc8f2'
             try:
                 user = await self.bot.fetch_user(int(uid))
                 await queries.upsert_discord_user(
