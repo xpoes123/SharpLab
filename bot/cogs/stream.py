@@ -5,8 +5,19 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot.cogs.odds import game_autocomplete
+from bot.cogs.odds import _fmt_game_time
 from db import queries
+
+
+async def _stream_game_autocomplete(_interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    games = await queries.get_streamable_games(current, sport="nba")
+    return [
+        app_commands.Choice(
+            name=f"{g.away_team} @ {g.home_team} — {_fmt_game_time(g.start_time_utc_iso)}"[:100],
+            value=g.game_id,
+        )
+        for g in games
+    ]
 
 
 class StreamCog(commands.Cog):
@@ -15,7 +26,7 @@ class StreamCog(commands.Cog):
 
     @app_commands.command(name="stream", description="Get a stream link for an NBA game")
     @app_commands.describe(game="Select a game")
-    @app_commands.autocomplete(game=game_autocomplete)
+    @app_commands.autocomplete(game=_stream_game_autocomplete)
     async def stream(self, interaction: discord.Interaction, game: str) -> None:
         target = await queries.get_game_by_id(game)
         if target is None:
