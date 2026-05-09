@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import aiosqlite
 
 log = logging.getLogger(__name__)
@@ -167,6 +167,30 @@ async def get_upcoming_games(filter_str: str = "", sport: str = "nba") -> list[G
             LIMIT 25
             """,
             (sport, now, pattern, pattern),
+        )
+        rows = await cursor.fetchall()
+    return [_row_to_game(row) for row in rows]
+
+
+async def get_streamable_games(filter_str: str = "", sport: str = "nba") -> list[Game]:
+    """Upcoming games plus those that tipped off within the last 6 hours.
+
+    Used by /stream so post-game wrap-ups stay selectable after the game ends.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+    pattern = f"%{filter_str}%"
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM games
+            WHERE sport = ?
+              AND start_time >= ?
+              AND (home_team LIKE ? OR away_team LIKE ?)
+            ORDER BY start_time ASC
+            LIMIT 25
+            """,
+            (sport, cutoff, pattern, pattern),
         )
         rows = await cursor.fetchall()
     return [_row_to_game(row) for row in rows]
