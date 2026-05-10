@@ -25,6 +25,7 @@ _THREAD_BLOCKED_COMMANDS: set[str] = {
     "sudoku", "tictactoe", "rps", "figgie", "mathsprint", "pokemon",
     "quizbowl", "valorant", "solitaire-chess", "nba", "minesweeper",
     "sequence", "prisoner", "indian-poker", "battleship",
+    "cluemaster", "imposter",
     "nbasim", "nflsim", "mlbsim", "tennissim", "soccersim",
     "penalties", "liarsdice",
     "soccersim-tournament",
@@ -116,6 +117,8 @@ COGS = [
     "bot.cogs.indianpoker",
     "bot.cogs.battleship",
     "bot.cogs.blotto",
+    "bot.cogs.cluemaster",
+    "bot.cogs.imposter",
     "bot.cogs.stream",
     "bot.cogs.game_menu",
 ]

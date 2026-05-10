@@ -53,6 +53,8 @@ GAME_DISPATCH: dict[str, tuple[str, str]] = {
     "sequence": ("SequenceCog", "sequence"),
     "battleship": ("BattleshipCog", "battleship"),
     "blotto": ("BlottoCog", "blotto"),
+    "cluemaster": ("CluemasterCog", "cluemaster"),
+    "imposter": ("ImposterCog", "imposter"),
     "rps": ("RPSCog", "rps"),
     "nbasim": ("NbaSimCog", "nbasim"),
     "nflsim": ("NflSimCog", "nflsim"),
