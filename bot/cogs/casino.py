@@ -1748,7 +1748,7 @@ class CasinoCog(commands.Cog):
         name, desc = random.choice(pool)
         prefix = f"**[{label}]** " if label else ""
         await interaction.response.send_message(
-            f"{prefix}You should play **/{name}** \u2014 {desc}"
+            f"{prefix}You should play **{_game_invocation(name)}** \u2014 {desc}"
         )
 
     @app_commands.command(name="casino-stats", description="View casino PnL stats")
@@ -1958,7 +1958,7 @@ class _ExplainCategorySelect(ui.Select):
             description=rules,
             colour=0xF1C40F,
         )
-        embed.set_footer(text=f"Start playing with /{key}")
+        embed.set_footer(text=f"Start playing with {_game_invocation(key)}")
         await interaction.response.edit_message(embed=embed, view=self.view)
 
 
@@ -2415,6 +2415,18 @@ CASINO_GAMES: list[tuple[str, str, str, str]] = [
 # ── Paginated /games ─────────────────────────────────────────────────────────
 
 
+# Games that need extra params (opponent, bet) \u2014 direct slash commands, not in /game.
+# Must stay in sync with PARAMETERIZED_SHORTCUTS in bot/cogs/game_menu.py.
+_DIRECT_SLASH_GAMES = {"penalties", "tictactoe"}
+
+
+def _game_invocation(name: str) -> str:
+    """How a user should launch this game from chat."""
+    if name in _DIRECT_SLASH_GAMES:
+        return f"/{name}"
+    return f"/game {name}"
+
+
 def _games_page_embed(page: int, total_pages: int) -> discord.Embed:
     cat_name, cat_emoji = GAME_CATEGORIES[page - 1]
     games = [(n, d, m) for n, d, cat, m in CASINO_GAMES if cat == cat_name]
@@ -2426,13 +2438,14 @@ def _games_page_embed(page: int, total_pages: int) -> discord.Embed:
     lines = []
     for name, desc, mode in games:
         tag = MODE_EMOJI.get(mode, "")
-        lines.append(f"{tag} ` /{name} ` \u2014 {desc}")
+        lines.append(f"{tag} ` {_game_invocation(name)} ` \u2014 {desc}")
     embed.description = "\n".join(lines)
     embed.set_footer(
         text=(
             f"Page {page}/{total_pages} \u00b7 "
             f"{len(CASINO_GAMES)} games \u00b7 "
-            f"\U0001f464 Solo  \u2694\ufe0f Duo  \U0001f389 Party"
+            f"\U0001f464 Solo  \u2694\ufe0f Duo  \U0001f389 Party  \u00b7 "
+            f"Most games launch via /game"
         ),
     )
     return embed
