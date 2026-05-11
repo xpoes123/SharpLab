@@ -11,6 +11,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot.services.error_forward import forward_to_sentinel
 from db import queries
 
 log = logging.getLogger(__name__)
@@ -275,6 +276,21 @@ class ErrorHandlerCog(commands.Cog):
             await self._mirror_to_thread(result, error, command_name, severity)
         except Exception:
             log.exception("Failed to mirror error to thread")
+
+        # Forward NEW and REOPENED errors to Sentinel so it can auto-triage.
+        # Skip 'deduped' — local dedup is enough; no need to re-notify Sentinel
+        # about an error it has already seen.
+        if result["action"] in ("created", "reopened"):
+            try:
+                await forward_to_sentinel(
+                    error_id=result["error_id"],
+                    exception_type=type(error).__qualname__,
+                    message=str(error)[:1000],
+                    traceback_text=tb,
+                    context=f"command=/{command_name}" if command_name else None,
+                )
+            except Exception:
+                log.exception("Failed to forward error to Sentinel")
 
         return result
 
