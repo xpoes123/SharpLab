@@ -105,6 +105,26 @@ def test_cluemaster_replaceable_when_closed() -> None:
     assert replaceable
 
 
+def test_games_listing_shows_correct_invocation() -> None:
+    """Most games launch via /game; only parameterized ones show a direct slash."""
+    from bot.cogs.casino import _game_invocation, _DIRECT_SLASH_GAMES, CASINO_GAMES
+    from bot.cogs.game_menu import PARAMETERIZED_SHORTCUTS
+
+    # Keep the two sets in sync — they live in different cogs to avoid a circular import
+    assert _DIRECT_SLASH_GAMES == PARAMETERIZED_SHORTCUTS
+
+    for name, *_ in CASINO_GAMES:
+        inv = _game_invocation(name)
+        if name in _DIRECT_SLASH_GAMES:
+            assert inv == f"/{name}", f"{name}: expected direct slash, got {inv}"
+        else:
+            assert inv == f"/game {name}", f"{name}: expected /game launcher, got {inv}"
+
+    assert _game_invocation("cluemaster") == "/game cluemaster"
+    assert _game_invocation("imposter") == "/game imposter"
+    assert _game_invocation("penalties") == "/penalties"
+
+
 def test_cluemaster_force_close_cancels_task() -> None:
     from bot.cogs.cluemaster import CMTable, CluemasterCog
 
