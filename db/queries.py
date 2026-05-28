@@ -2625,25 +2625,38 @@ async def update_error_ticket_id(error_id: int, ticket_id: str) -> None:
 # where avg_cost = cost_basis / net_shares immediately before the sell.
 
 
-def _aggregate_trades(trades: list[dict]) -> dict | None:
-    """Reduce a chronologically-ordered list of trades for one ticker into a
-    holding. Returns None if net shares end at (or below) zero."""
+def _aggregate_trades(trades: list[dict]) -> dict:
+    """Reduce a chronologically-ordered list of trades for one ticker.
+
+    Returns a dict with: shares, dca_price, cost_basis, realized_pnl, closed.
+    Realized P/L accumulates on every sell as (sell_price - avg_cost_at_sale)
+    * sold_shares. Closed positions (shares <= 0 after sells) still return
+    their realized_pnl — callers that only want open positions should filter
+    on the `closed` flag.
+    """
     shares = 0.0
     cost_basis = 0.0
+    realized_pnl = 0.0
     for t in trades:
         if t["side"] == "buy":
             shares += t["shares"]
             cost_basis += t["shares"] * t["price"]
         else:  # sell
             if shares <= 0:
-                continue  # ignore phantom sells; should be blocked at write time
+                continue  # phantom sells should be blocked at write time
             avg_cost = cost_basis / shares
             sold = min(t["shares"], shares)
+            realized_pnl += sold * (t["price"] - avg_cost)
             shares -= sold
             cost_basis -= sold * avg_cost
-    if shares <= 1e-9:
-        return None
-    return {"shares": shares, "dca_price": cost_basis / shares, "cost_basis": cost_basis}
+    closed = shares <= 1e-9
+    return {
+        "shares": 0.0 if closed else shares,
+        "dca_price": 0.0 if closed else cost_basis / shares,
+        "cost_basis": 0.0 if closed else cost_basis,
+        "realized_pnl": realized_pnl,
+        "closed": closed,
+    }
 
 
 async def add_stock_trade(
@@ -2714,18 +2727,9 @@ async def delete_stock_trades_for_ticker(discord_user: str, ticker: str) -> int:
 
 
 async def get_stock_holdings(discord_user: str) -> list[dict]:
-    """Derived holdings across all tickers the user has traded. Tickers whose
-    net position closed out (shares == 0) are omitted."""
-    trades = await get_stock_trades(discord_user)
-    by_ticker: dict[str, list[dict]] = {}
-    for t in trades:
-        by_ticker.setdefault(t["ticker"], []).append(t)
-    out: list[dict] = []
-    for ticker in sorted(by_ticker):
-        agg = _aggregate_trades(by_ticker[ticker])
-        if agg:
-            out.append({"ticker": ticker, **agg})
-    return out
+    """Open positions across all tickers the user has traded. Closed positions
+    (net shares == 0) are omitted; use get_stock_positions_full for those."""
+    return [p for p in await get_stock_positions_full(discord_user) if not p["closed"]]
 
 
 async def get_stock_holding(discord_user: str, ticker: str) -> dict | None:
@@ -2733,6 +2737,30 @@ async def get_stock_holding(discord_user: str, ticker: str) -> dict | None:
     if not trades:
         return None
     agg = _aggregate_trades(trades)
-    if not agg:
+    if agg["closed"]:
         return None
     return {"ticker": ticker.upper(), **agg}
+
+
+async def get_stock_positions_full(discord_user: str) -> list[dict]:
+    """All tickers the user has touched, open OR closed. Each row carries
+    realized_pnl; closed rows have shares=0 but still report their realized P/L."""
+    trades = await get_stock_trades(discord_user)
+    by_ticker: dict[str, list[dict]] = {}
+    for t in trades:
+        by_ticker.setdefault(t["ticker"], []).append(t)
+    return [
+        {"ticker": ticker, **_aggregate_trades(by_ticker[ticker])}
+        for ticker in sorted(by_ticker)
+    ]
+
+
+async def get_users_with_trades() -> list[str]:
+    """All discord_user IDs that have at least one stock trade recorded.
+    Used by the /stock leaderboard."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT DISTINCT discord_user FROM stock_trades ORDER BY discord_user"
+        )
+        rows = await cur.fetchall()
+        return [r[0] for r in rows]
