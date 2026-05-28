@@ -65,7 +65,10 @@ def _parse_executed_at(value: str | None) -> str | None:
 async def fetch_quote(ticker: str) -> dict:
     """Fetch latest price + previous close for a single ticker via yfinance.
 
-    Returns {price, prev_close, currency, name}. Raises on missing data.
+    Returns {price, prev_close, currency, name, extended}. `extended` is None
+    or a dict with {session: 'post'|'pre', price, change, pct} when the market
+    is currently outside regular hours and Yahoo has an extended-hours print.
+    Raises on missing data.
     """
     import yfinance as yf
 
@@ -85,18 +88,56 @@ async def fetch_quote(ticker: str) -> dict:
             prev = float(hist["Close"].iloc[0]) if len(hist) >= 2 else price
 
         name = ticker
+        extended: dict | None = None
+        # tk.info is slow and occasionally flaky, but it's the only path that
+        # exposes regular-session vs extended-hours prices explicitly. We've
+        # already been paying for it to get longName, so reuse the same call.
         try:
-            long_name = tk.info.get("longName") or tk.info.get("shortName")
+            full = tk.info
+            long_name = full.get("longName") or full.get("shortName")
             if long_name:
                 name = long_name
-        except Exception:
-            pass
+            # Prefer explicit regular-session values when present; fast_info's
+            # `last_price` will be the AH/pre print during extended hours,
+            # which would make "Today" compare two different sessions.
+            rmp = full.get("regularMarketPrice")
+            if rmp is not None:
+                price = float(rmp)
+            rpc = full.get("regularMarketPreviousClose") or full.get("previousClose")
+            if rpc is not None:
+                prev = float(rpc)
+            market_state = full.get("marketState")
+            pre_price = full.get("preMarketPrice")
+            post_price = full.get("postMarketPrice")
+            ext_price = None
+            session = None
+            # Pre-market takes priority when actively in pre-market hours.
+            # Otherwise the post-market print is the most recent extended-hours
+            # info (during AH itself or in the overnight gap when Yahoo's
+            # marketState is PREPRE but the pre session hasn't started yet).
+            if market_state in ("PRE", "PREPRE") and pre_price is not None:
+                ext_price, session = float(pre_price), "pre"
+            elif market_state != "REGULAR" and post_price is not None:
+                ext_price, session = float(post_price), "post"
+            if ext_price is not None and price:
+                ext_price = float(ext_price)
+                change = ext_price - price
+                pct = (change / price * 100) if price else 0.0
+                extended = {
+                    "session": session,
+                    "price": ext_price,
+                    "change": change,
+                    "pct": pct,
+                }
+        except Exception as e:
+            log.debug(f"fetch_quote: info read failed for {ticker}: {e}")
 
         return {
             "price": float(price),
             "prev_close": float(prev),
             "currency": currency,
             "name": name,
+            "extended": extended,
         }
 
     return await asyncio.get_running_loop().run_in_executor(None, _fetch)
@@ -250,6 +291,18 @@ class StockCog(commands.Cog):
         embed = discord.Embed(title=f"{quote['name']} ({symbol})", url=url, color=color)
         embed.add_field(name="Price", value=f"`{_fmt_money(price, quote['currency'])}`", inline=True)
         embed.add_field(name="Today", value=f"`{_fmt_change(change, pct)}`", inline=True)
+
+        ext = quote.get("extended")
+        if ext:
+            label = "After Hours" if ext["session"] == "post" else "Pre-Market"
+            embed.add_field(
+                name=label,
+                value=(
+                    f"`{_fmt_money(ext['price'], quote['currency'])}` · "
+                    f"`{_fmt_change(ext['change'], ext['pct'])}`"
+                ),
+                inline=True,
+            )
 
         holding = await queries.get_stock_holding(str(interaction.user.id), symbol)
         if holding:
