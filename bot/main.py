@@ -82,7 +82,6 @@ COGS = [
     "bot.cogs.stockmarket",
     "bot.cogs.stockguess",
     "bot.cogs.stock",
-    "bot.cogs.movers",
     "bot.cogs.math24",
     "bot.cogs.countdown",
     "bot.cogs.mastermind",

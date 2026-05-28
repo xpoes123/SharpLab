@@ -1,11 +1,7 @@
-"""/movers — top S&P 100 gainers and losers today."""
+"""Shared S&P 100 movers helpers — imported by /stock movers."""
 import asyncio
 import logging
 from dataclasses import dataclass
-
-import discord
-from discord import app_commands
-from discord.ext import commands
 
 log = logging.getLogger(__name__)
 
@@ -88,58 +84,45 @@ def _fmt_row(m: Mover) -> str:
     return f"[`{m.ticker:<5}`]({_yahoo_url(m.ticker)}) `{m.price:>8,.2f}` `{sign}{m.pct:>5.2f}%`"
 
 
-class MoversCog(commands.Cog):
-    def __init__(self, bot: commands.Bot) -> None:
-        self.bot = bot
+async def build_movers_embed():
+    """Render the SP100 movers embed. Returns (discord.Embed, status) where
+    status is 'ok', 'empty' (no data), or 'error' (fetch failed)."""
+    import discord
 
-    @app_commands.command(name="movers", description="Top S&P 100 gainers and losers today")
-    async def movers(self, interaction: discord.Interaction) -> None:
-        await interaction.response.defer()
+    try:
+        movers = await fetch_movers(SP100)
+    except Exception as e:
+        log.warning(f"build_movers_embed: fetch failed: {e}")
+        return None, "error"
+    if not movers:
+        return None, "empty"
 
-        try:
-            movers = await fetch_movers(SP100)
-        except Exception as e:
-            log.warning(f"/movers fetch failed: {e}")
-            await interaction.followup.send("Couldn't pull market data right now.", ephemeral=True)
-            return
+    movers.sort(key=lambda m: m.pct, reverse=True)
+    gainers = movers[:5]
+    losers = list(reversed(movers[-5:]))
 
-        if not movers:
-            await interaction.followup.send(
-                "No price data available — markets may not have opened yet.",
-                ephemeral=True,
-            )
-            return
+    avg = sum(m.pct for m in movers) / len(movers)
+    breadth_up = sum(1 for m in movers if m.pct > 0)
+    breadth_down = len(movers) - breadth_up
 
-        movers.sort(key=lambda m: m.pct, reverse=True)
-        gainers = movers[:5]
-        losers = list(reversed(movers[-5:]))  # biggest loser first
-
-        avg = sum(m.pct for m in movers) / len(movers)
-        breadth_up = sum(1 for m in movers if m.pct > 0)
-        breadth_down = len(movers) - breadth_up
-
-        color = 0x57F287 if avg >= 0 else 0xED4245
-        embed = discord.Embed(
-            title="Today's Movers — S&P 100",
-            description=(
-                f"Avg move `{'+' if avg >= 0 else ''}{avg:.2f}%` · "
-                f"🟢 {breadth_up} up · 🔴 {breadth_down} down"
-            ),
-            color=color,
-        )
-        embed.add_field(
-            name="🟢 Top Gainers",
-            value="\n".join(_fmt_row(m) for m in gainers) or "—",
-            inline=True,
-        )
-        embed.add_field(
-            name="🔴 Top Losers",
-            value="\n".join(_fmt_row(m) for m in losers) or "—",
-            inline=True,
-        )
-        embed.set_footer(text=f"{len(movers)} of {len(SP100)} tickers priced")
-        await interaction.followup.send(embed=embed)
-
-
-async def setup(bot: commands.Bot) -> None:
-    await bot.add_cog(MoversCog(bot))
+    color = 0x57F287 if avg >= 0 else 0xED4245
+    embed = discord.Embed(
+        title="Today's Movers — S&P 100",
+        description=(
+            f"Avg move `{'+' if avg >= 0 else ''}{avg:.2f}%` · "
+            f"🟢 {breadth_up} up · 🔴 {breadth_down} down"
+        ),
+        color=color,
+    )
+    embed.add_field(
+        name="🟢 Top Gainers",
+        value="\n".join(_fmt_row(m) for m in gainers) or "—",
+        inline=True,
+    )
+    embed.add_field(
+        name="🔴 Top Losers",
+        value="\n".join(_fmt_row(m) for m in losers) or "—",
+        inline=True,
+    )
+    embed.set_footer(text=f"{len(movers)} of {len(SP100)} tickers priced")
+    return embed, "ok"
