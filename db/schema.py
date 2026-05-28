@@ -294,6 +294,19 @@ CREATE TABLE IF NOT EXISTS stock_holdings (
     updated_at   TEXT NOT NULL,
     PRIMARY KEY (discord_user, ticker)
 );
+
+CREATE TABLE IF NOT EXISTS stock_trades (
+    trade_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    discord_user TEXT NOT NULL,
+    ticker       TEXT NOT NULL,
+    side         TEXT NOT NULL CHECK(side IN ('buy', 'sell')),
+    shares       REAL NOT NULL CHECK(shares > 0),
+    price        REAL NOT NULL CHECK(price > 0),
+    executed_at  TEXT NOT NULL,
+    notes        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_stock_trades_user_ticker
+    ON stock_trades(discord_user, ticker, executed_at);
 """
 
 
@@ -384,6 +397,42 @@ async def init_db() -> None:
                 "(discord_user TEXT NOT NULL, ticker TEXT NOT NULL, "
                 "shares REAL NOT NULL, dca_price REAL NOT NULL, "
                 "updated_at TEXT NOT NULL, PRIMARY KEY (discord_user, ticker))"
+            )
+            await db.commit()
+        except Exception:
+            pass
+        # Migration: add stock_trades log table
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS stock_trades ("
+                "trade_id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "discord_user TEXT NOT NULL, ticker TEXT NOT NULL, "
+                "side TEXT NOT NULL CHECK(side IN ('buy', 'sell')), "
+                "shares REAL NOT NULL CHECK(shares > 0), "
+                "price REAL NOT NULL CHECK(price > 0), "
+                "executed_at TEXT NOT NULL, notes TEXT)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_stock_trades_user_ticker "
+                "ON stock_trades(discord_user, ticker, executed_at)"
+            )
+            await db.commit()
+        except Exception:
+            pass
+        # Migration: backfill stock_trades from existing stock_holdings as synthetic
+        # buy trades. Only runs for rows that don't already have any trades — idempotent
+        # and safe to re-run.
+        try:
+            await db.execute(
+                "INSERT INTO stock_trades "
+                "(discord_user, ticker, side, shares, price, executed_at, notes) "
+                "SELECT h.discord_user, h.ticker, 'buy', h.shares, h.dca_price, "
+                "       h.updated_at, 'migrated from DCA entry' "
+                "FROM stock_holdings h "
+                "WHERE NOT EXISTS ("
+                "    SELECT 1 FROM stock_trades t "
+                "    WHERE t.discord_user = h.discord_user AND t.ticker = h.ticker"
+                ")"
             )
             await db.commit()
         except Exception:
