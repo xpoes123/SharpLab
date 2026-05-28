@@ -2617,62 +2617,122 @@ async def update_error_ticket_id(error_id: int, ticket_id: str) -> None:
         await db.commit()
 
 
-# ── Stock holdings ──────────────────────────────────────────────────────────
+# ── Stock trades + derived holdings ─────────────────────────────────────────
+# stock_trades is the source of truth. Holdings (shares + DCA) are aggregated
+# from the trade log using average-cost-basis accounting:
+#   buy:  cost_basis += shares*price;        net_shares += shares
+#   sell: cost_basis -= shares*avg_cost;     net_shares -= shares
+# where avg_cost = cost_basis / net_shares immediately before the sell.
 
 
-async def upsert_stock_holding(
-    discord_user: str, ticker: str, shares: float, dca_price: float
-) -> None:
-    now = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            """
-            INSERT INTO stock_holdings (discord_user, ticker, shares, dca_price, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(discord_user, ticker) DO UPDATE SET
-                shares     = excluded.shares,
-                dca_price  = excluded.dca_price,
-                updated_at = excluded.updated_at
-            """,
-            (discord_user, ticker.upper(), shares, dca_price, now),
-        )
-        await db.commit()
+def _aggregate_trades(trades: list[dict]) -> dict | None:
+    """Reduce a chronologically-ordered list of trades for one ticker into a
+    holding. Returns None if net shares end at (or below) zero."""
+    shares = 0.0
+    cost_basis = 0.0
+    for t in trades:
+        if t["side"] == "buy":
+            shares += t["shares"]
+            cost_basis += t["shares"] * t["price"]
+        else:  # sell
+            if shares <= 0:
+                continue  # ignore phantom sells; should be blocked at write time
+            avg_cost = cost_basis / shares
+            sold = min(t["shares"], shares)
+            shares -= sold
+            cost_basis -= sold * avg_cost
+    if shares <= 1e-9:
+        return None
+    return {"shares": shares, "dca_price": cost_basis / shares, "cost_basis": cost_basis}
 
 
-async def remove_stock_holding(discord_user: str, ticker: str) -> bool:
+async def add_stock_trade(
+    discord_user: str,
+    ticker: str,
+    side: str,
+    shares: float,
+    price: float,
+    executed_at: str | None = None,
+    notes: str | None = None,
+) -> int:
+    if side not in ("buy", "sell"):
+        raise ValueError(f"side must be 'buy' or 'sell', got {side!r}")
+    if shares <= 0 or price <= 0:
+        raise ValueError("shares and price must be > 0")
+    ts = executed_at or datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "DELETE FROM stock_holdings WHERE discord_user = ? AND ticker = ?",
-            (discord_user, ticker.upper()),
+            "INSERT INTO stock_trades "
+            "(discord_user, ticker, side, shares, price, executed_at, notes) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (discord_user, ticker.upper(), side, shares, price, ts, notes),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def get_stock_trades(
+    discord_user: str, ticker: str | None = None, limit: int | None = None
+) -> list[dict]:
+    sql = (
+        "SELECT trade_id, ticker, side, shares, price, executed_at, notes "
+        "FROM stock_trades WHERE discord_user = ?"
+    )
+    params: list = [discord_user]
+    if ticker:
+        sql += " AND ticker = ?"
+        params.append(ticker.upper())
+    sql += " ORDER BY executed_at ASC, trade_id ASC"
+    if limit:
+        sql += " LIMIT ?"
+        params.append(limit)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(sql, params)
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def delete_stock_trade(discord_user: str, trade_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "DELETE FROM stock_trades WHERE discord_user = ? AND trade_id = ?",
+            (discord_user, trade_id),
         )
         await db.commit()
         return cur.rowcount > 0
 
 
-async def get_stock_holdings(discord_user: str) -> list[dict]:
+async def delete_stock_trades_for_ticker(discord_user: str, ticker: str) -> int:
     async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT ticker, shares, dca_price FROM stock_holdings "
-            "WHERE discord_user = ? ORDER BY ticker",
-            (discord_user,),
+            "DELETE FROM stock_trades WHERE discord_user = ? AND ticker = ?",
+            (discord_user, ticker.upper()),
         )
-        rows = await cur.fetchall()
-        return [
-            {"ticker": r["ticker"], "shares": r["shares"], "dca_price": r["dca_price"]}
-            for r in rows
-        ]
+        await db.commit()
+        return cur.rowcount
+
+
+async def get_stock_holdings(discord_user: str) -> list[dict]:
+    """Derived holdings across all tickers the user has traded. Tickers whose
+    net position closed out (shares == 0) are omitted."""
+    trades = await get_stock_trades(discord_user)
+    by_ticker: dict[str, list[dict]] = {}
+    for t in trades:
+        by_ticker.setdefault(t["ticker"], []).append(t)
+    out: list[dict] = []
+    for ticker in sorted(by_ticker):
+        agg = _aggregate_trades(by_ticker[ticker])
+        if agg:
+            out.append({"ticker": ticker, **agg})
+    return out
 
 
 async def get_stock_holding(discord_user: str, ticker: str) -> dict | None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            "SELECT ticker, shares, dca_price FROM stock_holdings "
-            "WHERE discord_user = ? AND ticker = ?",
-            (discord_user, ticker.upper()),
-        )
-        row = await cur.fetchone()
-        if not row:
-            return None
-        return {"ticker": row["ticker"], "shares": row["shares"], "dca_price": row["dca_price"]}
+    trades = await get_stock_trades(discord_user, ticker)
+    if not trades:
+        return None
+    agg = _aggregate_trades(trades)
+    if not agg:
+        return None
+    return {"ticker": ticker.upper(), **agg}
