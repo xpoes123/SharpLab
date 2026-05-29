@@ -4,6 +4,7 @@ All commands live under a single /stock group:
 
 - /stock lookup <ticker>            — quote a single ticker (+ your position if any).
 - /stock profile [user]             — show your portfolio, or a tagged user's.
+- /stock cash <amount> [action]     — set/deposit/withdraw uninvested cash.
 - /stock buy <ticker> <sh> <px>     — record a buy.
 - /stock sell <ticker> <sh> <px>    — record a sell (realized P/L computed).
 - /stock trades [ticker] [user]     — show recent trade history.
@@ -183,7 +184,8 @@ async def _build_profile_embed(target: discord.abc.User) -> discord.Embed | None
     positions and cumulative realized P/L from past sells (including
     fully-closed positions)."""
     positions = await queries.get_stock_positions_full(str(target.id))
-    if not positions:
+    cash = await queries.get_stock_cash(str(target.id))
+    if not positions and cash <= 0:
         return None
 
     open_positions = [p for p in positions if not p["closed"]]
@@ -238,7 +240,10 @@ async def _build_profile_embed(target: discord.abc.User) -> discord.Embed | None
         description=description,
         color=color,
     )
+    account_value = total_value + cash
     embed.add_field(name="Market Value", value=f"`{_fmt_money(total_value)}`", inline=True)
+    embed.add_field(name="Cash", value=f"`{_fmt_money(cash)}`", inline=True)
+    embed.add_field(name="Account Value", value=f"`{_fmt_money(account_value)}`", inline=True)
     embed.add_field(name="Cost Basis", value=f"`{_fmt_money(total_cost)}`", inline=True)
     embed.add_field(
         name="Unrealized P/L",
@@ -343,6 +348,52 @@ class StockCog(commands.Cog):
             await interaction.followup.send(msg, ephemeral=True)
             return
         await interaction.followup.send(embed=embed)
+
+    # ── /stock cash ──────────────────────────────────────────────────────────
+
+    @stock.command(name="cash", description="Set, deposit, or withdraw your portfolio cash")
+    @app_commands.describe(
+        amount="Dollar amount",
+        action="set (replace), deposit (add), or withdraw (subtract). Defaults to set.",
+    )
+    @app_commands.choices(
+        action=[
+            app_commands.Choice(name="set", value="set"),
+            app_commands.Choice(name="deposit", value="deposit"),
+            app_commands.Choice(name="withdraw", value="withdraw"),
+        ]
+    )
+    async def cash(
+        self,
+        interaction: discord.Interaction,
+        amount: float,
+        action: app_commands.Choice[str] | None = None,
+    ) -> None:
+        mode = action.value if action else "set"
+        if amount < 0:
+            await interaction.response.send_message("Amount can't be negative.", ephemeral=True)
+            return
+        if mode in ("deposit", "withdraw") and amount == 0:
+            await interaction.response.send_message(
+                f"Nothing to {mode} — amount is 0.", ephemeral=True
+            )
+            return
+
+        uid = str(interaction.user.id)
+        if mode == "set":
+            new_balance = await queries.set_stock_cash(uid, amount)
+            verb = "Set cash to"
+            delta_line = ""
+        else:
+            delta = amount if mode == "deposit" else -amount
+            new_balance = await queries.adjust_stock_cash(uid, delta)
+            verb = "Deposited" if mode == "deposit" else "Withdrew"
+            delta_line = f"{verb} `{_fmt_money(amount)}` · "
+
+        await interaction.response.send_message(
+            f"{delta_line}cash balance: **{_fmt_money(new_balance)}**.",
+            ephemeral=True,
+        )
 
     # ── /stock buy ───────────────────────────────────────────────────────────
 
