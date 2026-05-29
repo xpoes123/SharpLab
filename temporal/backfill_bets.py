@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from db import queries
 from shared.models import Bet, Game
@@ -80,13 +80,22 @@ async def backfill_resolution(apply: bool) -> tuple[int, int]:
         return games[gid]
 
     async def scores_for(sport: str, date: str) -> list:
-        key = f"{sport}:{date}"
-        if key not in score_cache:
-            if sport == "nba":
-                score_cache[key] = await _fetch_nba_scores([date])
-            else:
-                score_cache[key] = await _fetch_espn_scores([date], sport)
-        return score_cache[key]
+        # Fetch the day plus its neighbours: a game's UTC start date can differ
+        # from the score provider's local (ET) game date by one day.
+        d = datetime.fromisoformat(date)
+        dates = [
+            (d + timedelta(days=delta)).date().isoformat() for delta in (-1, 0, 1)
+        ]
+        out: list = []
+        for dd in dates:
+            key = f"{sport}:{dd}"
+            if key not in score_cache:
+                if sport == "nba":
+                    score_cache[key] = await _fetch_nba_scores([dd])
+                else:
+                    score_cache[key] = await _fetch_espn_scores([dd], sport)
+            out.extend(score_cache[key])
+        return out
 
     resolved = 0
     unresolved = 0
