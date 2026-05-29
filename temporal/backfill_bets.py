@@ -126,7 +126,12 @@ async def backfill_resolution(apply: bool) -> tuple[int, int]:
         if scores is None:
             # Game never got a final score — look it up by date + team suffix.
             date = _date_of(game.start_time_utc_iso)
-            results = await scores_for(game.sport, date)
+            try:
+                results = await scores_for(game.sport, date)
+            except Exception as e:
+                print(f"  bet {bet.bet_id}: score lookup failed ({e!r}) — still open")
+                unresolved += 1
+                continue
             home_l, away_l = game.home_team.lower(), game.away_team.lower()
             match = next(
                 (r for r in results if r.home_last in home_l and r.away_last in away_l),
