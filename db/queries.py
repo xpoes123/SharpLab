@@ -2815,3 +2815,159 @@ async def adjust_stock_cash(discord_user: str, delta: float) -> float:
         )
         row = await cur.fetchone()
         return float(row[0]) if row else 0.0
+
+
+# ── Option trades + derived positions ───────────────────────────────────────
+# option_trades is the source of truth. Positions are keyed by the full
+# contract spec (underlying, opt_type, strike, expiry) and aggregated with
+# SIGNED average-cost accounting so a single helper handles both long and
+# short (written) positions:
+#   net > 0  -> net long   (you're holding contracts you bought)
+#   net < 0  -> net short  (you wrote/sold contracts to open)
+# Premiums are per-share; every dollar figure is scaled by OPTION_MULTIPLIER
+# because one contract controls 100 shares.
+
+OPTION_MULTIPLIER = 100
+
+
+def _aggregate_option_trades(trades: list[dict]) -> dict:
+    """Reduce chronologically-ordered trades for ONE contract spec.
+
+    Returns {net_contracts, avg_premium, realized_pnl, closed}. `avg_premium`
+    is the average open premium of the current position (always > 0 while open).
+    Realized P/L accrues on any trade that reduces the position — including a
+    flip (e.g. long 2, sell 5 -> close 2 long then open 3 short):
+        sign(net) * (close_premium - avg_premium) * closed_qty * 100
+    which is (premium - avg) for closing a long and (avg - premium) for a short.
+    """
+    net = 0          # signed contracts
+    avg = 0.0        # avg open premium of the current position
+    realized = 0.0
+    for t in trades:
+        qty = int(t["contracts"])
+        px = float(t["premium"])
+        d = qty if t["side"] == "buy" else -qty
+        if net == 0:
+            net, avg = d, px
+            continue
+        if (net > 0) == (d > 0):
+            # Same side: blend into the running average open premium.
+            total = abs(net) + qty
+            avg = (avg * abs(net) + px * qty) / total
+            net += d
+            continue
+        # Opposing side: close up to |net|, then flip any remainder.
+        close_qty = min(qty, abs(net))
+        realized += (1 if net > 0 else -1) * (px - avg) * close_qty * OPTION_MULTIPLIER
+        net += d
+        remaining = qty - close_qty
+        if remaining > 0:
+            avg = px           # flipped: new lot opens at this premium
+        elif net == 0:
+            avg = 0.0
+    closed = net == 0
+    return {
+        "net_contracts": 0 if closed else net,
+        "avg_premium": 0.0 if closed else avg,
+        "realized_pnl": realized,
+        "closed": closed,
+    }
+
+
+async def add_option_trade(
+    discord_user: str,
+    underlying: str,
+    opt_type: str,
+    strike: float,
+    expiry: str,
+    side: str,
+    contracts: int,
+    premium: float,
+    executed_at: str | None = None,
+    notes: str | None = None,
+) -> int:
+    if opt_type not in ("call", "put"):
+        raise ValueError(f"opt_type must be 'call' or 'put', got {opt_type!r}")
+    if side not in ("buy", "sell"):
+        raise ValueError(f"side must be 'buy' or 'sell', got {side!r}")
+    if contracts <= 0 or premium <= 0 or strike <= 0:
+        raise ValueError("contracts, premium, and strike must be > 0")
+    ts = executed_at or datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO option_trades "
+            "(discord_user, underlying, opt_type, strike, expiry, side, "
+            "contracts, premium, executed_at, notes) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (discord_user, underlying.upper(), opt_type, strike, expiry, side,
+             contracts, premium, ts, notes),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def get_option_trades(
+    discord_user: str, underlying: str | None = None, limit: int | None = None
+) -> list[dict]:
+    sql = (
+        "SELECT trade_id, underlying, opt_type, strike, expiry, side, "
+        "contracts, premium, executed_at, notes "
+        "FROM option_trades WHERE discord_user = ?"
+    )
+    params: list = [discord_user]
+    if underlying:
+        sql += " AND underlying = ?"
+        params.append(underlying.upper())
+    sql += " ORDER BY executed_at ASC, trade_id ASC"
+    if limit:
+        sql += " LIMIT ?"
+        params.append(limit)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(sql, params)
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def delete_option_trade(discord_user: str, trade_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "DELETE FROM option_trades WHERE discord_user = ? AND trade_id = ?",
+            (discord_user, trade_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def get_option_positions_full(discord_user: str) -> list[dict]:
+    """All option contracts the user has touched, open OR closed. Each row
+    carries the contract spec plus net_contracts / avg_premium / realized_pnl /
+    closed. Closed rows keep their realized P/L for the lifetime total."""
+    trades = await get_option_trades(discord_user)
+    by_spec: dict[tuple, list[dict]] = {}
+    for t in trades:
+        key = (t["underlying"], t["opt_type"], t["strike"], t["expiry"])
+        by_spec.setdefault(key, []).append(t)
+    out = []
+    for key in sorted(by_spec):
+        underlying, opt_type, strike, expiry = key
+        agg = _aggregate_option_trades(by_spec[key])
+        out.append({
+            "underlying": underlying,
+            "opt_type": opt_type,
+            "strike": strike,
+            "expiry": expiry,
+            **agg,
+        })
+    return out
+
+
+async def get_users_with_option_trades() -> list[str]:
+    """All discord_user IDs with at least one option trade. Used by the
+    /stock leaderboard to union option traders with stock traders."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT DISTINCT discord_user FROM option_trades ORDER BY discord_user"
+        )
+        rows = await cur.fetchall()
+        return [r[0] for r in rows]

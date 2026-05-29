@@ -313,6 +313,22 @@ CREATE TABLE IF NOT EXISTS stock_cash (
     balance      REAL NOT NULL DEFAULT 0,
     updated_at   TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS option_trades (
+    trade_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    discord_user TEXT NOT NULL,
+    underlying   TEXT NOT NULL,
+    opt_type     TEXT NOT NULL CHECK(opt_type IN ('call', 'put')),
+    strike       REAL NOT NULL CHECK(strike > 0),
+    expiry       TEXT NOT NULL,            -- YYYY-MM-DD
+    side         TEXT NOT NULL CHECK(side IN ('buy', 'sell')),
+    contracts    INTEGER NOT NULL CHECK(contracts > 0),
+    premium      REAL NOT NULL CHECK(premium > 0),  -- per-share; 1 contract = 100 shares
+    executed_at  TEXT NOT NULL,
+    notes        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_option_trades_user
+    ON option_trades(discord_user, underlying, expiry);
 """
 
 
@@ -449,6 +465,26 @@ async def init_db() -> None:
                 "CREATE TABLE IF NOT EXISTS stock_cash "
                 "(discord_user TEXT PRIMARY KEY, balance REAL NOT NULL DEFAULT 0, "
                 "updated_at TEXT NOT NULL)"
+            )
+            await db.commit()
+        except Exception:
+            pass
+        # Migration: add option_trades log table
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS option_trades ("
+                "trade_id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "discord_user TEXT NOT NULL, underlying TEXT NOT NULL, "
+                "opt_type TEXT NOT NULL CHECK(opt_type IN ('call', 'put')), "
+                "strike REAL NOT NULL CHECK(strike > 0), expiry TEXT NOT NULL, "
+                "side TEXT NOT NULL CHECK(side IN ('buy', 'sell')), "
+                "contracts INTEGER NOT NULL CHECK(contracts > 0), "
+                "premium REAL NOT NULL CHECK(premium > 0), "
+                "executed_at TEXT NOT NULL, notes TEXT)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_option_trades_user "
+                "ON option_trades(discord_user, underlying, expiry)"
             )
             await db.commit()
         except Exception:
