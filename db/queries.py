@@ -391,6 +391,16 @@ async def update_bet_clv(bet_id: int, clv: float | None) -> None:
         await db.commit()
 
 
+async def set_bet_clv(bet_id: int, clv: float | None) -> None:
+    """Set CLV on a bet without touching its status. For backfill of already-resolved bets."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE bets SET clv = ? WHERE bet_id = ?",
+            (clv, bet_id),
+        )
+        await db.commit()
+
+
 async def get_open_bets_for_game(game_id: str) -> list[Bet]:
     """Return all open bets for a game (used by CLV auto-post)."""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -424,6 +434,28 @@ async def get_resolvable_bets_for_game(game_id: str) -> list[Bet]:
         cursor = await db.execute(
             "SELECT * FROM bets WHERE game_id = ? AND status IN ('open', 'graded')",
             (game_id,),
+        )
+        rows = await cursor.fetchall()
+    return [_row_to_bet(r) for r in rows]
+
+
+async def get_all_unresolved_bets() -> list[Bet]:
+    """All bets still awaiting a final result (open/graded), oldest first. Backfill use."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM bets WHERE status IN ('open', 'graded') ORDER BY bet_id ASC"
+        )
+        rows = await cursor.fetchall()
+    return [_row_to_bet(r) for r in rows]
+
+
+async def get_all_bets_missing_clv() -> list[Bet]:
+    """All non-void bets with no CLV recorded yet, oldest first. Backfill use."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM bets WHERE clv IS NULL AND status != 'void' ORDER BY bet_id ASC"
         )
         rows = await cursor.fetchall()
     return [_row_to_bet(r) for r in rows]
@@ -742,6 +774,42 @@ async def get_first_poll_snapshot(game_id: str, source: str) -> OddsSnapshot | N
         captured_at_utc_iso=row["captured_at"],
         payload=json.loads(row["payload"]),
     )
+
+
+async def get_last_poll_snapshots_before(game_id: str, before_utc_iso: str) -> list[OddsSnapshot]:
+    """Most recent poll snapshot per source captured at/before a cutoff.
+
+    Used as a closing-line proxy when backfilling CLV for games whose real
+    'close' snapshot was never captured: the last line seen before tip-off.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT s.*
+            FROM odds_snapshots s
+            INNER JOIN (
+                SELECT source, MAX(captured_at) AS max_captured
+                FROM odds_snapshots
+                WHERE game_id = ? AND kind = 'poll' AND captured_at <= ?
+                GROUP BY source
+            ) latest ON s.source = latest.source AND s.captured_at = latest.max_captured
+            WHERE s.game_id = ? AND s.kind = 'poll' AND s.captured_at <= ?
+            """,
+            (game_id, before_utc_iso, game_id, before_utc_iso),
+        )
+        rows = await cursor.fetchall()
+    return [
+        OddsSnapshot(
+            snapshot_id=row["snapshot_id"],
+            game_id=row["game_id"],
+            kind=row["kind"],
+            source=row["source"],
+            captured_at_utc_iso=row["captured_at"],
+            payload=json.loads(row["payload"]),
+        )
+        for row in rows
+    ]
 
 
 async def get_recent_games(filter_str: str = "", sport: str = "nba") -> list[Game]:

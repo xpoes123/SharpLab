@@ -1,6 +1,7 @@
 from datetime import timedelta, datetime, timezone
 from temporalio import workflow
 from temporalio.common import RetryPolicy, WorkflowIDReusePolicy
+from temporalio.workflow import ParentClosePolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
 with workflow.unsafe.imports_passed_through():
@@ -62,6 +63,10 @@ class OddsPollingWorkflow:
                         id=close_wf_id,
                         task_queue=workflow.info().task_queue,
                         id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+                        # ABANDON so the child survives this parent's continue_as_new.
+                        # The default (TERMINATE) killed every pending close-capture
+                        # each 30-min poll cycle, so closing lines were never captured.
+                        parent_close_policy=ParentClosePolicy.ABANDON,
                     )
                     workflow.logger.info(
                         f"Started CloseCaptureWorkflow for {game.away_team} @ {game.home_team} ({game.game_id})"
