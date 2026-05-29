@@ -27,6 +27,8 @@ import argparse
 import asyncio
 from datetime import datetime, timedelta, timezone
 
+import httpx
+
 from db import queries
 from shared.models import Bet, Game
 from shared.odds_utils import compute_clv, side_is_home
@@ -63,6 +65,23 @@ def _close_odds_for_bet(bet: Bet, game: Game, payload: dict) -> int | None:
     return None
 
 
+async def _fetch_scores_retry(sport: str, date: str) -> list:
+    """Fetch one day of final scores, backing off on balldontlie's 429 rate limit."""
+    for attempt in range(5):
+        try:
+            if sport == "nba":
+                return await _fetch_nba_scores([date])
+            return await _fetch_espn_scores([date], sport)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429 and attempt < 4:
+                wait = 5 * (attempt + 1)
+                print(f"    (429 from score API on {date}; retrying in {wait}s)")
+                await asyncio.sleep(wait)
+                continue
+            raise
+    return []
+
+
 async def backfill_resolution(apply: bool) -> tuple[int, int]:
     """Grade open/graded bets. Returns (resolved, still_unresolved)."""
     bets = await queries.get_all_unresolved_bets()
@@ -90,10 +109,7 @@ async def backfill_resolution(apply: bool) -> tuple[int, int]:
         for dd in dates:
             key = f"{sport}:{dd}"
             if key not in score_cache:
-                if sport == "nba":
-                    score_cache[key] = await _fetch_nba_scores([dd])
-                else:
-                    score_cache[key] = await _fetch_espn_scores([dd], sport)
+                score_cache[key] = await _fetch_scores_retry(sport, dd)
             out.extend(score_cache[key])
         return out
 
