@@ -2764,3 +2764,54 @@ async def get_users_with_trades() -> list[str]:
         )
         rows = await cur.fetchall()
         return [r[0] for r in rows]
+
+
+# ── Stock cash positions ────────────────────────────────────────────────────
+# A simple per-user cash balance, decoupled from the trade log. Buys/sells do
+# NOT touch it automatically — it's a hand-managed figure so the portfolio can
+# show uninvested cash and a total account value. Floored at 0.
+
+
+async def get_stock_cash(discord_user: str) -> float:
+    """Return the user's cash balance (0.0 if they've never set one)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT balance FROM stock_cash WHERE discord_user = ?", (discord_user,)
+        )
+        row = await cur.fetchone()
+        return float(row[0]) if row else 0.0
+
+
+async def set_stock_cash(discord_user: str, amount: float) -> float:
+    """Set the cash balance to an absolute amount (floored at 0). Returns it."""
+    amount = max(amount, 0.0)
+    ts = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO stock_cash (discord_user, balance, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(discord_user) DO UPDATE SET "
+            "balance = excluded.balance, updated_at = excluded.updated_at",
+            (discord_user, amount, ts),
+        )
+        await db.commit()
+    return amount
+
+
+async def adjust_stock_cash(discord_user: str, delta: float) -> float:
+    """Add delta (may be negative) to the cash balance, floored at 0.
+    Returns the new balance."""
+    ts = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO stock_cash (discord_user, balance, updated_at) "
+            "VALUES (?, MAX(?, 0), ?) "
+            "ON CONFLICT(discord_user) DO UPDATE SET "
+            "balance = MAX(balance + ?, 0), updated_at = ?",
+            (discord_user, delta, ts, delta, ts),
+        )
+        await db.commit()
+        cur = await db.execute(
+            "SELECT balance FROM stock_cash WHERE discord_user = ?", (discord_user,)
+        )
+        row = await cur.fetchone()
+        return float(row[0]) if row else 0.0

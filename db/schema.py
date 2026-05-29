@@ -307,6 +307,12 @@ CREATE TABLE IF NOT EXISTS stock_trades (
 );
 CREATE INDEX IF NOT EXISTS idx_stock_trades_user_ticker
     ON stock_trades(discord_user, ticker, executed_at);
+
+CREATE TABLE IF NOT EXISTS stock_cash (
+    discord_user TEXT PRIMARY KEY,
+    balance      REAL NOT NULL DEFAULT 0,
+    updated_at   TEXT NOT NULL
+);
 """
 
 
@@ -433,6 +439,16 @@ async def init_db() -> None:
                 "    SELECT 1 FROM stock_trades t "
                 "    WHERE t.discord_user = h.discord_user AND t.ticker = h.ticker"
                 ")"
+            )
+            await db.commit()
+        except Exception:
+            pass
+        # Migration: add stock_cash table for portfolio cash positions
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS stock_cash "
+                "(discord_user TEXT PRIMARY KEY, balance REAL NOT NULL DEFAULT 0, "
+                "updated_at TEXT NOT NULL)"
             )
             await db.commit()
         except Exception:
