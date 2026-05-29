@@ -35,6 +35,33 @@ def _T(side, ct, px):
     return {"side": side, "contracts": ct, "premium": px}
 
 
+def _S(side, shares, price):
+    return {"side": side, "shares": shares, "price": price}
+
+
+# ── Stock average-cost aggregator (invested / % return denominator) ──────────
+
+
+class TestAggregateStockTrades:
+    def test_invested_sums_buys(self):
+        # buy 10 @100 ($1000), sell 5 @120 (realized +100), buy 2 @110 ($220)
+        r = _queries._aggregate_trades(
+            [_S("buy", 10, 100), _S("sell", 5, 120), _S("buy", 2, 110)]
+        )
+        assert r["realized_pnl"] == pytest.approx(100.0)  # 5 * (120 - 100)
+        assert r["invested"] == pytest.approx(1220.0)     # 1000 + 220, capital deployed
+        assert r["shares"] == pytest.approx(7)
+
+    def test_closed_position_keeps_invested(self):
+        # round trip: buy 4 @50 ($200), sell 4 @75 (+100). closed but invested stays.
+        r = _queries._aggregate_trades([_S("buy", 4, 50), _S("sell", 4, 75)])
+        assert r["closed"]
+        assert r["realized_pnl"] == pytest.approx(100.0)
+        assert r["invested"] == pytest.approx(200.0)
+        # % return = total P/L / invested = 100 / 200 = 50%
+        assert (r["realized_pnl"] / r["invested"]) == pytest.approx(0.5)
+
+
 # ── Signed average-cost option aggregator ────────────────────────────────────
 
 
@@ -44,12 +71,14 @@ class TestAggregateOptionTrades:
         r = _queries._aggregate_option_trades([_T("buy", 2, 3.50), _T("sell", 2, 5.00)])
         assert r["closed"]
         assert r["realized_pnl"] == pytest.approx(300.0)
+        assert r["invested"] == pytest.approx(700.0)  # 2 * 3.50 * 100
 
     def test_short_round_trip(self):
         # write 1 @4 then buy-to-cover 1 @2.50 -> +150 realized
         r = _queries._aggregate_option_trades([_T("sell", 1, 4.0), _T("buy", 1, 2.50)])
         assert r["closed"]
         assert r["realized_pnl"] == pytest.approx(150.0)
+        assert r["invested"] == pytest.approx(400.0)  # opening the short: 1 * 4 * 100
 
     def test_position_flip(self):
         # long 2 @3, sell 5 @4 -> close 2 long (+200), open short 3 @4
@@ -57,6 +86,8 @@ class TestAggregateOptionTrades:
         assert r["net_contracts"] == -3
         assert r["avg_premium"] == pytest.approx(4.0)
         assert r["realized_pnl"] == pytest.approx(200.0)
+        # capital in: 2*3*100 (long) + 3*4*100 (flipped-into short) = 600 + 1200
+        assert r["invested"] == pytest.approx(1800.0)
 
     def test_average_on_adds(self):
         # buy 1 @2, buy 1 @4 -> long 2 @3 avg, no realized
@@ -64,6 +95,7 @@ class TestAggregateOptionTrades:
         assert r["net_contracts"] == 2
         assert r["avg_premium"] == pytest.approx(3.0)
         assert r["realized_pnl"] == 0.0
+        assert r["invested"] == pytest.approx(600.0)  # 200 + 400
 
     def test_partial_cover_of_short(self):
         # write 3 @5, buy 1 @3 -> cover 1 (+200), short 2 @5
@@ -71,11 +103,14 @@ class TestAggregateOptionTrades:
         assert r["net_contracts"] == -2
         assert r["avg_premium"] == pytest.approx(5.0)
         assert r["realized_pnl"] == pytest.approx(200.0)
+        # only the opening write deploys capital; the buy-to-cover doesn't
+        assert r["invested"] == pytest.approx(1500.0)  # 3 * 5 * 100
 
     def test_losing_long(self):
         r = _queries._aggregate_option_trades([_T("buy", 1, 5.0), _T("sell", 1, 1.0)])
         assert r["closed"]
         assert r["realized_pnl"] == pytest.approx(-400.0)
+        assert r["invested"] == pytest.approx(500.0)
 
 
 # ── Option trade persistence + derived positions ─────────────────────────────
