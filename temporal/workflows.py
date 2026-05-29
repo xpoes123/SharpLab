@@ -62,7 +62,13 @@ class OddsPollingWorkflow:
                         (game.game_id, game.start_time_utc_iso, sport),
                         id=close_wf_id,
                         task_queue=workflow.info().task_queue,
-                        id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+                        # ALLOW_DUPLICATE so a close-capture can be recreated once a
+                        # prior run with the same id has closed. REJECT_DUPLICATE
+                        # permanently blocked recreation after a child was terminated,
+                        # so any game whose close-capture died once never got another.
+                        # Concurrent duplicates are still prevented by the
+                        # WorkflowAlreadyStartedError catch below.
+                        id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
                         # ABANDON so the child survives this parent's continue_as_new.
                         # The default (TERMINATE) killed every pending close-capture
                         # each 30-min poll cycle, so closing lines were never captured.
