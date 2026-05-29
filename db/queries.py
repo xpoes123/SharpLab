@@ -2628,19 +2628,22 @@ async def update_error_ticket_id(error_id: int, ticket_id: str) -> None:
 def _aggregate_trades(trades: list[dict]) -> dict:
     """Reduce a chronologically-ordered list of trades for one ticker.
 
-    Returns a dict with: shares, dca_price, cost_basis, realized_pnl, closed.
-    Realized P/L accumulates on every sell as (sell_price - avg_cost_at_sale)
-    * sold_shares. Closed positions (shares <= 0 after sells) still return
-    their realized_pnl — callers that only want open positions should filter
-    on the `closed` flag.
+    Returns a dict with: shares, dca_price, cost_basis, realized_pnl, invested,
+    closed. Realized P/L accumulates on every sell as (sell_price -
+    avg_cost_at_sale) * sold_shares. `invested` is lifetime capital deployed
+    (sum of all buy costs) — used as the denominator for % return. Closed
+    positions (shares <= 0 after sells) still return their realized_pnl and
+    invested — callers that only want open positions should filter on `closed`.
     """
     shares = 0.0
     cost_basis = 0.0
     realized_pnl = 0.0
+    invested = 0.0
     for t in trades:
         if t["side"] == "buy":
             shares += t["shares"]
             cost_basis += t["shares"] * t["price"]
+            invested += t["shares"] * t["price"]  # every buy opens/adds — capital in
         else:  # sell
             if shares <= 0:
                 continue  # phantom sells should be blocked at write time
@@ -2655,6 +2658,7 @@ def _aggregate_trades(trades: list[dict]) -> dict:
         "dca_price": 0.0 if closed else cost_basis / shares,
         "cost_basis": 0.0 if closed else cost_basis,
         "realized_pnl": realized_pnl,
+        "invested": invested,
         "closed": closed,
     }
 
@@ -2833,28 +2837,33 @@ OPTION_MULTIPLIER = 100
 def _aggregate_option_trades(trades: list[dict]) -> dict:
     """Reduce chronologically-ordered trades for ONE contract spec.
 
-    Returns {net_contracts, avg_premium, realized_pnl, closed}. `avg_premium`
-    is the average open premium of the current position (always > 0 while open).
-    Realized P/L accrues on any trade that reduces the position — including a
-    flip (e.g. long 2, sell 5 -> close 2 long then open 3 short):
+    Returns {net_contracts, avg_premium, realized_pnl, invested, closed}.
+    `avg_premium` is the average open premium of the current position (always >
+    0 while open). Realized P/L accrues on any trade that reduces the position —
+    including a flip (e.g. long 2, sell 5 -> close 2 long then open 3 short):
         sign(net) * (close_premium - avg_premium) * closed_qty * 100
     which is (premium - avg) for closing a long and (avg - premium) for a short.
+    `invested` is lifetime capital deployed (premium ×100 on every contract that
+    OPENS or adds to a position, long or short) — the denominator for % return.
     """
     net = 0          # signed contracts
     avg = 0.0        # avg open premium of the current position
     realized = 0.0
+    invested = 0.0
     for t in trades:
         qty = int(t["contracts"])
         px = float(t["premium"])
         d = qty if t["side"] == "buy" else -qty
         if net == 0:
             net, avg = d, px
+            invested += qty * px * OPTION_MULTIPLIER  # opens a fresh position
             continue
         if (net > 0) == (d > 0):
             # Same side: blend into the running average open premium.
             total = abs(net) + qty
             avg = (avg * abs(net) + px * qty) / total
             net += d
+            invested += qty * px * OPTION_MULTIPLIER  # adds to the position
             continue
         # Opposing side: close up to |net|, then flip any remainder.
         close_qty = min(qty, abs(net))
@@ -2863,6 +2872,7 @@ def _aggregate_option_trades(trades: list[dict]) -> dict:
         remaining = qty - close_qty
         if remaining > 0:
             avg = px           # flipped: new lot opens at this premium
+            invested += remaining * px * OPTION_MULTIPLIER  # capital for the flipped-into side
         elif net == 0:
             avg = 0.0
     closed = net == 0
@@ -2870,6 +2880,7 @@ def _aggregate_option_trades(trades: list[dict]) -> dict:
         "net_contracts": 0 if closed else net,
         "avg_premium": 0.0 if closed else avg,
         "realized_pnl": realized,
+        "invested": invested,
         "closed": closed,
     }
 

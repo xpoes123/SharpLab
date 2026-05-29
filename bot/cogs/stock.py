@@ -754,8 +754,18 @@ class StockCog(commands.Cog):
     # ── /stock leaderboard ───────────────────────────────────────────────────
 
     @stock.command(name="leaderboard", description="Server-wide P/L leaderboard")
-    async def leaderboard(self, interaction: discord.Interaction) -> None:
+    @app_commands.describe(sort="Rank by % return on capital (default) or total P/L in dollars")
+    @app_commands.choices(
+        sort=[
+            app_commands.Choice(name="percent", value="percent"),
+            app_commands.Choice(name="total", value="total"),
+        ]
+    )
+    async def leaderboard(
+        self, interaction: discord.Interaction, sort: app_commands.Choice[str] | None = None
+    ) -> None:
         await interaction.response.defer()
+        sort_by = sort.value if sort else "percent"
 
         stock_users = await queries.get_users_with_trades()
         option_users = await queries.get_users_with_option_trades()
@@ -790,6 +800,7 @@ class StockCog(commands.Cog):
             positions = all_positions[uid]
             unrealized = 0.0
             realized = sum(p["realized_pnl"] for p in positions)
+            invested = sum(p["invested"] for p in positions)
             for p in positions:
                 if p["closed"]:
                     continue
@@ -799,19 +810,24 @@ class StockCog(commands.Cog):
                 unrealized += p["shares"] * (q["price"] - p["dca_price"])
             for p in all_options[uid]:
                 realized += p["realized_pnl"]
+                invested += p["invested"]
                 if p["closed"]:
                     continue
                 key = (p["underlying"], p["opt_type"], p["strike"], p["expiry"])
                 premium = option_prices.get(key, {}).get("premium")
                 unrealized += _option_position_pnl(p, premium)["unrealized"]
+            total = unrealized + realized
             rows.append({
                 "user_id": uid,
                 "unrealized": unrealized,
                 "realized": realized,
-                "total": unrealized + realized,
+                "total": total,
+                "invested": invested,
+                "pct": (total / invested * 100) if invested > 0 else 0.0,
             })
 
-        rows.sort(key=lambda r: r["total"], reverse=True)
+        sort_key = "pct" if sort_by == "percent" else "total"
+        rows.sort(key=lambda r: r[sort_key], reverse=True)
         top = rows[:10]
 
         async def _name(uid: str) -> str:
@@ -827,17 +843,25 @@ class StockCog(commands.Cog):
         for rank, r in enumerate(top, start=1):
             medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"`#{rank:>2}`")
             name = await _name(r["user_id"])
-            lines.append(
-                f"{medal} **{name}** · Total `{_fmt_pnl(r['total'])}` "
-                f"(Unreal `{_fmt_pnl(r['unrealized'])}` · Real `{_fmt_pnl(r['realized'])}`)"
-            )
+            sign = "+" if r["pct"] >= 0 else ""
+            if sort_by == "percent":
+                lines.append(
+                    f"{medal} **{name}** · `{sign}{r['pct']:.2f}%` · "
+                    f"P/L `{_fmt_pnl(r['total'])}` on `{_fmt_money(r['invested'])}`"
+                )
+            else:
+                lines.append(
+                    f"{medal} **{name}** · P/L `{_fmt_pnl(r['total'])}` · "
+                    f"`{sign}{r['pct']:.2f}%` on `{_fmt_money(r['invested'])}`"
+                )
 
+        label = "% return on capital" if sort_by == "percent" else "total P/L"
         embed = discord.Embed(
             title="📊 Stock Portfolio Leaderboard",
             description="\n".join(lines),
             color=0x5865F2,
         )
-        embed.set_footer(text=f"{len(rows)} trader(s) · sorted by Total P/L")
+        embed.set_footer(text=f"{len(rows)} trader(s) · sorted by {label}")
         await interaction.followup.send(embed=embed)
 
     # ── /stock movers ────────────────────────────────────────────────────────
