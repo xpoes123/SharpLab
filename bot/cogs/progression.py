@@ -58,12 +58,27 @@ ALL_ACHIEVEMENTS: list[Achievement] = [
     Achievement("coins_100k", "Mogul", "Reach 100,000 coin balance", "Wealth", "\U0001f911", 200),
     Achievement("wager_50k", "High Roller", "Wager 50,000+ total coins", "Wealth", "\U0001f3b2", 100),
     Achievement("wager_500k", "Whale", "Wager 500,000+ total coins", "Wealth", "\U0001f40b", 300),
+    # ── Betting (sportsbook: /bet, CLV) ──
+    Achievement("bet_first", "On the Board", "Log your first bet", "Betting", "\U0001f4dd", 15),
+    Achievement("bet_10", "Regular Bettor", "Log 10 bets", "Betting", "\U0001f3ab", 40),
+    Achievement("bet_50", "Bookie's Nightmare", "Log 50 bets", "Betting", "\U0001f4da", 150),
+    Achievement("bet_win", "Cashed Ticket", "Win a bet", "Betting", "\U0001f4b8", 20),
+    Achievement("clv_beat", "Beat the Close", "Log a bet with positive CLV", "Betting", "\U0001f4c8", 30),
+    Achievement("clv_10", "Sharp Money", "Beat the closing line on 10 bets", "Betting", "\U0001f52a", 120),
+    # ── Investing (stocks / crypto / options) ──
+    Achievement("stock_first", "First Position", "Record your first stock trade", "Investing", "\U0001f4c8", 15),
+    Achievement("stock_10", "Active Trader", "Make 10 stock trades", "Investing", "\U0001f4b9", 50),
+    Achievement("stock_diversified", "Diversified", "Hold 10 different positions at once", "Investing", "\U0001f9fa", 75),
+    Achievement("stock_green", "In the Green", "Reach $1,000 realized stock profit", "Investing", "\U0001f7e2", 100),
+    Achievement("stock_bull", "Bull Market", "Reach $10,000 realized stock profit", "Investing", "\U0001f402", 300),
+    Achievement("crypto_first", "Crypto Curious", "Buy your first crypto", "Investing", "\U0001fa99", 25),
+    Achievement("options_first", "Optioned Up", "Trade your first option contract", "Investing", "\U0001f4d1", 25),
 ]
 
 ACHIEVEMENTS_BY_ID: dict[str, Achievement] = {a.id: a for a in ALL_ACHIEVEMENTS}
 
 # Ordered category list for display
-_CATEGORIES = ["Progression", "Winning", "Diversity", "Social", "Daily", "Wealth"]
+_CATEGORIES = ["Progression", "Winning", "Diversity", "Social", "Daily", "Wealth", "Betting", "Investing"]
 
 # Thresholds for progress display on countable achievements
 _PROGRESS_TARGETS: dict[str, tuple[str, int]] = {
@@ -88,6 +103,17 @@ _PROGRESS_TARGETS: dict[str, tuple[str, int]] = {
     "coins_100k": ("balance", 100_000),
     "wager_50k": ("total_wagered", 50_000),
     "wager_500k": ("total_wagered", 500_000),
+    "bet_first": ("num_bets", 1),
+    "bet_10": ("num_bets", 10),
+    "bet_50": ("num_bets", 50),
+    "bet_win": ("bet_wins", 1),
+    "clv_beat": ("pos_clv", 1),
+    "clv_10": ("pos_clv", 10),
+    "stock_first": ("num_trades", 1),
+    "stock_10": ("num_trades", 10),
+    "stock_diversified": ("distinct_holdings", 10),
+    "stock_green": ("realized_pnl", 1000),
+    "stock_bull": ("realized_pnl", 10000),
 }
 
 # Level color thresholds
@@ -113,6 +139,100 @@ def _progress_bar(current: int, total: int, width: int = 16) -> str:
     else:
         filled = min(int(current / total * width), width)
     return "\u2588" * filled + "\u2591" * (width - filled)
+
+
+async def gather_achievement_stats(uid: str) -> dict:
+    """All numeric stats used to evaluate achievements + show progress. DB-only
+    (no network), so it's cheap to call on every relevant action."""
+    stats = await queries.get_casino_stats(uid)
+    duel = await queries.get_duel_stats(uid)
+    tourney = await queries.get_tournament_stats(uid)
+
+    bets = await queries.get_bets_for_user(uid)
+    positions = await queries.get_stock_positions_full(uid)
+    open_positions = [p for p in positions if not p["closed"]]
+    trades = await queries.get_stock_trades(uid)
+    options = await queries.get_option_positions_full(uid)
+
+    return {
+        "rounds": stats["rounds"],
+        "total_wagered": stats["total_wagered"],
+        "streak": await queries.get_casino_win_streak(uid),
+        "max_profit": await queries.get_max_single_profit(uid),
+        "distinct": await queries.get_distinct_games_played(uid),
+        "duel_wins": duel["wins"],
+        "tourney_wins": tourney["wins"],
+        "balance": await queries.get_casino_balance(uid) or 0,
+        # Betting
+        "num_bets": len(bets),
+        "bet_wins": sum(1 for b in bets if b.status == "won"),
+        "pos_clv": sum(1 for b in bets if b.clv is not None and b.clv > 0),
+        # Investing
+        "num_trades": len(trades),
+        "distinct_holdings": len(open_positions),
+        "realized_pnl": sum(p["realized_pnl"] for p in positions),
+        "traded_crypto": any(t["ticker"].upper().endswith("-USD") for t in trades),
+        "has_options": len(options) > 0,
+    }
+
+
+def _achievement_checks(s: dict) -> list[tuple[str, bool]]:
+    """Map gathered stats → (achievement_id, earned?) conditions.
+
+    Daily achievements (daily_1/all/7) are owned by the challenges cog.
+    """
+    return [
+        ("first_game", s["rounds"] >= 1),
+        ("play_10", s["rounds"] >= 10),
+        ("play_100", s["rounds"] >= 100),
+        ("play_500", s["rounds"] >= 500),
+        ("first_win", s["max_profit"] > 0),
+        ("streak_3", s["streak"] >= 3),
+        ("streak_5", s["streak"] >= 5),
+        ("streak_10", s["streak"] >= 10),
+        ("big_win", s["max_profit"] >= 1000),
+        ("jackpot", s["max_profit"] >= 5000),
+        ("explore_5", s["distinct"] >= 5),
+        ("explore_15", s["distinct"] >= 15),
+        ("explore_all", s["distinct"] >= TOTAL_GAMES),
+        ("duel_win", s["duel_wins"] >= 1),
+        ("duel_10", s["duel_wins"] >= 10),
+        ("tourney_win", s["tourney_wins"] >= 1),
+        ("tourney_5", s["tourney_wins"] >= 5),
+        ("coins_5k", s["balance"] >= 5_000),
+        ("coins_25k", s["balance"] >= 25_000),
+        ("coins_100k", s["balance"] >= 100_000),
+        ("wager_50k", s["total_wagered"] >= 50_000),
+        ("wager_500k", s["total_wagered"] >= 500_000),
+        ("bet_first", s["num_bets"] >= 1),
+        ("bet_10", s["num_bets"] >= 10),
+        ("bet_50", s["num_bets"] >= 50),
+        ("bet_win", s["bet_wins"] >= 1),
+        ("clv_beat", s["pos_clv"] >= 1),
+        ("clv_10", s["pos_clv"] >= 10),
+        ("stock_first", s["num_trades"] >= 1),
+        ("stock_10", s["num_trades"] >= 10),
+        ("stock_diversified", s["distinct_holdings"] >= 10),
+        ("stock_green", s["realized_pnl"] >= 1000),
+        ("stock_bull", s["realized_pnl"] >= 10000),
+        ("crypto_first", s["traded_crypto"]),
+        ("options_first", s["has_options"]),
+    ]
+
+
+async def evaluate_user_achievements(uid: str) -> list[str]:
+    """Unlock any earned-but-missing achievements for a user (idempotent — used
+    by the live loop, on-demand views, action hooks, and the backfill). Awards
+    XP for each newly unlocked one. Returns the list of newly-unlocked ids."""
+    existing = {a["achievement_id"] for a in await queries.get_user_achievements(uid)}
+    stats = await gather_achievement_stats(uid)
+    newly_unlocked: list[str] = []
+    for aid, condition in _achievement_checks(stats):
+        if condition and aid not in existing:
+            if await queries.unlock_achievement(uid, aid):
+                await queries.add_xp(uid, ACHIEVEMENTS_BY_ID[aid].xp_reward)
+                newly_unlocked.append(aid)
+    return newly_unlocked
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────
@@ -219,28 +339,18 @@ class ProgressionCog(commands.Cog):
         target = user or interaction.user
         uid = str(target.id)
 
+        # Evaluate first so opening the panel unlocks anything newly earned
+        # (covers users whose activity is betting/investing, not casino).
+        try:
+            await evaluate_user_achievements(uid)
+        except Exception:
+            log.warning("achievement evaluation on view failed for %s", uid, exc_info=True)
+
         unlocked_list = await queries.get_user_achievements(uid)
         unlocked_ids = {a["achievement_id"] for a in unlocked_list}
 
         # Gather progress data for locked achievements
-        stats = await queries.get_casino_stats(uid)
-        streak = await queries.get_casino_win_streak(uid)
-        distinct = await queries.get_distinct_games_played(uid)
-        max_profit = await queries.get_max_single_profit(uid)
-        duel_stats = await queries.get_duel_stats(uid)
-        tourney_stats = await queries.get_tournament_stats(uid)
-        balance = await queries.get_casino_balance(uid) or 0
-
-        progress_values: dict[str, int] = {
-            "rounds": stats["rounds"],
-            "streak": streak,
-            "distinct": distinct,
-            "max_profit": max_profit,
-            "duel_wins": duel_stats["wins"],
-            "tourney_wins": tourney_stats["wins"],
-            "balance": balance,
-            "total_wagered": stats["total_wagered"],
-        }
+        progress_values = await gather_achievement_stats(uid)
 
         total_ach = len(ALL_ACHIEVEMENTS)
         unlocked_count = len(unlocked_ids)
@@ -361,69 +471,7 @@ class ProgressionCog(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def _check_user_achievements(self, uid: str) -> None:
-        existing = {a["achievement_id"] for a in await queries.get_user_achievements(uid)}
-
-        stats = await queries.get_casino_stats(uid)
-        rounds = stats["rounds"]
-        total_wagered = stats["total_wagered"]
-
-        # Progression
-        checks: list[tuple[str, bool]] = [
-            ("first_game", rounds >= 1),
-            ("play_10", rounds >= 10),
-            ("play_100", rounds >= 100),
-            ("play_500", rounds >= 500),
-        ]
-
-        # Winning
-        streak = await queries.get_casino_win_streak(uid)
-        max_profit = await queries.get_max_single_profit(uid)
-        checks += [
-            ("first_win", max_profit > 0),
-            ("streak_3", streak >= 3),
-            ("streak_5", streak >= 5),
-            ("streak_10", streak >= 10),
-            ("big_win", max_profit >= 1000),
-            ("jackpot", max_profit >= 5000),
-        ]
-
-        # Diversity
-        distinct = await queries.get_distinct_games_played(uid)
-        checks += [
-            ("explore_5", distinct >= 5),
-            ("explore_15", distinct >= 15),
-            ("explore_all", distinct >= TOTAL_GAMES),
-        ]
-
-        # Social
-        duel_stats = await queries.get_duel_stats(uid)
-        tourney_stats = await queries.get_tournament_stats(uid)
-        checks += [
-            ("duel_win", duel_stats["wins"] >= 1),
-            ("duel_10", duel_stats["wins"] >= 10),
-            ("tourney_win", tourney_stats["wins"] >= 1),
-            ("tourney_5", tourney_stats["wins"] >= 5),
-        ]
-
-        # Wealth
-        balance = await queries.get_casino_balance(uid) or 0
-        checks += [
-            ("coins_5k", balance >= 5_000),
-            ("coins_25k", balance >= 25_000),
-            ("coins_100k", balance >= 100_000),
-            ("wager_50k", total_wagered >= 50_000),
-            ("wager_500k", total_wagered >= 500_000),
-        ]
-
-        # Note: daily achievements (daily_1, daily_all, daily_7) are checked
-        # by the challenges cog when it completes challenges, not here.
-
-        for aid, condition in checks:
-            if aid not in existing and condition:
-                newly = await queries.unlock_achievement(uid, aid)
-                if newly:
-                    ach = ACHIEVEMENTS_BY_ID[aid]
-                    await queries.add_xp(uid, ach.xp_reward)
+        await evaluate_user_achievements(uid)
 
 
 async def setup(bot: commands.Bot) -> None:

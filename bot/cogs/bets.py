@@ -18,6 +18,15 @@ import logging
 
 log = logging.getLogger(__name__)
 
+
+async def _check_achievements(uid: str) -> None:
+    """Fire achievement evaluation after a betting action (best-effort)."""
+    try:
+        from bot.cogs.progression import evaluate_user_achievements
+        await evaluate_user_achievements(uid)
+    except Exception:
+        log.debug("achievement check failed for %s", uid, exc_info=True)
+
 # ── Choices ────────────────────────────────────────────────────────────────────
 
 BOOK_CHOICES = [
@@ -361,6 +370,7 @@ class BetsCog(commands.Cog):
             notes=notes,
         )
         bet_id = await queries.insert_bet(bet)
+        await _check_achievements(str(interaction.user.id))
 
         line_str = f" {final_line:+.1f}" if final_line is not None else ""
 
