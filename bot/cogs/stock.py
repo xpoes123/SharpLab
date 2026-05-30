@@ -3,7 +3,8 @@
 All commands live under a single /stock group:
 
 - /stock lookup <ticker>            — quote a single ticker (+ your position if any).
-- /stock profile [user]             — show your portfolio, or a tagged user's.
+- /stock profile [user]             — show your portfolio (Overview / Today / Graph buttons).
+- /stock graph [user]               — equity curve of portfolio value over time.
 - /stock cash <amount> [action]     — set/deposit/withdraw uninvested cash.
 - /stock buy <ticker> <sh> <px>     — record a buy.
 - /stock sell <ticker> <sh> <px>    — record a sell (realized P/L computed).
@@ -20,12 +21,13 @@ Options use a 100x multiplier and are priced from yfinance option chains,
 falling back to intrinsic value once expired.
 """
 import asyncio
+import io
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from bot.cogs._movers_helpers import build_movers_embed
 from db import queries
@@ -323,14 +325,13 @@ def _option_position_pnl(pos: dict, premium: float | None) -> dict:
     return {"value": value, "cost": cost, "unrealized": unrealized, "priced": True}
 
 
-# ── Portfolio embed builder ─────────────────────────────────────────────────
+# ── Portfolio computation + views ───────────────────────────────────────────
 
 
-async def _build_profile_embed(target: discord.abc.User) -> discord.Embed | None:
-    """Render `target`'s portfolio: stock holdings, option positions, and cash.
-    Unrealized P/L on open positions plus cumulative realized P/L from past
-    sells (including fully-closed positions) across both stocks and options."""
-    uid = str(target.id)
+async def _compute_portfolio(uid: str) -> dict | None:
+    """Price a user's whole portfolio once and return a structured breakdown the
+    Overview / Today / Graph views all share. Returns None if the user has
+    nothing (no positions, no options, no cash)."""
     positions = await queries.get_stock_positions_full(uid)
     option_positions = await queries.get_option_positions_full(uid)
     cash = await queries.get_stock_cash(uid)
@@ -345,37 +346,34 @@ async def _build_profile_embed(target: discord.abc.User) -> discord.Embed | None
     total_value = 0.0
     total_cost = 0.0
     total_day_change = 0.0
-    lines: list[str] = []
+    stocks: list[dict] = []
 
     for h in open_positions:
         sym = h["ticker"]
         shares = h["shares"]
         dca = h["dca_price"]
         cost = shares * dca
-
         q = quotes.get(sym)
         if not q:
-            lines.append(f"`{sym}` — {shares:g} sh @ {dca:,.2f} DCA · *price unavailable*")
             total_cost += cost
+            stocks.append({"sym": sym, "shares": shares, "dca": dca, "cost": cost,
+                           "available": False})
             continue
-
         price = q["price"]
         prev = q["prev_close"]
         value = shares * price
         pl = value - cost
-        pl_pct = (pl / cost * 100) if cost else 0.0
         day_change = shares * (price - prev)
-
         total_value += value
         total_cost += cost
         total_day_change += day_change
-
-        pl_sign = "+" if pl >= 0 else ""
-        emoji = "🟢" if pl >= 0 else "🔴"
-        lines.append(
-            f"{emoji} [`{sym}`]({_yahoo_url(sym)}) · {shares:g} sh @ {dca:,.2f} → "
-            f"**{price:,.2f}** · P/L `{pl_sign}{pl:,.2f} ({pl_sign}{pl_pct:.2f}%)`"
-        )
+        stocks.append({
+            "sym": sym, "shares": shares, "dca": dca, "cost": cost, "available": True,
+            "price": price, "prev": prev, "value": value,
+            "pl": pl, "pl_pct": (pl / cost * 100) if cost else 0.0,
+            "day_change": day_change,
+            "day_pct": ((price - prev) / prev * 100) if prev else 0.0,
+        })
 
     # ── Options ──
     open_options = [p for p in option_positions if not p["closed"]]
@@ -385,7 +383,7 @@ async def _build_profile_embed(target: discord.abc.User) -> discord.Embed | None
     options_value = 0.0
     options_unrealized = 0.0
     options_cost = 0.0
-    option_lines: list[str] = []
+    options: list[dict] = []
 
     for p in open_options:
         key = (p["underlying"], p["opt_type"], p["strike"], p["expiry"])
@@ -396,38 +394,74 @@ async def _build_profile_embed(target: discord.abc.User) -> discord.Embed | None
         options_value += pl["value"]
         options_unrealized += pl["unrealized"]
         options_cost += pl["cost"]
-
         net = p["net_contracts"]
-        side_word = "long" if net > 0 else "short"
-        qty = abs(net)
-        avg = p["avg_premium"]
-        label = _option_label(p)
-        if not pl["priced"]:
-            flag = " ⚠️ expired" if expired else ""
-            option_lines.append(
-                f"• {label} · {side_word} {qty} @ {avg:,.2f}{flag} · *price unavailable*"
-            )
-            continue
         u = pl["unrealized"]
-        upct = (u / pl["cost"] * 100) if pl["cost"] else 0.0
-        sign = "+" if u >= 0 else ""
-        emoji = "🟢" if u >= 0 else "🔴"
-        flag = " ⚠️" if expired else ""
-        option_lines.append(
-            f"{emoji} {label}{flag} · {side_word} {qty} @ {avg:,.2f} → "
-            f"**{premium:,.2f}** · P/L `{sign}{u:,.2f} ({sign}{upct:.2f}%)`"
-        )
+        options.append({
+            "label": _option_label(p),
+            "side_word": "long" if net > 0 else "short",
+            "qty": abs(net), "avg": p["avg_premium"], "premium": premium,
+            "priced": pl["priced"], "expired": expired,
+            "unrealized": u, "cost": pl["cost"],
+            "upct": (u / pl["cost"] * 100) if pl["cost"] else 0.0,
+        })
 
     realized_total += option_realized
     unrealized = (total_value - total_cost) + options_unrealized
     combined_cost = total_cost + options_cost
     total_pnl = unrealized + realized_total
-    unrealized_pct = (unrealized / combined_cost * 100) if combined_cost else 0.0
-    day_pct = (total_day_change / (total_value - total_day_change) * 100) if (total_value - total_day_change) else 0.0
-    account_value = total_value + options_value + cash
-    color = 0x57F287 if total_pnl >= 0 else 0xED4245
+    base = total_value - total_day_change
+    return {
+        "stocks": stocks,
+        "options": options,
+        "has_options": bool(option_positions),
+        "stock_value": total_value,
+        "stock_cost": total_cost,
+        "day_change": total_day_change,
+        "day_pct": (total_day_change / base * 100) if base else 0.0,
+        "options_value": options_value,
+        "options_unrealized": options_unrealized,
+        "options_cost": options_cost,
+        "cash": cash,
+        "account_value": total_value + options_value + cash,
+        "realized_total": realized_total,
+        "unrealized": unrealized,
+        "unrealized_pct": (unrealized / combined_cost * 100) if combined_cost else 0.0,
+        "total_pnl": total_pnl,
+    }
 
-    has_options = bool(option_positions)
+
+def _build_overview_embed(target: discord.abc.User, d: dict) -> discord.Embed:
+    """The default portfolio view: holdings list + headline totals."""
+    lines: list[str] = []
+    for h in d["stocks"]:
+        sym = h["sym"]
+        if not h["available"]:
+            lines.append(f"`{sym}` — {h['shares']:g} sh @ {h['dca']:,.2f} DCA · *price unavailable*")
+            continue
+        sign = "+" if h["pl"] >= 0 else ""
+        emoji = "🟢" if h["pl"] >= 0 else "🔴"
+        lines.append(
+            f"{emoji} [`{sym}`]({_yahoo_url(sym)}) · {h['shares']:g} sh @ {h['dca']:,.2f} → "
+            f"**{h['price']:,.2f}** · P/L `{sign}{h['pl']:,.2f} ({sign}{h['pl_pct']:.2f}%)`"
+        )
+
+    option_lines: list[str] = []
+    for o in d["options"]:
+        if not o["priced"]:
+            flag = " ⚠️ expired" if o["expired"] else ""
+            option_lines.append(
+                f"• {o['label']} · {o['side_word']} {o['qty']} @ {o['avg']:,.2f}{flag} · *price unavailable*"
+            )
+            continue
+        u = o["unrealized"]
+        sign = "+" if u >= 0 else ""
+        emoji = "🟢" if u >= 0 else "🔴"
+        flag = " ⚠️" if o["expired"] else ""
+        option_lines.append(
+            f"{emoji} {o['label']}{flag} · {o['side_word']} {o['qty']} @ {o['avg']:,.2f} → "
+            f"**{o['premium']:,.2f}** · P/L `{sign}{u:,.2f} ({sign}{o['upct']:.2f}%)`"
+        )
+
     sections: list[str] = []
     if lines:
         sections.append("\n".join(lines))
@@ -435,31 +469,354 @@ async def _build_profile_embed(target: discord.abc.User) -> discord.Embed | None
         sections.append("**Options**\n" + "\n".join(option_lines))
     description = "\n\n".join(sections) if sections else "_No open positions._"
 
+    color = 0x57F287 if d["total_pnl"] >= 0 else 0xED4245
     embed = discord.Embed(
         title=f"{target.display_name}'s Portfolio",
         description=description,
         color=color,
     )
-    embed.add_field(name="Stock Value", value=f"`{_fmt_money(total_value)}`", inline=True)
-    if has_options:
-        embed.add_field(name="Options Value", value=f"`{_fmt_money(options_value)}`", inline=True)
-    embed.add_field(name="Cash", value=f"`{_fmt_money(cash)}`", inline=True)
-    embed.add_field(name="Account Value", value=f"`{_fmt_money(account_value)}`", inline=True)
-    if not has_options:
-        embed.add_field(name="Cost Basis", value=f"`{_fmt_money(total_cost)}`", inline=True)
-    embed.add_field(
-        name="Unrealized P/L",
-        value=f"`{_fmt_change(unrealized, unrealized_pct)}`",
-        inline=True,
-    )
-    embed.add_field(name="Realized P/L", value=f"`{_fmt_pnl(realized_total)}`", inline=True)
-    embed.add_field(name="Total P/L", value=f"`{_fmt_pnl(total_pnl)}`", inline=True)
-    embed.add_field(
-        name="Today (stocks)",
-        value=f"`{_fmt_change(total_day_change, day_pct)}`",
-        inline=True,
-    )
+    embed.add_field(name="Stock Value", value=f"`{_fmt_money(d['stock_value'])}`", inline=True)
+    if d["has_options"]:
+        embed.add_field(name="Options Value", value=f"`{_fmt_money(d['options_value'])}`", inline=True)
+    embed.add_field(name="Cash", value=f"`{_fmt_money(d['cash'])}`", inline=True)
+    embed.add_field(name="Account Value", value=f"`{_fmt_money(d['account_value'])}`", inline=True)
+    if not d["has_options"]:
+        embed.add_field(name="Cost Basis", value=f"`{_fmt_money(d['stock_cost'])}`", inline=True)
+    embed.add_field(name="Unrealized P/L",
+                    value=f"`{_fmt_change(d['unrealized'], d['unrealized_pct'])}`", inline=True)
+    embed.add_field(name="Realized P/L", value=f"`{_fmt_pnl(d['realized_total'])}`", inline=True)
+    embed.add_field(name="Total P/L", value=f"`{_fmt_pnl(d['total_pnl'])}`", inline=True)
+    embed.add_field(name="Today (stocks)",
+                    value=f"`{_fmt_change(d['day_change'], d['day_pct'])}`", inline=True)
     return embed
+
+
+def _build_today_embed(target: discord.abc.User, d: dict) -> discord.Embed:
+    """Granular day view: each stock's move today, biggest movers first."""
+    priced = [h for h in d["stocks"] if h.get("available")]
+    movers = sorted(priced, key=lambda h: h["day_change"], reverse=True)
+
+    lines: list[str] = []
+    for h in movers:
+        sign = "+" if h["day_change"] >= 0 else ""
+        psign = "+" if h["day_pct"] >= 0 else ""
+        emoji = "🟢" if h["day_change"] >= 0 else ("🔴" if h["day_change"] < 0 else "⚪")
+        lines.append(
+            f"{emoji} [`{h['sym']}`]({_yahoo_url(h['sym'])}) · {h['prev']:,.2f} → **{h['price']:,.2f}** "
+            f"`{psign}{h['day_pct']:.2f}%` · {sign}{_fmt_money(h['day_change'])}"
+        )
+    unpriced = [h for h in d["stocks"] if not h.get("available")]
+    for h in unpriced:
+        lines.append(f"`{h['sym']}` · *price unavailable*")
+
+    description = "\n".join(lines) if lines else "_No priced stock positions today._"
+    color = 0x57F287 if d["day_change"] >= 0 else 0xED4245
+    embed = discord.Embed(
+        title=f"{target.display_name}'s Portfolio — Today",
+        description=description,
+        color=color,
+    )
+    base = d["stock_value"] - d["day_change"]
+    embed.add_field(name="Day P/L (stocks)",
+                    value=f"`{_fmt_change(d['day_change'], d['day_pct'])}`", inline=True)
+    if movers:
+        top = movers[0]
+        embed.add_field(name="Top gainer",
+                        value=f"`{top['sym']}` {('+' if top['day_pct']>=0 else '')}{top['day_pct']:.2f}%",
+                        inline=True)
+        bot_ = movers[-1]
+        embed.add_field(name="Top loser",
+                        value=f"`{bot_['sym']}` {('+' if bot_['day_pct']>=0 else '')}{bot_['day_pct']:.2f}%",
+                        inline=True)
+    embed.set_footer(text="Day change reflects stock positions only (options excluded).")
+    return embed
+
+
+async def _build_profile_embed(target: discord.abc.User) -> discord.Embed | None:
+    """Back-compat thin wrapper: compute + render the overview embed."""
+    data = await _compute_portfolio(str(target.id))
+    if data is None:
+        return None
+    return _build_overview_embed(target, data)
+
+
+# ── Equity curve: snapshots, backfill, rendering ─────────────────────────────
+
+
+def _parse_utc(iso: str) -> datetime | None:
+    """Parse an ISO timestamp to an aware UTC datetime (None on failure)."""
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _shares_held_asof(trades: list[dict], cutoff: datetime) -> float:
+    """Net shares held after applying all of a ticker's trades up to `cutoff`."""
+    shares = 0.0
+    for t in trades:
+        dt = _parse_utc(t["executed_at"])
+        if dt is None or dt > cutoff:
+            continue
+        if t["side"] == "buy":
+            shares += t["shares"]
+        else:
+            shares -= min(t["shares"], shares)
+    return shares
+
+
+def _reconstruct_stock_history_sync(trades: list[dict], end_date: date) -> list[tuple]:
+    """Reconstruct daily market value of stock HOLDINGS from the trade log using
+    yfinance historical closes. Returns [(date, stock_value), ...]. Synchronous
+    (pandas/yfinance) — run in an executor. Options and cash are not modelled."""
+    import yfinance as yf
+    import pandas as pd
+
+    parsed = [(_parse_utc(t["executed_at"]), t) for t in trades]
+    parsed = [(dt, t) for dt, t in parsed if dt is not None]
+    if not parsed:
+        return []
+    first = min(dt for dt, _ in parsed).date()
+    if first > end_date:
+        return []
+
+    tickers = sorted({t["ticker"] for _, t in parsed})
+    closes: dict[str, dict] = {}
+    for sym in tickers:
+        try:
+            h = yf.Ticker(sym).history(
+                start=first.isoformat(),
+                end=(end_date + timedelta(days=1)).isoformat(),
+                interval="1d",
+                auto_adjust=True,
+            )
+        except Exception:
+            continue
+        if h is None or h.empty or "Close" not in h:
+            continue
+        s = h["Close"]
+        s.index = [ts.date() for ts in s.index]
+        s = s[~s.index.duplicated(keep="last")]
+        closes[sym] = s
+
+    if not closes:
+        return []
+
+    all_dates = sorted({d for s in closes.values() for d in s.index if first <= d <= end_date})
+    if not all_dates:
+        return []
+
+    # Forward-fill each ticker's close across the shared trading-day axis.
+    ff: dict[str, dict] = {}
+    for sym, s in closes.items():
+        ff[sym] = s.reindex(all_dates).ffill().to_dict()
+
+    by_ticker: dict[str, list[dict]] = {}
+    for _, t in parsed:
+        by_ticker.setdefault(t["ticker"], []).append(t)
+
+    out: list[tuple] = []
+    for d in all_dates:
+        cutoff = datetime(d.year, d.month, d.day, 23, 59, 59, tzinfo=timezone.utc)
+        total = 0.0
+        for sym in tickers:
+            shares = _shares_held_asof(by_ticker.get(sym, []), cutoff)
+            if shares <= 0:
+                continue
+            px = ff.get(sym, {}).get(d)
+            if px is not None and not pd.isna(px):
+                total += shares * float(px)
+        out.append((d, total))
+    return out
+
+
+async def _ensure_backfill(uid: str, trades: list[dict]) -> None:
+    """Reconstruct and store this user's historical stock-value curve once."""
+    end = datetime.now(timezone.utc).date() - timedelta(days=1)  # leave today to live snapshots
+    loop = asyncio.get_running_loop()
+    hist = await loop.run_in_executor(None, _reconstruct_stock_history_sync, trades, end)
+    rows = [
+        {
+            "discord_user": uid,
+            "captured_at": datetime(d.year, d.month, d.day, 21, 0, 0, tzinfo=timezone.utc).isoformat(),
+            "account_value": v,
+            "stock_value": v,
+            "options_value": 0.0,
+            "cash": 0.0,
+            "kind": "backfill",
+        }
+        for d, v in hist
+    ]
+    if rows:
+        await queries.insert_portfolio_snapshots_bulk(rows)
+
+
+async def _take_live_snapshot(uid: str, data: dict | None = None) -> None:
+    """Store one live equity-curve point for a user (computes the portfolio if not given)."""
+    if data is None:
+        data = await _compute_portfolio(uid)
+    if data is None:
+        return
+    await queries.insert_portfolio_snapshot(
+        uid, data["account_value"], data["stock_value"], data["options_value"], data["cash"]
+    )
+
+
+def _render_equity_curve_png(name: str, points: list[tuple]) -> bytes:
+    """Render an equity curve to a PNG (Tokyo-Night styled). Synchronous — run in executor.
+    `points` is [(datetime, account_value), ...] sorted ascending."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    up = ys[-1] >= ys[0]
+    line = "#9ece6a" if up else "#f7768e"
+
+    fig, ax = plt.subplots(figsize=(9, 4.5), dpi=110)
+    fig.patch.set_facecolor("#1a1b26")
+    ax.set_facecolor("#1a1b26")
+    ax.plot(xs, ys, color=line, linewidth=2.0)
+    ax.fill_between(xs, ys, min(ys), color=line, alpha=0.12)
+
+    ax.set_title(f"{name}'s Portfolio Value", color="#c0caf5", fontsize=14, pad=12)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    for spine in ("left", "bottom"):
+        ax.spines[spine].set_color("#414868")
+    ax.tick_params(colors="#a9b1d6", labelsize=9)
+    ax.grid(True, color="#292e42", linewidth=0.6)
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"${v:,.0f}"))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
+    fig.autofmt_xdate(rotation=0, ha="center")
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+async def _build_graph(target: discord.abc.User, data: dict | None = None):
+    """Build (discord.File, discord.Embed) for a user's equity curve, or (None, error_embed)."""
+    uid = str(target.id)
+    trades = await queries.get_stock_trades(uid)
+    if trades and not await queries.has_backfill_snapshots(uid):
+        try:
+            await _ensure_backfill(uid, trades)
+        except Exception:
+            log.exception("backfill failed for %s", uid)
+
+    snaps = await queries.get_portfolio_snapshots(uid)
+    points: list[tuple] = []
+    for s in snaps:
+        dt = _parse_utc(s["captured_at"])
+        if dt is not None:
+            points.append((dt, s["account_value"]))
+
+    # Always anchor the curve to the user's current account value.
+    if data is None:
+        data = await _compute_portfolio(uid)
+    if data is not None:
+        now = datetime.now(timezone.utc)
+        if not points or (now - points[-1][0]) > timedelta(minutes=30):
+            points.append((now, data["account_value"]))
+
+    if len(points) < 2:
+        err = discord.Embed(
+            title=f"{target.display_name}'s Portfolio Value",
+            description=(
+                "Not enough history to graph yet — I need at least two data points.\n"
+                "The bot snapshots portfolios hourly, so check back later, or this fills in "
+                "automatically once you've held positions across more than one day."
+            ),
+            color=0xE0AF68,
+        )
+        return None, err
+
+    png = await asyncio.get_running_loop().run_in_executor(
+        None, _render_equity_curve_png, target.display_name, points
+    )
+    file = discord.File(io.BytesIO(png), filename="portfolio.png")
+
+    first_v, last_v = points[0][1], points[-1][1]
+    change = last_v - first_v
+    pct = (change / first_v * 100) if first_v else 0.0
+    color = 0x57F287 if change >= 0 else 0xED4245
+    embed = discord.Embed(title=f"{target.display_name}'s Portfolio Value", color=color)
+    embed.set_image(url="attachment://portfolio.png")
+    span_days = (points[-1][0] - points[0][0]).days or 1
+    embed.add_field(name="Now", value=f"`{_fmt_money(last_v)}`", inline=True)
+    embed.add_field(name=f"Change ({span_days}d)",
+                    value=f"`{_fmt_change(change, pct)}`", inline=True)
+    embed.set_footer(text="Points before today are reconstructed from your stock trades "
+                          "(cash/options excluded); live points include everything.")
+    return file, embed
+
+
+# ── Interactive profile view ─────────────────────────────────────────────────
+
+
+class PortfolioView(discord.ui.View):
+    """Buttons under /stock profile to switch between Overview, Today, and Graph."""
+
+    def __init__(self, target: discord.abc.User, data: dict, invoker_id: int) -> None:
+        super().__init__(timeout=180)
+        self.target = target
+        self.data = data
+        self.invoker_id = invoker_id
+        self.message: discord.Message | None = None
+        self._set_active("overview")
+
+    def _set_active(self, mode: str) -> None:
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = child.custom_id == mode
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.invoker_id:
+            await interaction.response.send_message(
+                "This isn't your portfolio menu — run `/stock profile` yourself.", ephemeral=True
+            )
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+    @discord.ui.button(label="Overview", style=discord.ButtonStyle.primary, custom_id="overview")
+    async def overview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self._set_active("overview")
+        await interaction.response.edit_message(
+            embed=_build_overview_embed(self.target, self.data), attachments=[], view=self
+        )
+
+    @discord.ui.button(label="Today", style=discord.ButtonStyle.secondary, custom_id="today")
+    async def today(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self._set_active("today")
+        await interaction.response.edit_message(
+            embed=_build_today_embed(self.target, self.data), attachments=[], view=self
+        )
+
+    @discord.ui.button(label="Graph", style=discord.ButtonStyle.secondary, custom_id="graph")
+    async def graph(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self._set_active("graph")
+        await interaction.response.defer()
+        file, embed = await _build_graph(self.target, self.data)
+        attachments = [file] if file is not None else []
+        await interaction.edit_original_response(embed=embed, attachments=attachments, view=self)
 
 
 # ── Cog ─────────────────────────────────────────────────────────────────────
@@ -468,11 +825,36 @@ async def _build_profile_embed(target: discord.abc.User) -> discord.Embed | None
 class StockCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
+        self.snapshot_loop.start()
+
+    def cog_unload(self) -> None:
+        self.snapshot_loop.cancel()
 
     stock = app_commands.Group(name="stock", description="Stock quotes, portfolio, and market data")
     option = app_commands.Group(
         name="option", description="Track option contracts (calls/puts)", parent=stock
     )
+
+    # ── Hourly equity-curve snapshot ─────────────────────────────────────────
+
+    @tasks.loop(hours=1)
+    async def snapshot_loop(self) -> None:
+        """Record one account-value point per portfolio user, hourly, for /stock graph."""
+        try:
+            users = await queries.get_all_portfolio_users()
+        except Exception:
+            log.exception("snapshot_loop: failed to list portfolio users")
+            return
+        for uid in users:
+            try:
+                await _take_live_snapshot(uid)
+            except Exception:
+                log.exception("snapshot_loop: snapshot failed for %s", uid)
+            await asyncio.sleep(0)  # cooperatively yield between users
+
+    @snapshot_loop.before_loop
+    async def _before_snapshot_loop(self) -> None:
+        await self.bot.wait_until_ready()
 
     # ── /stock lookup ────────────────────────────────────────────────────────
 
@@ -544,15 +926,41 @@ class StockCog(commands.Cog):
     ) -> None:
         await interaction.response.defer()
         target = user or interaction.user
-        embed = await _build_profile_embed(target)
-        if embed is None:
+        data = await _compute_portfolio(str(target.id))
+        if data is None:
             if target.id == interaction.user.id:
                 msg = "You don't have any trades yet. Add one with `/stock buy`."
             else:
                 msg = f"{target.display_name} hasn't logged any trades yet."
             await interaction.followup.send(msg, ephemeral=True)
             return
-        await interaction.followup.send(embed=embed)
+        embed = _build_overview_embed(target, data)
+        view = PortfolioView(target, data, interaction.user.id)
+        msg = await interaction.followup.send(embed=embed, view=view)
+        view.message = msg
+
+    # ── /stock graph ─────────────────────────────────────────────────────────
+
+    @stock.command(name="graph", description="Graph your portfolio value over time")
+    @app_commands.describe(user="Whose portfolio to graph (defaults to you)")
+    async def graph(
+        self, interaction: discord.Interaction, user: discord.User | None = None
+    ) -> None:
+        await interaction.response.defer()
+        target = user or interaction.user
+        data = await _compute_portfolio(str(target.id))
+        if data is None:
+            if target.id == interaction.user.id:
+                msg = "You don't have any trades yet. Add one with `/stock buy`."
+            else:
+                msg = f"{target.display_name} hasn't logged any trades yet."
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+        file, embed = await _build_graph(target, data)
+        if file is None:
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        await interaction.followup.send(embed=embed, file=file)
 
     # ── /stock cash ──────────────────────────────────────────────────────────
 

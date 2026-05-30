@@ -329,6 +329,19 @@ CREATE TABLE IF NOT EXISTS option_trades (
 );
 CREATE INDEX IF NOT EXISTS idx_option_trades_user
     ON option_trades(discord_user, underlying, expiry);
+
+CREATE TABLE IF NOT EXISTS portfolio_snapshots (
+    snapshot_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    discord_user  TEXT NOT NULL,
+    captured_at   TEXT NOT NULL,                  -- UTC ISO 8601
+    account_value REAL NOT NULL,                  -- stock+options+cash (live); stock-only (backfill)
+    stock_value   REAL NOT NULL DEFAULT 0,
+    options_value REAL NOT NULL DEFAULT 0,
+    cash          REAL NOT NULL DEFAULT 0,
+    kind          TEXT NOT NULL DEFAULT 'live'    -- 'live' | 'backfill'
+);
+CREATE INDEX IF NOT EXISTS idx_portfolio_snapshots_user
+    ON portfolio_snapshots(discord_user, captured_at);
 """
 
 
@@ -485,6 +498,23 @@ async def init_db() -> None:
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_option_trades_user "
                 "ON option_trades(discord_user, underlying, expiry)"
+            )
+            await db.commit()
+        except Exception:
+            pass
+        # Migration: add portfolio_snapshots for the /stock graph equity curve
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS portfolio_snapshots ("
+                "snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "discord_user TEXT NOT NULL, captured_at TEXT NOT NULL, "
+                "account_value REAL NOT NULL, stock_value REAL NOT NULL DEFAULT 0, "
+                "options_value REAL NOT NULL DEFAULT 0, cash REAL NOT NULL DEFAULT 0, "
+                "kind TEXT NOT NULL DEFAULT 'live')"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_portfolio_snapshots_user "
+                "ON portfolio_snapshots(discord_user, captured_at)"
             )
             await db.commit()
         except Exception:
