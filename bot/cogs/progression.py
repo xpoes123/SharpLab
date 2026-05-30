@@ -235,6 +235,36 @@ async def evaluate_user_achievements(uid: str) -> list[str]:
     return newly_unlocked
 
 
+async def announce_achievements(bot, uid: str, newly: list[str], channel=None) -> None:
+    """Send a celebratory unlock message. Posts in `channel` (pinging the user)
+    when given — e.g. the channel where the bet/trade happened — otherwise DMs
+    the user. Best-effort: never raises into the caller."""
+    achs = [ACHIEVEMENTS_BY_ID[a] for a in newly if a in ACHIEVEMENTS_BY_ID]
+    if not achs:
+        return
+    if len(achs) == 1:
+        a = achs[0]
+        title = "\U0001f3c6 Achievement Unlocked!"
+        desc = f"{a.emoji} **{a.name}** — {a.description}\n`+{a.xp_reward} XP`"
+    else:
+        title = f"\U0001f3c6 {len(achs)} Achievements Unlocked!"
+        desc = "\n".join(
+            f"{a.emoji} **{a.name}** — {a.description} `+{a.xp_reward} XP`" for a in achs
+        )
+    embed = discord.Embed(title=title, description=desc, colour=0xF1C40F)
+    try:
+        if channel is not None:
+            await channel.send(content=f"<@{uid}>", embed=embed)
+        else:
+            user = bot.get_user(int(uid)) if uid.isdigit() else None
+            if user is None and uid.isdigit():
+                user = await bot.fetch_user(int(uid))
+            if user is not None:
+                await user.send(embed=embed)
+    except Exception:
+        log.debug("could not announce achievements to %s", uid, exc_info=True)
+
+
 # ── Cog ──────────────────────────────────────────────────────────────────────
 
 
@@ -460,7 +490,9 @@ class ProgressionCog(commands.Cog):
             users = {e["discord_user"] for e in new_entries}
             for uid in users:
                 try:
-                    await self._check_user_achievements(uid)
+                    newly = await evaluate_user_achievements(uid)
+                    if newly:
+                        await announce_achievements(self.bot, uid, newly)
                 except Exception:
                     log.warning("Failed to check achievements for user %s", uid, exc_info=True)
         except Exception:
