@@ -2960,6 +2960,39 @@ async def get_all_portfolio_snapshots() -> list[dict]:
         return [dict(r) for r in await cur.fetchall()]
 
 
+async def get_ticker_meta_bulk(tickers: list[str]) -> dict[str, dict]:
+    """Cached metadata (quote_type, sector, category, beta, name, updated_at) for
+    the given tickers. Missing tickers are simply absent from the result."""
+    if not tickers:
+        return {}
+    placeholders = ",".join("?" for _ in tickers)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            f"SELECT * FROM ticker_meta WHERE ticker IN ({placeholders})",
+            [t.upper() for t in tickers],
+        )
+        return {r["ticker"]: dict(r) for r in await cur.fetchall()}
+
+
+async def upsert_ticker_meta(
+    ticker: str, quote_type: str | None, sector: str | None,
+    category: str | None, beta: float | None, name: str | None,
+) -> None:
+    """Insert or refresh one ticker's cached metadata, stamping updated_at."""
+    ts = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO ticker_meta (ticker, quote_type, sector, category, beta, name, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(ticker) DO UPDATE SET "
+            "quote_type=excluded.quote_type, sector=excluded.sector, category=excluded.category, "
+            "beta=excluded.beta, name=excluded.name, updated_at=excluded.updated_at",
+            (ticker.upper(), quote_type, sector, category, beta, name, ts),
+        )
+        await db.commit()
+
+
 async def get_latest_snapshot_at(discord_user: str) -> str | None:
     """captured_at of the user's most recent snapshot, or None. For cadence dedup."""
     async with aiosqlite.connect(DB_PATH) as db:

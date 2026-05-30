@@ -216,6 +216,85 @@ class TestServerEmbeds:
         assert "TSLA" in fields["Top loser"]
 
 
+class TestComposition:
+    META = {
+        "AAPL": {"quote_type": "EQUITY", "sector": "Technology"},
+        "NVDA": {"quote_type": "EQUITY", "sector": "Technology"},
+        "XOM": {"quote_type": "EQUITY", "sector": "Energy"},
+        "SPY": {"quote_type": "ETF", "category": "Large Blend"},
+        "VOO": {"quote_type": "ETF", "category": "Large Blend"},
+    }
+
+    def test_stock_vs_etf_split(self):
+        comp = stock._compute_composition(
+            [("AAPL", 6000), ("XOM", 2000), ("SPY", 2000)],
+            options_value=0, cash=0, meta=self.META,
+        )
+        assert comp["by_type"] == {"Stocks": 8000.0, "ETFs": 2000.0}
+        assert comp["invested_total"] == 10000.0
+        # largest single position weight
+        assert round(comp["max_weight"], 1) == 60.0 and comp["top_sym"] == "AAPL"
+
+    def test_sector_and_etf_bucket(self):
+        comp = stock._compute_composition(
+            [("AAPL", 1000), ("NVDA", 1000), ("XOM", 500), ("SPY", 500)],
+            options_value=0, cash=0, meta=self.META,
+        )
+        assert comp["by_sector"]["Technology"] == 2000.0
+        assert comp["by_sector"]["Energy"] == 500.0
+        assert comp["by_sector"]["ETF / Fund"] == 500.0
+
+    def test_slices_include_cash_and_options(self):
+        comp = stock._compute_composition(
+            [("AAPL", 5000)], options_value=1500, cash=2000, meta=self.META,
+        )
+        assert comp["slices"]["Stocks"] == 5000.0
+        assert comp["slices"]["Options"] == 1500.0
+        assert comp["slices"]["Cash"] == 2000.0
+        assert comp["account_total"] == 8500.0
+
+    def test_short_options_excluded_from_donut(self):
+        comp = stock._compute_composition(
+            [("AAPL", 5000)], options_value=-800, cash=0, meta=self.META,
+        )
+        assert "Options" not in comp["slices"]  # net-short premium isn't a positive slice
+
+    def test_persona_index_zen(self):
+        comp = stock._compute_composition(
+            [("SPY", 7000), ("VOO", 2000), ("AAPL", 1000)],
+            options_value=0, cash=0, meta=self.META,
+        )
+        assert "Index Zen" in stock._portfolio_persona(comp)
+
+    def test_persona_all_in(self):
+        comp = stock._compute_composition(
+            [("NVDA", 9000), ("AAPL", 1000)], options_value=0, cash=0, meta=self.META,
+        )
+        assert stock._portfolio_persona(comp) == "🎯 All-In NVDA"
+
+    def test_persona_theta_gang(self):
+        comp = stock._compute_composition(
+            [("AAPL", 1000)], options_value=500, cash=0, meta=self.META,
+        )
+        assert "Theta Gang" in stock._portfolio_persona(comp)
+
+    def test_donut_png(self):
+        png = stock._render_allocation_donut("X", {"Stocks": 8000, "ETFs": 2000, "Cash": 1000})
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+class TestTickerMetaQueries:
+    def test_upsert_and_bulk_get(self, tmp_db):
+        async def go():
+            await _queries.upsert_ticker_meta("aapl", "EQUITY", "Technology", None, 1.07, "Apple")
+            await _queries.upsert_ticker_meta("spy", "ETF", None, "Large Blend", None, "SPDR")
+            return await _queries.get_ticker_meta_bulk(["AAPL", "SPY", "MISSING"])
+        rows = _run(go())
+        assert rows["AAPL"]["quote_type"] == "EQUITY" and rows["AAPL"]["sector"] == "Technology"
+        assert rows["SPY"]["quote_type"] == "ETF" and rows["SPY"]["category"] == "Large Blend"
+        assert "MISSING" not in rows
+
+
 class TestLeaderboardRender:
     def test_all_time_sorted_by_total(self):
         rows = [_row("a", total=50), _row("b", total=300), _row("c", total=-10)]

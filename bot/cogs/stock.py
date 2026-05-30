@@ -3,7 +3,7 @@
 All commands live under a single /stock group:
 
 - /stock lookup <ticker>            — quote a single ticker (+ your position if any).
-- /stock profile [user]             — show your portfolio (Overview / Today / Graph buttons).
+- /stock profile [user]             — portfolio (Overview / Today / Graph / Allocation buttons).
 - /stock graph [user]               — equity curve of portfolio value over time.
 - /stock server                     — server-wide portfolio (Overview / Today / Graph).
 - /stock cash <amount> [action]     — set/deposit/withdraw uninvested cash.
@@ -182,6 +182,76 @@ async def fetch_quotes(tickers: list[str]) -> dict[str, dict]:
         return out
 
     return await asyncio.get_running_loop().run_in_executor(None, _fetch)
+
+
+# ── Ticker metadata (sector / quote type / beta), cached ─────────────────────
+
+_TICKER_META_TTL = timedelta(days=14)
+
+
+def _fetch_ticker_info(tickers: list[str]) -> dict[str, dict]:
+    """Blocking yfinance .info pull for several tickers. Run in an executor."""
+    import yfinance as yf
+
+    out: dict[str, dict] = {}
+    for sym in tickers:
+        try:
+            info = yf.Ticker(sym).info
+            out[sym] = {
+                "quote_type": info.get("quoteType"),
+                "sector": info.get("sector"),
+                "category": info.get("category"),
+                "beta": info.get("beta"),
+                "name": info.get("longName") or info.get("shortName"),
+            }
+        except Exception as e:
+            log.debug(f"ticker info fetch failed for {sym}: {e}")
+    return out
+
+
+async def get_ticker_metadata(tickers: list[str]) -> dict[str, dict]:
+    """{ticker: {quote_type, sector, category, beta, name}} for tickers, served
+    from the ticker_meta cache and refreshed from yfinance when missing or older
+    than _TICKER_META_TTL (.info is slow, so we cache aggressively)."""
+    wanted = sorted({t.upper() for t in tickers})
+    if not wanted:
+        return {}
+    cached = await queries.get_ticker_meta_bulk(wanted)
+    now = datetime.now(timezone.utc)
+    stale: list[str] = []
+    for t in wanted:
+        row = cached.get(t)
+        upd = _parse_utc(row["updated_at"]) if row else None
+        if row is None or upd is None or (now - upd) > _TICKER_META_TTL:
+            stale.append(t)
+
+    if stale:
+        fetched = await asyncio.get_running_loop().run_in_executor(
+            None, _fetch_ticker_info, stale
+        )
+        for t, info in fetched.items():
+            # Only persist a real hit (quote_type present); leave failures
+            # uncached so a transient error isn't sticky for two weeks.
+            if info.get("quote_type"):
+                await queries.upsert_ticker_meta(
+                    t, info["quote_type"], info["sector"], info["category"],
+                    info["beta"], info["name"],
+                )
+            cached[t] = {"ticker": t, **info}
+
+    out: dict[str, dict] = {}
+    for t in wanted:
+        row = cached.get(t)
+        if row is None:
+            continue
+        out[t] = {
+            "quote_type": row.get("quote_type"),
+            "sector": row.get("sector"),
+            "category": row.get("category"),
+            "beta": row.get("beta"),
+            "name": row.get("name"),
+        }
+    return out
 
 
 # ── Options ──────────────────────────────────────────────────────────────────
@@ -819,6 +889,17 @@ class PortfolioView(discord.ui.View):
         attachments = [file] if file is not None else []
         await interaction.edit_original_response(embed=embed, attachments=attachments, view=self)
 
+    @discord.ui.button(label="Allocation", style=discord.ButtonStyle.secondary, custom_id="allocation")
+    async def allocation(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self._set_active("allocation")
+        await interaction.response.defer()
+        holdings = [(h["sym"], h["value"]) for h in self.data["stocks"] if h.get("available")]
+        file, embed = await _build_allocation(
+            self.target.display_name, holdings, self.data["options_value"], self.data["cash"]
+        )
+        attachments = [file] if file is not None else []
+        await interaction.edit_original_response(embed=embed, attachments=attachments, view=self)
+
 
 # ── Leaderboard (period-rankable) ────────────────────────────────────────────
 
@@ -1321,6 +1402,166 @@ class ServerPortfolioView(discord.ui.View):
         file, embed = await _build_server_graph(self.name, self.snap_rows, self.data["account_value"])
         attachments = [file] if file is not None else []
         await interaction.edit_original_response(embed=embed, attachments=attachments, view=self)
+
+    @discord.ui.button(label="Allocation", style=discord.ButtonStyle.secondary, custom_id="allocation")
+    async def allocation(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self._set_active("allocation")
+        await interaction.response.defer()
+        holdings = [(sym, t["value"]) for sym, t in self.data["per_ticker"].items()]
+        file, embed = await _build_allocation(
+            self.name, holdings, self.data["options_value"], self.data["cash"]
+        )
+        attachments = [file] if file is not None else []
+        await interaction.edit_original_response(embed=embed, attachments=attachments, view=self)
+
+
+# ── Composition / allocation (stocks vs ETFs, sectors, persona) ──────────────
+
+_TYPE_LABELS = {"EQUITY": "Stocks", "ETF": "ETFs", "MUTUALFUND": "Funds"}
+
+
+def _compute_composition(
+    holdings: list[tuple], options_value: float, cash: float, meta: dict[str, dict]
+) -> dict:
+    """Bucket open stock holdings into Stocks/ETFs/Funds/Other (by quote type)
+    and by sector. `holdings` is [(ticker, market_value), ...]. Returns the type
+    split, sector split, full-account donut slices, and the largest position."""
+    by_type: dict[str, float] = {}
+    by_sector: dict[str, float] = {}
+    top_value = 0.0
+    top_sym = None
+    for sym, value in holdings:
+        m = meta.get(sym.upper(), {})
+        qt = (m.get("quote_type") or "").upper()
+        label = _TYPE_LABELS.get(qt, "Other")
+        by_type[label] = by_type.get(label, 0.0) + value
+        if qt == "EQUITY":
+            sec = m.get("sector") or "Unknown"
+        elif qt in ("ETF", "MUTUALFUND"):
+            sec = "ETF / Fund"
+        else:
+            sec = m.get("sector") or "Other"
+        by_sector[sec] = by_sector.get(sec, 0.0) + value
+        if value > top_value:
+            top_value, top_sym = value, sym
+
+    invested_total = sum(by_type.values())
+    slices = dict(by_type)
+    if options_value and options_value > 0:
+        slices["Options"] = options_value
+    if cash and cash > 0:
+        slices["Cash"] = cash
+    return {
+        "by_type": by_type,
+        "by_sector": by_sector,
+        "invested_total": invested_total,
+        "slices": slices,
+        "account_total": sum(slices.values()),
+        "options_value": options_value,
+        "cash": cash,
+        "max_weight": (top_value / invested_total * 100) if invested_total else 0.0,
+        "top_sym": top_sym,
+    }
+
+
+def _portfolio_persona(comp: dict) -> str:
+    """A lighthearted archetype label derived from the composition."""
+    inv = comp["invested_total"] or 0.0
+    bt = comp["by_type"]
+    etf_pct = (bt.get("ETFs", 0.0) + bt.get("Funds", 0.0)) / inv * 100 if inv else 0.0
+    acct = comp["account_total"] or 0.0
+    cash_pct = (comp["cash"] / acct * 100) if acct else 0.0
+    sectors = [s for s in comp["by_sector"] if s != "ETF / Fund"]
+
+    if comp["options_value"]:
+        return "🎰 Theta Gang"
+    if etf_pct >= 60:
+        return "🧘 Index Zen Master"
+    if comp["max_weight"] >= 60 and comp["top_sym"]:
+        return f"🎯 All-In {comp['top_sym']}"
+    if cash_pct >= 50:
+        return "💰 Cash Hoarder"
+    if len(sectors) >= 5:
+        return "🌐 Diversified"
+    return "⚖️ Balanced Trader"
+
+
+def _render_allocation_donut(title: str, slices: dict) -> bytes:
+    """Render an allocation donut chart to PNG. Synchronous — run in executor."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    items = sorted(slices.items(), key=lambda kv: kv[1], reverse=True)
+    labels = [k for k, _ in items]
+    vals = [v for _, v in items]
+    palette = ["#7aa2f7", "#9ece6a", "#e0af68", "#bb9af7", "#f7768e",
+               "#7dcfff", "#ff9e64", "#73daca", "#c0caf5", "#565f89"]
+    colors = [palette[i % len(palette)] for i in range(len(items))]
+
+    fig, ax = plt.subplots(figsize=(6.5, 4.8), dpi=110)
+    fig.patch.set_facecolor("#1a1b26")
+    wedges, _ = ax.pie(
+        vals, colors=colors, startangle=90,
+        wedgeprops=dict(width=0.42, edgecolor="#1a1b26", linewidth=2),
+    )
+    ax.set_title(title, color="#c0caf5", fontsize=13, pad=10)
+    total = sum(vals) or 1.0
+    legend = [f"{l}  {v / total * 100:.0f}%" for l, v in items]
+    ax.legend(wedges, legend, loc="center left", bbox_to_anchor=(0.98, 0.5),
+              frameon=False, labelcolor="#a9b1d6", fontsize=10)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def _build_allocation_embed(name: str, comp: dict, persona: str) -> discord.Embed:
+    inv = comp["invested_total"]
+    lines: list[str] = []
+    for label in ("Stocks", "ETFs", "Funds", "Other"):
+        v = comp["by_type"].get(label)
+        if not v:
+            continue
+        pct = (v / inv * 100) if inv else 0.0
+        lines.append(f"**{label}** · {_fmt_money(v)} · `{pct:.1f}%`")
+    type_block = "\n".join(lines) if lines else "_No stock/ETF holdings._"
+
+    sec_items = sorted(comp["by_sector"].items(), key=lambda kv: kv[1], reverse=True)[:6]
+    sec_block = "\n".join(
+        f"{s} · `{(v / inv * 100 if inv else 0):.0f}%`" for s, v in sec_items
+    ) if sec_items else "—"
+
+    embed = discord.Embed(
+        title=f"{name} — Allocation",
+        description=f"**By type** (share of stock holdings)\n{type_block}",
+        color=0x7AA2F7,
+    )
+    embed.add_field(name="By sector", value=sec_block, inline=False)
+    embed.set_image(url="attachment://allocation.png")
+    embed.set_footer(text=f"Persona: {persona} · donut shows full account incl. cash/options")
+    return embed
+
+
+async def _build_allocation(name: str, holdings: list[tuple], options_value: float, cash: float):
+    """Build (discord.File donut, discord.Embed) for an allocation breakdown."""
+    meta = await get_ticker_metadata([s for s, _ in holdings]) if holdings else {}
+    comp = _compute_composition(holdings, options_value, cash, meta)
+    if not comp["slices"]:
+        embed = discord.Embed(
+            title=f"{name} — Allocation",
+            description="_No open positions to break down yet._",
+            color=0x7AA2F7,
+        )
+        return None, embed
+    persona = _portfolio_persona(comp)
+    png = await asyncio.get_running_loop().run_in_executor(
+        None, _render_allocation_donut, f"{name} — Allocation", comp["slices"]
+    )
+    file = discord.File(io.BytesIO(png), filename="allocation.png")
+    return file, _build_allocation_embed(name, comp, persona)
 
 
 # ── Cog ─────────────────────────────────────────────────────────────────────
