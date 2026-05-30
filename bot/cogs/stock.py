@@ -819,6 +819,204 @@ class PortfolioView(discord.ui.View):
         await interaction.edit_original_response(embed=embed, attachments=attachments, view=self)
 
 
+# ── Leaderboard (period-rankable) ────────────────────────────────────────────
+
+_PERIOD_LABELS = {
+    "all": "All-Time",
+    "ytd": "Year to Date",
+    "weekly": "This Week",
+    "daily": "Today",
+}
+
+
+async def _leaderboard_rows(users: list[str]) -> list[dict]:
+    """Price every trader once and return per-user metrics for all periods:
+    all-time P/L, today's stock move, current account value, and the snapshot
+    baselines used for weekly / YTD gains."""
+    all_positions: dict[str, list[dict]] = {}
+    all_options: dict[str, list[dict]] = {}
+    ticker_set: set[str] = set()
+    open_option_specs: list[dict] = []
+    for uid in users:
+        positions = await queries.get_stock_positions_full(uid)
+        options = await queries.get_option_positions_full(uid)
+        all_positions[uid] = positions
+        all_options[uid] = options
+        for p in positions:
+            if not p["closed"]:
+                ticker_set.add(p["ticker"])
+        for p in options:
+            if not p["closed"]:
+                open_option_specs.append(p)
+
+    quotes = await fetch_quotes(sorted(ticker_set)) if ticker_set else {}
+    option_prices = await _price_option_positions(open_option_specs)
+
+    now = datetime.now(timezone.utc)
+    week_cut = (now - timedelta(days=7)).isoformat()
+    ytd_cut = datetime(now.year, 1, 1, tzinfo=timezone.utc).isoformat()
+
+    rows: list[dict] = []
+    for uid in users:
+        positions = all_positions[uid]
+        unrealized = 0.0
+        realized = sum(p["realized_pnl"] for p in positions)
+        invested = sum(p["invested"] for p in positions)
+        stock_value = 0.0
+        stock_value_prev = 0.0
+        day_gain = 0.0
+        for p in positions:
+            if p["closed"]:
+                continue
+            q = quotes.get(p["ticker"])
+            if not q:
+                continue
+            unrealized += p["shares"] * (q["price"] - p["dca_price"])
+            stock_value += p["shares"] * q["price"]
+            stock_value_prev += p["shares"] * q["prev_close"]
+            day_gain += p["shares"] * (q["price"] - q["prev_close"])
+
+        options_value = 0.0
+        for p in all_options[uid]:
+            realized += p["realized_pnl"]
+            invested += p["invested"]
+            if p["closed"]:
+                continue
+            key = (p["underlying"], p["opt_type"], p["strike"], p["expiry"])
+            premium = option_prices.get(key, {}).get("premium")
+            pl = _option_position_pnl(p, premium)
+            unrealized += pl["unrealized"]
+            options_value += pl["value"]
+
+        cash = await queries.get_stock_cash(uid)
+        total = unrealized + realized
+        rows.append({
+            "user_id": uid,
+            "total": total,
+            "invested": invested,
+            "pct": (total / invested * 100) if invested > 0 else 0.0,
+            "account_value": stock_value + options_value + cash,
+            "day_gain": day_gain,
+            "day_base": stock_value_prev,
+            "week_base": await queries.get_snapshot_value_asof(uid, week_cut),
+            "ytd_base": await queries.get_snapshot_value_asof(uid, ytd_cut),
+        })
+    return rows
+
+
+def _pct_str(pct: float) -> str:
+    return f"{'+' if pct >= 0 else ''}{pct:.2f}%"
+
+
+def _render_leaderboard_embed(rows: list[dict], period: str, names: dict[str, str]) -> discord.Embed:
+    """Rank `rows` for one period and render the leaderboard embed."""
+    hidden = 0
+    if period == "all":
+        ranked = sorted(rows, key=lambda r: r["total"], reverse=True)
+    elif period == "daily":
+        ranked = sorted(rows, key=lambda r: r["day_gain"], reverse=True)
+    else:
+        base_key = "week_base" if period == "weekly" else "ytd_base"
+        eligible = [r for r in rows if r[base_key] is not None]
+        hidden = len(rows) - len(eligible)
+        ranked = sorted(
+            eligible, key=lambda r: r["account_value"] - r[base_key], reverse=True
+        )
+
+    lines: list[str] = []
+    for rank, r in enumerate(ranked[:10], start=1):
+        medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"`#{rank:>2}`")
+        name = names.get(r["user_id"], f"<@{r['user_id']}>")
+        if period == "all":
+            lines.append(
+                f"{medal} **{name}** · P/L `{_fmt_pnl(r['total'])}` · "
+                f"`{_pct_str(r['pct'])}` on `{_fmt_money(r['invested'])}`"
+            )
+        elif period == "daily":
+            base = r["day_base"]
+            pct = (r["day_gain"] / base * 100) if base else 0.0
+            lines.append(f"{medal} **{name}** · `{_fmt_pnl(r['day_gain'])}` · `{_pct_str(pct)}`")
+        else:
+            base = r["week_base"] if period == "weekly" else r["ytd_base"]
+            gain = r["account_value"] - base
+            pct = (gain / base * 100) if base else 0.0
+            lines.append(f"{medal} **{name}** · `{_fmt_pnl(gain)}` · `{_pct_str(pct)}`")
+
+    color = 0x5865F2
+    embed = discord.Embed(
+        title=f"📊 Stock Leaderboard — {_PERIOD_LABELS[period]}",
+        description="\n".join(lines) if lines else "_No data for this period yet._",
+        color=color,
+    )
+    if period == "all":
+        embed.set_footer(text=f"{len(rows)} trader(s) · all-time P/L (realized + unrealized)")
+    elif period == "daily":
+        embed.set_footer(text=f"{len(rows)} trader(s) · today's stock move (options/cash excluded)")
+    else:
+        note = f" · {hidden} hidden (no history this far back)" if hidden else ""
+        embed.set_footer(text=f"{len(rows) - hidden} ranked · account-value change{note}")
+    return embed
+
+
+class LeaderboardView(discord.ui.View):
+    """Period switcher for /stock leaderboard. Metrics are precomputed, so the
+    buttons just re-rank and re-render — no refetch."""
+
+    def __init__(self, rows: list[dict], names: dict[str, str], period: str,
+                 invoker_id: int) -> None:
+        super().__init__(timeout=180)
+        self.rows = rows
+        self.names = names
+        self.invoker_id = invoker_id
+        self.message: discord.Message | None = None
+        self._set_active(period)
+
+    def _set_active(self, period: str) -> None:
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = child.custom_id == period
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.invoker_id:
+            await interaction.response.send_message(
+                "This isn't your leaderboard — run `/stock leaderboard` yourself.", ephemeral=True
+            )
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+    async def _switch(self, interaction: discord.Interaction, period: str) -> None:
+        self._set_active(period)
+        await interaction.response.edit_message(
+            embed=_render_leaderboard_embed(self.rows, period, self.names), view=self
+        )
+
+    @discord.ui.button(label="Today", style=discord.ButtonStyle.secondary, custom_id="daily")
+    async def daily(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._switch(interaction, "daily")
+
+    @discord.ui.button(label="Week", style=discord.ButtonStyle.secondary, custom_id="weekly")
+    async def weekly(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._switch(interaction, "weekly")
+
+    @discord.ui.button(label="YTD", style=discord.ButtonStyle.secondary, custom_id="ytd")
+    async def ytd(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._switch(interaction, "ytd")
+
+    @discord.ui.button(label="All-Time", style=discord.ButtonStyle.primary, custom_id="all")
+    async def all_time(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._switch(interaction, "all")
+
+
 # ── Cog ─────────────────────────────────────────────────────────────────────
 
 
@@ -1161,19 +1359,34 @@ class StockCog(commands.Cog):
 
     # ── /stock leaderboard ───────────────────────────────────────────────────
 
-    @stock.command(name="leaderboard", description="Server-wide P/L leaderboard")
-    @app_commands.describe(sort="Rank by % return on capital (default) or total P/L in dollars")
+    async def _resolve_names(self, uids: list[str]) -> dict[str, str]:
+        """Resolve discord user IDs to display names (cached + fetch fallback)."""
+        names: dict[str, str] = {}
+        for uid in uids:
+            user = self.bot.get_user(int(uid)) if uid.isdigit() else None
+            if user is None and uid.isdigit():
+                try:
+                    user = await self.bot.fetch_user(int(uid))
+                except Exception:
+                    user = None
+            names[uid] = user.display_name if user else f"<@{uid}>"
+        return names
+
+    @stock.command(name="leaderboard", description="Server-wide portfolio leaderboard")
+    @app_commands.describe(period="Ranking window — switch any time with the buttons")
     @app_commands.choices(
-        sort=[
-            app_commands.Choice(name="percent", value="percent"),
-            app_commands.Choice(name="total", value="total"),
+        period=[
+            app_commands.Choice(name="all-time", value="all"),
+            app_commands.Choice(name="ytd", value="ytd"),
+            app_commands.Choice(name="weekly", value="weekly"),
+            app_commands.Choice(name="daily", value="daily"),
         ]
     )
     async def leaderboard(
-        self, interaction: discord.Interaction, sort: app_commands.Choice[str] | None = None
+        self, interaction: discord.Interaction, period: app_commands.Choice[str] | None = None
     ) -> None:
         await interaction.response.defer()
-        sort_by = sort.value if sort else "percent"
+        sel = period.value if period else "all"
 
         stock_users = await queries.get_users_with_trades()
         option_users = await queries.get_users_with_option_trades()
@@ -1182,95 +1395,12 @@ class StockCog(commands.Cog):
             await interaction.followup.send("Nobody has logged any trades yet.", ephemeral=True)
             return
 
-        # Per-user positions in one pass, then batch-fetch stock prices for the
-        # union of open tickers and option prices for the union of open contracts.
-        all_positions: dict[str, list[dict]] = {}
-        all_options: dict[str, list[dict]] = {}
-        ticker_set: set[str] = set()
-        open_option_specs: list[dict] = []
-        for uid in users:
-            positions = await queries.get_stock_positions_full(uid)
-            options = await queries.get_option_positions_full(uid)
-            all_positions[uid] = positions
-            all_options[uid] = options
-            for p in positions:
-                if not p["closed"]:
-                    ticker_set.add(p["ticker"])
-            for p in options:
-                if not p["closed"]:
-                    open_option_specs.append(p)
-
-        quotes = await fetch_quotes(sorted(ticker_set)) if ticker_set else {}
-        option_prices = await _price_option_positions(open_option_specs)
-
-        rows: list[dict] = []
-        for uid in users:
-            positions = all_positions[uid]
-            unrealized = 0.0
-            realized = sum(p["realized_pnl"] for p in positions)
-            invested = sum(p["invested"] for p in positions)
-            for p in positions:
-                if p["closed"]:
-                    continue
-                q = quotes.get(p["ticker"])
-                if not q:
-                    continue
-                unrealized += p["shares"] * (q["price"] - p["dca_price"])
-            for p in all_options[uid]:
-                realized += p["realized_pnl"]
-                invested += p["invested"]
-                if p["closed"]:
-                    continue
-                key = (p["underlying"], p["opt_type"], p["strike"], p["expiry"])
-                premium = option_prices.get(key, {}).get("premium")
-                unrealized += _option_position_pnl(p, premium)["unrealized"]
-            total = unrealized + realized
-            rows.append({
-                "user_id": uid,
-                "unrealized": unrealized,
-                "realized": realized,
-                "total": total,
-                "invested": invested,
-                "pct": (total / invested * 100) if invested > 0 else 0.0,
-            })
-
-        sort_key = "pct" if sort_by == "percent" else "total"
-        rows.sort(key=lambda r: r[sort_key], reverse=True)
-        top = rows[:10]
-
-        async def _name(uid: str) -> str:
-            user = self.bot.get_user(int(uid)) if uid.isdigit() else None
-            if user is None and uid.isdigit():
-                try:
-                    user = await self.bot.fetch_user(int(uid))
-                except Exception:
-                    user = None
-            return user.display_name if user else f"<@{uid}>"
-
-        lines: list[str] = []
-        for rank, r in enumerate(top, start=1):
-            medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"`#{rank:>2}`")
-            name = await _name(r["user_id"])
-            sign = "+" if r["pct"] >= 0 else ""
-            if sort_by == "percent":
-                lines.append(
-                    f"{medal} **{name}** · `{sign}{r['pct']:.2f}%` · "
-                    f"P/L `{_fmt_pnl(r['total'])}` on `{_fmt_money(r['invested'])}`"
-                )
-            else:
-                lines.append(
-                    f"{medal} **{name}** · P/L `{_fmt_pnl(r['total'])}` · "
-                    f"`{sign}{r['pct']:.2f}%` on `{_fmt_money(r['invested'])}`"
-                )
-
-        label = "% return on capital" if sort_by == "percent" else "total P/L"
-        embed = discord.Embed(
-            title="📊 Stock Portfolio Leaderboard",
-            description="\n".join(lines),
-            color=0x5865F2,
-        )
-        embed.set_footer(text=f"{len(rows)} trader(s) · sorted by {label}")
-        await interaction.followup.send(embed=embed)
+        rows = await _leaderboard_rows(users)
+        names = await self._resolve_names([r["user_id"] for r in rows])
+        view = LeaderboardView(rows, names, sel, interaction.user.id)
+        embed = _render_leaderboard_embed(rows, sel, names)
+        msg = await interaction.followup.send(embed=embed, view=view)
+        view.message = msg
 
     # ── /stock movers ────────────────────────────────────────────────────────
 
