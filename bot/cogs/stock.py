@@ -42,6 +42,15 @@ def _yahoo_url(ticker: str) -> str:
     return f"https://finance.yahoo.com/quote/{ticker}"
 
 
+async def _check_achievements(uid: str) -> None:
+    """Fire achievement evaluation after a trade (best-effort)."""
+    try:
+        from bot.cogs.progression import evaluate_user_achievements
+        await evaluate_user_achievements(uid)
+    except Exception:
+        log.debug("achievement check failed for %s", uid, exc_info=True)
+
+
 # Common crypto tickers — typed bare (BTC) they map to Yahoo's BTC-USD form.
 # Anything with an explicit -USD suffix is also treated as crypto/FX.
 CRYPTO_SYMBOLS = {
@@ -2218,6 +2227,7 @@ class StockCog(commands.Cog):
         await queries.add_stock_trade(
             str(interaction.user.id), symbol, "buy", shares, price, executed_at, notes
         )
+        await _check_achievements(str(interaction.user.id))
         holding = await queries.get_stock_holding(str(interaction.user.id), symbol)
         position_line = (
             f"Position: **{holding['shares']:g}** sh @ DCA **{holding['dca_price']:,.2f}**"
@@ -2278,6 +2288,7 @@ class StockCog(commands.Cog):
         await queries.add_stock_trade(
             str(interaction.user.id), symbol, "sell", shares, price, executed_at, notes
         )
+        await _check_achievements(str(interaction.user.id))
         holding = await queries.get_stock_holding(str(interaction.user.id), symbol)
         position_line = (
             f"Position: **{holding['shares']:g}** sh @ DCA **{holding['dca_price']:,.2f}**"

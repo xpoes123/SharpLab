@@ -2838,6 +2838,20 @@ async def get_users_with_trades() -> list[str]:
         return [r[0] for r in rows]
 
 
+async def get_all_achievement_users() -> list[str]:
+    """Every user with an achievement-relevant footprint: casino play, a bet, a
+    stock trade, or an option trade. Used to backfill achievements."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT discord_user FROM casino_history "
+            "UNION SELECT discord_user FROM bets "
+            "UNION SELECT discord_user FROM stock_trades "
+            "UNION SELECT discord_user FROM option_trades"
+        )
+        rows = await cur.fetchall()
+        return [r[0] for r in rows]
+
+
 # ── Stock cash positions ────────────────────────────────────────────────────
 # A simple per-user cash balance, decoupled from the trade log. Buys/sells do
 # NOT touch it automatically — it's a hand-managed figure so the portfolio can
