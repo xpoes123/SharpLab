@@ -110,3 +110,25 @@ class TestEvaluateAndBackfill:
         first, second = _run(go())
         assert {"stock_first", "stock_green", "crypto_first"} <= set(first)
         assert second == []  # idempotent — already achieved
+
+
+class TestAnnounce:
+    def test_channel_post_pings_user(self):
+        from unittest.mock import AsyncMock, MagicMock
+        ch = MagicMock(); ch.send = AsyncMock()
+        _run(_prog.announce_achievements(MagicMock(), "123", ["crypto_first"], channel=ch))
+        assert ch.send.call_args.kwargs["content"] == "<@123>"
+        assert "Unlocked" in ch.send.call_args.kwargs["embed"].title
+
+    def test_dm_fallback_without_channel(self):
+        from unittest.mock import AsyncMock, MagicMock
+        user = MagicMock(); user.send = AsyncMock()
+        bot = MagicMock(); bot.get_user.return_value = user
+        _run(_prog.announce_achievements(bot, "123", ["stock_first"], channel=None))
+        assert user.send.called
+
+    def test_empty_does_nothing(self):
+        from unittest.mock import AsyncMock, MagicMock
+        ch = MagicMock(); ch.send = AsyncMock()
+        _run(_prog.announce_achievements(MagicMock(), "123", [], channel=ch))
+        assert not ch.send.called
