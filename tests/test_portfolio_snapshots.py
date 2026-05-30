@@ -330,6 +330,48 @@ class TestRiskAndTradeQuality:
         assert stock._trade_quality(trades) is None
 
 
+class TestBenchmark:
+    def _pts(self, vals):
+        from datetime import date as _date
+        base = _date(2026, 1, 1)
+        return [
+            (datetime(2026, 1, 1, tzinfo=timezone.utc).replace(day=1) + timedelta(days=i), v)
+            for i, v in enumerate(vals)
+        ]
+
+    def test_benchmark_scaled_to_portfolio_start(self):
+        from datetime import date as _date
+        pts = [
+            (datetime(2026, 1, 1, tzinfo=timezone.utc), 10000),
+            (datetime(2026, 1, 2, tzinfo=timezone.utc), 11000),
+        ]
+        spy = {_date(2026, 1, 1): 400.0, _date(2026, 1, 2): 440.0}  # +10%
+        bench = stock._benchmark_points(pts, spy)
+        assert round(bench[0][1]) == 10000  # starts at same dollars
+        assert round(bench[1][1]) == 11000  # +10% -> 11000
+
+    def test_alpha_is_return_gap(self):
+        from datetime import date as _date
+        pts = [
+            (datetime(2026, 1, 1, tzinfo=timezone.utc), 10000),
+            (datetime(2026, 1, 2, tzinfo=timezone.utc), 12000),  # +20%
+        ]
+        spy = {_date(2026, 1, 1): 400.0, _date(2026, 1, 2): 440.0}  # +10%
+        bench = stock._benchmark_points(pts, spy)
+        stats = stock._benchmark_stats(pts, bench)
+        assert round(stats["alpha"], 1) == 10.0  # 20% - 10%
+
+    def test_benchmark_none_without_spy(self):
+        pts = [(datetime(2026, 1, 1, tzinfo=timezone.utc), 100),
+               (datetime(2026, 1, 2, tzinfo=timezone.utc), 110)]
+        assert stock._benchmark_points(pts, {}) is None
+
+    def test_sharpe_needs_enough_history(self):
+        assert stock._sharpe_ratio([100, 101, 102]) is None  # too few
+        vals = [100 * (1.001 ** i) for i in range(40)]  # steady climb, 39 returns
+        assert stock._sharpe_ratio(vals) is not None
+
+
 class TestTickerMetaQueries:
     def test_upsert_and_bulk_get(self, tmp_db):
         async def go():
