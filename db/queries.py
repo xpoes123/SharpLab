@@ -2852,6 +2852,61 @@ async def get_all_achievement_users() -> list[str]:
         return [r[0] for r in rows]
 
 
+# ── Reaction roles (auto-role panels) ────────────────────────────────────────
+
+
+async def add_reaction_role(
+    message_id: str, emoji: str, role_id: str, guild_id: str, channel_id: str
+) -> None:
+    """Bind an emoji on a message to a role (idempotent on message_id+emoji)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO reaction_roles (message_id, emoji, role_id, guild_id, channel_id) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(message_id, emoji) DO UPDATE SET role_id=excluded.role_id",
+            (message_id, emoji, role_id, guild_id, channel_id),
+        )
+        await db.commit()
+
+
+async def remove_reaction_role(message_id: str, emoji: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "DELETE FROM reaction_roles WHERE message_id = ? AND emoji = ?",
+            (message_id, emoji),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def get_reaction_role(message_id: str, emoji: str) -> str | None:
+    """Role id bound to (message, emoji), or None. Hot path for reaction events."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT role_id FROM reaction_roles WHERE message_id = ? AND emoji = ?",
+            (message_id, emoji),
+        )
+        row = await cur.fetchone()
+        return row[0] if row else None
+
+
+async def get_reaction_role_message_ids() -> set[str]:
+    """All message ids that have reaction-role bindings (quick membership test)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT DISTINCT message_id FROM reaction_roles")
+        return {r[0] for r in await cur.fetchall()}
+
+
+async def get_reaction_roles_for_message(message_id: str) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT emoji, role_id, channel_id FROM reaction_roles WHERE message_id = ?",
+            (message_id,),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
 # ── Stock cash positions ────────────────────────────────────────────────────
 # A simple per-user cash balance, decoupled from the trade log. Buys/sells do
 # NOT touch it automatically — it's a hand-managed figure so the portfolio can

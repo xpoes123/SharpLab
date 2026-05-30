@@ -352,6 +352,15 @@ CREATE TABLE IF NOT EXISTS ticker_meta (
     name        TEXT,
     updated_at  TEXT NOT NULL  -- UTC ISO 8601; used for cache TTL
 );
+
+CREATE TABLE IF NOT EXISTS reaction_roles (
+    message_id  TEXT NOT NULL,
+    emoji       TEXT NOT NULL,   -- str(emoji): unicode char or '<:name:id>'
+    role_id     TEXT NOT NULL,
+    guild_id    TEXT NOT NULL,
+    channel_id  TEXT NOT NULL,
+    PRIMARY KEY (message_id, emoji)
+);
 """
 
 
@@ -535,6 +544,17 @@ async def init_db() -> None:
                 "CREATE TABLE IF NOT EXISTS ticker_meta ("
                 "ticker TEXT PRIMARY KEY, quote_type TEXT, sector TEXT, "
                 "category TEXT, beta REAL, name TEXT, updated_at TEXT NOT NULL)"
+            )
+            await db.commit()
+        except Exception:
+            pass
+        # Migration: add reaction_roles for the auto-role panels
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS reaction_roles ("
+                "message_id TEXT NOT NULL, emoji TEXT NOT NULL, role_id TEXT NOT NULL, "
+                "guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, "
+                "PRIMARY KEY (message_id, emoji))"
             )
             await db.commit()
         except Exception:
