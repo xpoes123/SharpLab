@@ -1988,7 +1988,7 @@ async def get_tournament_stats(discord_user: str) -> dict:
         cursor = await db.execute(
             """SELECT
                    COUNT(*) AS entries,
-                   SUM(CASE WHEN final_place = 1 THEN 1 ELSE 0 END) AS wins,
+                   COALESCE(SUM(CASE WHEN final_place = 1 THEN 1 ELSE 0 END), 0) AS wins,
                    COALESCE(SUM(payout), 0) AS total_payout
                FROM tournament_entries
                WHERE discord_user = ?""",

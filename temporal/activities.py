@@ -807,9 +807,13 @@ async def resolve_bets_for_game(result: GameResult) -> int:
 
     game = await queries.get_game_by_team_suffixes(result.home_last, result.away_last, cutoff)
     if game is None:
-        activity.logger.warning(
+        # Expected steady state: every already-final game in the score window is
+        # re-reported each resolution cycle and matches no *unresolved* game, so
+        # this is debug-level, not a warning. A genuinely unmatched game still
+        # surfaces as a perpetually-open bet in /bet view.
+        activity.logger.debug(
             f"[resolve_bets_for_game] No unresolved DB game for "
-            f"{result.away_last} @ {result.home_last}"
+            f"{result.away_last} @ {result.home_last} (already final or not tracked)"
         )
         return 0
 

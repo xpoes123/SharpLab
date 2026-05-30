@@ -75,7 +75,7 @@ class TestBaccaratTableGuard:
         async def _run():
             with patch("bot.cogs.baccarat.queries") as mock_q:
                 mock_q.get_or_create_casino_wallet = AsyncMock(return_value=1000)
-                await cog.baccarat.callback(cog, interaction)
+                await cog.baccarat(interaction)
 
         run(_run())
 
@@ -102,7 +102,7 @@ class TestBaccaratTableGuard:
         async def _run():
             with patch("bot.cogs.baccarat.queries") as mock_q:
                 mock_q.get_or_create_casino_wallet = AsyncMock(return_value=1000)
-                await cog.baccarat.callback(cog, interaction)
+                await cog.baccarat(interaction)
 
         run(_run())
 
@@ -128,7 +128,7 @@ class TestBaccaratTableGuard:
         async def _run():
             with patch("bot.cogs.baccarat.queries") as mock_q:
                 mock_q.get_or_create_casino_wallet = AsyncMock(return_value=1000)
-                await cog.baccarat.callback(cog, interaction)
+                await cog.baccarat(interaction)
 
         run(_run())
 
@@ -161,7 +161,7 @@ class TestBaccaratTableGuard:
         async def _run():
             with patch("bot.cogs.baccarat.queries") as mock_q:
                 mock_q.get_or_create_casino_wallet = AsyncMock(return_value=1000)
-                await cog.baccarat.callback(cog, interaction)
+                await cog.baccarat(interaction)
 
         run(_run())
 
@@ -180,7 +180,7 @@ class TestBaccaratTableGuard:
         async def _run():
             with patch("bot.cogs.baccarat.queries") as mock_q:
                 mock_q.get_or_create_casino_wallet = AsyncMock(return_value=1000)
-                await cog.baccarat.callback(cog, interaction)
+                await cog.baccarat(interaction)
 
         run(_run())
 
