@@ -24,6 +24,7 @@ falling back to intrinsic value once expired.
 import asyncio
 import io
 import logging
+import time
 from collections import deque
 from datetime import date, datetime, timedelta, timezone
 
@@ -94,15 +95,40 @@ def _parse_executed_at(value: str | None) -> str | None:
     raise ValueError(f"Could not parse date {value!r}. Use YYYY-MM-DD or YYYY-MM-DD HH:MM.")
 
 
+# ── Quote cache ──────────────────────────────────────────────────────────────
+# yfinance calls are the slow part of every /stock command, and the same tickers
+# get re-fetched constantly when people spam /profile, /leaderboard, /server, …
+# A short in-memory TTL cache makes repeat calls near-instant. Prices going a
+# few seconds stale is fine for a portfolio tracker. The cache is only ever
+# touched from the event loop (the executor just does the network fetch), so
+# the plain dicts need no locking.
+_QUOTE_TTL = 45.0          # seconds — single + batch quotes
+_OPTION_PRICE_TTL = 120.0  # seconds — option-chain premiums (slower to fetch)
+_quote_cache: dict[str, tuple[float, dict]] = {}
+_quote1_cache: dict[str, tuple[float, dict]] = {}
+_option_price_cache: dict[tuple, tuple[float, dict]] = {}
+
+
+def _cache_get(cache: dict, key, ttl: float):
+    ent = cache.get(key)
+    if ent is not None and (time.monotonic() - ent[0]) < ttl:
+        return ent[1]
+    return None
+
+
 async def fetch_quote(ticker: str) -> dict:
     """Fetch latest price + previous close for a single ticker via yfinance.
 
     Returns {price, prev_close, currency, name, extended}. `extended` is None
     or a dict with {session: 'post'|'pre', price, change, pct} when the market
     is currently outside regular hours and Yahoo has an extended-hours print.
-    Raises on missing data.
+    Raises on missing data. Cached for _QUOTE_TTL seconds.
     """
     import yfinance as yf
+
+    cached = _cache_get(_quote1_cache, ticker, _QUOTE_TTL)
+    if cached is not None:
+        return cached
 
     def _fetch() -> dict:
         tk = yf.Ticker(ticker)
@@ -172,16 +198,30 @@ async def fetch_quote(ticker: str) -> dict:
             "extended": extended,
         }
 
-    return await asyncio.get_running_loop().run_in_executor(None, _fetch)
+    quote = await asyncio.get_running_loop().run_in_executor(None, _fetch)
+    _quote1_cache[ticker] = (time.monotonic(), quote)
+    return quote
 
 
 async def fetch_quotes(tickers: list[str]) -> dict[str, dict]:
-    """Fetch quotes for many tickers in one executor call. Skips ones that fail."""
+    """Fetch quotes for many tickers, skipping ones that fail. Per-ticker results
+    are cached for _QUOTE_TTL seconds, so only cache-misses hit yfinance."""
     import yfinance as yf
 
+    out: dict[str, dict] = {}
+    misses: list[str] = []
+    for sym in tickers:
+        hit = _cache_get(_quote_cache, sym, _QUOTE_TTL)
+        if hit is not None:
+            out[sym] = hit
+        else:
+            misses.append(sym)
+    if not misses:
+        return out
+
     def _fetch() -> dict[str, dict]:
-        out: dict[str, dict] = {}
-        for sym in tickers:
+        fetched: dict[str, dict] = {}
+        for sym in misses:
             try:
                 tk = yf.Ticker(sym)
                 info = tk.fast_info
@@ -197,16 +237,21 @@ async def fetch_quotes(tickers: list[str]) -> dict[str, dict]:
                         continue
                     price = float(hist["Close"].iloc[-1])
                     prev = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else price
-                out[sym] = {
+                fetched[sym] = {
                     "price": float(price),
                     "prev_close": float(prev),
                     "currency": currency,
                 }
             except Exception as e:
                 log.warning(f"fetch_quotes: {sym} failed: {e}")
-        return out
+        return fetched
 
-    return await asyncio.get_running_loop().run_in_executor(None, _fetch)
+    fetched = await asyncio.get_running_loop().run_in_executor(None, _fetch)
+    now = time.monotonic()
+    for sym, q in fetched.items():
+        _quote_cache[sym] = (now, q)
+        out[sym] = q
+    return out
 
 
 # ── Ticker metadata (sector / quote type / beta), cached ─────────────────────
@@ -324,14 +369,27 @@ async def fetch_option_prices(
 
     Returns {(underlying, opt_type, strike, expiry): {premium: float|None,
     expired: bool}}. premium is None when the contract couldn't be priced.
+    Per-contract results are cached for _OPTION_PRICE_TTL seconds.
     """
     import yfinance as yf
 
     today = datetime.now(timezone.utc).date()
 
+    out: dict[tuple, dict] = {}
+    misses: list[dict] = []
+    for s in specs:
+        key = (s["underlying"], s["opt_type"], s["strike"], s["expiry"])
+        hit = _cache_get(_option_price_cache, key, _OPTION_PRICE_TTL)
+        if hit is not None:
+            out[key] = hit
+        else:
+            misses.append(s)
+    if not misses:
+        return out
+
     def _fetch() -> dict[tuple, dict]:
         groups: dict[tuple, list[dict]] = {}
-        for s in specs:
+        for s in misses:
             groups.setdefault((s["underlying"], s["expiry"]), []).append(s)
 
         out: dict[tuple, dict] = {}
@@ -376,7 +434,12 @@ async def fetch_option_prices(
                 out[key] = {"premium": premium, "expired": expired}
         return out
 
-    return await asyncio.get_running_loop().run_in_executor(None, _fetch)
+    fetched = await asyncio.get_running_loop().run_in_executor(None, _fetch)
+    now = time.monotonic()
+    for key, val in fetched.items():
+        _option_price_cache[key] = (now, val)
+        out[key] = val
+    return out
 
 
 async def _price_option_positions(open_options: list[dict]) -> dict[tuple, dict]:
