@@ -141,3 +141,57 @@ class TestRenderEquityCurve:
         png = stock._render_equity_curve_png("Tester", pts)
         assert png[:8] == b"\x89PNG\r\n\x1a\n"  # PNG magic
         assert len(png) > 1000
+
+
+# ── leaderboard ranking per period ───────────────────────────────────────────
+
+
+def _row(uid, total=0, day_gain=0, account_value=0, week_base=None, ytd_base=None):
+    return {
+        "user_id": uid, "total": total, "invested": 1000,
+        "pct": total / 10.0, "account_value": account_value,
+        "day_gain": day_gain, "day_base": 1000,
+        "week_base": week_base, "ytd_base": ytd_base,
+    }
+
+
+def _order(embed):
+    """Pull the user ids out of a rendered leaderboard embed, in rank order."""
+    ids = []
+    for line in embed.description.splitlines():
+        for tok in line.split():
+            if tok.startswith("**") and tok.endswith("**"):
+                ids.append(tok.strip("*"))
+                break
+    return ids
+
+
+class TestLeaderboardRender:
+    def test_all_time_sorted_by_total(self):
+        rows = [_row("a", total=50), _row("b", total=300), _row("c", total=-10)]
+        names = {"a": "a", "b": "b", "c": "c"}
+        assert _order(stock._render_leaderboard_embed(rows, "all", names)) == ["b", "a", "c"]
+
+    def test_daily_sorted_by_day_gain(self):
+        rows = [_row("a", day_gain=5), _row("b", day_gain=80), _row("c", day_gain=-3)]
+        names = {"a": "a", "b": "b", "c": "c"}
+        assert _order(stock._render_leaderboard_embed(rows, "daily", names)) == ["b", "a", "c"]
+
+    def test_weekly_excludes_users_without_baseline(self):
+        rows = [
+            _row("a", account_value=1200, week_base=1000),   # +200
+            _row("b", account_value=1500, week_base=1000),   # +500
+            _row("c", account_value=900),                    # no baseline -> hidden
+        ]
+        names = {"a": "a", "b": "b", "c": "c"}
+        embed = stock._render_leaderboard_embed(rows, "weekly", names)
+        assert _order(embed) == ["b", "a"]
+        assert "1 hidden" in embed.footer.text
+
+    def test_ytd_ranks_by_account_delta(self):
+        rows = [
+            _row("a", account_value=2000, ytd_base=1000),    # +1000
+            _row("b", account_value=1100, ytd_base=1000),    # +100
+        ]
+        names = {"a": "a", "b": "b"}
+        assert _order(stock._render_leaderboard_embed(rows, "ytd", names)) == ["a", "b"]
