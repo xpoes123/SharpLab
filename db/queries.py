@@ -2948,6 +2948,18 @@ async def get_portfolio_snapshots(
         return [dict(r) for r in await cur.fetchall()]
 
 
+async def get_all_portfolio_snapshots() -> list[dict]:
+    """Every user's (discord_user, captured_at, account_value), oldest first.
+    Used to build the server-wide equity curve."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT discord_user, captured_at, account_value "
+            "FROM portfolio_snapshots ORDER BY captured_at ASC"
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
 async def get_latest_snapshot_at(discord_user: str) -> str | None:
     """captured_at of the user's most recent snapshot, or None. For cadence dedup."""
     async with aiosqlite.connect(DB_PATH) as db:

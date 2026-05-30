@@ -5,6 +5,7 @@ All commands live under a single /stock group:
 - /stock lookup <ticker>            — quote a single ticker (+ your position if any).
 - /stock profile [user]             — show your portfolio (Overview / Today / Graph buttons).
 - /stock graph [user]               — equity curve of portfolio value over time.
+- /stock server                     — server-wide portfolio (Overview / Today / Graph).
 - /stock cash <amount> [action]     — set/deposit/withdraw uninvested cash.
 - /stock buy <ticker> <sh> <px>     — record a buy.
 - /stock sell <ticker> <sh> <px>    — record a sell (realized P/L computed).
@@ -665,7 +666,7 @@ async def _take_live_snapshot(uid: str, data: dict | None = None) -> None:
     )
 
 
-def _render_equity_curve_png(name: str, points: list[tuple]) -> bytes:
+def _render_equity_curve_png(name: str, points: list[tuple], title: str | None = None) -> bytes:
     """Render an equity curve to a PNG (Tokyo-Night styled). Synchronous — run in executor.
     `points` is [(datetime, account_value), ...] sorted ascending."""
     import matplotlib
@@ -684,7 +685,7 @@ def _render_equity_curve_png(name: str, points: list[tuple]) -> bytes:
     ax.plot(xs, ys, color=line, linewidth=2.0)
     ax.fill_between(xs, ys, min(ys), color=line, alpha=0.12)
 
-    ax.set_title(f"{name}'s Portfolio Value", color="#c0caf5", fontsize=14, pad=12)
+    ax.set_title(title or f"{name}'s Portfolio Value", color="#c0caf5", fontsize=14, pad=12)
     for spine in ("top", "right"):
         ax.spines[spine].set_visible(False)
     for spine in ("left", "bottom"):
@@ -1017,6 +1018,311 @@ class LeaderboardView(discord.ui.View):
         await self._switch(interaction, "all")
 
 
+# ── Server-wide portfolio ────────────────────────────────────────────────────
+
+
+async def _compute_server_portfolio() -> dict | None:
+    """Aggregate every trader's portfolio into one server book. Prices all open
+    positions in a single batched pass. Returns None if nobody trades."""
+    users = await queries.get_all_portfolio_users()
+    if not users:
+        return None
+
+    all_positions: dict[str, list[dict]] = {}
+    all_options: dict[str, list[dict]] = {}
+    ticker_set: set[str] = set()
+    open_option_specs: list[dict] = []
+    for uid in users:
+        positions = await queries.get_stock_positions_full(uid)
+        options = await queries.get_option_positions_full(uid)
+        all_positions[uid] = positions
+        all_options[uid] = options
+        for p in positions:
+            if not p["closed"]:
+                ticker_set.add(p["ticker"])
+        for p in options:
+            if not p["closed"]:
+                open_option_specs.append(p)
+
+    quotes = await fetch_quotes(sorted(ticker_set)) if ticker_set else {}
+    option_prices = await _price_option_positions(open_option_specs)
+
+    per_ticker: dict[str, dict] = {}
+    stock_value = stock_cost = day_change = 0.0
+    realized_total = 0.0
+    options_value = options_unrealized = options_cost = 0.0
+    holders: set[str] = set()
+
+    for uid in users:
+        held = False
+        for p in all_positions[uid]:
+            realized_total += p["realized_pnl"]
+            if p["closed"]:
+                continue
+            q = quotes.get(p["ticker"])
+            if not q:
+                continue
+            held = True
+            sh, price, prev, dca = p["shares"], q["price"], q["prev_close"], p["dca_price"]
+            val, cost, dch = sh * price, sh * dca, sh * (price - prev)
+            stock_value += val
+            stock_cost += cost
+            day_change += dch
+            t = per_ticker.setdefault(p["ticker"], {
+                "shares": 0.0, "value": 0.0, "cost": 0.0,
+                "day_change": 0.0, "prev_value": 0.0, "price": price, "holders": 0,
+            })
+            t["shares"] += sh
+            t["value"] += val
+            t["cost"] += cost
+            t["day_change"] += dch
+            t["prev_value"] += sh * prev
+            t["holders"] += 1
+        for p in all_options[uid]:
+            realized_total += p["realized_pnl"]
+            if p["closed"]:
+                continue
+            held = True
+            key = (p["underlying"], p["opt_type"], p["strike"], p["expiry"])
+            premium = option_prices.get(key, {}).get("premium")
+            pl = _option_position_pnl(p, premium)
+            options_value += pl["value"]
+            options_unrealized += pl["unrealized"]
+            options_cost += pl["cost"]
+        if held:
+            holders.add(uid)
+
+    cash_total = 0.0
+    for uid in users:
+        cash_total += await queries.get_stock_cash(uid)
+
+    unrealized = (stock_value - stock_cost) + options_unrealized
+    base = stock_value - day_change
+    return {
+        "per_ticker": per_ticker,
+        "num_traders": len(users),
+        "num_holders": len(holders),
+        "stock_value": stock_value,
+        "stock_cost": stock_cost,
+        "day_change": day_change,
+        "day_pct": (day_change / base * 100) if base else 0.0,
+        "options_value": options_value,
+        "options_cost": options_cost,
+        "cash": cash_total,
+        "account_value": stock_value + options_value + cash_total,
+        "realized_total": realized_total,
+        "unrealized": unrealized,
+        "unrealized_pct": (unrealized / (stock_cost + options_cost) * 100)
+        if (stock_cost + options_cost) else 0.0,
+        "total_pnl": unrealized + realized_total,
+        "has_options": options_value != 0 or options_cost != 0,
+    }
+
+
+def _build_server_overview_embed(name: str, d: dict) -> discord.Embed:
+    """Server totals + the most valuable holdings across everyone."""
+    lines: list[str] = []
+    for sym, t in sorted(d["per_ticker"].items(), key=lambda kv: kv[1]["value"], reverse=True)[:12]:
+        dpct = (t["day_change"] / t["prev_value"] * 100) if t["prev_value"] else 0.0
+        emoji = "🟢" if t["day_change"] >= 0 else "🔴"
+        lines.append(
+            f"{emoji} [`{sym}`]({_yahoo_url(sym)}) · {t['shares']:g} sh · "
+            f"**{_fmt_money(t['value'])}** · today `{_pct_str(dpct)}` "
+            f"· {t['holders']} holder{'s' if t['holders'] != 1 else ''}"
+        )
+    description = "\n".join(lines) if lines else "_No open positions across the server._"
+
+    color = 0x57F287 if d["total_pnl"] >= 0 else 0xED4245
+    embed = discord.Embed(
+        title=f"🏦 {name} — Server Portfolio",
+        description=description,
+        color=color,
+    )
+    embed.add_field(name="Account Value", value=f"`{_fmt_money(d['account_value'])}`", inline=True)
+    embed.add_field(name="Stock Value", value=f"`{_fmt_money(d['stock_value'])}`", inline=True)
+    if d["has_options"]:
+        embed.add_field(name="Options Value", value=f"`{_fmt_money(d['options_value'])}`", inline=True)
+    embed.add_field(name="Cash", value=f"`{_fmt_money(d['cash'])}`", inline=True)
+    embed.add_field(name="Unrealized P/L",
+                    value=f"`{_fmt_change(d['unrealized'], d['unrealized_pct'])}`", inline=True)
+    embed.add_field(name="Realized P/L", value=f"`{_fmt_pnl(d['realized_total'])}`", inline=True)
+    embed.add_field(name="Total P/L", value=f"`{_fmt_pnl(d['total_pnl'])}`", inline=True)
+    embed.add_field(name="Today (stocks)",
+                    value=f"`{_fmt_change(d['day_change'], d['day_pct'])}`", inline=True)
+    embed.set_footer(
+        text=f"{d['num_holders']} active holder(s) · {len(d['per_ticker'])} ticker(s)"
+    )
+    return embed
+
+
+def _build_server_today_embed(name: str, d: dict) -> discord.Embed:
+    """The server's combined book ranked by today's dollar move."""
+    movers = sorted(d["per_ticker"].values(), key=lambda t: t["day_change"], reverse=True)
+    items = sorted(d["per_ticker"].items(), key=lambda kv: kv[1]["day_change"], reverse=True)
+    lines: list[str] = []
+    for sym, t in items[:15]:
+        dpct = (t["day_change"] / t["prev_value"] * 100) if t["prev_value"] else 0.0
+        emoji = "🟢" if t["day_change"] > 0 else ("🔴" if t["day_change"] < 0 else "⚪")
+        sign = "+" if t["day_change"] >= 0 else ""
+        lines.append(
+            f"{emoji} [`{sym}`]({_yahoo_url(sym)}) · `{_pct_str(dpct)}` · "
+            f"{sign}{_fmt_money(t['day_change'])} ({t['shares']:g} sh)"
+        )
+    description = "\n".join(lines) if lines else "_No priced positions today._"
+    color = 0x57F287 if d["day_change"] >= 0 else 0xED4245
+    embed = discord.Embed(
+        title=f"🏦 {name} — Server Today",
+        description=description,
+        color=color,
+    )
+    embed.add_field(name="Day P/L (stocks)",
+                    value=f"`{_fmt_change(d['day_change'], d['day_pct'])}`", inline=True)
+    if movers:
+        top, bot_ = movers[0], movers[-1]
+        tp = (top["day_change"] / top["prev_value"] * 100) if top["prev_value"] else 0.0
+        bp = (bot_["day_change"] / bot_["prev_value"] * 100) if bot_["prev_value"] else 0.0
+        # Recover symbols for the top/bottom movers.
+        tsym = next(k for k, v in d["per_ticker"].items() if v is top)
+        bsym = next(k for k, v in d["per_ticker"].items() if v is bot_)
+        embed.add_field(name="Top gainer", value=f"`{tsym}` {_pct_str(tp)}", inline=True)
+        embed.add_field(name="Top loser", value=f"`{bsym}` {_pct_str(bp)}", inline=True)
+    embed.set_footer(text="Day change reflects stock positions only (options excluded).")
+    return embed
+
+
+def _server_equity_points(rows: list[dict]) -> list[tuple]:
+    """Sum all users' equity curves onto a shared daily axis. Each user's value
+    is forward-filled (last known snapshot) so gaps don't drop them to zero.
+    Returns [(datetime, server_account_value), ...]."""
+    by_user: dict[str, list[tuple]] = {}
+    for r in rows:
+        dt = _parse_utc(r["captured_at"])
+        if dt is not None:
+            by_user.setdefault(r["discord_user"], []).append((dt, r["account_value"]))
+    if not by_user:
+        return []
+    for series in by_user.values():
+        series.sort(key=lambda x: x[0])
+
+    first_day = min(s[0][0] for s in by_user.values()).date()
+    last_day = max(s[-1][0] for s in by_user.values()).date()
+    days: list = []
+    d = first_day
+    while d <= last_day:
+        days.append(d)
+        d += timedelta(days=1)
+
+    totals = [0.0] * len(days)
+    for series in by_user.values():
+        idx = 0
+        last = None
+        for i, day in enumerate(days):
+            end = datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=timezone.utc)
+            while idx < len(series) and series[idx][0] <= end:
+                last = series[idx][1]
+                idx += 1
+            if last is not None:
+                totals[i] += last
+
+    return [
+        (datetime(day.year, day.month, day.day, 21, 0, 0, tzinfo=timezone.utc), totals[i])
+        for i, day in enumerate(days)
+    ]
+
+
+async def _build_server_graph(name: str, snap_rows: list[dict], current_value: float | None):
+    """Build (discord.File, discord.Embed) for the server equity curve."""
+    points = _server_equity_points(snap_rows)
+    now = datetime.now(timezone.utc)
+    if current_value is not None and (not points or (now - points[-1][0]) > timedelta(hours=1)):
+        points.append((now, current_value))
+
+    if len(points) < 2:
+        err = discord.Embed(
+            title=f"🏦 {name} — Server Portfolio Value",
+            description="Not enough history to graph yet — the server curve fills in as "
+                        "members' portfolios are snapshotted hourly.",
+            color=0xE0AF68,
+        )
+        return None, err
+
+    png = await asyncio.get_running_loop().run_in_executor(
+        None, _render_equity_curve_png, name, points, f"{name} — Server Portfolio Value"
+    )
+    file = discord.File(io.BytesIO(png), filename="server_portfolio.png")
+
+    first_v, last_v = points[0][1], points[-1][1]
+    change = last_v - first_v
+    pct = (change / first_v * 100) if first_v else 0.0
+    color = 0x57F287 if change >= 0 else 0xED4245
+    embed = discord.Embed(title=f"🏦 {name} — Server Portfolio Value", color=color)
+    embed.set_image(url="attachment://server_portfolio.png")
+    span_days = (points[-1][0] - points[0][0]).days or 1
+    embed.add_field(name="Now", value=f"`{_fmt_money(last_v)}`", inline=True)
+    embed.add_field(name=f"Change ({span_days}d)", value=f"`{_fmt_change(change, pct)}`", inline=True)
+    embed.set_footer(text="Combined account value of all members. Points before today are "
+                          "reconstructed from stock trades (cash/options excluded).")
+    return file, embed
+
+
+class ServerPortfolioView(discord.ui.View):
+    """Overview / Today / Graph switcher for the server-wide portfolio."""
+
+    def __init__(self, name: str, data: dict, snap_rows: list[dict], invoker_id: int) -> None:
+        super().__init__(timeout=180)
+        self.name = name
+        self.data = data
+        self.snap_rows = snap_rows
+        self.invoker_id = invoker_id
+        self.message: discord.Message | None = None
+        self._set_active("overview")
+
+    def _set_active(self, mode: str) -> None:
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = child.custom_id == mode
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.invoker_id:
+            await interaction.response.send_message(
+                "This isn't your menu — run `/stock server` yourself.", ephemeral=True
+            )
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+    @discord.ui.button(label="Overview", style=discord.ButtonStyle.primary, custom_id="overview")
+    async def overview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self._set_active("overview")
+        await interaction.response.edit_message(
+            embed=_build_server_overview_embed(self.name, self.data), attachments=[], view=self
+        )
+
+    @discord.ui.button(label="Today", style=discord.ButtonStyle.secondary, custom_id="today")
+    async def today(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self._set_active("today")
+        await interaction.response.edit_message(
+            embed=_build_server_today_embed(self.name, self.data), attachments=[], view=self
+        )
+
+    @discord.ui.button(label="Graph", style=discord.ButtonStyle.secondary, custom_id="graph")
+    async def graph(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self._set_active("graph")
+        await interaction.response.defer()
+        file, embed = await _build_server_graph(self.name, self.snap_rows, self.data["account_value"])
+        attachments = [file] if file is not None else []
+        await interaction.edit_original_response(embed=embed, attachments=attachments, view=self)
+
+
 # ── Cog ─────────────────────────────────────────────────────────────────────
 
 
@@ -1159,6 +1465,24 @@ class StockCog(commands.Cog):
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
         await interaction.followup.send(embed=embed, file=file)
+
+    # ── /stock server ────────────────────────────────────────────────────────
+
+    @stock.command(name="server", description="Server-wide portfolio: holdings, P/L, and value over time")
+    async def server(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+        data = await _compute_server_portfolio()
+        if data is None or data["num_traders"] == 0:
+            await interaction.followup.send(
+                "Nobody on the server has logged any stock trades yet.", ephemeral=True
+            )
+            return
+        snap_rows = await queries.get_all_portfolio_snapshots()
+        name = interaction.guild.name if interaction.guild else "Server"
+        embed = _build_server_overview_embed(name, data)
+        view = ServerPortfolioView(name, data, snap_rows, interaction.user.id)
+        msg = await interaction.followup.send(embed=embed, view=view)
+        view.message = msg
 
     # ── /stock cash ──────────────────────────────────────────────────────────
 
