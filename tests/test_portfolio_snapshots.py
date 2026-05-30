@@ -283,6 +283,53 @@ class TestComposition:
         assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
+class TestRiskAndTradeQuality:
+    META = {"NVDA": {"beta": 2.2}, "AAPL": {"beta": 1.07}, "SPY": {"beta": None}}
+
+    def test_max_drawdown(self):
+        assert round(stock._max_drawdown([100, 120, 60, 90]), 1) == -50.0  # 120 -> 60
+        assert stock._max_drawdown([100]) is None  # need >= 2
+
+    def test_concentrated_book_is_high_risk(self):
+        r = stock._compute_risk([("NVDA", 9000), ("AAPL", 1000)], 0, 0, 10000, self.META, [])
+        assert r["score"] >= 80 and "Degenerate" in r["label"]
+        assert round(r["beta"], 2) == 2.09  # value-weighted
+        assert round(r["largest_pct"]) == 90 and r["top_sym"] == "NVDA"
+
+    def test_cash_cushion_lowers_score(self):
+        full = stock._compute_risk([("SPY", 10000)], 0, 0, 10000, self.META, [])
+        half = stock._compute_risk([("SPY", 5000)], 0, 5000, 10000, self.META, [])
+        assert half["score"] < full["score"]
+        assert round(half["beta"], 2) == 1.0  # ETF beta defaults to market
+
+    def test_var_scales_with_beta(self):
+        r = stock._compute_risk([("NVDA", 10000)], 0, 0, 10000, self.META, [])
+        # VaR = value * beta * 0.01 * 1.645
+        assert round(r["var_1d"], 0) == round(10000 * 2.2 * 0.01 * 1.645, 0)
+
+    def test_trade_quality_fifo(self):
+        trades = [
+            {"ticker": "AAPL", "side": "buy", "shares": 10, "price": 100,
+             "executed_at": "2026-01-01T00:00:00+00:00"},
+            {"ticker": "AAPL", "side": "sell", "shares": 5, "price": 120,
+             "executed_at": "2026-01-11T00:00:00+00:00"},
+            {"ticker": "AAPL", "side": "sell", "shares": 5, "price": 90,
+             "executed_at": "2026-01-21T00:00:00+00:00"},
+        ]
+        tq = stock._trade_quality(trades)
+        assert tq["n"] == 2
+        assert tq["win_rate"] == 50.0
+        assert tq["profit_factor"] == 2.0          # +100 win vs 50 loss
+        assert tq["avg_win"] == 100.0 and tq["avg_loss"] == 50.0
+        assert tq["best"] == 100 and tq["worst"] == -50
+        assert tq["avg_hold"] == 15.0              # share-weighted (10d & 20d)
+
+    def test_trade_quality_no_closed_lots(self):
+        trades = [{"ticker": "AAPL", "side": "buy", "shares": 1, "price": 10,
+                   "executed_at": "2026-01-01T00:00:00+00:00"}]
+        assert stock._trade_quality(trades) is None
+
+
 class TestTickerMetaQueries:
     def test_upsert_and_bulk_get(self, tmp_db):
         async def go():

@@ -3,7 +3,7 @@
 All commands live under a single /stock group:
 
 - /stock lookup <ticker>            — quote a single ticker (+ your position if any).
-- /stock profile [user]             — portfolio (Overview / Today / Graph / Allocation buttons).
+- /stock profile [user]             — portfolio (Overview / Today / Graph / Allocation / Risk).
 - /stock graph [user]               — equity curve of portfolio value over time.
 - /stock server                     — server-wide portfolio (Overview / Today / Graph).
 - /stock cash <amount> [action]     — set/deposit/withdraw uninvested cash.
@@ -24,6 +24,7 @@ falling back to intrinsic value once expired.
 import asyncio
 import io
 import logging
+from collections import deque
 from datetime import date, datetime, timedelta, timezone
 
 import discord
@@ -900,6 +901,20 @@ class PortfolioView(discord.ui.View):
         attachments = [file] if file is not None else []
         await interaction.edit_original_response(embed=embed, attachments=attachments, view=self)
 
+    @discord.ui.button(label="Risk", style=discord.ButtonStyle.secondary, custom_id="risk")
+    async def risk(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self._set_active("risk")
+        await interaction.response.defer()
+        holdings = [(h["sym"], h["value"]) for h in self.data["stocks"] if h.get("available")]
+        snaps = await queries.get_portfolio_snapshots(str(self.target.id))
+        series = [s["stock_value"] for s in snaps]
+        trades = await queries.get_stock_trades(str(self.target.id))
+        embed = await _build_risk(
+            self.target.display_name, holdings, self.data["options_value"],
+            self.data["cash"], self.data["account_value"], series, trades,
+        )
+        await interaction.edit_original_response(embed=embed, attachments=[], view=self)
+
 
 # ── Leaderboard (period-rankable) ────────────────────────────────────────────
 
@@ -1414,6 +1429,18 @@ class ServerPortfolioView(discord.ui.View):
         attachments = [file] if file is not None else []
         await interaction.edit_original_response(embed=embed, attachments=attachments, view=self)
 
+    @discord.ui.button(label="Risk", style=discord.ButtonStyle.secondary, custom_id="risk")
+    async def risk(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self._set_active("risk")
+        await interaction.response.defer()
+        holdings = [(sym, t["value"]) for sym, t in self.data["per_ticker"].items()]
+        series = [v for _, v in _server_equity_points(self.snap_rows)]
+        embed = await _build_risk(
+            self.name, holdings, self.data["options_value"], self.data["cash"],
+            self.data["account_value"], series, None,
+        )
+        await interaction.edit_original_response(embed=embed, attachments=[], view=self)
+
 
 # ── Composition / allocation (stocks vs ETFs, sectors, persona) ──────────────
 
@@ -1562,6 +1589,187 @@ async def _build_allocation(name: str, holdings: list[tuple], options_value: flo
     )
     file = discord.File(io.BytesIO(png), filename="allocation.png")
     return file, _build_allocation_embed(name, comp, persona)
+
+
+# ── Risk profile + trade quality ─────────────────────────────────────────────
+
+_MARKET_DAILY_VOL = 0.01  # ~S&P 500 daily stdev, for a bottom-up VaR estimate
+_VAR_Z = 1.645            # one-sided 95% z-score
+
+
+def _max_drawdown(values: list[float]) -> float | None:
+    """Largest peak-to-trough decline (as a negative %) over a value series."""
+    clean = [v for v in values if v is not None]
+    if len(clean) < 2:
+        return None
+    peak = clean[0]
+    mdd = 0.0
+    for v in clean:
+        if v > peak:
+            peak = v
+        if peak > 0:
+            dd = (v - peak) / peak
+            if dd < mdd:
+                mdd = dd
+    return mdd * 100
+
+
+def _risk_label(score: float) -> str:
+    if score < 20:
+        return "🟢 Conservative"
+    if score < 40:
+        return "🔵 Balanced"
+    if score < 60:
+        return "🟡 Moderately Aggressive"
+    if score < 80:
+        return "🟠 Aggressive"
+    return "🔴 Degenerate"
+
+
+def _compute_risk(
+    holdings: list[tuple], options_value: float, cash: float,
+    account_value: float, meta: dict[str, dict], value_series: list[float],
+) -> dict:
+    """Heuristic risk profile. Beta/concentration/VaR are bottom-up from current
+    holdings (instant); max drawdown comes from the value series if available."""
+    invested = sum(v for _, v in holdings)
+    # Position-weighted beta (ETFs / unknowns default to ~market = 1.0).
+    bsum = wsum = 0.0
+    for sym, v in holdings:
+        b = meta.get(sym.upper(), {}).get("beta")
+        bsum += v * (b if b is not None else 1.0)
+        wsum += v
+    beta = (bsum / wsum) if wsum else 0.0
+
+    values = [v for _, v in holdings]
+    largest = max(values, default=0.0)
+    largest_pct = (largest / invested * 100) if invested else 0.0
+    top_sym = max(holdings, key=lambda kv: kv[1])[0] if holdings else None
+    hhi = sum((v / invested) ** 2 for v in values) if invested else 0.0
+
+    at_risk = invested + abs(options_value)
+    exposure = (at_risk / account_value) if account_value else 0.0
+    var_1d = at_risk * beta * _MARKET_DAILY_VOL * _VAR_Z
+    var_pct = (var_1d / account_value * 100) if account_value else 0.0
+    mdd = _max_drawdown(value_series)
+
+    beta_score = min(beta / 2.0, 1.0) * 100
+    raw = 0.55 * beta_score + 0.45 * largest_pct
+    score = max(0.0, min(100.0, raw * exposure + (12 if options_value else 0)))
+    return {
+        "score": score, "label": _risk_label(score),
+        "beta": beta, "largest_pct": largest_pct, "top_sym": top_sym,
+        "n_positions": len(holdings), "hhi": hhi,
+        "var_1d": var_1d, "var_pct": var_pct,
+        "max_drawdown": mdd, "exposure": exposure * 100,
+        "has_options": bool(options_value),
+    }
+
+
+def _trade_quality(trades: list[dict]) -> dict | None:
+    """FIFO-match the stock trade log into closed lots and summarise: win rate,
+    profit factor, avg win/loss, best/worst, and share-weighted holding period."""
+    by_ticker: dict[str, list[dict]] = {}
+    for t in trades:
+        by_ticker.setdefault(t["ticker"], []).append(t)
+
+    closed: list[dict] = []
+    for ts in by_ticker.values():
+        lots: deque = deque()  # [shares, price, dt]
+        for t in ts:
+            dt = _parse_utc(t["executed_at"])
+            if t["side"] == "buy":
+                lots.append([t["shares"], t["price"], dt])
+            else:
+                qty, sell_price, sell_dt = t["shares"], t["price"], dt
+                while qty > 1e-9 and lots:
+                    lot = lots[0]
+                    take = min(qty, lot[0])
+                    hold = (sell_dt - lot[2]).days if (sell_dt and lot[2]) else None
+                    closed.append({"pnl": take * (sell_price - lot[1]), "hold": hold, "shares": take})
+                    lot[0] -= take
+                    qty -= take
+                    if lot[0] <= 1e-9:
+                        lots.popleft()
+    if not closed:
+        return None
+
+    wins = [c for c in closed if c["pnl"] > 0]
+    losses = [c for c in closed if c["pnl"] < 0]
+    gross_win = sum(c["pnl"] for c in wins)
+    gross_loss = -sum(c["pnl"] for c in losses)
+    held = [(c["hold"], c["shares"]) for c in closed if c["hold"] is not None]
+    avg_hold = (sum(h * s for h, s in held) / sum(s for _, s in held)) if held else None
+    n = len(closed)
+    return {
+        "n": n,
+        "win_rate": len(wins) / n * 100,
+        "profit_factor": (gross_win / gross_loss) if gross_loss > 0 else None,
+        "avg_win": (gross_win / len(wins)) if wins else 0.0,
+        "avg_loss": (gross_loss / len(losses)) if losses else 0.0,
+        "best": max((c["pnl"] for c in closed), default=0.0),
+        "worst": min((c["pnl"] for c in closed), default=0.0),
+        "avg_hold": avg_hold,
+    }
+
+
+def _score_bar(score: float) -> str:
+    filled = round(score / 10)
+    return "█" * filled + "░" * (10 - filled)
+
+
+def _build_risk_embed(name: str, risk: dict, tq: dict | None) -> discord.Embed:
+    score = risk["score"]
+    color = 0x9ECE6A if score < 40 else (0xE0AF68 if score < 70 else 0xF7768E)
+    embed = discord.Embed(
+        title=f"{name} — Risk Profile",
+        description=f"**Risk Score: {score:.0f} / 100** — {risk['label']}\n`{_score_bar(score)}`",
+        color=color,
+    )
+    embed.add_field(name="Beta", value=f"`{risk['beta']:.2f}`", inline=True)
+    conc = f"`{risk['largest_pct']:.0f}%`"
+    if risk["top_sym"]:
+        conc += f" {risk['top_sym']}"
+    embed.add_field(name="Largest position", value=conc, inline=True)
+    embed.add_field(name="Positions", value=f"`{risk['n_positions']}`", inline=True)
+    embed.add_field(
+        name="1-day VaR (95%)",
+        value=f"`-{_fmt_money(risk['var_1d'])}` (`-{risk['var_pct']:.1f}%`)",
+        inline=True,
+    )
+    if risk["max_drawdown"] is not None:
+        embed.add_field(name="Max drawdown", value=f"`{risk['max_drawdown']:.1f}%`", inline=True)
+    embed.add_field(name="Invested", value=f"`{risk['exposure']:.0f}%` of account", inline=True)
+
+    if tq:
+        pf = f"{tq['profit_factor']:.2f}" if tq["profit_factor"] is not None else "∞"
+        hold = f"{tq['avg_hold']:.0f}d" if tq["avg_hold"] is not None else "—"
+        embed.add_field(
+            name="📒 Trade record (closed lots, FIFO)",
+            value=(
+                f"Win rate `{tq['win_rate']:.0f}%` ({tq['n']} lots) · Profit factor `{pf}`\n"
+                f"Avg win `+{_fmt_money(tq['avg_win'])}` · Avg loss `-{_fmt_money(tq['avg_loss'])}` · "
+                f"Avg hold `{hold}`\n"
+                f"Best `{_fmt_pnl(tq['best'])}` · Worst `{_fmt_pnl(tq['worst'])}`"
+            ),
+            inline=False,
+        )
+    embed.set_footer(
+        text="Heuristic score from beta, concentration & exposure. "
+             "VaR assumes ~1%/day market vol; drawdown from your value history."
+    )
+    return embed
+
+
+async def _build_risk(
+    name: str, holdings: list[tuple], options_value: float, cash: float,
+    account_value: float, value_series: list[float], trades: list[dict] | None,
+):
+    """Build the risk-profile embed (no image)."""
+    meta = await get_ticker_metadata([s for s, _ in holdings]) if holdings else {}
+    risk = _compute_risk(holdings, options_value, cash, account_value, meta, value_series)
+    tq = _trade_quality(trades) if trades else None
+    return _build_risk_embed(name, risk, tq)
 
 
 # ── Cog ─────────────────────────────────────────────────────────────────────
