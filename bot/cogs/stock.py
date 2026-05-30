@@ -4,7 +4,7 @@ All commands live under a single /stock group:
 
 - /stock lookup <ticker>            — quote a single ticker (+ your position if any).
 - /stock profile [user]             — portfolio (Overview / Today / Graph / Allocation / Risk).
-- /stock graph [user]               — equity curve of portfolio value over time.
+- /stock graph [user]               — equity curve vs S&P 500 (are you beating the market?).
 - /stock server                     — server-wide portfolio (Overview / Today / Graph).
 - /stock cash <amount> [action]     — set/deposit/withdraw uninvested cash.
 - /stock buy <ticker> <sh> <px>     — record a buy.
@@ -737,9 +737,14 @@ async def _take_live_snapshot(uid: str, data: dict | None = None) -> None:
     )
 
 
-def _render_equity_curve_png(name: str, points: list[tuple], title: str | None = None) -> bytes:
+def _render_equity_curve_png(
+    name: str, points: list[tuple], title: str | None = None,
+    benchmark: list[tuple] | None = None,
+) -> bytes:
     """Render an equity curve to a PNG (Tokyo-Night styled). Synchronous — run in executor.
-    `points` is [(datetime, account_value), ...] sorted ascending."""
+    `points` is [(datetime, account_value), ...] sorted ascending. `benchmark`,
+    if given, is a same-scale [(datetime, value), ...] series (e.g. SPY started
+    at the same dollars) drawn as a reference line."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -753,8 +758,15 @@ def _render_equity_curve_png(name: str, points: list[tuple], title: str | None =
     fig, ax = plt.subplots(figsize=(9, 4.5), dpi=110)
     fig.patch.set_facecolor("#1a1b26")
     ax.set_facecolor("#1a1b26")
-    ax.plot(xs, ys, color=line, linewidth=2.0)
+    ax.plot(xs, ys, color=line, linewidth=2.0, label="Portfolio")
     ax.fill_between(xs, ys, min(ys), color=line, alpha=0.12)
+
+    if benchmark:
+        bxs = [p[0] for p in benchmark]
+        bys = [p[1] for p in benchmark]
+        ax.plot(bxs, bys, color="#7aa2f7", linewidth=1.6, linestyle="--",
+                label="S&P 500 (same $)")
+        ax.legend(loc="upper left", frameon=False, labelcolor="#a9b1d6", fontsize=9)
 
     ax.set_title(title or f"{name}'s Portfolio Value", color="#c0caf5", fontsize=14, pad=12)
     for spine in ("top", "right"):
@@ -772,6 +784,88 @@ def _render_equity_curve_png(name: str, points: list[tuple], title: str | None =
     plt.close(fig)
     buf.seek(0)
     return buf.getvalue()
+
+
+# ── Benchmark (S&P 500) ──────────────────────────────────────────────────────
+
+_spy_cache: dict = {"at": None, "series": None}
+_SPY_TTL = timedelta(hours=12)
+_SPY_LOOKBACK_DAYS = 1100  # ~3 years; covers any realistic portfolio history
+
+
+def _fetch_spy_history_sync(start_date: date, end_date: date) -> dict:
+    """{date: close} for SPY over a range. Synchronous — run in executor."""
+    import yfinance as yf
+    try:
+        h = yf.Ticker("SPY").history(
+            start=start_date.isoformat(), end=(end_date + timedelta(days=1)).isoformat(),
+            interval="1d", auto_adjust=True,
+        )
+    except Exception:
+        return {}
+    if h is None or h.empty or "Close" not in h:
+        return {}
+    return {ts.date(): float(c) for ts, c in zip(h.index, h["Close"].values)}
+
+
+async def _get_spy_series() -> dict:
+    """SPY daily closes (cached 12h)."""
+    now = datetime.now(timezone.utc)
+    if _spy_cache["series"] and _spy_cache["at"] and (now - _spy_cache["at"]) < _SPY_TTL:
+        return _spy_cache["series"]
+    start = (now - timedelta(days=_SPY_LOOKBACK_DAYS)).date()
+    series = await asyncio.get_running_loop().run_in_executor(
+        None, _fetch_spy_history_sync, start, now.date()
+    )
+    if series:
+        _spy_cache.update({"at": now, "series": series})
+    return _spy_cache["series"] or {}
+
+
+def _benchmark_points(points: list[tuple], spy: dict) -> list[tuple] | None:
+    """Scale SPY so it starts at the portfolio's first dollar value — 'what the
+    same money in SPY would be worth.' Returns same-axis [(dt, value), ...]."""
+    import bisect
+    if not spy or not points:
+        return None
+    dates = sorted(spy)
+    closes = [spy[d] for d in dates]
+
+    def spy_on(day: date):
+        i = bisect.bisect_right(dates, day) - 1
+        return closes[i] if i >= 0 else None
+
+    base_port = points[0][1]
+    base_spy = spy_on(points[0][0].date())
+    if not base_spy or not base_port:
+        return None
+    out = [(dt, base_port * c / base_spy) for dt, _ in points
+           if (c := spy_on(dt.date())) is not None]
+    return out if len(out) >= 2 else None
+
+
+def _sharpe_ratio(values: list[float]) -> float | None:
+    """Annualised Sharpe from a daily value series (risk-free ~0)."""
+    rets = [values[i] / values[i - 1] - 1 for i in range(1, len(values))
+            if values[i - 1]]
+    if len(rets) < 20:  # need ~a month of daily points before this means anything
+        return None
+    mean = sum(rets) / len(rets)
+    var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
+    sd = var ** 0.5
+    if sd == 0:
+        return None
+    return (mean / sd) * (252 ** 0.5)
+
+
+def _benchmark_stats(points: list[tuple], bench: list[tuple] | None) -> dict:
+    """Alpha vs SPY and Sharpe over the window covered by `points`."""
+    out: dict = {"alpha": None, "sharpe": _sharpe_ratio([v for _, v in points])}
+    if bench and len(bench) >= 2 and points[0][1] and bench[0][1]:
+        port_ret = points[-1][1] / points[0][1] - 1
+        spy_ret = bench[-1][1] / bench[0][1] - 1
+        out["alpha"] = (port_ret - spy_ret) * 100
+    return out
 
 
 async def _build_graph(target: discord.abc.User, data: dict | None = None):
@@ -811,8 +905,10 @@ async def _build_graph(target: discord.abc.User, data: dict | None = None):
         )
         return None, err
 
+    bench = _benchmark_points(points, await _get_spy_series())
+    stats = _benchmark_stats(points, bench)
     png = await asyncio.get_running_loop().run_in_executor(
-        None, _render_equity_curve_png, target.display_name, points
+        None, _render_equity_curve_png, target.display_name, points, None, bench
     )
     file = discord.File(io.BytesIO(png), filename="portfolio.png")
 
@@ -826,8 +922,14 @@ async def _build_graph(target: discord.abc.User, data: dict | None = None):
     embed.add_field(name="Now", value=f"`{_fmt_money(last_v)}`", inline=True)
     embed.add_field(name=f"Change ({span_days}d)",
                     value=f"`{_fmt_change(change, pct)}`", inline=True)
-    embed.set_footer(text="Points before today are reconstructed from your stock trades "
-                          "(cash/options excluded); live points include everything.")
+    if stats["alpha"] is not None:
+        verb = "beating" if stats["alpha"] >= 0 else "trailing"
+        embed.add_field(name="vs S&P 500",
+                        value=f"`{_pct_str(stats['alpha'])}` ({verb})", inline=True)
+    if stats["sharpe"] is not None:
+        embed.add_field(name="Sharpe", value=f"`{stats['sharpe']:.2f}`", inline=True)
+    embed.set_footer(text="Dashed = the same money in SPY. Points before today are reconstructed "
+                          "from stock trades (cash/options excluded); live points include everything.")
     return file, embed
 
 
@@ -1342,8 +1444,10 @@ async def _build_server_graph(name: str, snap_rows: list[dict], current_value: f
         )
         return None, err
 
+    bench = _benchmark_points(points, await _get_spy_series())
+    stats = _benchmark_stats(points, bench)
     png = await asyncio.get_running_loop().run_in_executor(
-        None, _render_equity_curve_png, name, points, f"{name} — Server Portfolio Value"
+        None, _render_equity_curve_png, name, points, f"{name} — Server Portfolio Value", bench
     )
     file = discord.File(io.BytesIO(png), filename="server_portfolio.png")
 
@@ -1356,8 +1460,12 @@ async def _build_server_graph(name: str, snap_rows: list[dict], current_value: f
     span_days = (points[-1][0] - points[0][0]).days or 1
     embed.add_field(name="Now", value=f"`{_fmt_money(last_v)}`", inline=True)
     embed.add_field(name=f"Change ({span_days}d)", value=f"`{_fmt_change(change, pct)}`", inline=True)
-    embed.set_footer(text="Combined account value of all members. Points before today are "
-                          "reconstructed from stock trades (cash/options excluded).")
+    if stats["alpha"] is not None:
+        verb = "beating" if stats["alpha"] >= 0 else "trailing"
+        embed.add_field(name="vs S&P 500",
+                        value=f"`{_pct_str(stats['alpha'])}` ({verb})", inline=True)
+    embed.set_footer(text="Combined account value of all members vs the same money in SPY (dashed). "
+                          "Points before today are reconstructed from stock trades.")
     return file, embed
 
 
