@@ -2889,6 +2889,99 @@ async def adjust_stock_cash(discord_user: str, delta: float) -> float:
         return float(row[0]) if row else 0.0
 
 
+# ── Portfolio snapshots (equity curve for /stock graph) ──────────────────────
+
+
+async def insert_portfolio_snapshot(
+    discord_user: str,
+    account_value: float,
+    stock_value: float,
+    options_value: float,
+    cash: float,
+    captured_at: str | None = None,
+    kind: str = "live",
+) -> None:
+    """Record one point on a user's equity curve. captured_at defaults to now."""
+    ts = captured_at or datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO portfolio_snapshots "
+            "(discord_user, captured_at, account_value, stock_value, options_value, cash, kind) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (discord_user, ts, account_value, stock_value, options_value, cash, kind),
+        )
+        await db.commit()
+
+
+async def insert_portfolio_snapshots_bulk(rows: list[dict]) -> int:
+    """Bulk-insert snapshot rows (used by backfill). Each dict needs
+    discord_user, captured_at, account_value, stock_value, options_value, cash, kind.
+    Returns the number inserted."""
+    if not rows:
+        return 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.executemany(
+            "INSERT INTO portfolio_snapshots "
+            "(discord_user, captured_at, account_value, stock_value, options_value, cash, kind) "
+            "VALUES (:discord_user, :captured_at, :account_value, :stock_value, "
+            ":options_value, :cash, :kind)",
+            rows,
+        )
+        await db.commit()
+    return len(rows)
+
+
+async def get_portfolio_snapshots(
+    discord_user: str, since_utc_iso: str | None = None
+) -> list[dict]:
+    """A user's equity-curve points, oldest first. Optionally only those at/after a cutoff."""
+    sql = "SELECT captured_at, account_value, stock_value, options_value, cash, kind " \
+          "FROM portfolio_snapshots WHERE discord_user = ?"
+    params: list = [discord_user]
+    if since_utc_iso:
+        sql += " AND captured_at >= ?"
+        params.append(since_utc_iso)
+    sql += " ORDER BY captured_at ASC"
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(sql, params)
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_latest_snapshot_at(discord_user: str) -> str | None:
+    """captured_at of the user's most recent snapshot, or None. For cadence dedup."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT MAX(captured_at) FROM portfolio_snapshots WHERE discord_user = ?",
+            (discord_user,),
+        )
+        row = await cur.fetchone()
+        return row[0] if row and row[0] else None
+
+
+async def get_all_portfolio_users() -> list[str]:
+    """Every user that has any portfolio footprint: a stock trade, an option
+    trade, or a cash balance. Used by the hourly snapshot loop."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT discord_user FROM stock_trades "
+            "UNION SELECT discord_user FROM option_trades "
+            "UNION SELECT discord_user FROM stock_cash WHERE balance > 0"
+        )
+        rows = await cur.fetchall()
+        return [r[0] for r in rows]
+
+
+async def has_backfill_snapshots(discord_user: str) -> bool:
+    """True if this user already has reconstructed (backfill) snapshots."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT 1 FROM portfolio_snapshots WHERE discord_user = ? AND kind = 'backfill' LIMIT 1",
+            (discord_user,),
+        )
+        return await cur.fetchone() is not None
+
+
 # ── Option trades + derived positions ───────────────────────────────────────
 # option_trades is the source of truth. Positions are keyed by the full
 # contract spec (underlying, opt_type, strike, expiry) and aggregated with
