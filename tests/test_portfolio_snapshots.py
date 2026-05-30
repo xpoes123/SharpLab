@@ -372,6 +372,28 @@ class TestBenchmark:
         assert stock._sharpe_ratio(vals) is not None
 
 
+class TestQuoteCache:
+    def test_cache_get_respects_ttl(self):
+        import time
+        cache = {"X": (time.monotonic(), {"v": 1})}
+        assert stock._cache_get(cache, "X", ttl=10) == {"v": 1}      # fresh
+        cache["X"] = (time.monotonic() - 100, {"v": 1})
+        assert stock._cache_get(cache, "X", ttl=10) is None          # stale
+        assert stock._cache_get(cache, "missing", ttl=10) is None
+
+    def test_fetch_quotes_serves_from_cache(self):
+        import time
+        stock._quote_cache.clear()
+        # Prime a fake ticker; if the cache works it's returned without any
+        # network call (a real fetch of FAKEZZZ would fail and be skipped).
+        stock._quote_cache["FAKEZZZ"] = (
+            time.monotonic(), {"price": 1.23, "prev_close": 1.0, "currency": "USD"}
+        )
+        out = asyncio.run(stock.fetch_quotes(["FAKEZZZ"]))
+        assert out["FAKEZZZ"]["price"] == 1.23
+        stock._quote_cache.clear()
+
+
 class TestCrypto:
     def test_normalize_symbol(self):
         assert stock._normalize_symbol("btc") == "BTC-USD"
