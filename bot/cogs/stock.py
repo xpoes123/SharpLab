@@ -7,7 +7,7 @@ All commands live under a single /stock group:
 - /stock graph [user]               — equity curve vs S&P 500 (are you beating the market?).
 - /stock server                     — server-wide portfolio (Overview / Today / Graph).
 - /stock cash <amount> [action]     — set/deposit/withdraw uninvested cash.
-- /stock buy <ticker> <sh> <px>     — record a buy.
+- /stock buy <ticker> <sh> <px>     — record a buy (stocks, ETFs, or crypto: BTC, ETH, …).
 - /stock sell <ticker> <sh> <px>    — record a sell (realized P/L computed).
 - /stock trades [ticker] [user]     — show recent trade history.
 - /stock leaderboard                — server-wide ranking by total P/L (unrealized + realized).
@@ -39,6 +39,28 @@ log = logging.getLogger(__name__)
 
 def _yahoo_url(ticker: str) -> str:
     return f"https://finance.yahoo.com/quote/{ticker}"
+
+
+# Common crypto tickers — typed bare (BTC) they map to Yahoo's BTC-USD form.
+# Anything with an explicit -USD suffix is also treated as crypto/FX.
+CRYPTO_SYMBOLS = {
+    "BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "AVAX", "LINK", "DOT", "MATIC",
+    "LTC", "BCH", "SHIB", "TRX", "UNI", "ATOM", "XLM", "NEAR", "APT", "ARB",
+    "OP", "PEPE", "BNB", "TON", "SUI", "INJ", "FIL", "ICP", "HBAR", "ALGO",
+    "VET", "AAVE", "MKR", "GRT", "SAND", "MANA", "AXS", "FTM", "RNDR", "TIA",
+}
+
+
+def _normalize_symbol(raw: str) -> str:
+    """Canonicalise a user-entered symbol. Bare crypto tickers (BTC, ETH, …) and
+    anything already ending in -USD become Yahoo's `BTC-USD` form; everything
+    else is treated as a normal stock/ETF ticker."""
+    s = raw.strip().upper()
+    if not s or s.endswith("-USD"):
+        return s
+    if s in CRYPTO_SYMBOLS:
+        return f"{s}-USD"
+    return s
 
 
 def _fmt_money(amount: float, currency: str = "USD") -> str:
@@ -168,11 +190,13 @@ async def fetch_quotes(tickers: list[str]) -> dict[str, dict]:
                 prev = get("previous_close")
                 currency = get("currency") or "USD"
                 if price is None or prev is None:
-                    hist = tk.history(period="2d")
+                    # fast_info is empty for crypto (BTC-USD etc.); fall back to
+                    # recent daily closes for both the price and a real prior close.
+                    hist = tk.history(period="5d")
                     if hist.empty:
                         continue
                     price = float(hist["Close"].iloc[-1])
-                    prev = float(hist["Close"].iloc[0]) if len(hist) >= 2 else price
+                    prev = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else price
                 out[sym] = {
                     "price": float(price),
                     "prev_close": float(prev),
@@ -1552,7 +1576,7 @@ class ServerPortfolioView(discord.ui.View):
 
 # ── Composition / allocation (stocks vs ETFs, sectors, persona) ──────────────
 
-_TYPE_LABELS = {"EQUITY": "Stocks", "ETF": "ETFs", "MUTUALFUND": "Funds"}
+_TYPE_LABELS = {"EQUITY": "Stocks", "ETF": "ETFs", "MUTUALFUND": "Funds", "CRYPTOCURRENCY": "Crypto"}
 
 
 def _compute_composition(
@@ -1574,6 +1598,8 @@ def _compute_composition(
             sec = m.get("sector") or "Unknown"
         elif qt in ("ETF", "MUTUALFUND"):
             sec = "ETF / Fund"
+        elif qt == "CRYPTOCURRENCY":
+            sec = "Crypto"
         else:
             sec = m.get("sector") or "Other"
         by_sector[sec] = by_sector.get(sec, 0.0) + value
@@ -1604,10 +1630,13 @@ def _portfolio_persona(comp: dict) -> str:
     inv = comp["invested_total"] or 0.0
     bt = comp["by_type"]
     etf_pct = (bt.get("ETFs", 0.0) + bt.get("Funds", 0.0)) / inv * 100 if inv else 0.0
+    crypto_pct = bt.get("Crypto", 0.0) / inv * 100 if inv else 0.0
     acct = comp["account_total"] or 0.0
     cash_pct = (comp["cash"] / acct * 100) if acct else 0.0
-    sectors = [s for s in comp["by_sector"] if s != "ETF / Fund"]
+    sectors = [s for s in comp["by_sector"] if s not in ("ETF / Fund", "Crypto")]
 
+    if crypto_pct >= 50:
+        return "🪙 Crypto Degen"
     if comp["options_value"]:
         return "🎰 Theta Gang"
     if etf_pct >= 60:
@@ -1656,7 +1685,7 @@ def _render_allocation_donut(title: str, slices: dict) -> bytes:
 def _build_allocation_embed(name: str, comp: dict, persona: str) -> discord.Embed:
     inv = comp["invested_total"]
     lines: list[str] = []
-    for label in ("Stocks", "ETFs", "Funds", "Other"):
+    for label in ("Stocks", "ETFs", "Funds", "Crypto", "Other"):
         v = comp["by_type"].get(label)
         if not v:
             continue
@@ -1741,11 +1770,15 @@ def _compute_risk(
     """Heuristic risk profile. Beta/concentration/VaR are bottom-up from current
     holdings (instant); max drawdown comes from the value series if available."""
     invested = sum(v for _, v in holdings)
-    # Position-weighted beta (ETFs / unknowns default to ~market = 1.0).
+    # Position-weighted beta. ETFs/unknowns default to ~market (1.0); crypto has
+    # no published beta but is far swingier, so it defaults high (~3.0).
     bsum = wsum = 0.0
     for sym, v in holdings:
-        b = meta.get(sym.upper(), {}).get("beta")
-        bsum += v * (b if b is not None else 1.0)
+        m = meta.get(sym.upper(), {})
+        b = m.get("beta")
+        if b is None:
+            b = 3.0 if (m.get("quote_type") or "").upper() == "CRYPTOCURRENCY" else 1.0
+        bsum += v * b
         wsum += v
     beta = (bsum / wsum) if wsum else 0.0
 
@@ -1920,10 +1953,10 @@ class StockCog(commands.Cog):
     # ── /stock lookup ────────────────────────────────────────────────────────
 
     @stock.command(name="lookup", description="Look up a stock's current price")
-    @app_commands.describe(ticker="Ticker symbol (e.g. AAPL)")
+    @app_commands.describe(ticker="Ticker — stock/ETF (AAPL) or crypto (BTC, ETH)")
     async def lookup(self, interaction: discord.Interaction, ticker: str) -> None:
         await interaction.response.defer()
-        symbol = ticker.strip().upper()
+        symbol = _normalize_symbol(ticker)
         if not symbol:
             await interaction.followup.send("Please provide a ticker.", ephemeral=True)
             return
@@ -2091,7 +2124,7 @@ class StockCog(commands.Cog):
 
     @stock.command(name="buy", description="Record a stock purchase")
     @app_commands.describe(
-        ticker="Ticker symbol (e.g. AAPL)",
+        ticker="Ticker — stock/ETF (AAPL) or crypto (BTC, ETH)",
         shares="Number of shares bought (fractional ok)",
         price="Execution price per share",
         date="Optional trade date (YYYY-MM-DD or YYYY-MM-DD HH:MM, UTC). Defaults to now.",
@@ -2106,7 +2139,7 @@ class StockCog(commands.Cog):
         date: str | None = None,
         notes: str | None = None,
     ) -> None:
-        symbol = ticker.strip().upper()
+        symbol = _normalize_symbol(ticker)
         if not symbol:
             await interaction.response.send_message("Please provide a ticker.", ephemeral=True)
             return
@@ -2136,7 +2169,7 @@ class StockCog(commands.Cog):
 
     @stock.command(name="sell", description="Record a stock sale (realized P/L is computed)")
     @app_commands.describe(
-        ticker="Ticker symbol (e.g. AAPL)",
+        ticker="Ticker — stock/ETF (AAPL) or crypto (BTC, ETH)",
         shares="Number of shares sold (fractional ok)",
         price="Execution price per share",
         date="Optional trade date (YYYY-MM-DD or YYYY-MM-DD HH:MM, UTC). Defaults to now.",
@@ -2151,7 +2184,7 @@ class StockCog(commands.Cog):
         date: str | None = None,
         notes: str | None = None,
     ) -> None:
-        symbol = ticker.strip().upper()
+        symbol = _normalize_symbol(ticker)
         if not symbol:
             await interaction.response.send_message("Please provide a ticker.", ephemeral=True)
             return
@@ -2208,7 +2241,7 @@ class StockCog(commands.Cog):
     ) -> None:
         await interaction.response.defer(ephemeral=True)
         target = user or interaction.user
-        symbol = ticker.strip().upper() if ticker else None
+        symbol = _normalize_symbol(ticker) if ticker else None
         trades = await queries.get_stock_trades(str(target.id), symbol)
         if not trades:
             scope = f" for `{symbol}`" if symbol else ""

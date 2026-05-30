@@ -372,6 +372,32 @@ class TestBenchmark:
         assert stock._sharpe_ratio(vals) is not None
 
 
+class TestCrypto:
+    def test_normalize_symbol(self):
+        assert stock._normalize_symbol("btc") == "BTC-USD"
+        assert stock._normalize_symbol(" eth ") == "ETH-USD"
+        assert stock._normalize_symbol("BTC-USD") == "BTC-USD"      # already canonical
+        assert stock._normalize_symbol("DOGE-USD") == "DOGE-USD"
+        assert stock._normalize_symbol("aapl") == "AAPL"            # normal stock untouched
+        assert stock._normalize_symbol("") == ""
+
+    def test_crypto_composition_bucket(self):
+        meta = {
+            "BTC-USD": {"quote_type": "CRYPTOCURRENCY", "beta": None},
+            "AAPL": {"quote_type": "EQUITY", "sector": "Technology", "beta": 1.1},
+        }
+        comp = stock._compute_composition([("BTC-USD", 6000), ("AAPL", 4000)], 0, 0, meta)
+        assert comp["by_type"] == {"Crypto": 6000.0, "Stocks": 4000.0}
+        assert comp["by_sector"]["Crypto"] == 6000.0
+        assert stock._portfolio_persona(comp) == "🪙 Crypto Degen"
+
+    def test_crypto_default_beta_is_high(self):
+        meta = {"BTC-USD": {"quote_type": "CRYPTOCURRENCY", "beta": None}}
+        r = stock._compute_risk([("BTC-USD", 10000)], 0, 0, 10000, meta, [])
+        assert r["beta"] == 3.0          # not the 1.0 market default
+        assert r["score"] >= 80          # all-in crypto is high risk
+
+
 class TestTickerMetaQueries:
     def test_upsert_and_bulk_get(self, tmp_db):
         async def go():
