@@ -166,6 +166,56 @@ def _order(embed):
     return ids
 
 
+class TestServerEquityPoints:
+    def test_forward_fill_and_sum(self):
+        rows = [
+            {"discord_user": "a", "captured_at": "2026-05-01T21:00:00+00:00", "account_value": 100},
+            {"discord_user": "a", "captured_at": "2026-05-03T21:00:00+00:00", "account_value": 120},
+            {"discord_user": "b", "captured_at": "2026-05-02T21:00:00+00:00", "account_value": 50},
+        ]
+        pts = stock._server_equity_points(rows)
+        # Days 05-01, 05-02, 05-03; b appears day 2, a forward-fills.
+        assert [round(v, 2) for _, v in pts] == [100, 150, 170]
+
+    def test_empty(self):
+        assert stock._server_equity_points([]) == []
+
+
+def _server_data():
+    per_ticker = {
+        "AAPL": {"shares": 10, "value": 2000, "cost": 1500, "day_change": 50,
+                 "prev_value": 1950, "price": 200, "holders": 2},
+        "TSLA": {"shares": 5, "value": 1000, "cost": 1200, "day_change": -30,
+                 "prev_value": 1030, "price": 200, "holders": 1},
+    }
+    return {
+        "per_ticker": per_ticker, "num_traders": 3, "num_holders": 2,
+        "stock_value": 3000, "stock_cost": 2700, "day_change": 20, "day_pct": 0.67,
+        "options_value": 0, "options_cost": 0, "cash": 500, "account_value": 3500,
+        "realized_total": 100, "unrealized": 300, "unrealized_pct": 11.1,
+        "total_pnl": 400, "has_options": False,
+    }
+
+
+def _syms(embed):
+    import re
+    return re.findall(r"\[`([A-Z]+)`\]", embed.description)
+
+
+class TestServerEmbeds:
+    def test_overview_orders_by_value(self):
+        embed = stock._build_server_overview_embed("MyServer", _server_data())
+        assert _syms(embed) == ["AAPL", "TSLA"]  # AAPL ($2000) before TSLA ($1000)
+        assert "Server Portfolio" in embed.title
+
+    def test_today_orders_by_day_change_and_resolves_movers(self):
+        embed = stock._build_server_today_embed("MyServer", _server_data())
+        assert _syms(embed) == ["AAPL", "TSLA"]  # +50 before -30
+        fields = {f.name: f.value for f in embed.fields}
+        assert "AAPL" in fields["Top gainer"]
+        assert "TSLA" in fields["Top loser"]
+
+
 class TestLeaderboardRender:
     def test_all_time_sorted_by_total(self):
         rows = [_row("a", total=50), _row("b", total=300), _row("c", total=-10)]
