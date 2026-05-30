@@ -101,7 +101,13 @@ async def _launch(bot: commands.Bot, interaction: discord.Interaction, game: str
             ephemeral=True,
         )
         return
-    await method(interaction)
+    # The launcher is usually a plain coroutine method, but on cogs that still
+    # decorate it with @app_commands.command the attribute is a (non-callable)
+    # Command object — invoke its underlying callback with the cog bound.
+    if isinstance(method, app_commands.Command):
+        await method.callback(cog, interaction)
+    else:
+        await method(interaction)
 
 
 class CategorySelect(ui.Select):
