@@ -342,6 +342,16 @@ CREATE TABLE IF NOT EXISTS portfolio_snapshots (
 );
 CREATE INDEX IF NOT EXISTS idx_portfolio_snapshots_user
     ON portfolio_snapshots(discord_user, captured_at);
+
+CREATE TABLE IF NOT EXISTS ticker_meta (
+    ticker      TEXT PRIMARY KEY,
+    quote_type  TEXT,          -- EQUITY | ETF | MUTUALFUND | ...
+    sector      TEXT,          -- equities only (NULL for ETFs)
+    category    TEXT,          -- ETFs only (e.g. 'Large Blend')
+    beta        REAL,          -- equities (NULL for many ETFs)
+    name        TEXT,
+    updated_at  TEXT NOT NULL  -- UTC ISO 8601; used for cache TTL
+);
 """
 
 
@@ -515,6 +525,16 @@ async def init_db() -> None:
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_portfolio_snapshots_user "
                 "ON portfolio_snapshots(discord_user, captured_at)"
+            )
+            await db.commit()
+        except Exception:
+            pass
+        # Migration: add ticker_meta cache (sector / quote type / beta) for analytics
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS ticker_meta ("
+                "ticker TEXT PRIMARY KEY, quote_type TEXT, sector TEXT, "
+                "category TEXT, beta REAL, name TEXT, updated_at TEXT NOT NULL)"
             )
             await db.commit()
         except Exception:
