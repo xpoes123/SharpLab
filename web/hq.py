@@ -291,6 +291,53 @@ async def hq_profile(handle: str):
     }
 
 
+@router.get("/hq/stocks")
+async def hq_stocks():
+    """Every trader's portfolio — value (latest hourly snapshot), realized P&L,
+    and open holdings. Public, cached briefly."""
+    cached = _SERVER_CACHE.get("stocks")
+    if cached and (time.monotonic() - cached[0]) < _SERVER_TTL:
+        return cached[1]
+
+    users = await queries.get_all_portfolio_users()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT p.discord_user, p.account_value, p.stock_value, p.options_value, p.cash
+               FROM portfolio_snapshots p
+               JOIN (SELECT discord_user, MAX(captured_at) mc FROM portfolio_snapshots
+                     GROUP BY discord_user) m
+                 ON p.discord_user = m.discord_user AND p.captured_at = m.mc""",
+        )
+        snaps = {r["discord_user"]: dict(r) for r in await cur.fetchall()}
+    names = await _names(users)
+
+    traders = []
+    for uid in users:
+        positions = await queries.get_stock_positions_full(uid)
+        realized = round(sum(p.get("realized_pnl", 0) for p in positions), 2)
+        holdings = [
+            {"ticker": p["ticker"], "shares": round(p.get("shares", 0), 4),
+             "dca": round(p.get("dca_price", 0), 2), "cost_basis": round(p.get("cost_basis", 0), 2)}
+            for p in positions if p.get("shares", 0) > 0
+        ]
+        snap = snaps.get(uid, {})
+        traders.append({
+            "user_id": uid,
+            "username": (names.get(uid) or {}).get("username") or f"Player {uid[:6]}",
+            "account_value": snap.get("account_value"),
+            "stock_value": snap.get("stock_value"),
+            "cash": snap.get("cash"),
+            "realized_pnl": realized,
+            "positions": len(holdings),
+            "holdings": sorted(holdings, key=lambda h: h["cost_basis"], reverse=True),
+        })
+    traders.sort(key=lambda t: (t["account_value"] is not None, t["account_value"] or 0), reverse=True)
+    data = {"traders": traders}
+    _SERVER_CACHE["stocks"] = (time.monotonic(), data)
+    return data
+
+
 @router.get("/hq/pickem/open")
 async def hq_pickem_open(request: Request):
     """Today's still-open pick'em games, with the viewer's current bet if any."""
