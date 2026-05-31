@@ -37,6 +37,32 @@ from db import queries
 
 log = logging.getLogger(__name__)
 
+# ── Price-monitor config ─────────────────────────────────────────────────────
+
+DEFAULT_STOCK_ALERTS_CHANNEL_ID = 1510100250411536495  # auto-swing alerts land here
+MONITOR_POLL_MINUTES = 5
+SWING_THRESHOLD_PCT = 10.0  # auto-alert when a held ticker moves this % on the day
+_ALERTS_CHANNEL_SETTING = "stock_alerts_channel"
+
+
+def _manual_triggered(direction: str, target: float, price: float) -> bool:
+    """True when an above/below monitor's condition is met."""
+    if direction == "above":
+        return price >= target
+    return price <= target
+
+
+def _swing_pct(price: float, prev_close: float | None) -> float:
+    """Daily % change vs previous close (0 when prev_close is missing)."""
+    if not prev_close:
+        return 0.0
+    return (price - prev_close) / prev_close * 100.0
+
+
+def _display_ticker(symbol: str) -> str:
+    """Strip Yahoo's -USD suffix for crypto display (BTC-USD -> BTC)."""
+    return symbol[:-4] if symbol.endswith("-USD") else symbol
+
 
 def _yahoo_url(ticker: str) -> str:
     return f"https://finance.yahoo.com/quote/{ticker}"
@@ -1995,14 +2021,21 @@ async def _build_risk(
 class StockCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
+        # (uid, ticker) -> UTC date string of the last auto-swing alert (once/day)
+        self._swing_alerted: dict[tuple[str, str], str] = {}
         self.snapshot_loop.start()
+        self.monitor_loop.start()
 
     def cog_unload(self) -> None:
         self.snapshot_loop.cancel()
+        self.monitor_loop.cancel()
 
     stock = app_commands.Group(name="stock", description="Stock quotes, portfolio, and market data")
     option = app_commands.Group(
         name="option", description="Track option contracts (calls/puts)", parent=stock
+    )
+    monitor = app_commands.Group(
+        name="monitor", description="Price alerts for a ticker", parent=stock
     )
 
     # ── Hourly equity-curve snapshot ─────────────────────────────────────────
@@ -2024,6 +2057,197 @@ class StockCog(commands.Cog):
 
     @snapshot_loop.before_loop
     async def _before_snapshot_loop(self) -> None:
+        await self.bot.wait_until_ready()
+
+    # ── Price monitors ───────────────────────────────────────────────────────
+
+    @monitor.command(name="add", description="Alert me when a ticker crosses a price")
+    @app_commands.describe(
+        ticker="Ticker — stock/ETF (AAPL) or crypto (BTC, ETH)",
+        direction="Fire when the price goes above or below your target",
+        price="Target price",
+    )
+    @app_commands.choices(direction=[
+        app_commands.Choice(name="above", value="above"),
+        app_commands.Choice(name="below", value="below"),
+    ])
+    async def monitor_add(
+        self, interaction: discord.Interaction,
+        ticker: str, direction: app_commands.Choice[str], price: float,
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
+        symbol = _normalize_symbol(ticker)
+        if price <= 0:
+            await interaction.followup.send("Target price must be positive.", ephemeral=True)
+            return
+        try:
+            quote = await fetch_quote(symbol)
+        except Exception:
+            await interaction.followup.send(
+                f"Couldn't find a price for `{_display_ticker(symbol)}`.", ephemeral=True,
+            )
+            return
+        cur = quote["price"]
+        # Reject if the condition is already true — it would fire instantly.
+        if _manual_triggered(direction.value, price, cur):
+            await interaction.followup.send(
+                f"`{_display_ticker(symbol)}` is already {direction.value} "
+                f"${price:,.2f} (now ${cur:,.2f}). Pick a target on the other side.",
+                ephemeral=True,
+            )
+            return
+        mid = await queries.add_stock_monitor(
+            str(interaction.user.id), str(interaction.channel_id),
+            symbol, direction.value, price,
+        )
+        await interaction.followup.send(
+            f"✅ Monitor **#{mid}**: I'll ping you here when "
+            f"**{_display_ticker(symbol)}** goes **{direction.value} ${price:,.2f}** "
+            f"(now ${cur:,.2f}).",
+            ephemeral=True,
+        )
+
+    @monitor.command(name="list", description="Your active price monitors")
+    async def monitor_list(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        mons = await queries.get_stock_monitors_for_user(str(interaction.user.id))
+        if not mons:
+            await interaction.followup.send(
+                "You have no active monitors. Add one with `/stock monitor add`.",
+                ephemeral=True,
+            )
+            return
+        lines = [
+            f"**#{m['monitor_id']}** — {_display_ticker(m['ticker'])} "
+            f"{m['direction']} ${m['target_price']:,.2f}"
+            for m in mons
+        ]
+        embed = discord.Embed(
+            title="📡 Your Price Monitors", description="\n".join(lines), colour=0x3498DB,
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @monitor.command(name="remove", description="Cancel a price monitor")
+    @app_commands.describe(monitor_id="ID from /stock monitor list")
+    async def monitor_remove(
+        self, interaction: discord.Interaction, monitor_id: int,
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
+        ok = await queries.delete_stock_monitor(monitor_id, str(interaction.user.id))
+        if ok:
+            await interaction.followup.send(f"🗑️ Removed monitor **#{monitor_id}**.", ephemeral=True)
+        else:
+            await interaction.followup.send(
+                f"No monitor **#{monitor_id}** of yours found.", ephemeral=True,
+            )
+
+    @monitor.command(name="channel", description="Set the channel for auto portfolio-swing alerts")
+    @app_commands.describe(channel="Channel where ≥10% daily swing alerts are posted")
+    async def monitor_channel(
+        self, interaction: discord.Interaction, channel: discord.TextChannel,
+    ) -> None:
+        if not interaction.user.guild_permissions.manage_guild:
+            await interaction.response.send_message(
+                "You need **Manage Server** to set the alerts channel.", ephemeral=True,
+            )
+            return
+        await queries.set_bot_setting(_ALERTS_CHANNEL_SETTING, str(channel.id))
+        await interaction.response.send_message(
+            f"✅ Portfolio-swing alerts will post in {channel.mention}.", ephemeral=True,
+        )
+
+    async def _alerts_channel_id(self) -> int:
+        raw = await queries.get_bot_setting(_ALERTS_CHANNEL_SETTING)
+        try:
+            return int(raw) if raw else DEFAULT_STOCK_ALERTS_CHANNEL_ID
+        except ValueError:
+            return DEFAULT_STOCK_ALERTS_CHANNEL_ID
+
+    # ── Monitor polling loop ─────────────────────────────────────────────────
+
+    @tasks.loop(minutes=MONITOR_POLL_MINUTES)
+    async def monitor_loop(self) -> None:
+        """Poll watched tickers and fire manual + auto-swing alerts."""
+        try:
+            monitors = await queries.get_active_stock_monitors()
+            holdings = await queries.get_all_stock_holdings()
+        except Exception:
+            log.exception("monitor_loop: failed to load monitors/holdings")
+            return
+        tickers = {m["ticker"] for m in monitors} | {h["ticker"] for h in holdings}
+        if not tickers:
+            return
+        try:
+            quotes = await fetch_quotes(list(tickers))
+        except Exception:
+            log.exception("monitor_loop: quote fetch failed")
+            return
+        await self._fire_manual_alerts(monitors, quotes)
+        await self._fire_swing_alerts(holdings, quotes)
+
+    async def _fire_manual_alerts(
+        self, monitors: list[dict], quotes: dict[str, dict],
+    ) -> None:
+        for m in monitors:
+            q = quotes.get(m["ticker"])
+            if not q:
+                continue
+            if not _manual_triggered(m["direction"], m["target_price"], q["price"]):
+                continue
+            await queries.deactivate_stock_monitor(m["monitor_id"])
+            channel = self.bot.get_channel(int(m["channel_id"]))
+            if channel is None:
+                continue
+            arrow = "📈" if m["direction"] == "above" else "📉"
+            try:
+                await channel.send(
+                    f"{arrow} <@{m['discord_user']}> **{_display_ticker(m['ticker'])}** is "
+                    f"now **${q['price']:,.2f}** — {m['direction']} your "
+                    f"${m['target_price']:,.2f} target."
+                )
+            except discord.HTTPException:
+                log.exception("monitor_loop: failed to post manual alert")
+
+    async def _fire_swing_alerts(
+        self, holdings: list[dict], quotes: dict[str, dict],
+    ) -> None:
+        today = datetime.now(timezone.utc).date().isoformat()
+        # Group holders by ticker
+        holders: dict[str, list[str]] = {}
+        for h in holdings:
+            holders.setdefault(h["ticker"], []).append(h["discord_user"])
+        channel = self.bot.get_channel(await self._alerts_channel_id())
+        for ticker, uids in holders.items():
+            q = quotes.get(ticker)
+            if not q:
+                continue
+            pct = _swing_pct(q["price"], q.get("prev_close"))
+            if abs(pct) < SWING_THRESHOLD_PCT:
+                continue
+            # Once per (user, ticker) per UTC day
+            to_ping = [
+                uid for uid in uids
+                if self._swing_alerted.get((uid, ticker)) != today
+            ]
+            if not to_ping:
+                continue
+            for uid in to_ping:
+                self._swing_alerted[(uid, ticker)] = today
+            if channel is None:
+                continue
+            sign = "🟢 +" if pct >= 0 else "🔴 "
+            mentions = " ".join(f"<@{uid}>" for uid in to_ping)
+            prev = q.get("prev_close") or q["price"]
+            try:
+                await channel.send(
+                    f"⚠️ **{_display_ticker(ticker)}** {sign}{pct:.1f}% today "
+                    f"(${prev:,.2f} → ${q['price']:,.2f}) — {mentions}"
+                )
+            except discord.HTTPException:
+                log.exception("monitor_loop: failed to post swing alert")
+
+    @monitor_loop.before_loop
+    async def _before_monitor_loop(self) -> None:
         await self.bot.wait_until_ready()
 
     # ── /stock lookup ────────────────────────────────────────────────────────

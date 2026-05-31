@@ -368,6 +368,23 @@ CREATE TABLE IF NOT EXISTS qb_answers (
     aliases     TEXT,              -- JSON list of accepted alternates
     created_at  TEXT NOT NULL      -- UTC ISO 8601, first time we saw it
 );
+
+CREATE TABLE IF NOT EXISTS stock_monitors (
+    monitor_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    discord_user  TEXT NOT NULL,
+    channel_id    TEXT NOT NULL,   -- where to ping when it fires
+    ticker        TEXT NOT NULL,   -- normalized (AAPL, BTC-USD)
+    direction     TEXT NOT NULL CHECK(direction IN ('above', 'below')),
+    target_price  REAL NOT NULL,
+    created_at    TEXT NOT NULL,
+    active        INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_stock_monitors_active ON stock_monitors(active);
+
+CREATE TABLE IF NOT EXISTS bot_settings (
+    key    TEXT PRIMARY KEY,
+    value  TEXT NOT NULL
+);
 """
 
 
@@ -572,6 +589,23 @@ async def init_db() -> None:
                 "CREATE TABLE IF NOT EXISTS qb_answers ("
                 "answer TEXT PRIMARY KEY, category TEXT NOT NULL, "
                 "aliases TEXT, created_at TEXT NOT NULL)"
+            )
+            await db.commit()
+        except Exception:
+            pass
+        # Migration: add stock_monitors + bot_settings for price alerts
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS stock_monitors ("
+                "monitor_id INTEGER PRIMARY KEY AUTOINCREMENT, discord_user TEXT NOT NULL, "
+                "channel_id TEXT NOT NULL, ticker TEXT NOT NULL, "
+                "direction TEXT NOT NULL CHECK(direction IN ('above','below')), "
+                "target_price REAL NOT NULL, created_at TEXT NOT NULL, "
+                "active INTEGER NOT NULL DEFAULT 1)"
+            )
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS bot_settings ("
+                "key TEXT PRIMARY KEY, value TEXT NOT NULL)"
             )
             await db.commit()
         except Exception:
