@@ -132,9 +132,13 @@ class Signals(commands.Cog):
                 if tot and self._fresh(f"{tot['kind']}:{g.game_id}:{tot['over_book']}:{tot['under_book']}:{tot['over_line']}:{tot['under_line']}"):
                     await self._post(self._total_embed(emoji, label, g, tot)); posted += 1
 
-                spr = sig.find_spread_middle(current)
-                if spr and self._fresh(f"spread_middle:{g.game_id}:{spr['home_book']}:{spr['away_book']}:{spr['home_line']}:{spr['away_line']}"):
-                    await self._post(self._spread_embed(emoji, label, g, spr)); posted += 1
+                # Spread middles only for NBA — MLB run lines are ~always ±1.5, so
+                # a "middle" there just means books disagree on the favorite (common,
+                # marginal, noisy). Total middles still apply to both sports.
+                if g.sport == "nba":
+                    spr = sig.find_spread_middle(current)
+                    if spr and self._fresh(f"spread_middle:{g.game_id}:{spr['home_book']}:{spr['away_book']}:{spr['home_line']}:{spr['away_line']}"):
+                        await self._post(self._spread_embed(emoji, label, g, spr)); posted += 1
 
                 # Steam / divergence compare to ~30 min ago.
                 since = await queries.get_snapshots_for_game_since(g.game_id, baseline_cut)
