@@ -242,10 +242,17 @@ class StakeButton(ui.Button):
         if game is None:
             await interaction.response.edit_message(content="🔒 Voting is closed for this game.", view=None)
             return
-        await queries.record_pickem_pick(self.message_id, str(interaction.user.id), self.team, self.n)
+        locked = await queries.record_pickem_pick(
+            self.message_id, str(interaction.user.id), self.team, self.n,
+        )
+        if not locked:
+            await interaction.response.edit_message(
+                content="❌ You already locked in a bet on this game — bets are final.", view=None,
+            )
+            return
         prob = game["away_prob"] if self.team == "away" else game["home_prob"]
         await interaction.response.edit_message(
-            content=f"✅ Bet **{self.n}u** on **{self.team_name}** — {_potential(self.n, prob)} when it resolves.",
+            content=f"✅ Bet **{self.n}u** on **{self.team_name}** (final) — {_potential(self.n, prob)} when it resolves.",
             view=None,
         )
 
@@ -272,10 +279,18 @@ class TeamButton(ui.Button):
         if game is None:
             await interaction.response.send_message("🔒 Voting is closed for this game.", ephemeral=True)
             return
+        existing = await queries.get_pickem_pick_full(self.message_id, str(interaction.user.id))
+        if existing:
+            side = game["away_team"] if existing["pick"] == "away" else game["home_team"]
+            await interaction.response.send_message(
+                f"❌ You already bet **{existing['stake']}u** on **{side}** — bets are final.",
+                ephemeral=True,
+            )
+            return
         prob = game["away_prob"] if self.team == "away" else game["home_prob"]
         pct = f" (market win% {prob * 100:.0f}%)" if prob else ""
         await interaction.response.send_message(
-            f"**{self.team_name}** to win{pct} — choose your stake (1–5 units):",
+            f"**{self.team_name}** to win{pct} — choose your stake (1–5 units). **Bets are final.**",
             view=StakeView(self.message_id, self.team, self.team_name),
             ephemeral=True,
         )

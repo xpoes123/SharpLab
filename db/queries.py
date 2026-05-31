@@ -3515,17 +3515,31 @@ async def resolve_pickem_game(message_id: str, winner: str) -> None:
 
 async def record_pickem_pick(
     message_id: str, discord_user: str, pick: str, stake: int = 1,
-) -> None:
+) -> bool:
+    """Place a bet. Bets are FINAL — returns True if this locked it in, False if
+    the user had already bet on this game (no overwrite)."""
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            """INSERT INTO pickem_picks (message_id, discord_user, pick, stake, picked_at)
-               VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(message_id, discord_user)
-               DO UPDATE SET pick = excluded.pick, stake = excluded.stake""",
+        cur = await db.execute(
+            """INSERT OR IGNORE INTO pickem_picks
+               (message_id, discord_user, pick, stake, picked_at)
+               VALUES (?, ?, ?, ?, ?)""",
             (message_id, discord_user, pick, stake, now),
         )
         await db.commit()
+        return cur.rowcount > 0
+
+
+async def get_pickem_pick_full(message_id: str, discord_user: str) -> dict | None:
+    """The user's locked-in pick + stake for a game, or None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT pick, stake FROM pickem_picks WHERE message_id = ? AND discord_user = ?",
+            (message_id, discord_user),
+        )
+        row = await cur.fetchone()
+    return dict(row) if row else None
 
 
 async def remove_pickem_pick(message_id: str, discord_user: str) -> None:

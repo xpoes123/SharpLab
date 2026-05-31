@@ -339,7 +339,9 @@ async def hq_pickem_bet(body: BetIn, request: Request):
     now = datetime.now(timezone.utc).isoformat()
     if game is None or game["locked"] or game["start_time"] <= now:
         return JSONResponse({"error": "closed"}, status_code=409)
-    await queries.record_pickem_pick(body.message_id, sess["id"], body.team, body.stake)
+    locked = await queries.record_pickem_pick(body.message_id, sess["id"], body.team, body.stake)
+    if not locked:
+        return JSONResponse({"error": "already_bet"}, status_code=409)
     return {"ok": True, "team": body.team, "stake": body.stake}
 
 
