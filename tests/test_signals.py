@@ -72,3 +72,19 @@ def test_no_move_below_threshold():
     base = {b: {"ml_home": -130} for b in ("A", "B", "C")}
     cur = {b: {"ml_home": -135} for b in ("A", "B", "C")}  # only 5c, below 12
     assert detect_ml_moves(base, cur) is None
+
+
+def test_steam_reports_lagging_books():
+    base = {b: {"ml_home": -130} for b in ("A", "B", "C", "D")}
+    cur = {"A": {"ml_home": -150}, "B": {"ml_home": -150}, "C": {"ml_home": -148},
+           "D": {"ml_home": -132}}  # D barely moved → lagging
+    s = detect_ml_moves(base, cur)
+    assert s["kind"] == "steam"
+    assert s["lagging"] == ["D"]
+
+
+def test_arb_min_roi_filters_marginal():
+    # ~0.7% arb — below a 1% floor.
+    odds = {"A": {"ml_home": 110, "ml_away": -130}, "B": {"ml_home": -130, "ml_away": 110}}
+    assert find_ml_arb(odds) is not None             # no floor → detected
+    assert find_ml_arb(odds, min_roi=5.0) is None    # 5% floor → filtered

@@ -26,6 +26,7 @@ LOOKAHEAD_HOURS = 18      # only games tipping within this window
 BASELINE_MINUTES = 30     # steam/divergence compare-against window
 ALERT_TTL_SEC = 6 * 3600  # re-alert the same signal at most once per this period
 STALE_MINUTES = 45        # ignore games whose latest odds are older than this
+ARB_MIN_ROI = 1.0         # ignore arbs below this % (snapshots aren't simultaneous)
 
 
 def _am(v: int) -> str:
@@ -123,8 +124,9 @@ class Signals(commands.Cog):
                 label = f"{g.away_team} @ {g.home_team}"
                 emoji = "🏀" if g.sport == "nba" else "⚾"
 
-                # Arbitrage / middles use the current cross-book picture.
-                arb = sig.find_ml_arb(current)
+                # Arbitrage / middles use the current cross-book picture. The arb
+                # floor filters marginal/stale edges (snapshots aren't simultaneous).
+                arb = sig.find_ml_arb(current, min_roi=ARB_MIN_ROI)
                 if arb and self._fresh(f"arb:{g.game_id}:{arb['home_book']}:{arb['away_book']}:{round(arb['roi_pct'])}"):
                     await self._post(self._arb_embed(emoji, label, g, arb)); posted += 1
 
@@ -132,13 +134,9 @@ class Signals(commands.Cog):
                 if tot and self._fresh(f"{tot['kind']}:{g.game_id}:{tot['over_book']}:{tot['under_book']}:{tot['over_line']}:{tot['under_line']}"):
                     await self._post(self._total_embed(emoji, label, g, tot)); posted += 1
 
-                # Spread middles only for NBA — MLB run lines are ~always ±1.5, so
-                # a "middle" there just means books disagree on the favorite (common,
-                # marginal, noisy). Total middles still apply to both sports.
-                if g.sport == "nba":
-                    spr = sig.find_spread_middle(current)
-                    if spr and self._fresh(f"spread_middle:{g.game_id}:{spr['home_book']}:{spr['away_book']}:{spr['home_line']}:{spr['away_line']}"):
-                        await self._post(self._spread_embed(emoji, label, g, spr)); posted += 1
+                spr = sig.find_spread_middle(current)
+                if spr and self._fresh(f"spread_middle:{g.game_id}:{spr['home_book']}:{spr['away_book']}:{spr['home_line']}:{spr['away_line']}"):
+                    await self._post(self._spread_embed(emoji, label, g, spr)); posted += 1
 
                 # Steam / divergence compare to ~30 min ago.
                 since = await queries.get_snapshots_for_game_since(g.game_id, baseline_cut)
@@ -202,7 +200,10 @@ class Signals(commands.Cog):
                 description=f"{emoji} **{side}** moneyline steamed across {len(m['books'])} books (~{m['avg_cents']}¢) in the last {BASELINE_MINUTES} min.",
                 color=0x7aa2f7,
             )
-            e.add_field(name="Books", value=", ".join(f"`{b}`" for b in m["books"]), inline=False)
+            e.add_field(name="Moved", value=", ".join(f"`{b}`" for b in m["books"]), inline=False)
+            if m.get("lagging"):
+                e.add_field(name="⏳ Lagging (haven't moved yet)",
+                            value=", ".join(f"`{b}`" for b in m["lagging"]), inline=False)
         else:
             e = discord.Embed(
                 title=f"↔️ Books Disagree — {label}",
