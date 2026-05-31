@@ -140,12 +140,13 @@ class OddsPollingWorkflow:
                     retry_policy=RetryPolicy(maximum_attempts=3),
                 )
 
-            # Burst-poll near tip: if any game tips within BURST_WINDOW, poll every
-            # BURST_INTERVAL so the closing line is fresh; otherwise the base
-            # cadence. Patched so an in-flight run that already recorded its sleep
-            # replays deterministically.
+            # Cadence ramps as the soonest tip approaches (tiered). Nested patches
+            # keep in-flight runs that already recorded a sleep deterministic:
+            # newest first, falling back to the older burst patch, then the base.
             sleep_min = interval_minutes
-            if workflow.patched("burst-poll-near-tip"):
+            if workflow.patched("poll-cadence-tiered"):
+                sleep_min = _next_poll_tiered(upcoming_games, workflow.now(), interval_minutes)
+            elif workflow.patched("burst-poll-near-tip"):
                 sleep_min = _next_poll_minutes(upcoming_games, workflow.now(), interval_minutes)
             await workflow.sleep(timedelta(minutes=sleep_min))
             workflow.continue_as_new(args=[interval_minutes, sport])
@@ -154,9 +155,12 @@ class OddsPollingWorkflow:
 BURST_WINDOW_MIN = 35   # within this many minutes of a tip, poll densely
 BURST_INTERVAL_MIN = 5  # the dense cadence near tip
 
+# Tiered poll cadence: (within N minutes of the soonest tip → poll every M min).
+# Closing line gets progressively fresher as tip approaches. >12h out = base 30.
+POLL_TIERS = [(60, 5), (240, 10), (480, 15), (720, 20)]
 
-def _next_poll_minutes(upcoming_games, now, base: int) -> int:
-    """Minutes to sleep before the next poll: dense near the soonest tip, else base."""
+
+def _soonest_tip_minutes(upcoming_games, now) -> float | None:
     soonest = None
     for g in upcoming_games:
         try:
@@ -168,8 +172,25 @@ def _next_poll_minutes(upcoming_games, now, base: int) -> int:
         mins = (st - now).total_seconds() / 60
         if mins > 0 and (soonest is None or mins < soonest):
             soonest = mins
+    return soonest
+
+
+def _next_poll_minutes(upcoming_games, now, base: int) -> int:
+    """Legacy burst cadence (kept for the burst-poll-near-tip patch replay)."""
+    soonest = _soonest_tip_minutes(upcoming_games, now)
     if soonest is not None and soonest <= BURST_WINDOW_MIN:
         return min(base, BURST_INTERVAL_MIN)
+    return base
+
+
+def _next_poll_tiered(upcoming_games, now, base: int) -> int:
+    """Tiered cadence by minutes-to-soonest-tip: 5/10/15/20 within 1/4/8/12h, else base."""
+    soonest = _soonest_tip_minutes(upcoming_games, now)
+    if soonest is None:
+        return base
+    for threshold, interval in POLL_TIERS:
+        if soonest <= threshold:
+            return min(base, interval)
     return base
 
 
