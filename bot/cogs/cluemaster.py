@@ -32,8 +32,8 @@ ROUND_TIME = 90
 ROUND_DELAY = 4
 MIN_PLAYERS = 2  # need at least clue master + 1 guesser
 MAX_PLAYERS = 8
-DEFAULT_ROUNDS = 6
-MAX_ROUNDS_CAP = 16
+DEFAULT_ROUNDS_PER_PLAYER = 2  # each player is clue master this many times
+MAX_ROUNDS_CAP = 24  # safety ceiling on total rounds (e.g. 8 players × 3)
 INACTIVITY_ROUNDS = 3
 IDLE_REPLACEABLE_SECS = 90  # mirrors crash.py — replace stuck tables after 90s idle
 
@@ -59,7 +59,8 @@ class CMTable:
     host_id: int
     host_name: str
     category_key: str = DEFAULT_CATEGORY
-    total_rounds: int = DEFAULT_ROUNDS
+    rounds_per_player: int = DEFAULT_ROUNDS_PER_PLAYER
+    total_rounds: int = 0  # computed at game start: rounds_per_player × player count
     phase: str = "betting"  # betting | playing | between_rounds | closed
     players: dict[int, CMPlayer] = field(default_factory=dict)
     player_order: list[int] = field(default_factory=list)
@@ -79,6 +80,12 @@ class CMTable:
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _compute_total_rounds(rounds_per_player: int, n_players: int) -> int:
+    """Total rounds = each player is clue master rounds_per_player times,
+    capped at MAX_ROUNDS_CAP so big tables don't run forever."""
+    return min(MAX_ROUNDS_CAP, max(1, rounds_per_player * n_players))
 
 
 def _pick_item(category_key: str, used: set[str]) -> tuple[str, list[str]]:
@@ -111,11 +118,17 @@ def _category_label(key: str) -> str:
 
 
 def _betting_embed(table: CMTable) -> discord.Embed:
+    n_players = len(table.players)
+    total = table.rounds_per_player * n_players if n_players else table.rounds_per_player
+    rounds_line = (
+        f"**Rounds:** {table.rounds_per_player} per player"
+        + (f" ({total} total)" if n_players else "")
+    )
     embed = discord.Embed(
         title="\U0001f3af Clue Master",
         description=(
             f"**Category:** {_category_label(table.category_key)}\n"
-            f"**Rounds:** {table.total_rounds}\n\n"
+            f"{rounds_line}\n\n"
             "Each round a player becomes the **Clue Master** and sees the "
             "answer privately. They type clues in the thread; everyone else "
             "races to guess. First correct guess scores 3 pts; clue master "
@@ -226,10 +239,10 @@ def _final_embed(
 
 
 _ROUNDS_OPTIONS = [
-    discord.SelectOption(label="3 Rounds", value="3"),
-    discord.SelectOption(label="6 Rounds", value="6", default=True),
-    discord.SelectOption(label="10 Rounds", value="10"),
-    discord.SelectOption(label="16 Rounds", value="16"),
+    discord.SelectOption(label="1 round each", value="1", description="Each player is clue master once"),
+    discord.SelectOption(label="2 rounds each", value="2", default=True, description="Each player is clue master twice"),
+    discord.SelectOption(label="3 rounds each", value="3", description="Each player is clue master 3×"),
+    discord.SelectOption(label="4 rounds each", value="4", description="Each player is clue master 4×"),
 ]
 
 
@@ -411,7 +424,7 @@ class CluemasterView(ui.View):
         )
         await interaction.response.edit_message(embed=embed, view=self)
 
-    @ui.select(placeholder="Rounds: 6", options=_ROUNDS_OPTIONS, row=2)
+    @ui.select(placeholder="Rounds each: 2", options=_ROUNDS_OPTIONS, row=2)
     async def rounds_select(self, interaction: discord.Interaction, select: ui.Select) -> None:
         if interaction.user.id != self.table.host_id:
             await interaction.response.send_message("Only the host can change!", ephemeral=True)
@@ -420,8 +433,8 @@ class CluemasterView(ui.View):
             await interaction.response.send_message("Can't change mid-game!", ephemeral=True)
             return
         val = int(select.values[0])
-        self.table.total_rounds = val
-        select.placeholder = f"Rounds: {val}"
+        self.table.rounds_per_player = val
+        select.placeholder = f"Rounds each: {val}"
         for opt in select.options:
             opt.default = opt.value == str(val)
         await interaction.response.edit_message(embed=_betting_embed(self.table), view=self)
@@ -449,6 +462,11 @@ class CluemasterView(ui.View):
         table.phase = "playing"
         table.player_order = list(table.players.keys())
         random.shuffle(table.player_order)
+        # Total rounds scale with the table: each player is clue master
+        # rounds_per_player times, capped for sanity.
+        table.total_rounds = _compute_total_rounds(
+            table.rounds_per_player, len(table.player_order),
+        )
         self._update_buttons()
 
         in_progress = discord.Embed(
