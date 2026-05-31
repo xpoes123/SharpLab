@@ -74,3 +74,4 @@ tbody tr:hover { background: rgba(122,162,247,.06); }
 .dog { color: var(--muted); }
 .spread { color: var(--gold); font-weight: 600; }
 .over { color: var(--gold); } .under { color: var(--accent); }
+.bk { font-size: 9px; color: var(--muted); margin-left: 2px; vertical-align: super; }
