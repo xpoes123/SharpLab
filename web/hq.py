@@ -309,15 +309,26 @@ async def hq_pickem_open(request: Request):
             )
             mine = {r["message_id"]: dict(r) for r in await cur.fetchall()}
 
+    # All bets on each game (for the expandable list) — one name lookup.
+    picks_by_game = {g["message_id"]: await queries.get_pickem_picks_for_message(g["message_id"]) for g in games}
+    names = await _names(list({p["discord_user"] for ps in picks_by_game.values() for p in ps}))
+
     out = []
     for g in games:
         my = mine.get(g["message_id"])
+        bets = sorted(
+            ({"username": (names.get(p["discord_user"]) or {}).get("username") or f"Player {p['discord_user'][:6]}",
+              "pick": p["pick"], "stake": p["stake"]}
+             for p in picks_by_game[g["message_id"]]),
+            key=lambda b: b["stake"], reverse=True,
+        )
         out.append({
             "message_id": g["message_id"], "sport": g["sport"],
             "home_team": g["home_team"], "away_team": g["away_team"],
             "start_time": g["start_time"], "home_prob": g["home_prob"],
             "away_prob": g["away_prob"], "odds_source": g["odds_source"],
             "my_pick": my["pick"] if my else None, "my_stake": my["stake"] if my else None,
+            "bets": bets,
         })
     return {"authenticated": bool(uid), "games": out}
 
