@@ -179,19 +179,23 @@ function renderHome(server, me, notMember, open) {
     <div class="card stat"><div class="label">Stock traders</div><div class="value">${num(t.stock_traders)}</div></div>
     <div class="card stat"><div class="label">Pick'em players</div><div class="value">${num(t.pickem_players)}</div></div></div>`;
 
-  // Unified leaderboard with a dropdown selector
+  // Unified leaderboard: overview boards + one option per ranked game
   const myName = me && me.user.username;
+  const eloOpts = (server.elo_games || [])
+    .map((g) => `<option value="elo:${g.key}">${ELO_LABELS[g.key] || g.key} (${g.plays})</option>`).join("");
   html += `<h2>Leaderboards</h2><div class="card" style="padding:0">
     <div style="padding:12px 16px;border-bottom:1px solid var(--line)">
       <select id="lbSelect" class="lbselect">
-        ${BOARD_DEFS.map((b) => `<option value="${b.key}">${b.label}</option>`).join("")}
+        <optgroup label="Overview">
+          ${BOARD_DEFS.map((b) => `<option value="${b.key}">${b.label}</option>`).join("")}
+        </optgroup>
+        <optgroup label="Game ELO (most played first)">${eloOpts}</optgroup>
       </select>
     </div>
     <div id="lbBody"></div></div>`;
 
   app.innerHTML = html;
 
-  // Wire the dropdown
   const lbBody = document.getElementById("lbBody");
   const lbSelect = document.getElementById("lbSelect");
   const draw = () => { lbBody.innerHTML = boardTable(server, lbSelect.value, myName); };
@@ -199,19 +203,31 @@ function renderHome(server, me, notMember, open) {
   draw();
 }
 
+const ELO_LABELS = {
+  cluemaster: "Clue Master", imposter: "Imposter", wordle: "Wordle", pokemon: "Pokemon",
+  quizbowl: "Quiz Bowl", geography: "Geography", countdown: "Countdown", mathsprint: "Math Sprint",
+  math24: "Math 24", stockguess: "Stock Guess", nbaguess: "NBA Guess", sequence: "Sequence",
+  prisoner: "Prisoner's Dilemma", mastermind: "Mastermind", liarsdice: "Liar's Dice",
+  blotto: "Colonel Blotto", figgie: "Figgie", sudoku: "Sudoku", bingo: "Bingo",
+  minesweeper: "Minesweeper", valorant: "Valorant", indian_poker: "Indian Poker",
+  solitairechess: "Solitaire Chess", tradingfloor: "Trading Floor", rps: "RPS",
+  "nba-trivia": "NBA Trivia", "nfl-trivia": "NFL Trivia",
+};
+
 const BOARD_DEFS = [
   { key: "pickem", label: "🎯 Pick'em — Market P&L" },
-  { key: "elo", label: "🏆 ELO — Best Across Games" },
-  { key: "casino", label: "🪙 Casino — Balances" },
   { key: "stocks", label: "📈 Stocks — Portfolio Value" },
+  { key: "casino", label: "🪙 Casino — Balances" },
   { key: "chess", label: "♟️ Hearthstone Chess" },
 ];
 
 function boardTable(server, key, myName) {
-  if (key === "elo")
-    return table([{ t: "Player" }, { t: "Games", num: true }, { t: "Edge", num: true }],
-      (server.elo_champions || []).map((r) => [{ t: plink(r.username) },
-        { t: r.games }, { t: "+" + r.edge, cls: "pos" }]));
+  if (key.startsWith("elo:")) {
+    const g = (server.elo_games || []).find((x) => x.key === key.slice(4));
+    return table([{ t: "Player" }, { t: "Rating", num: true }, { t: "W/L", num: true }],
+      (g ? g.rows : []).map((r) => [{ t: plink(r.username) }, { t: r.rating },
+        { t: `${r.wins}/${r.losses}`, cls: "muted" }]));
+  }
   if (key === "pickem")
     return table([{ t: "Player" }, { t: "Units", num: true }, { t: "Record", num: true }],
       (server.pickem || []).map((r) => {
