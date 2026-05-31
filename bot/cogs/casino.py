@@ -2061,13 +2061,15 @@ GAME_RULES: dict[str, str] = {
     ),
     "plinko": (
         "**Plinko**\n"
-        "Drop a ball through pegs and see which bucket it lands in.\n\n"
-        "**How to play:** Choose a risk level (Low, Medium, or High) and place your bet. "
-        "The ball drops through 8 rows of pegs and lands in one of 9 buckets, each with a "
-        "different multiplier.\n\n"
+        "Drop balls through pegs and see which buckets they land in.\n\n"
+        "**How to play:** The host chooses a risk level and each player places a bet, "
+        "optionally dropping multiple balls (up to 5). Each ball drops independently "
+        "through 8 rows of pegs into one of 9 multiplier buckets; your payout is the "
+        "sum across all your balls.\n\n"
         "**Risk levels:**\n"
-        "Low: 0.5x to 5.6x (safer) | Medium: 0.3x to 13x | High: 0x to 29x (volatile)\n"
-        "**Fair game:** Expected value = 1.0x across all risk levels."
+        "Low: to 5.6x | Medium: to 13x | High: to 29x | Extreme: to 72x | "
+        "Insane: to 110x (near-total wipeout in the middle)\n"
+        "**Fair game:** Expected value ≈ 1.0x across all risk levels."
     ),
     "slots": (
         "**Fortune Reels** (Slots)\n"
