@@ -22,7 +22,7 @@ from temporalio import activity
 
 from db import queries, schema
 from shared.models import Bet, Game, GameResult, InjuryAlert, OddsBatch, OddsSnapshot, get_team_abbr, get_kalshi_code
-from shared.odds_utils import fetch_polymarket_ml, prob_to_american
+from shared.odds_utils import fetch_polymarket_ml, prob_to_american, kalshi_exec_price
 
 load_dotenv()
 
@@ -257,23 +257,13 @@ async def fetch_close_odds_snapshot(inp: FetchCloseSnapshotInput) -> list[OddsSn
 
 # ── Kalshi helpers ──────────────────────────────────────────────────────────────
 
-def _kalshi_mid(market: dict) -> float | None:
-    """Return mid price (0–1) from a Kalshi market dict, or None if unavailable."""
-    yes_bid = market.get("yes_bid_dollars") or 0
-    yes_ask = market.get("yes_ask_dollars") or 0
-    if yes_bid or yes_ask:
-        mid = (float(yes_bid) + float(yes_ask)) / 2
-    else:
-        last = market.get("last_price_dollars")
-        mid = float(last) if last else 0.0
-    return mid if 0 < mid < 1 else None
-
-
 def _kalshi_ml_from_markets(
     game_markets: list[dict], home_abbr: str, away_abbr: str
 ) -> tuple[int, int] | None:
     """
     Extract (ml_home, ml_away) American odds from a pair of Kalshi game markets.
+    Prices are fee-inclusive executable costs, so each side's implied prob
+    includes Kalshi's vig — directly comparable to a sportsbook moneyline.
     Returns None if prices are missing or not in (0, 1).
     """
     home_prob: float | None = None
@@ -282,13 +272,13 @@ def _kalshi_ml_from_markets(
     for m in game_markets:
         ticker = m.get("ticker", "")
         suffix = ticker.split("-")[-1].upper()
-        mid = _kalshi_mid(m)
-        if mid is None:
+        price = kalshi_exec_price(m)
+        if price is None:
             continue
         if suffix == home_abbr:
-            home_prob = mid
+            home_prob = price
         elif suffix == away_abbr:
-            away_prob = mid
+            away_prob = price
 
     if home_prob is None or away_prob is None:
         return None

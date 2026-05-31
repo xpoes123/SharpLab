@@ -15,8 +15,8 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 from db import queries
-from shared.models import OddsSnapshot, get_team_abbr
-from shared.odds_utils import american_to_prob, fetch_polymarket_ml, prob_to_american
+from shared.models import OddsSnapshot, get_team_abbr, get_kalshi_code
+from shared.odds_utils import american_to_prob, fetch_polymarket_ml, prob_to_american, kalshi_exec_price
 import logging
 
 log = logging.getLogger(__name__)
@@ -122,8 +122,8 @@ async def _fetch_kalshi_ml(home_team: str, away_team: str, sport: str = "nba") -
     series_ticker = KALSHI_SERIES.get(sport)
     if not KALSHI_API_KEY or not series_ticker:
         return None
-    h_abbr = get_team_abbr(home_team, sport)
-    a_abbr = get_team_abbr(away_team, sport)
+    h_abbr = get_kalshi_code(home_team, sport)
+    a_abbr = get_kalshi_code(away_team, sport)
     if not h_abbr or not a_abbr:
         return None
     try:
@@ -139,23 +139,29 @@ async def _fetch_kalshi_ml(home_team: str, away_team: str, sport: str = "nba") -
             markets = resp.json().get("markets", [])
     except Exception:
         return None
-    home_prob: float | None = None
-    away_prob: float | None = None
+    # Match the event by the unordered pair of team codes from market tickers
+    # ({event}-{TEAM}); MLB codes are 2-3 chars so positional slicing breaks.
+    event_teams: dict[str, set[str]] = {}
+    event_markets: dict[str, list[dict]] = {}
     for m in markets:
         et = m.get("event_ticker", "")
-        team_part = et.split("-")[-1]
-        if team_part[-3:].upper() != h_abbr or team_part[-6:-3].upper() != a_abbr:
-            continue
+        event_markets.setdefault(et, []).append(m)
         suffix = m.get("ticker", "").split("-")[-1].upper()
-        yes_bid = m.get("yes_bid_dollars") or 0
-        yes_ask = m.get("yes_ask_dollars") or 0
-        mid = (float(yes_bid) + float(yes_ask)) / 2 if (yes_bid or yes_ask) else float(m.get("last_price_dollars") or 0)
-        if not (0 < mid < 1):
+        if suffix:
+            event_teams.setdefault(et, set()).add(suffix)
+    target = next((et for et, teams in event_teams.items() if teams == {h_abbr, a_abbr}), None)
+    if not target:
+        return None
+    home_prob = away_prob = None
+    for m in event_markets[target]:
+        suffix = m.get("ticker", "").split("-")[-1].upper()
+        price = kalshi_exec_price(m)  # fee-inclusive executable price
+        if price is None:
             continue
         if suffix == h_abbr:
-            home_prob = mid
+            home_prob = price
         elif suffix == a_abbr:
-            away_prob = mid
+            away_prob = price
     if home_prob is None or away_prob is None:
         return None
     try:
