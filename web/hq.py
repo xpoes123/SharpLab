@@ -315,27 +315,97 @@ async def hq_stocks():
     traders = []
     for uid in users:
         positions = await queries.get_stock_positions_full(uid)
-        realized = round(sum(p.get("realized_pnl", 0) for p in positions), 2)
+        opos = await queries.get_option_positions_full(uid)
+        realized = round(
+            sum(p.get("realized_pnl", 0) for p in positions)
+            + sum(o.get("realized_pnl", 0) for o in opos), 2,
+        )
         holdings = [
             {"ticker": p["ticker"], "shares": round(p.get("shares", 0), 4),
              "dca": round(p.get("dca_price", 0), 2), "cost_basis": round(p.get("cost_basis", 0), 2)}
             for p in positions if p.get("shares", 0) > 0
         ]
+        open_opts = sum(1 for o in opos if o.get("net_contracts", 0))
         snap = snaps.get(uid, {})
         traders.append({
             "user_id": uid,
             "username": (names.get(uid) or {}).get("username") or f"Player {uid[:6]}",
             "account_value": snap.get("account_value"),
             "stock_value": snap.get("stock_value"),
+            "options_value": snap.get("options_value"),
             "cash": snap.get("cash"),
             "realized_pnl": realized,
-            "positions": len(holdings),
+            "positions": len(holdings) + open_opts,
             "holdings": sorted(holdings, key=lambda h: h["cost_basis"], reverse=True),
         })
     traders.sort(key=lambda t: (t["account_value"] is not None, t["account_value"] or 0), reverse=True)
     data = {"traders": traders}
     _SERVER_CACHE["stocks"] = (time.monotonic(), data)
     return data
+
+
+@router.get("/hq/stocks/{handle}")
+async def hq_stock_trader(handle: str):
+    """One trader's full portfolio: equity curve, stock + option positions, txns."""
+    who = await _resolve_handle(handle)
+    if not who:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    uid = who["discord_user"]
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT captured_at, account_value, stock_value, options_value, cash "
+            "FROM portfolio_snapshots WHERE discord_user = ? ORDER BY captured_at", (uid,),
+        )
+        snaps = [dict(r) for r in await cur.fetchall()]
+    latest = snaps[-1] if snaps else {}
+    equity = [{"t": s["captured_at"], "v": s["account_value"]} for s in snaps]
+
+    sp = await queries.get_stock_positions_full(uid)
+    stock_realized = sum(p.get("realized_pnl", 0) for p in sp)
+    stock_holdings = sorted(
+        ({"ticker": p["ticker"], "shares": round(p.get("shares", 0), 4),
+          "dca": round(p.get("dca_price", 0), 2), "cost_basis": round(p.get("cost_basis", 0), 2)}
+         for p in sp if p.get("shares", 0) > 0),
+        key=lambda h: h["cost_basis"], reverse=True,
+    )
+
+    op = await queries.get_option_positions_full(uid)
+    opt_realized = sum(o.get("realized_pnl", 0) for o in op)
+    option_positions = [
+        {"underlying": o["underlying"], "opt_type": o["opt_type"], "strike": o["strike"],
+         "expiry": o["expiry"], "contracts": o.get("net_contracts", 0),
+         "avg_premium": round(o.get("avg_premium", 0), 2)}
+        for o in op if o.get("net_contracts", 0)
+    ]
+
+    txns = []
+    for t in await queries.get_stock_trades(uid):
+        txns.append({"at": t["executed_at"], "kind": "stock",
+                     "desc": f"{t['side'].upper()} {t['shares']:g} {t['ticker']} @ ${t['price']:,.2f}"})
+    for t in await queries.get_option_trades(uid):
+        otype = t["opt_type"][0].upper()
+        txns.append({"at": t["executed_at"], "kind": "option",
+                     "desc": f"{t['side'].upper()} {t['contracts']} {t['underlying']} "
+                             f"${t['strike']:g}{otype} {t['expiry']} @ ${t['premium']:,.2f}"})
+    txns.sort(key=lambda x: x["at"], reverse=True)
+
+    return {
+        "user": {"id": uid, "username": who.get("username") or f"Player {uid[:6]}",
+                 "avatar_url": who.get("avatar_url")},
+        "summary": {
+            "account_value": latest.get("account_value"),
+            "stock_value": latest.get("stock_value"),
+            "options_value": latest.get("options_value"),
+            "cash": latest.get("cash"),
+            "realized_pnl": round(stock_realized + opt_realized, 2),
+        },
+        "equity": equity,
+        "stock_holdings": stock_holdings,
+        "option_positions": option_positions,
+        "transactions": txns[:150],
+    }
 
 
 @router.get("/hq/pickem/open")
