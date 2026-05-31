@@ -36,8 +36,19 @@ def _parse(ts: str | None) -> datetime | None:
         return None
 
 
-async def backfill(apply: bool) -> None:
+async def backfill(apply: bool, purge_late: bool) -> None:
     now = datetime.now(timezone.utc)
+
+    if purge_late:
+        # Drop live-contaminated closes (captured after tip) so the backfill below
+        # can refill those sources from the clean last-pre-tip poll.
+        if apply:
+            n = await queries.purge_post_tip_closes()
+            print(f"Purged {n} post-tip (live-contaminated) close snapshots.\n")
+        else:
+            # Dry run: count without deleting via a transaction we don't commit.
+            print("(--purge-late) would delete post-tip closes before refilling.\n")
+
     games = await queries.get_games_started_before(now.isoformat())
     print(f"Scanning {len(games)} games that have already started…\n")
 
@@ -88,8 +99,10 @@ async def backfill(apply: bool) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--apply", action="store_true", help="write changes (default: dry run)")
+    ap.add_argument("--purge-late", action="store_true",
+                    help="first delete closes captured after tip (live-contaminated), then refill")
     args = ap.parse_args()
-    asyncio.run(backfill(args.apply))
+    asyncio.run(backfill(args.apply, args.purge_late))
 
 
 if __name__ == "__main__":

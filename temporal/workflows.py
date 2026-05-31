@@ -144,10 +144,19 @@ class OddsPollingWorkflow:
             workflow.continue_as_new(args=[interval_minutes, sport])
 
 
+# Capture the closing line this many seconds BEFORE tip-off. Capturing AT tip
+# is too late: sportsbooks suspend and the Odds API event briefly drops out, so
+# the activity retries into the first LIVE in-game price (~2 min after tip).
+# Kalshi exposes this worst — it's a continuous market that reprices the instant
+# the ball is in the air. 90s before tip is effectively the close, but clean.
+CLOSE_LEAD = timedelta(seconds=90)
+
+
 @workflow.defn
 class CloseCaptureWorkflow:
     """
-    One workflow per game. Sleeps until tip-off, then captures the closing line.
+    One workflow per game. Sleeps until just before tip-off, then captures the
+    closing line (the last pre-game market state).
     """
 
     @workflow.run
@@ -160,7 +169,11 @@ class CloseCaptureWorkflow:
         if start_dt.tzinfo is None:
             start_dt = start_dt.replace(tzinfo=timezone.utc)
 
-        delay = start_dt - workflow.now()
+        # Patched so close-capture children already in flight (which slept using
+        # the old "capture at tip" math) replay deterministically; only new runs
+        # lead by CLOSE_LEAD.
+        target = start_dt - CLOSE_LEAD if workflow.patched("close-capture-lead-90s") else start_dt
+        delay = target - workflow.now()
         if delay.total_seconds() > 0:
             await workflow.sleep(delay)
 
