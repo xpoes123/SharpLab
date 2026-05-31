@@ -31,3 +31,8 @@ include = ["bot*", "db*", "shared*", "temporal*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["."]
+
+[dependency-groups]
+dev = [
+    "playwright>=1.60.0",
+]
