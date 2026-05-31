@@ -97,8 +97,29 @@ async def discord_login():
     return RedirectResponse(auth.login_url(auth.make_state()))
 
 
+async def _log_member(request: Request, uid: str, username: str | None, etype: str) -> None:
+    """Record a signed-in member event (login / member_visit) for /hq/analytics."""
+    import hashlib
+    import json as _json
+    import time as _time
+    try:
+        ua = (request.headers.get("user-agent") or "")[:240]
+        fwd = request.headers.get("x-forwarded-for", "")
+        ip = fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "")
+        ip_hash = hashlib.sha256(ip.encode()).hexdigest()[:16] if ip else ""
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT INTO web_events (ts, sid, type, page, ref, ua, ip_hash, data) VALUES (?,?,?,?,?,?,?,?)",
+                (int(_time.time() * 1000), uid, etype, "/hq", "", ua, ip_hash,
+                 _json.dumps({"id": uid, "username": username or uid})),
+            )
+            await db.commit()
+    except Exception:
+        pass  # analytics never breaks auth
+
+
 @router.get("/auth/discord/callback")
-async def discord_callback(code: str = "", state: str = ""):
+async def discord_callback(request: Request, code: str = "", state: str = ""):
     if not code or not auth.check_state(state):
         return RedirectResponse(f"{WEB_BASE_URL}/hq?error=bad_request")
     try:
@@ -107,6 +128,7 @@ async def discord_callback(code: str = "", state: str = ""):
         return RedirectResponse(f"{WEB_BASE_URL}/hq?error=oauth_failed")
     if not auth.is_member(info["guilds"]):
         return RedirectResponse(f"{WEB_BASE_URL}/hq?error=not_member")
+    await _log_member(request, str(info["user"].get("id")), info["user"].get("username"), "login")
     resp = RedirectResponse(f"{WEB_BASE_URL}/hq")
     resp.set_cookie(
         auth.COOKIE_NAME, auth.make_session_cookie(info["user"]),
@@ -131,6 +153,7 @@ async def hq_me(request: Request):
     if not sess:
         return JSONResponse({"authenticated": False}, status_code=401)
     uid = sess["id"]
+    await _log_member(request, uid, sess.get("username"), "member_visit")
 
     elo = await queries.get_elo_ratings_for_user(uid)
     rows = await queries.get_pickem_resolved_picks()

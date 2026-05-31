@@ -9,6 +9,14 @@ const dur = (s) => (s == null ? "—" : s >= 60 ? `${Math.floor(s / 60)}m ${Math
 function host(ref) {
   try { return new URL(ref).hostname.replace(/^www\./, ""); } catch { return ref; }
 }
+function ago(ms) {
+  if (!ms) return "—";
+  const m = Math.round((Date.now() - ms) / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  if (m < 1440) return `${Math.floor(m / 60)}h ago`;
+  return `${Math.floor(m / 1440)}d ago`;
+}
 
 async function load() {
   let s;
@@ -38,6 +46,16 @@ async function load() {
           <td class="num">${fmt(p.views)}</td><td class="num muted">${fmt(p.visitors)}</td></tr>`).join("")
       + `</tbody></table>`
     : `<div class="muted" style="padding:16px">No pageviews yet.</div>`;
+  html += `</div>`;
+
+  // Signed-in members
+  html += `<div class="card" style="padding:0;margin-bottom:18px"><div class="date-hd">👤 Signed-in members (Discord OAuth)</div>`;
+  html += (s.members || []).length
+    ? `<table><thead><tr><th>Member</th><th class="num">Visits</th><th class="num">Logins</th><th class="num">Last seen</th></tr></thead><tbody>`
+      + s.members.map((m) => `<tr><td>${m.handle}</td><td class="num">${fmt(m.visits || 0)}</td>
+          <td class="num muted">${m.logins || 0}</td><td class="num muted">${ago(m.last_seen)}</td></tr>`).join("")
+      + `</tbody></table>`
+    : `<div class="muted" style="padding:16px">No one has signed in yet.</div>`;
   html += `</div>`;
 
   // Two columns: dwell + referrers
