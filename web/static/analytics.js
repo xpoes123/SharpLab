@@ -20,8 +20,14 @@ function ago(ms) {
 
 async function load() {
   let s;
-  try { s = await fetch("/api/v1/analytics/stats").then((r) => r.json()); }
-  catch { app.innerHTML = `<div class="hero"><p class="muted">Couldn't load analytics.</p></div>`; return; }
+  try {
+    const r = await fetch("/api/v1/analytics/stats", { credentials: "include" });
+    if (r.status === 403) {
+      app.innerHTML = `<div class="hero"><h2>🔒 Private</h2><p class="muted">This page is owner-only. <a href="/hq">Sign in</a> as the owner to view it.</p></div>`;
+      return;
+    }
+    s = await r.json();
+  } catch { app.innerHTML = `<div class="hero"><p class="muted">Couldn't load analytics.</p></div>`; return; }
 
   const stat = (label, val) => `<div class="card stat"><div class="label">${label}</div><div class="value">${val}</div></div>`;
   let html = `<h2 style="margin:0 0 14px">📊 Site Analytics</h2>

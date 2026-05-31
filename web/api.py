@@ -870,8 +870,13 @@ async def analytics_event(request: Request):
 
 
 @app.get("/api/v1/analytics/stats")
-async def analytics_stats():
-    """Aggregate site analytics for the /hq/analytics dashboard."""
+async def analytics_stats(request: Request):
+    """Aggregate site analytics for the /hq/analytics dashboard — owner only."""
+    from web import auth
+    owner = os.environ.get("OWNER_DISCORD_ID", "")
+    sess = auth.read_session(request)
+    if not owner or not sess or str(sess.get("id")) != owner:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
     now = int(datetime.now(timezone.utc).timestamp() * 1000)
     day = 86_400_000
 

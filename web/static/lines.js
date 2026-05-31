@@ -342,7 +342,14 @@ function multiLineChart(series, metric) {
   const W = 760, H = 230, mL = 60, mR = 16, mT = 14, mB = 36;
   const pw = W - mL - mR, ph = H - mT - mB;
   let vmin = Math.min(...allV), vmax = Math.max(...allV);
-  const pad = (vmax - vmin) * 0.15 || 1; vmin -= pad; vmax += pad;
+  // Enforce a minimum y-span so a near-flat line (e.g. two books 1¢ apart) isn't
+  // zoomed in until it looks like a huge gap. Tuned per metric.
+  const MIN_SPAN = metric === "total" ? 2 : metric === "spread" ? 2 : 24;  // 24¢ for ML
+  if (vmax - vmin < MIN_SPAN) {
+    const mid = (vmin + vmax) / 2;
+    vmin = mid - MIN_SPAN / 2; vmax = mid + MIN_SPAN / 2;
+  }
+  const pad = (vmax - vmin) * 0.12; vmin -= pad; vmax += pad;
   const X = (t) => mL + (tmax > tmin ? (t - tmin) / (tmax - tmin) : 0.5) * pw;
   const Y = (v) => mT + ph - ((v - vmin) / (vmax - vmin)) * ph;
   const fmtV = metric === "total" ? (v) => Math.round(v * 10) / 10 : (v) => am(Math.round(v));
