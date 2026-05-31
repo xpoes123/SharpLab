@@ -57,10 +57,32 @@ function pickemSection(open, loggedIn) {
          </div>`;
     }
     return `<div class="gamecard">
-      <div style="margin-bottom:8px">${em} <strong>${g.away_team}</strong> @ <strong>${g.home_team}</strong> ${mine}</div>
-      ${controls}</div>`;
+      <div style="margin-bottom:2px">${em} <strong>${g.away_team}</strong> @ <strong>${g.home_team}</strong> ${mine}</div>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">🕒 ${fmtGameTime(g.start_time)}</div>
+      ${controls}
+      ${betsDetails(g)}</div>`;
   }).join("");
-  return `<h2>🎯 Today's Pick'em — bet 1–5 units</h2><div class="card" style="padding:0">${rows}</div>`;
+  return `<h2>🎯 Pick'em — bet 1–5 units</h2><div class="card" style="padding:0">${rows}</div>`;
+}
+
+function fmtGameTime(iso) {
+  try {
+    return new Date(iso).toLocaleString("en-US", {
+      weekday: "short", month: "short", day: "numeric",
+      hour: "numeric", minute: "2-digit",
+      timeZone: "America/New_York", timeZoneName: "short",
+    });
+  } catch { return ""; }
+}
+
+function betsDetails(g) {
+  const bets = g.bets || [];
+  if (!bets.length) return `<div class="muted" style="margin-top:8px;font-size:13px">No bets yet.</div>`;
+  const lines = bets.map((b) =>
+    `${b.username} — <strong>${b.stake}u</strong> on ${b.pick === "away" ? g.away_team : g.home_team}`).join("<br>");
+  return `<details style="margin-top:8px">
+    <summary class="muted" style="cursor:pointer;font-size:13px">👥 ${bets.length} bet${bets.length > 1 ? "s" : ""} so far</summary>
+    <div style="padding:8px 4px 2px;font-size:13px">${lines}</div></details>`;
 }
 
 function wireBetting() {
@@ -157,39 +179,57 @@ function renderHome(server, me, notMember, open) {
     <div class="card stat"><div class="label">Stock traders</div><div class="value">${num(t.stock_traders)}</div></div>
     <div class="card stat"><div class="label">Pick'em players</div><div class="value">${num(t.pickem_players)}</div></div></div>`;
 
-  // ELO champions
-  html += section("🏆 ELO Champions", table(
-    [{ t: "Player" }, { t: "Pts", num: true }],
-    (server.elo_champions || []).map((r) => [{ t: plink(r.username) }, { t: r.points }])));
-
-  // Pick'em P&L
+  // Unified leaderboard with a dropdown selector
   const myName = me && me.user.username;
-  html += section("🎯 Pick'em — Market P&amp;L", table(
-    [{ t: "Player" }, { t: "Units", num: true }, { t: "Record", num: true }],
-    (server.pickem || []).map((r) => {
-      const row = [{ t: plink(r.username) }, { t: sign(r.units.toFixed(1)) + "u", cls: cls(r.units) },
-        { t: `${r.correct}/${r.total}`, cls: "muted" }];
-      row._me = r.username === myName; return row;
-    })));
-
-  // Casino
-  html += section("🪙 Casino — Top Balances", table(
-    [{ t: "Player" }, { t: "Coins", num: true }],
-    (server.casino || []).map((r) => [{ t: plink(r.username) }, { t: num(r.balance) }])));
-
-  // Stocks
-  html += section("📈 Stocks — Realized P&amp;L", table(
-    [{ t: "Trader" }, { t: "P&L ($)", num: true }],
-    (server.stocks || []).map((r) => [{ t: plink(r.username) },
-      { t: sign(num(r.realized_pnl)), cls: cls(r.realized_pnl) }])));
-
-  // Chess
-  html += section("♟️ Hearthstone Chess", table(
-    [{ t: "Player" }, { t: "Rating", num: true }, { t: "Record", num: true }],
-    (server.chess || []).map((r) => [{ t: r.handle }, { t: r.rating },
-      { t: `${r.wins}-${r.losses}${r.draws ? "-" + r.draws : ""}`, cls: "muted" }])));
+  html += `<h2>Leaderboards</h2><div class="card" style="padding:0">
+    <div style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <select id="lbSelect" class="lbselect">
+        ${BOARD_DEFS.map((b) => `<option value="${b.key}">${b.label}</option>`).join("")}
+      </select>
+    </div>
+    <div id="lbBody"></div></div>`;
 
   app.innerHTML = html;
+
+  // Wire the dropdown
+  const lbBody = document.getElementById("lbBody");
+  const lbSelect = document.getElementById("lbSelect");
+  const draw = () => { lbBody.innerHTML = boardTable(server, lbSelect.value, myName); };
+  lbSelect.addEventListener("change", draw);
+  draw();
+}
+
+const BOARD_DEFS = [
+  { key: "pickem", label: "🎯 Pick'em — Market P&L" },
+  { key: "elo", label: "🏆 ELO Champions" },
+  { key: "casino", label: "🪙 Casino — Balances" },
+  { key: "stocks", label: "📈 Stocks — Realized P&L" },
+  { key: "chess", label: "♟️ Hearthstone Chess" },
+];
+
+function boardTable(server, key, myName) {
+  if (key === "elo")
+    return table([{ t: "Player" }, { t: "Pts", num: true }],
+      (server.elo_champions || []).map((r) => [{ t: plink(r.username) }, { t: r.points }]));
+  if (key === "pickem")
+    return table([{ t: "Player" }, { t: "Units", num: true }, { t: "Record", num: true }],
+      (server.pickem || []).map((r) => {
+        const row = [{ t: plink(r.username) }, { t: sign(r.units.toFixed(1)) + "u", cls: cls(r.units) },
+          { t: `${r.correct}/${r.total}`, cls: "muted" }];
+        row._me = r.username === myName; return row;
+      }));
+  if (key === "casino")
+    return table([{ t: "Player" }, { t: "Coins", num: true }],
+      (server.casino || []).map((r) => [{ t: plink(r.username) }, { t: num(r.balance) }]));
+  if (key === "stocks")
+    return table([{ t: "Trader" }, { t: "P&L ($)", num: true }],
+      (server.stocks || []).map((r) => [{ t: plink(r.username) },
+        { t: sign(num(r.realized_pnl)), cls: cls(r.realized_pnl) }]));
+  if (key === "chess")
+    return table([{ t: "Player" }, { t: "Rating", num: true }, { t: "Record", num: true }],
+      (server.chess || []).map((r) => [{ t: r.handle }, { t: r.rating },
+        { t: `${r.wins}-${r.losses}${r.draws ? "-" + r.draws : ""}`, cls: "muted" }]));
+  return "";
 }
 
 main();

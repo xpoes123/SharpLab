@@ -56,3 +56,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .gamecard:last-child { border-bottom: 0; }
 .profhead { display: flex; align-items: center; gap: 16px; margin-bottom: 8px; }
 .profhead h1 { margin: 0; font-size: 26px; }
+.lbselect { background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+  border-radius: 8px; padding: 8px 12px; font-size: 14px; font-weight: 600; cursor: pointer; }
+.lbselect:hover { border-color: var(--accent); }
+details summary { list-style: none; }
+details summary::-webkit-details-marker { display: none; }
+details[open] summary::before { content: "▾ "; }
+details:not([open]) summary::before { content: "▸ "; }

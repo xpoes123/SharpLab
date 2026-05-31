@@ -85,6 +85,16 @@ def _fmt_et_time(start_time_iso: str) -> str:
         return "TBD"
 
 
+def _discord_time(start_time_iso: str) -> str:
+    """Discord dynamic timestamp — renders in each viewer's own timezone with
+    the full date, plus a relative hint. Falls back to ET text."""
+    try:
+        ts = int(datetime.fromisoformat(start_time_iso.replace("Z", "+00:00")).timestamp())
+        return f"<t:{ts}:F> (<t:{ts}:R>)"
+    except Exception:
+        return _fmt_et_time(start_time_iso)
+
+
 # ── Message / embed builders ─────────────────────────────────────────────────
 
 
@@ -105,7 +115,7 @@ def _game_message(game: dict, *, locked: bool = False, result: str | None = None
         return f"{head}{odds}\n{result}"
     if locked:
         return f"{head}{odds}\n🔒 Voting closed — game underway."
-    return f"{head}{odds}\n🕒 {_fmt_et_time(game['start_time'])} — react to pick a winner!"
+    return f"{head}{odds}\n🕒 {_discord_time(game['start_time'])} — tap a team to bet!"
 
 
 def _result_line(game: dict, counts: dict[str, int]) -> str:
