@@ -783,16 +783,19 @@ async def dashboard_results(sport: str = Query("all"), limit: int = Query(10, ge
             "ORDER BY captured_at ASC", (g["game_id"],),
         )
         closes = await _fetch_all(
-            "SELECT source, payload FROM odds_snapshots WHERE game_id = ? AND kind = 'close'",
+            "SELECT source, captured_at, payload FROM odds_snapshots WHERE game_id = ? AND kind = 'close'",
             (g["game_id"],),
         )
-        close_by = {r["source"]: json.loads(r["payload"]) for r in closes}
+        close_meta = {r["source"]: (r["captured_at"], json.loads(r["payload"])) for r in closes}
+        close_by = {s: p for s, (c, p) in close_meta.items()}
         poll_by: dict[str, list] = {}
+        poll_cap: dict[str, str] = {}  # last pre-tip poll capture time per source
         for r in polls:
             # Pre-match only: the closing line is the last poll BEFORE tip-off.
             if not _is_pregame(r["captured_at"], g["start_time"]):
                 continue
             poll_by.setdefault(r["source"], []).append(json.loads(r["payload"]))
+            poll_cap[r["source"]] = r["captured_at"]  # ordered ASC → ends as the last
 
         # One book for open + close: prefer one with a real close, else most polled.
         book = (next((b for b in pref if b in close_by), None)
@@ -812,8 +815,16 @@ async def dashboard_results(sport: str = Query("all"), limit: int = Query(10, ge
         close_fair = _consensus_fair([close_by.get(s) or (poll_by.get(s) or [None])[-1]
                                       for s in set(close_by) | set(poll_by)])
 
+        # How fresh the close is: minutes before tip it was captured (the closing
+        # line's quality). Real tip-off captures are seconds-to-minutes; proxies
+        # are the last poll, so up to the poll interval old.
+        close_cap = close_meta[book][0] if book in close_meta else poll_cap.get(book)
+        cap_dt, start_dt = _ts(close_cap), _ts(g["start_time"])
+        close_lead_min = round((start_dt - cap_dt).total_seconds() / 60) if (cap_dt and start_dt) else None
+
         entry: dict = {**g, "book": book, "open": open_line, "close": close,
-                       "close_is_real": close_is_real, "open_fair": open_fair, "close_fair": close_fair}
+                       "close_is_real": close_is_real, "open_fair": open_fair, "close_fair": close_fair,
+                       "close_lead_min": close_lead_min}
         if close and margin is not None:
             spread = close.get("spread")
             total = close.get("total")
