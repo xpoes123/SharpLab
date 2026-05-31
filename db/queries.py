@@ -3327,3 +3327,95 @@ async def get_qb_answers(category: str) -> list[tuple[str, list[str]]]:
         )
         rows = await cur.fetchall()
     return [(r[0], json.loads(r[1]) if r[1] else []) for r in rows]
+
+
+# ── Stock monitors & bot settings ────────────────────────────────────────────
+
+
+async def add_stock_monitor(
+    discord_user: str, channel_id: str, ticker: str,
+    direction: str, target_price: float,
+) -> int:
+    """Create a price monitor. Returns the new monitor_id."""
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """INSERT INTO stock_monitors
+               (discord_user, channel_id, ticker, direction, target_price, created_at, active)
+               VALUES (?, ?, ?, ?, ?, ?, 1)""",
+            (discord_user, channel_id, ticker, direction, target_price, now),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def get_active_stock_monitors() -> list[dict]:
+    """All armed monitors (active=1), for the polling loop."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM stock_monitors WHERE active = 1 ORDER BY monitor_id",
+        )
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_stock_monitors_for_user(discord_user: str) -> list[dict]:
+    """A user's active monitors."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM stock_monitors WHERE discord_user = ? AND active = 1 "
+            "ORDER BY monitor_id",
+            (discord_user,),
+        )
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def deactivate_stock_monitor(monitor_id: int) -> None:
+    """Disarm a monitor after it fires."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE stock_monitors SET active = 0 WHERE monitor_id = ?", (monitor_id,),
+        )
+        await db.commit()
+
+
+async def delete_stock_monitor(monitor_id: int, discord_user: str) -> bool:
+    """Remove a monitor the user owns. Returns True if one was deleted."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "DELETE FROM stock_monitors WHERE monitor_id = ? AND discord_user = ?",
+            (monitor_id, discord_user),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def get_bot_setting(key: str) -> str | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT value FROM bot_settings WHERE key = ?", (key,))
+        row = await cur.fetchone()
+    return row[0] if row else None
+
+
+async def set_bot_setting(key: str, value: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO bot_settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        await db.commit()
+
+
+async def get_all_stock_holdings() -> list[dict]:
+    """Every user's holdings across the server (for the auto swing monitor)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT discord_user, ticker, shares FROM stock_holdings WHERE shares > 0",
+        )
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
