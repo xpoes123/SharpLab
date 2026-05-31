@@ -84,6 +84,31 @@ def get_team_abbr(team_name: str, sport: str = "nba") -> str | None:
     return TEAM_ABBR.get(sport, {}).get(team_name)
 
 
+# Kalshi uses its own (often 2-char) team codes that differ from The Odds API's
+# 3-char abbreviations. Only the deltas are listed — anything not here matches.
+# Without these, ~half the slate fails to match a Kalshi event.
+KALSHI_ABBR_OVERRIDE: dict[str, dict[str, str]] = {
+    "mlb": {
+        "ARI": "AZ",
+        "KCR": "KC",
+        "OAK": "ATH",   # Athletics (relocating) — Kalshi uses ATH
+        "SDP": "SD",
+        "SFG": "SF",
+        "TBR": "TB",
+        "WSN": "WSH",
+    },
+    "nba": {},
+}
+
+
+def get_kalshi_code(team_name: str, sport: str = "nba") -> str | None:
+    """Kalshi's team code for a team, applying the per-sport override map."""
+    base = get_team_abbr(team_name, sport)
+    if base is None:
+        return None
+    return KALSHI_ABBR_OVERRIDE.get(sport, {}).get(base, base)
+
+
 # ── Dataclasses ──────────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)

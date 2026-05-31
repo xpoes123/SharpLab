@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from temporalio import activity
 
 from db import queries, schema
-from shared.models import Bet, Game, GameResult, InjuryAlert, OddsBatch, OddsSnapshot, get_team_abbr
+from shared.models import Bet, Game, GameResult, InjuryAlert, OddsBatch, OddsSnapshot, get_team_abbr, get_kalshi_code
 from shared.odds_utils import fetch_polymarket_ml, prob_to_american
 
 load_dotenv()
@@ -327,29 +327,39 @@ async def fetch_kalshi_odds_batch(games: list[Game], sport: str = "nba") -> Odds
             return empty
         markets = resp.json().get("markets", [])
 
-    # Group markets by event_ticker; build (away_abbr, home_abbr) → event_ticker lookup.
+    # Group markets by event; derive each event's team codes from the MARKET
+    # tickers ({event}-{TEAM}), not by slicing the event ticker. MLB codes are
+    # 2-3 chars and the time digits leak into a positional slice, so the old
+    # approach matched only ~half the slate. The market suffix is exact.
     event_markets: dict[str, list[dict]] = {}
-    abbr_pair_to_event: dict[tuple[str, str], str] = {}
+    event_teams: dict[str, set[str]] = {}
     for m in markets:
         et = m.get("event_ticker", "")
         event_markets.setdefault(et, []).append(m)
-        team_part = et.split("-")[-1]           # e.g. "26MAR24DENPHX"
-        home_abbr = team_part[-3:].upper()      # "PHX"
-        away_abbr = team_part[-6:-3].upper()    # "DEN"
-        abbr_pair_to_event[(away_abbr, home_abbr)] = et
+        suffix = m.get("ticker", "").split("-")[-1].upper()
+        if suffix:
+            event_teams.setdefault(et, set()).add(suffix)
+
+    # Match on the unordered pair of team codes.
+    teamset_to_event: dict[frozenset, str] = {
+        frozenset(teams): et for et, teams in event_teams.items() if len(teams) == 2
+    }
 
     snapshots: list[OddsSnapshot] = []
     for game in games:
-        h_abbr = get_team_abbr(game.home_team, sport)
-        a_abbr = get_team_abbr(game.away_team, sport)
+        h_abbr = get_kalshi_code(game.home_team, sport)
+        a_abbr = get_kalshi_code(game.away_team, sport)
         if not h_abbr or not a_abbr:
-            activity.logger.debug(
-                f"[fetch_kalshi_odds_batch] No abbreviation for {game.home_team!r} or {game.away_team!r}"
+            activity.logger.warning(
+                f"[fetch_kalshi_odds_batch] No Kalshi code for {game.home_team!r} or {game.away_team!r}"
             )
             continue
 
-        et = abbr_pair_to_event.get((a_abbr, h_abbr))
+        et = teamset_to_event.get(frozenset({a_abbr, h_abbr}))
         if et is None:
+            activity.logger.debug(
+                f"[fetch_kalshi_odds_batch] No Kalshi event for {a_abbr}@{h_abbr}"
+            )
             continue
 
         result = _kalshi_ml_from_markets(event_markets[et], h_abbr, a_abbr)
@@ -518,11 +528,11 @@ async def fetch_kalshi_close_snapshot(inp: FetchCloseSnapshotInput) -> list[Odds
         )
         return []
 
-    h_abbr = get_team_abbr(game.home_team, inp.sport)
-    a_abbr = get_team_abbr(game.away_team, inp.sport)
+    h_abbr = get_kalshi_code(game.home_team, inp.sport)
+    a_abbr = get_kalshi_code(game.away_team, inp.sport)
     if not h_abbr or not a_abbr:
         activity.logger.warning(
-            f"[fetch_kalshi_close_snapshot] No abbreviation for {game.home_team!r}/{game.away_team!r}"
+            f"[fetch_kalshi_close_snapshot] No Kalshi code for {game.home_team!r}/{game.away_team!r}"
         )
         return []
 
@@ -540,13 +550,16 @@ async def fetch_kalshi_close_snapshot(inp: FetchCloseSnapshotInput) -> list[Odds
             return []
         markets = resp.json().get("markets", [])
 
-    # Find markets for this specific game
-    game_markets = [
-        m for m in markets
-        if (lambda tp: tp[-3:].upper() == h_abbr and tp[-6:-3].upper() == a_abbr)(
-            m.get("event_ticker", "").split("-")[-1]
-        )
-    ]
+    # Find this game's event by matching the unordered pair of team codes from
+    # the market tickers ({event}-{TEAM}), same robust approach as the batch poll.
+    event_teams: dict[str, set[str]] = {}
+    for m in markets:
+        et = m.get("event_ticker", "")
+        suffix = m.get("ticker", "").split("-")[-1].upper()
+        if suffix:
+            event_teams.setdefault(et, set()).add(suffix)
+    target = next((et for et, teams in event_teams.items() if teams == {h_abbr, a_abbr}), None)
+    game_markets = [m for m in markets if m.get("event_ticker", "") == target] if target else []
 
     if not game_markets:
         activity.logger.warning(
