@@ -119,13 +119,21 @@ def _draft(api_key: str, summaries: list[str], note: str) -> str:
     return msg
 
 
-def _post_discord(token: str, channel: str, content: str) -> None:
-    r = httpx.post(
-        f"https://discord.com/api/v10/channels/{channel}/messages",
-        headers={"Authorization": f"Bot {token}", "Content-Type": "application/json"},
-        json={"content": content},
-        timeout=30.0,
-    )
+def _post_discord(token: str, channel: str, content: str, images: list[str] | None = None) -> None:
+    url = f"https://discord.com/api/v10/channels/{channel}/messages"
+    auth = {"Authorization": f"Bot {token}"}
+    paths = [p for p in (images or []) if Path(p).is_file()]
+    if not paths:
+        r = httpx.post(url, headers={**auth, "Content-Type": "application/json"},
+                       json={"content": content}, timeout=30.0)
+        r.raise_for_status()
+        return
+    # Multipart: message content + up to 10 image attachments.
+    files = {}
+    for i, p in enumerate(paths[:10]):
+        files[f"files[{i}]"] = (Path(p).name, Path(p).read_bytes(), "image/png")
+    r = httpx.post(url, headers=auth, data={"payload_json": json.dumps({"content": content})},
+                   files=files, timeout=60.0)
     r.raise_for_status()
 
 
@@ -134,6 +142,7 @@ def main() -> int:
     ap.add_argument("--post", action="store_true", help="actually post + advance marker")
     ap.add_argument("--since", default=None, help="start commit (default: marker file, else HEAD~1)")
     ap.add_argument("--note", default="", help="extra guidance for the drafted message")
+    ap.add_argument("--image", action="append", default=[], help="screenshot to attach (repeatable, max 10)")
     args = ap.parse_args()
 
     load_dotenv(REPO / ".env")
@@ -174,9 +183,10 @@ def main() -> int:
         print("\nDry run — re-run with --post to publish.")
         return 0
 
-    _post_discord(token, channel, message)
+    _post_discord(token, channel, message, args.image)
     MARKER.write_text(head + "\n")
-    print(f"\nPosted to channel {channel}; marker advanced to {head[:12]}.")
+    imgnote = f" with {len(args.image)} image(s)" if args.image else ""
+    print(f"\nPosted to channel {channel}{imgnote}; marker advanced to {head[:12]}.")
     return 0
 
 
