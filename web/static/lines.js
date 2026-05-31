@@ -50,6 +50,33 @@ function liveFreshness(g) {
   return ` <span class="muted" style="font-size:11px">· updated ${txt}</span>`;
 }
 
+// Per-team line table for an upcoming game: ML / Spread / Fair per side, total
+// below. The favorite's row is tinted. Built from the card's slate odds.
+function lineTable(g) {
+  const best = bestML(g.odds || {});
+  const [, src] = consensus(g.odds || {});
+  const hasOdds = src || best.home || best.away;
+  if (!hasOdds && !g.fair) return `<div class="gline muted">No lines yet.</div>`;
+  const hs = src && src.spread != null ? src.spread : null;          // home spread
+  const total = src && src.total != null ? src.total : null;
+  const homeFav = hs != null && hs < 0;
+
+  const spreadCell = (v) => v == null ? "—" : `<span class="spread">${v > 0 ? "+" : ""}${v}</span>`;
+  const mlCellT = (b) => b ? `${am(b.v)}<sup class="bk">${shortBook(b.book)}</sup>` : "—";
+  const row = (name, fav, ml, spr, fairPct) =>
+    `<tr class="${fav ? "favrow" : ""}"><td class="tm">${name}</td>
+       <td class="num">${mlCellT(ml)}</td><td class="num">${spreadCell(spr)}</td>
+       <td class="num muted">${fairPct != null ? fairPct + "%" : "—"}</td></tr>`;
+
+  const rows = row(g.home_team, homeFav, best.home, hs, g.fair && g.fair.home)
+             + row(g.away_team, hs != null && hs > 0, best.away, hs != null ? -hs : null, g.fair && g.fair.away);
+  const totalRow = total != null ? `<span>Total <strong>O/U ${total}</strong></span>` : "";
+  const fairNote = g.fair ? `<span class="fairlabel">no-vig</span> <span class="muted">${g.fair.books} books</span>` : "";
+  return `<table class="linetable"><thead><tr><th>Team</th><th class="num">ML</th><th class="num">Spread</th><th class="num">Fair</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    <div class="totalrow">${totalRow}${totalRow && fairNote ? " · " : ""}${fairNote}</div>`;
+}
+
 // No-vig consensus home win% open → close (the honest closing-line value).
 function fairLine(g) {
   if (!g.close_fair) return "";
@@ -98,25 +125,11 @@ function render(upcoming, results) {
     html += upcoming.map((g) => {
       const dk = dateKey(g.start_time);
       const hdr = dk !== lastDate ? `<div class="date-hd">${dk}</div>` : ""; lastDate = dk;
-      const [, src] = consensus(g.odds || {});  // consensus only for spread/total + fav
-      const best = bestML(g.odds || {});
       const em = SPORT[g.sport] || "🏟️";
-      const homeFav = src && src.spread != null && src.spread < 0;
-      const awayFav = src && src.spread != null && src.spread > 0;
-      const away = `<span class="${awayFav ? "fav" : homeFav ? "dog" : ""}">${g.away_team}</span>`;
-      const home = `<span class="${homeFav ? "fav" : awayFav ? "dog" : ""}">${g.home_team}</span>`;
-      let lineHtml = `<span class="muted">No lines yet.</span>`;
-      if (src || best.away || best.home) {
-        const spr = src && src.spread != null ? `<span class="spread">${src.spread < 0 ? g.home_team : g.away_team} −${Math.abs(src.spread)}</span> · ` : "";
-        const ml = (best.away || best.home) ? `${mlCell(best.away)} / ${mlCell(best.home)}` : (src ? fmtML(src) : "—");
-        const ou = src && src.total != null ? ` · <span class="muted">O/U ${src.total}</span>` : "";
-        lineHtml = `${spr}<span class="muted">ML</span> ${ml}${ou} <span class="muted" style="font-size:11px">best price</span>`;
-      }
-      const fair = g.fair ? `<div class="fairrow"><span class="fairlabel">no-vig</span> ${g.home_team} <strong>${g.fair.home}%</strong> · ${g.away_team} <strong>${g.fair.away}%</strong> <span class="muted">· ${g.fair.books} books</span></div>` : "";
       return `${hdr}<div class="gamecard">
-        <div class="matchup">${em} ${away} <span class="at">@</span> ${home}</div>
+        <div class="matchup">${em} ${g.away_team} <span class="at">@</span> ${g.home_team}</div>
         <div class="gtime muted">${dateTime(g.start_time)}${liveFreshness(g)}</div>
-        <div class="gline">${lineHtml}</div>${fair}
+        ${lineTable(g)}
         ${movementDetails(g.game_id, "📈 pre-match line movement")}</div>`;
     }).join("");
   }

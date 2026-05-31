@@ -62,6 +62,17 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .fairrow strong { color: var(--fg); font-weight: 600; }
 .fairlabel { font-size: 10px; text-transform: uppercase; letter-spacing: .5px;
   background: var(--panel2); color: var(--accent2); padding: 1px 7px; border-radius: 6px; margin-right: 2px; }
+.linetable { width: auto; min-width: 340px; max-width: 520px; margin-top: 10px; border-collapse: collapse; font-size: 14px; }
+.linetable th { text-align: right; font-size: 10px; text-transform: uppercase; letter-spacing: .5px;
+  color: var(--muted); font-weight: 600; padding: 3px 14px 5px; }
+.linetable th:first-child { text-align: left; }
+.linetable td { padding: 6px 14px; border-top: 1px solid var(--line); }
+.linetable td.tm { font-weight: 600; }
+.linetable td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.linetable tr.favrow td { background: rgba(122, 162, 247, 0.07); }
+.linetable tr.favrow td.tm { color: var(--accent); }
+.totalrow { font-size: 13px; margin-top: 8px; color: var(--muted); }
+.totalrow strong { color: var(--fg); }
 .profhead { display: flex; align-items: center; gap: 16px; margin-bottom: 8px; }
 .profhead h1 { margin: 0; font-size: 26px; }
 .lbselect { background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
