@@ -80,10 +80,17 @@ def find_total_middle(odds: dict, min_gap: float = TOTAL_MIDDLE_MIN) -> dict | N
 
 
 def find_spread_middle(odds: dict, min_gap: float = SPREAD_MIDDLE_MIN) -> dict | None:
-    """Best home spread (most points) at one book + best away spread at another.
-    A gap means a middle on the home margin."""
-    home = _best(odds, "spread", highest=True)   # largest (least negative) home line
-    away = _best(odds, "spread", highest=False)  # most negative home line → most away points
+    """Best home spread (most points) at one book + best away spread at another,
+    each priced at its own side's odds. A gap means a middle on the home margin."""
+    home = away = None  # (book, line, odds)
+    for src, p in odds.items():
+        s = p.get("spread")
+        if s is None:
+            continue
+        if home is None or s > home[1]:
+            home = (src, s, p.get("spread_odds"))
+        if away is None or s < away[1]:
+            away = (src, s, p.get("spread_away_odds"))
     if not home or not away:
         return None
     gap = home[1] - away[1]
@@ -91,10 +98,57 @@ def find_spread_middle(odds: dict, min_gap: float = SPREAD_MIDDLE_MIN) -> dict |
         return None
     return {
         "kind": "spread_middle",
-        "home_book": home[0], "home_line": home[1],
-        "away_book": away[0], "away_line": -away[1],
+        "home_book": home[0], "home_line": home[1], "home_odds": home[2],
+        "away_book": away[0], "away_line": -away[1], "away_odds": away[2],
         "gap": gap,
     }
+
+
+# ── Middle profitability ──────────────────────────────────────────────────────
+# Empirical base rates for how often a middle's window actually hits.
+MLB_ONE_RUN_RATE = 0.286     # share of MLB games decided by exactly 1 run
+PER_RUN_TOTAL = 0.115        # ~prob the total lands on a given run near the number
+PER_POINT_NBA_SPREAD = 0.028  # ~prob an NBA margin equals a given number near the line
+PER_POINT_NBA_TOTAL = 0.022
+
+
+def _profit_mult(american: int | None) -> float | None:
+    """Profit per $1 staked if the bet wins (e.g. +150 → 1.5, -200 → 0.5)."""
+    if american is None or american == 0:
+        return None
+    return american / 100 if american > 0 else 100 / abs(american)
+
+
+def _window_count(lo: float, hi: float) -> int:
+    """Integer outcomes strictly between two lines (the margins/totals that hit)."""
+    import math
+    a, b = min(lo, hi), max(lo, hi)
+    return max(0, math.floor(b - 1e-9) - math.ceil(a + 1e-9) + 1)
+
+
+def estimate_middle_hit(sport: str, market: str, lo: float, hi: float) -> float:
+    """Rough P(result lands in the middle window). Base rates only — not
+    game-specific. Spread on MLB = the 1-run rate; everything else scales the
+    integer-outcome count by a per-number probability."""
+    if market == "spread" and sport == "mlb":
+        return MLB_ONE_RUN_RATE
+    n = _window_count(lo, hi)
+    if market == "spread":
+        return min(n * PER_POINT_NBA_SPREAD, 0.6)
+    per = PER_RUN_TOTAL if sport == "mlb" else PER_POINT_NBA_TOTAL
+    return min(n * per, 0.6)
+
+
+def middle_profit(odds_a: int | None, odds_b: int | None, hit_p: float) -> dict | None:
+    """Breakeven hit-rate and EV for a 2-leg middle at $1 per leg.
+    Win both (hit) → pa+pb; exactly one wins (miss) → avg(pa-1, pb-1)."""
+    pa, pb = _profit_mult(odds_a), _profit_mult(odds_b)
+    if pa is None or pb is None:
+        return None
+    hit, miss = pa + pb, ((pa - 1) + (pb - 1)) / 2
+    breakeven = -miss / (hit - miss) if (hit - miss) else None
+    ev_roi = (hit_p * hit + (1 - hit_p) * miss) / 2 * 100  # % ROI on the $2 staked
+    return {"breakeven": breakeven, "ev_roi": ev_roi, "hit_p": hit_p}
 
 
 def detect_ml_moves(baseline: dict, current: dict,

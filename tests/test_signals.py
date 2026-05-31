@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from shared.signals import (
     find_ml_arb, find_total_middle, find_spread_middle, detect_ml_moves,
+    middle_profit, estimate_middle_hit,
 )
 
 
@@ -43,12 +44,34 @@ def test_total_arb_same_line_plus_prices():
     assert m and m["kind"] == "total_arb"
 
 
-def test_spread_middle():
-    odds = {"A": {"spread": -2.5}, "B": {"spread": -3.5}}
+def test_spread_middle_carries_both_side_prices():
+    odds = {"A": {"spread": -2.5, "spread_odds": -110, "spread_away_odds": -110},
+            "B": {"spread": -3.5, "spread_odds": -105, "spread_away_odds": -115}}
     m = find_spread_middle(odds)
     assert m and m["gap"] == 1.0
-    assert m["home_book"] == "A" and m["home_line"] == -2.5
-    assert m["away_book"] == "B" and m["away_line"] == 3.5
+    assert m["home_book"] == "A" and m["home_line"] == -2.5 and m["home_odds"] == -110
+    assert m["away_book"] == "B" and m["away_line"] == 3.5 and m["away_odds"] == -115
+
+
+def test_middle_profit_matches_losing_runline_example():
+    # Cards +1.5 @ -200, Cubs +1.5 @ -195, MLB 1-run rate ~28.6% → ~-3% ROI.
+    hit = estimate_middle_hit("mlb", "spread", 1.5, -1.5)
+    p = middle_profit(-200, -195, hit)
+    assert abs(p["breakeven"] - 0.328) < 0.005
+    assert -4 < p["ev_roi"] < -2  # negative — should NOT be flagged as a good bet
+
+
+def test_middle_profit_positive_when_well_priced():
+    hit = estimate_middle_hit("mlb", "spread", 1.5, -1.5)
+    p = middle_profit(-150, -150, hit)  # cheaper juice → +EV
+    assert p["ev_roi"] > 0
+
+
+def test_total_middle_window_count_scales_hit():
+    # over 7.5 / under 9.5 → integers 8,9 hit; wider window = higher prob.
+    narrow = estimate_middle_hit("mlb", "total", 7.5, 8.5)   # just 8
+    wide = estimate_middle_hit("mlb", "total", 7.5, 10.5)    # 8,9,10
+    assert wide > narrow
 
 
 def test_steam_same_direction():
