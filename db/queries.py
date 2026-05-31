@@ -151,6 +151,19 @@ async def get_games_in_window(start_utc_iso: str, end_utc_iso: str, sport: str =
     return [_row_to_game(row) for row in rows]
 
 
+async def get_games_started_before(cutoff_utc_iso: str) -> list[Game]:
+    """All games (any sport) whose start_time is at/before a cutoff — i.e. their
+    line has already closed. Used to backfill closing-line snapshots."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM games WHERE start_time <= ? ORDER BY start_time ASC",
+            (cutoff_utc_iso,),
+        )
+        rows = await cursor.fetchall()
+    return [_row_to_game(row) for row in rows]
+
+
 async def get_upcoming_games(filter_str: str = "", sport: str = "nba") -> list[Game]:
     """Return upcoming games (start_time >= now), optionally filtered by team name."""
     now = datetime.now(timezone.utc).isoformat()
