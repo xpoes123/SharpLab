@@ -3575,7 +3575,7 @@ async def get_pickem_picks_for_message(message_id: str) -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT discord_user, pick, correct FROM pickem_picks WHERE message_id = ?",
+            "SELECT discord_user, pick, stake, correct FROM pickem_picks WHERE message_id = ?",
             (message_id,),
         )
         rows = await cur.fetchall()
