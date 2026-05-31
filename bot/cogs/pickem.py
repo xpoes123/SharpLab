@@ -488,6 +488,33 @@ class PickemCog(commands.Cog):
                     )
                 except discord.HTTPException:
                     pass
+                await self._post_bet_summary(channel, g)
+
+    async def _post_bet_summary(self, channel: discord.TextChannel, game: dict) -> None:
+        """When a game locks, post who bet what."""
+        picks = await queries.get_pickem_picks_for_message(game["message_id"])
+        if not picks:
+            return
+        away_list, home_list = [], []
+        for p in picks:
+            try:
+                name = (await self.bot.fetch_user(int(p["discord_user"]))).display_name
+            except Exception:
+                name = f"Player {p['discord_user'][:6]}"
+            entry = f"{name} {p['stake']}u"
+            (away_list if p["pick"] == "away" else home_list).append(entry)
+        ap, hp = game.get("away_prob"), game.get("home_prob")
+        apct = f" ({ap * 100:.0f}%)" if ap else ""
+        hpct = f" ({hp * 100:.0f}%)" if hp else ""
+        lines = [
+            f"🔒 **{game['away_team']} @ {game['home_team']}** is underway — bets locked:",
+            f"{AWAY_EMOJI} **{game['away_team']}**{apct}: " + (", ".join(away_list) or "—"),
+            f"{HOME_EMOJI} **{game['home_team']}**{hpct}: " + (", ".join(home_list) or "—"),
+        ]
+        try:
+            await channel.send("\n".join(lines))
+        except discord.HTTPException:
+            log.exception("pickem: failed to post bet summary")
 
     @lock_loop.before_loop
     async def _before_lock(self) -> None:
