@@ -112,10 +112,11 @@ function render(upcoming, results) {
         const ou = src && src.total != null ? ` · <span class="muted">O/U ${src.total}</span>` : "";
         lineHtml = `${spr}<span class="muted">ML</span> ${ml}${ou} <span class="muted" style="font-size:11px">best price</span>`;
       }
-      const fair = g.fair ? `<div class="muted" style="font-size:12px;margin-top:2px">fair (no-vig): <span style="color:var(--fg)">${g.home_team} ${g.fair.home}%</span> · ${g.away_team} ${g.fair.away}% <span style="font-size:10px">${g.fair.books} books</span></div>` : "";
+      const fair = g.fair ? `<div class="fairrow"><span class="fairlabel">no-vig</span> ${g.home_team} <strong>${g.fair.home}%</strong> · ${g.away_team} <strong>${g.fair.away}%</strong> <span class="muted">· ${g.fair.books} books</span></div>` : "";
       return `${hdr}<div class="gamecard">
-        <div>${em} ${away} @ ${home} <span class="muted" style="font-size:12px">· ${dateTime(g.start_time)}</span>${liveFreshness(g)}</div>
-        <div style="font-size:13px;margin-top:4px">${lineHtml}</div>${fair}
+        <div class="matchup">${em} ${away} <span class="at">@</span> ${home}</div>
+        <div class="gtime muted">${dateTime(g.start_time)}${liveFreshness(g)}</div>
+        <div class="gline">${lineHtml}</div>${fair}
         ${movementDetails(g.game_id, "📈 pre-match line movement")}</div>`;
     }).join("");
   }
@@ -140,9 +141,9 @@ function render(upcoming, results) {
         `<span class="pill ${g.total_result}">${g.total_result === "over" ? "Over" : "Under"} ${(g.close && g.close.total != null) ? g.close.total : ""}</span>`;
       const tag = g.close && !g.close_is_real ? ' <span class="muted" style="font-size:10px">(last)</span>' : "";
       return `<div class="gamecard">
-        <div>${em} ${g.away_team} @ <strong>${g.home_team}</strong> · final ${score}
-          <span class="muted" style="font-size:11px">${dateKey(g.start_time)} · ${g.book || ""}</span> ${ats}${ou}</div>
-        <div class="muted" style="font-size:13px;margin-top:4px">ML ${mlPair(g.open)} → <span style="color:var(--fg)">${mlPair(g.close)}</span>${tag}${move}</div>
+        <div class="matchup">${em} ${g.away_team} <span class="at">@</span> ${g.home_team} <span class="muted" style="font-weight:400">· final ${score}</span></div>
+        <div class="gtime"><span class="muted">${dateKey(g.start_time)} · ${g.book || ""}</span> ${ats}${ou}</div>
+        <div class="gline muted">ML ${mlPair(g.open)} → <span style="color:var(--fg)">${mlPair(g.close)}</span>${tag}${move}</div>
         ${freshnessTag(g)}
         ${fairLine(g)}
         ${movementDetails(g.game_id, "📊 pre-match open → close (all books)")}</div>`;
