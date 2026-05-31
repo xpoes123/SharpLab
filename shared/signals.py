@@ -31,16 +31,19 @@ def _best(odds: dict, key: str, *, highest: bool) -> tuple[str, float] | None:
     return best
 
 
-def find_ml_arb(odds: dict) -> dict | None:
+def find_ml_arb(odds: dict, min_roi: float = 0.0) -> dict | None:
     """Two-way moneyline arbitrage: best home price + best away price across all
-    books (incl. Kalshi). Arb exists when their implied probabilities sum < 1."""
+    books (incl. Kalshi). Arb exists when their implied probabilities sum < 1.
+    min_roi filters marginal arbs (our per-book snapshots aren't simultaneous, so
+    sub-~1% edges are unreliable)."""
     bh = _best(odds, "ml_home", highest=True)
     ba = _best(odds, "ml_away", highest=True)
     if not bh or not ba:
         return None
     ph, pa = american_to_prob(bh[1]), american_to_prob(ba[1])
     s = ph + pa
-    if s >= 1.0:
+    roi = (1.0 / s - 1.0) * 100 if s > 0 else 0.0
+    if s >= 1.0 or roi < min_roi:
         return None
     return {
         "kind": "arb",
@@ -100,6 +103,7 @@ def detect_ml_moves(baseline: dict, current: dict,
     """Compare home moneyline now vs a baseline. ≥min_books moving the same way =
     steam; books moving opposite ways = divergence (books disagree on direction)."""
     moves: dict[str, int] = {}
+    lagging: list[str] = []  # books that had a comparable line but barely moved
     for src, cur in current.items():
         base = baseline.get(src)
         if not base:
@@ -110,15 +114,17 @@ def detect_ml_moves(baseline: dict, current: dict,
         d = b - a
         if abs(d) >= cents:
             moves[src] = d
+        else:
+            lagging.append(src)
     if not moves:
         return None
     # ml_home more negative (d<0) = home steamed; more positive (d>0) = away steamed.
     home_side = [s for s, d in moves.items() if d < 0]
     away_side = [s for s, d in moves.items() if d > 0]
     if len(home_side) >= DIVERGENCE_MIN_PER_SIDE and len(away_side) >= DIVERGENCE_MIN_PER_SIDE:
-        return {"kind": "divergence", "home_books": home_side, "away_books": away_side}
+        return {"kind": "divergence", "home_books": home_side, "away_books": away_side, "lagging": lagging}
     if len(moves) >= min_books and (not away_side or not home_side):
         return {"kind": "steam", "toward": "home" if home_side else "away",
-                "books": list(moves.keys()),
+                "books": list(moves.keys()), "lagging": lagging,
                 "avg_cents": round(sum(abs(d) for d in moves.values()) / len(moves))}
     return None
