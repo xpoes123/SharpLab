@@ -33,6 +33,30 @@ def american_to_prob(odds: int) -> float:
         return abs(odds) / (abs(odds) + 100)
 
 
+# Kalshi taker fee ≈ 0.07 * P * (1-P) per contract.
+KALSHI_TAKER_FEE = 0.07
+
+
+def kalshi_exec_price(market: dict) -> float | None:
+    """Cost (0–1) to back a side on Kalshi: the yes ASK plus the taker fee — what
+    you can ACTUALLY transact at. Falls back to last trade, then the bid/ask mid.
+
+    The raw bid/ask mid is a fair-value midpoint you can't trade; using it made
+    Kalshi look like the best price and created phantom arbs. Fields are Kalshi's
+    *_dollars (0–1)."""
+    ask = market.get("yes_ask_dollars")
+    p = float(ask) if ask else 0.0
+    if not (0 < p < 1):
+        last = market.get("last_price_dollars")
+        p = float(last) if last else 0.0
+    if not (0 < p < 1):
+        yes_bid = market.get("yes_bid_dollars") or 0
+        p = (float(yes_bid) + float(ask or 0)) / 2 if (yes_bid or ask) else 0.0
+    if not (0 < p < 1):
+        return None
+    return min(p + KALSHI_TAKER_FEE * p * (1 - p), 0.99)
+
+
 def devig_two_way(ml_home: int, ml_away: int) -> tuple[float, float]:
     """Normalize a two-sided American moneyline into fair (home, away) win
     probabilities summing to 1 (removes the bookmaker's vig)."""
