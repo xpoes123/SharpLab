@@ -3419,3 +3419,158 @@ async def get_all_stock_holdings() -> list[dict]:
         )
         rows = await cur.fetchall()
     return [dict(r) for r in rows]
+
+
+# ── Daily NBA/MLB pick'em ─────────────────────────────────────────────────────
+
+
+async def add_pickem_game(
+    message_id: str, game_id: str, sport: str, home_team: str,
+    away_team: str, start_time: str, posted_date: str,
+) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT OR IGNORE INTO pickem_games
+               (message_id, game_id, sport, home_team, away_team, start_time, posted_date)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (message_id, game_id, sport, home_team, away_team, start_time, posted_date),
+        )
+        await db.commit()
+
+
+async def get_pickem_game(message_id: str) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM pickem_games WHERE message_id = ?", (message_id,),
+        )
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def pickem_game_exists(game_id: str, posted_date: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT 1 FROM pickem_games WHERE game_id = ? AND posted_date = ?",
+            (game_id, posted_date),
+        )
+        return await cur.fetchone() is not None
+
+
+async def get_unlocked_pickem_games() -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM pickem_games WHERE locked = 0")
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def lock_pickem_game(message_id: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE pickem_games SET locked = 1 WHERE message_id = ?", (message_id,),
+        )
+        await db.commit()
+
+
+async def get_unresolved_pickem_games() -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM pickem_games WHERE resolved = 0")
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def resolve_pickem_game(message_id: str, winner: str) -> None:
+    """Mark a game resolved and score every pick on it (correct = pick == winner)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE pickem_games SET resolved = 1, locked = 1, winner = ? WHERE message_id = ?",
+            (winner, message_id),
+        )
+        await db.execute(
+            "UPDATE pickem_picks SET correct = CASE WHEN pick = ? THEN 1 ELSE 0 END "
+            "WHERE message_id = ?",
+            (winner, message_id),
+        )
+        await db.commit()
+
+
+async def record_pickem_pick(message_id: str, discord_user: str, pick: str) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO pickem_picks (message_id, discord_user, pick, picked_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(message_id, discord_user) DO UPDATE SET pick = excluded.pick""",
+            (message_id, discord_user, pick, now),
+        )
+        await db.commit()
+
+
+async def remove_pickem_pick(message_id: str, discord_user: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "DELETE FROM pickem_picks WHERE message_id = ? AND discord_user = ?",
+            (message_id, discord_user),
+        )
+        await db.commit()
+
+
+async def get_pickem_pick(message_id: str, discord_user: str) -> str | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT pick FROM pickem_picks WHERE message_id = ? AND discord_user = ?",
+            (message_id, discord_user),
+        )
+        row = await cur.fetchone()
+    return row[0] if row else None
+
+
+async def get_pickem_vote_counts(message_id: str) -> dict[str, int]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT pick, COUNT(*) FROM pickem_picks WHERE message_id = ? GROUP BY pick",
+            (message_id,),
+        )
+        rows = await cur.fetchall()
+    out = {"home": 0, "away": 0}
+    for pick, n in rows:
+        out[pick] = n
+    return out
+
+
+async def get_pickem_games_for_date(posted_date: str) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM pickem_games WHERE posted_date = ? ORDER BY start_time",
+            (posted_date,),
+        )
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_pickem_picks_for_message(message_id: str) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT discord_user, pick, correct FROM pickem_picks WHERE message_id = ?",
+            (message_id,),
+        )
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_pickem_resolved_picks() -> list[dict]:
+    """Every scored pick joined with its game's start_time, ordered for streak calc."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT p.discord_user, p.correct, g.start_time
+               FROM pickem_picks p JOIN pickem_games g ON p.message_id = g.message_id
+               WHERE p.correct IS NOT NULL
+               ORDER BY p.discord_user, g.start_time""",
+        )
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]

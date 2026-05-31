@@ -106,6 +106,7 @@ COGS = [
     "bot.cogs.mathsprint",
     "bot.cogs.pokemon",
     "bot.cogs.ratings",
+    "bot.cogs.pickem",
     "bot.cogs.tradingfloor",
     "bot.cogs.quizbowl",
     "bot.cogs.valorant",
