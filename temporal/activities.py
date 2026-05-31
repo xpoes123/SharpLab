@@ -798,7 +798,6 @@ def _resolve_bet(
     return "void"
 
 
-@activity.defn
 def _pick_game_for_date(candidates: list, game_date: str):
     """From same-matchup candidates, choose the one whose start_time is on the
     score's date (within ±18h). Prevents yesterday's final being stamped onto
@@ -824,6 +823,7 @@ def _pick_game_for_date(candidates: list, game_date: str):
     return best if dist(best) <= 18 * 3600 else None
 
 
+@activity.defn
 async def resolve_bets_for_game(result: GameResult) -> int:
     """
     Match a completed game to a DB game by team suffix AND date, then resolve all
