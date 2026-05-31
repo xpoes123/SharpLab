@@ -63,3 +63,6 @@ details summary { list-style: none; }
 details summary::-webkit-details-marker { display: none; }
 details[open] summary::before { content: "▾ "; }
 details:not([open]) summary::before { content: "▸ "; }
+.nav { display: flex; gap: 18px; }
+.nav a { color: var(--muted); font-weight: 600; font-size: 14px; }
+.nav a:hover { color: var(--fg); text-decoration: none; }
