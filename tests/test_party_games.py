@@ -65,6 +65,19 @@ def test_cluemaster_imports_and_basic_flow() -> None:
     assert MAX_PLAYERS >= MIN_PLAYERS
 
 
+def test_cluemaster_total_rounds_scale_with_players() -> None:
+    from bot.cogs.cluemaster import _compute_total_rounds, MAX_ROUNDS_CAP
+
+    # Each player is clue master rounds_per_player times.
+    assert _compute_total_rounds(2, 4) == 8
+    assert _compute_total_rounds(1, 3) == 3
+    assert _compute_total_rounds(3, 5) == 15
+    # Capped for big tables.
+    assert _compute_total_rounds(4, 8) == MAX_ROUNDS_CAP
+    # Never zero, even with a degenerate table.
+    assert _compute_total_rounds(2, 0) == 1
+
+
 def test_imposter_imports_and_setup_payouts() -> None:
     from bot.cogs.imposter import (
         ImpTable, ImpPlayer, _betting_embed, _pick_secret,

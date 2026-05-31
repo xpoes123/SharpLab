@@ -129,7 +129,7 @@ _MOVIES: list[CategoryItem] = [
     ("Shrek", []), ("Toy Story", []), ("Finding Nemo", []),
     ("Harry Potter", []), ("The Dark Knight", ["Dark Knight"]), ("Pulp Fiction", []),
     ("Interstellar", []), ("Joker", []), ("Aladdin", []),
-    ("Up", []), ("Moana", []), ("Encanto", []), ("Barbie", []),
+    ("Inside Out", []), ("Moana", []), ("Encanto", []), ("Barbie", []),
     ("Oppenheimer", []), ("The Wizard of Oz", ["Wizard of Oz"]),
     ("Ghostbusters", []), ("Home Alone", []), ("Top Gun", []),
     ("Pirates of the Caribbean", []), ("The Lord of the Rings", ["Lord of the Rings"]),
@@ -206,10 +206,82 @@ _NFL_PLAYERS: list[CategoryItem] = [
 ]
 
 
+# Curated well-known MLB players (current stars + all-time greats), static for
+# the same reason as NFL. Last-name matching + nickname/accent-free aliases.
+_MLB_PLAYERS: list[CategoryItem] = [
+    # Current stars — hitters
+    ("Shohei Ohtani", ["Ohtani", "Shohei"]), ("Aaron Judge", ["Judge"]),
+    ("Mookie Betts", ["Mookie"]), ("Mike Trout", ["Trout"]),
+    ("Ronald Acuña Jr", ["Ronald Acuna", "Acuna"]), ("Juan Soto", ["Soto"]),
+    ("Freddie Freeman", []), ("Jose Altuve", ["Altuve"]), ("Bryce Harper", []),
+    ("Fernando Tatis Jr", ["Fernando Tatis", "Tatis"]),
+    ("Vladimir Guerrero Jr", ["Vlad Guerrero", "Vladdy", "Guerrero"]),
+    ("Bobby Witt Jr", ["Bobby Witt"]), ("Gunnar Henderson", ["Gunnar"]),
+    ("Corey Seager", []), ("Trea Turner", []), ("Francisco Lindor", ["Lindor"]),
+    ("Manny Machado", ["Machado"]), ("Rafael Devers", ["Devers"]),
+    ("Yordan Alvarez", ["Yordan"]), ("Kyle Tucker", []),
+    ("Julio Rodriguez", ["Julio", "J-Rod"]), ("Pete Alonso", ["Polar Bear"]),
+    ("Matt Olson", []), ("Marcus Semien", []), ("Adley Rutschman", []),
+    ("Jose Ramirez", []), ("Paul Goldschmidt", ["Goldy"]),
+    ("Nolan Arenado", ["Arenado"]), ("Christian Yelich", ["Yelich"]),
+    ("Elly De La Cruz", ["Elly"]),
+    # Current stars — pitchers
+    ("Gerrit Cole", []), ("Corbin Burnes", []), ("Zack Wheeler", []),
+    ("Tarik Skubal", ["Skubal"]), ("Paul Skenes", ["Skenes"]),
+    ("Blake Snell", []), ("Max Fried", []), ("Spencer Strider", ["Strider"]),
+    ("Emmanuel Clase", ["Clase"]), ("Josh Hader", []),
+    # All-time / recent greats
+    ("Albert Pujols", ["Pujols"]), ("Miguel Cabrera", ["Miggy"]),
+    ("Clayton Kershaw", ["Kershaw"]), ("Justin Verlander", ["Verlander"]),
+    ("Max Scherzer", ["Mad Max"]), ("Derek Jeter", ["Jeter"]),
+    ("Barry Bonds", ["Bonds"]), ("Ken Griffey Jr", ["Griffey", "The Kid"]),
+    ("Babe Ruth", ["Babe", "The Bambino"]), ("Hank Aaron", ["Hammerin Hank"]),
+    ("Willie Mays", ["Say Hey Kid"]), ("Ted Williams", []),
+    ("Mickey Mantle", ["Mantle"]), ("Jackie Robinson", ["Jackie"]),
+    ("Pedro Martinez", ["Pedro"]), ("Mariano Rivera", ["Mo", "Mariano"]),
+    ("Ichiro Suzuki", ["Ichiro"]), ("Alex Rodriguez", ["A-Rod", "ARod"]),
+    ("David Ortiz", ["Big Papi"]), ("Chipper Jones", ["Chipper"]),
+    ("Randy Johnson", ["Big Unit"]), ("Greg Maddux", ["Maddux"]),
+    ("Cal Ripken Jr", ["Cal Ripken"]), ("Nolan Ryan", []),
+]
+
+
+# Basic science — high-school / intro-college terms that play well as guess
+# targets (one recognizable concept per item). Skews toward the science-bowl
+# crowd without being graduate-level. Aliases cover symbols/spelling variants.
+_SCIENCE_BASIC: list[CategoryItem] = [
+    # Physics
+    ("Gravity", []), ("Velocity", []), ("Acceleration", []), ("Friction", []),
+    ("Momentum", []), ("Inertia", []), ("Energy", []), ("Voltage", []),
+    ("Magnetism", ["Magnet"]), ("Refraction", []), ("Density", []),
+    ("Buoyancy", []), ("Pressure", []), ("Frequency", []), ("Wavelength", []),
+    # Chemistry
+    ("Atom", ["Atoms"]), ("Molecule", ["Molecules"]), ("Electron", ["Electrons"]),
+    ("Proton", ["Protons"]), ("Neutron", ["Neutrons"]), ("Isotope", ["Isotopes"]),
+    ("Periodic Table", []), ("Covalent Bond", ["Covalent"]), ("Ionic Bond", ["Ionic"]),
+    ("Catalyst", []), ("Oxidation", []), ("Acidity", ["pH", "ph scale"]), ("Solvent", []),
+    ("Combustion", []), ("Hydrogen", []), ("Oxygen", []), ("Carbon", []),
+    # Biology
+    ("Photosynthesis", []), ("Mitosis", []), ("Meiosis", []), ("DNA", []),
+    ("Chromosome", ["Chromosomes"]), ("Cell", ["Cells"]), ("Mitochondria", ["Mitochondrion"]),
+    ("Enzyme", ["Enzymes"]), ("Osmosis", []), ("Ecosystem", []), ("Evolution", []),
+    ("Protein", ["Proteins"]), ("Bacteria", ["Bacterium"]), ("Virus", ["Viruses"]),
+    ("Nucleus", []), ("Ribosome", ["Ribosomes"]),
+    # Earth & space
+    ("Magma", ["Lava"]), ("Tectonic Plates", ["Plate Tectonics", "Tectonic"]),
+    ("Erosion", []), ("Volcano", ["Volcanoes"]), ("Earthquake", ["Earthquakes"]),
+    ("Atmosphere", []), ("Orbit", ["Orbits"]), ("Eclipse", ["Eclipses"]),
+    ("Comet", ["Comets"]), ("Galaxy", ["Galaxies"]), ("Black Hole", []),
+    ("Supernova", ["Supernovae"]), ("Condensation", []), ("Evaporation", []),
+]
+
+
 CATEGORIES: dict[str, tuple[str, str, list[CategoryItem]]] = {
     # key -> (display_name, emoji, items)
     "nba": ("NBA Players", "\U0001f3c0", _nba_items()),
     "nfl": ("NFL Players", "\U0001f3c8", _NFL_PLAYERS),
+    "mlb": ("MLB Players", "\U000026be", _MLB_PLAYERS),
+    "science_basic": ("Basic Science", "\U0001f9ea", _SCIENCE_BASIC),
     "celebrities": ("Celebrities", "\U0001f31f", _CELEBRITIES),
     "animals": ("Animals", "\U0001f981", _ANIMALS),
     "food": ("Food & Drink", "\U0001f354", _FOOD),
