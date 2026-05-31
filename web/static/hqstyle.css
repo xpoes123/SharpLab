@@ -75,3 +75,8 @@ tbody tr:hover { background: rgba(122,162,247,.06); }
 .spread { color: var(--gold); font-weight: 600; }
 .over { color: var(--gold); } .under { color: var(--accent); }
 .bk { font-size: 9px; color: var(--muted); margin-left: 2px; vertical-align: super; }
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
+.bookchip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-family: inherit;
+  padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); cursor: pointer; transition: background .12s, border-color .12s; }
+.bookchip .dot { width: 8px; height: 8px; }
+.bookchip:hover { border-color: var(--accent); }
