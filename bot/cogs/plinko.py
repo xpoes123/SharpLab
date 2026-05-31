@@ -17,22 +17,35 @@ log = logging.getLogger(__name__)
 
 ROWS = 8  # 9 buckets
 MAX_PLAYERS = 10
+MAX_BALLS = 5  # most balls one player can drop in a round
 
-# Multiplier tables per risk level (symmetric, fair EV = 1.0).
+# Multiplier tables per risk level (symmetric, ~fair EV ≈ 1.0). Higher tiers
+# trade a near-total wipeout in the middle for a huge edge-bucket payout.
 MULTIPLIERS: dict[str, list[float]] = {
     "low": [5.6, 2.1, 1.1, 1.0, 0.54, 1.0, 1.1, 2.1, 5.6],
     "medium": [13, 3, 1.3, 0.7, 0.44, 0.7, 1.3, 3, 13],
     "high": [29, 4, 1.5, 0.3, 0.24, 0.3, 1.5, 4, 29],
+    "extreme": [72, 3, 0.5, 0.2, 0.2, 0.2, 0.5, 3, 72],
+    "insane": [110, 0.5, 0.2, 0.1, 0.1, 0.1, 0.2, 0.5, 110],
 }
 
-RISK_EMOJI: dict[str, str] = {"low": "🟢", "medium": "🟡", "high": "🔴"}
-RISK_LABEL: dict[str, str] = {"low": "Low", "medium": "Med", "high": "High"}
+RISK_EMOJI: dict[str, str] = {
+    "low": "🟢", "medium": "🟡", "high": "🔴", "extreme": "🟣", "insane": "💀",
+}
+RISK_LABEL: dict[str, str] = {
+    "low": "Low", "medium": "Med", "high": "High", "extreme": "Extreme", "insane": "Insane",
+}
 RISK_STYLE: dict[str, discord.ButtonStyle] = {
     "low": discord.ButtonStyle.success,
     "medium": discord.ButtonStyle.primary,
     "high": discord.ButtonStyle.danger,
+    "extreme": discord.ButtonStyle.danger,
+    "insane": discord.ButtonStyle.danger,
 }
-RISK_CYCLE: dict[str, str] = {"low": "medium", "medium": "high", "high": "low"}
+RISK_CYCLE: dict[str, str] = {
+    "low": "medium", "medium": "high", "high": "extreme",
+    "extreme": "insane", "insane": "low",
+}
 
 # Animation: show ball at these rows, then final (ROWS=8)
 ANIM_ROWS = [2, 4, 6]
@@ -77,6 +90,32 @@ def _render_board(
     return "\n".join(lines)
 
 
+def _resolve_drops(table: "PlinkoTable") -> tuple[list[int], int, float]:
+    """Drop every player's balls independently, set each player's payout and
+    per-ball results, and return the round's *showcase* ball — the single
+    highest-multiplier drop — as (path, bucket, multiplier) for the animation.
+    """
+    mults = MULTIPLIERS[table.risk]
+    best_path: list[int] = []
+    best_mult = -1.0
+    best_bucket = -1
+    for p in table.players.values():
+        p.ball_results = []
+        total = 0
+        for _ in range(p.balls):
+            bucket, path = _drop_ball()
+            m = mults[bucket]
+            p.ball_results.append((bucket, m))
+            total += math.floor(p.bet * m)
+            if m > best_mult:
+                best_mult, best_bucket, best_path = m, bucket, path
+        p.payout = total
+    if not best_path:  # no players/balls — fall back to a lone drop for the board
+        best_bucket, best_path = _drop_ball()
+        best_mult = mults[best_bucket]
+    return best_path, best_bucket, best_mult
+
+
 # ── Dataclasses ──────────────────────────────────────────────────────────────
 
 
@@ -84,8 +123,14 @@ def _render_board(
 class PlinkoPlayer:
     user_id: int
     display_name: str
-    bet: int
+    bet: int  # per-ball stake
+    balls: int = 1
     payout: int = 0
+    ball_results: list[tuple[int, float]] = field(default_factory=list)  # (bucket, mult)
+
+    @property
+    def total_stake(self) -> int:
+        return self.bet * self.balls
 
 
 @dataclass
@@ -98,8 +143,8 @@ class PlinkoTable:
     players: dict[int, PlinkoPlayer] = field(default_factory=dict)
     message: discord.Message | None = None
     round_num: int = 1
-    last_bets: dict[int, tuple[str, int]] = field(default_factory=dict)
-    # Single ball per round
+    last_bets: dict[int, tuple[str, int, int]] = field(default_factory=dict)  # name, bet, balls
+    # Showcase ball — the round's best drop, used for the board animation
     bucket: int = -1
     multiplier: float = 0.0
     path: list[int] = field(default_factory=list)
@@ -112,7 +157,10 @@ def _betting_embed(table: PlinkoTable) -> discord.Embed:
     emoji = RISK_EMOJI[table.risk]
     embed = discord.Embed(
         title=f"Plinko — Place Your Bets (Round {table.round_num})",
-        description=f"Risk: {emoji} **{RISK_LABEL[table.risk]}** — one ball, everyone rides!",
+        description=(
+            f"Risk: {emoji} **{RISK_LABEL[table.risk]}** — drop up to "
+            f"{MAX_BALLS} balls; each ball lands independently."
+        ),
         colour=discord.Colour.blurple(),
     )
 
@@ -121,10 +169,11 @@ def _betting_embed(table: PlinkoTable) -> discord.Embed:
     embed.add_field(name="Buckets", value=f"`{vals}`", inline=False)
 
     if table.players:
-        plines = [
-            f"💰 **{p.display_name}** — {p.bet}c"
-            for p in table.players.values()
-        ]
+        plines = []
+        for p in table.players.values():
+            ball_tag = f" ×{p.balls} balls" if p.balls > 1 else ""
+            stake = f" = {p.total_stake}c" if p.balls > 1 else ""
+            plines.append(f"💰 **{p.display_name}** — {p.bet}c{ball_tag}{stake}")
         embed.add_field(name="Players", value="\n".join(plines), inline=False)
     else:
         embed.add_field(
@@ -164,7 +213,7 @@ def _results_embed(
     desc_parts: list[str] = []
     if board:
         desc_parts.append(f"```\n{board}\n```")
-    desc_parts.append(f"{emoji} Landed on **{table.multiplier}x**{celebration}")
+    desc_parts.append(f"{emoji} Best drop of the round: **{table.multiplier}x**{celebration}")
 
     embed = discord.Embed(
         title=f"Plinko — Round {table.round_num} Complete",
@@ -175,11 +224,18 @@ def _results_embed(
     lines: list[str] = []
     for p in table.players.values():
         bal = balances.get(p.user_id, 0) if balances else 0
-        net = p.payout - p.bet
+        net = p.payout - p.total_stake
         sign = "+" if net >= 0 else ""
+        if p.balls > 1:
+            mults = " ".join(f"{m:g}x" for _bucket, m in p.ball_results)
+            stake_str = f"{p.bet}c×{p.balls}"
+            detail = f"\n   └ {mults}"
+        else:
+            stake_str = f"{p.bet}c"
+            detail = ""
         lines.append(
-            f"**{p.display_name}** — {p.bet}c → "
-            f"**{p.payout}c** ({sign}{net}c) — bal: {bal}c"
+            f"**{p.display_name}** — {stake_str} → "
+            f"**{p.payout}c** ({sign}{net}c) — bal: {bal}c{detail}"
         )
 
     embed.add_field(name="Results", value="\n".join(lines), inline=False)
@@ -192,10 +248,17 @@ def _results_embed(
 
 class JoinPlinkoModal(ui.Modal):
     amount = ui.TextInput(
-        label="Bet amount (coins)",
+        label="Bet amount per ball (coins)",
         placeholder="e.g. 100",
         required=True,
         max_length=10,
+    )
+    balls = ui.TextInput(
+        label=f"Number of balls (1-{MAX_BALLS})",
+        placeholder="e.g. 3",
+        required=False,
+        max_length=2,
+        default="1",
     )
 
     def __init__(self, table: PlinkoTable, view: "PlinkoTableView", balance: int) -> None:
@@ -218,6 +281,19 @@ class JoinPlinkoModal(ui.Modal):
             )
             return
 
+        try:
+            n_balls = int(self.balls.value) if self.balls.value.strip() else 1
+        except ValueError:
+            await interaction.response.send_message(
+                "Number of balls must be a whole number.", ephemeral=True,
+            )
+            return
+        if not 1 <= n_balls <= MAX_BALLS:
+            await interaction.response.send_message(
+                f"Number of balls must be between 1 and {MAX_BALLS}.", ephemeral=True,
+            )
+            return
+
         uid = interaction.user.id
         if uid in self.table.players:
             await interaction.response.send_message(
@@ -225,12 +301,14 @@ class JoinPlinkoModal(ui.Modal):
             )
             return
 
+        stake = amt * n_balls
         try:
-            await queries.update_casino_balance(str(uid), -amt)
+            await queries.update_casino_balance(str(uid), -stake)
         except ValueError:
             bal = await queries.get_or_create_casino_wallet(str(uid))
             await interaction.response.send_message(
-                f"Not enough coins! (have {bal}c)", ephemeral=True,
+                f"Not enough coins for {n_balls}×{amt}c = {stake}c! (have {bal}c)",
+                ephemeral=True,
             )
             return
 
@@ -238,6 +316,7 @@ class JoinPlinkoModal(ui.Modal):
             user_id=uid,
             display_name=interaction.user.display_name,
             bet=amt,
+            balls=n_balls,
         )
 
         self.table_view._update_buttons()
@@ -344,18 +423,19 @@ class PlinkoTableView(ui.View):
                 "Table is full!", ephemeral=True,
             )
             return
-        name, amt = last
+        name, amt, n_balls = last
+        stake = amt * n_balls
         try:
-            await queries.update_casino_balance(str(uid), -amt)
+            await queries.update_casino_balance(str(uid), -stake)
         except ValueError:
             bal = await queries.get_or_create_casino_wallet(str(uid))
             await interaction.response.send_message(
-                f"Not enough coins for {amt}c re-bet! (have {bal}c)",
+                f"Not enough coins for {stake}c re-bet! (have {bal}c)",
                 ephemeral=True,
             )
             return
         self.table.players[uid] = PlinkoPlayer(
-            user_id=uid, display_name=name, bet=amt,
+            user_id=uid, display_name=name, bet=amt, balls=n_balls,
         )
         self._update_buttons()
         await interaction.response.edit_message(
@@ -378,7 +458,7 @@ class PlinkoTableView(ui.View):
                 "Can't leave mid-drop!", ephemeral=True,
             )
             return
-        await queries.update_casino_balance(str(uid), player.bet)
+        await queries.update_casino_balance(str(uid), player.total_stake)
         del self.table.players[uid]
         self._update_buttons()
         await interaction.response.edit_message(
@@ -443,7 +523,7 @@ class PlinkoTableView(ui.View):
         if self.table.phase == "betting":
             for p in self.table.players.values():
                 try:
-                    await queries.update_casino_balance(str(p.user_id), p.bet)
+                    await queries.update_casino_balance(str(p.user_id), p.total_stake)
                 except Exception:
                     log.exception("Unhandled error in plinko.py")
         await self._close(interaction, "Table closed by host.")
@@ -453,15 +533,12 @@ class PlinkoTableView(ui.View):
     async def _drop(self, interaction: discord.Interaction) -> None:
         table = self.table
 
-        # Single ball for the whole table
-        bucket, path = _drop_ball()
-        table.bucket = bucket
+        # Each player drops their own balls independently; the board animates
+        # the round's best drop.
+        path, bucket, mult = _resolve_drops(table)
         table.path = path
-        table.multiplier = MULTIPLIERS[table.risk][bucket]
-
-        # Everyone gets the same multiplier
-        for p in table.players.values():
-            p.payout = math.floor(p.bet * table.multiplier)
+        table.bucket = bucket
+        table.multiplier = mult
 
         table.phase = "dropping"
         self._update_buttons()
@@ -488,11 +565,11 @@ class PlinkoTableView(ui.View):
         for p in table.players.values():
             if p.payout > 0:
                 await queries.update_casino_balance(str(p.user_id), p.payout)
-            await queries.log_casino_result(str(p.user_id), "plinko", p.bet, p.payout)
+            await queries.log_casino_result(str(p.user_id), "plinko", p.total_stake, p.payout)
 
         # Save last bets for re-bet
         for p in table.players.values():
-            table.last_bets[p.user_id] = (p.display_name, p.bet)
+            table.last_bets[p.user_id] = (p.display_name, p.bet, p.balls)
 
         # Final frame: full trail + results
         await asyncio.sleep(ANIM_DELAY)
@@ -558,7 +635,7 @@ class PlinkoTableView(ui.View):
         if table.phase == "betting":
             for p in table.players.values():
                 try:
-                    await queries.update_casino_balance(str(p.user_id), p.bet)
+                    await queries.update_casino_balance(str(p.user_id), p.total_stake)
                 except Exception:
                     log.exception("Unhandled error in plinko.py")
         self.active_tables.pop(table.channel_id, None)
