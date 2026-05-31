@@ -986,7 +986,7 @@ class LiarTableView(ui.View):
         if len(table.players) >= 2:
             finish_order = [winner_uid] + [uid for uid in table.turn_order if uid != winner_uid]
             try:
-                await update_elo_multiplayer(finish_order, "liarsdice", "liarsdice")
+                await update_elo_multiplayer(finish_order, "liarsdice", "liarsdice", scores={uid: (1 if uid == winner_uid else 0) for uid in finish_order})
             except Exception:
                 log.exception("Unhandled error in liarsdice.py")
 

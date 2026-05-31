@@ -807,6 +807,7 @@ class ImposterLobbyView(ui.View):
             try:
                 elo_changes = await update_elo_multiplayer(
                     finish_order, "imposter", "imposter",
+                    scores={p.user_id: p.score for p in sorted_players},
                 )
             except Exception:
                 log.exception("imposter: ELO update failed")

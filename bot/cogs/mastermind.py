@@ -583,7 +583,7 @@ class MastermindTableView(ui.View):
             )
             finish_order = [p.user_id for p in sorted_p]
             try:
-                await update_elo_multiplayer(finish_order, "mastermind", "mastermind")
+                await update_elo_multiplayer(finish_order, "mastermind", "mastermind", scores={p.user_id: -(p.solve_count if p.solve_count is not None else 999) for p in sorted_p})
             except Exception:
                 log.exception("Unhandled error in mastermind.py")
 

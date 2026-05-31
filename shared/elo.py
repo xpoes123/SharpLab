@@ -69,11 +69,17 @@ def compute_multiplayer(
     ratings: dict[int, float],
     games_played: dict[int, int],
     finish_order: list[int],
+    scores: dict[int, float] | None = None,
 ) -> dict[int, float]:
     """New ratings for a multiplayer game (e.g. Pokemon).
 
-    Pairwise comparison: player ranked *i* "beats" player ranked *j* if i < j.
-    Total delta normalised by (N-1).
+    Pairwise comparison, total delta normalised by (N-1).
+
+    If ``scores`` is given (uid -> score, higher = better), each pair is judged
+    by score so equal scores count as a draw (0.5 each) — players who genuinely
+    tie get the same treatment instead of an arbitrary win/loss from list order.
+    Without ``scores`` it falls back to strict order: player ranked *i* beats
+    player ranked *j* if i < j.
     """
     n = len(finish_order)
     if n < 2:
@@ -85,7 +91,11 @@ def compute_multiplayer(
         for j, uid_b in enumerate(finish_order):
             if i == j:
                 continue
-            actual = 1.0 if i < j else 0.0
+            if scores is not None:
+                sa, sb = scores[uid_a], scores[uid_b]
+                actual = 1.0 if sa > sb else 0.0 if sa < sb else 0.5
+            else:
+                actual = 1.0 if i < j else 0.0
             delta = rating_change(
                 ratings[uid_a], ratings[uid_b], actual, games_played[uid_a],
             )

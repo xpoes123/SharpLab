@@ -821,7 +821,7 @@ class SprintTableView(ui.View):
             sorted_p = sorted(table.players.values(), key=lambda p: (-p.points, p.total_time))
             finish_order = [p.user_id for p in sorted_p]
             try:
-                await update_elo_multiplayer(finish_order, "mathsprint", "mathsprint")
+                await update_elo_multiplayer(finish_order, "mathsprint", "mathsprint", scores={p.user_id: p.points * 100000 - p.total_time for p in sorted_p})
             except Exception:
                 log.exception("Unhandled error in mathsprint.py")
 

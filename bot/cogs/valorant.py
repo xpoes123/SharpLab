@@ -1296,7 +1296,7 @@ class ValTableView(ui.View):
             )
             finish_order = [p.user_id for p in sorted_players]
             try:
-                await update_elo_multiplayer(finish_order, "valorant", "valorant")
+                await update_elo_multiplayer(finish_order, "valorant", "valorant", scores={p.user_id: p.rounds_won for p in sorted_players})
             except Exception:
                 log.exception("Unhandled error in valorant.py")
 

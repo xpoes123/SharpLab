@@ -1081,7 +1081,7 @@ class CountdownTableView(ui.View):
             sorted_p = sorted(table.players.values(), key=lambda p: p.total_points, reverse=True)
             finish_order = [p.user_id for p in sorted_p]
             try:
-                await update_elo_multiplayer(finish_order, "countdown", "countdown")
+                await update_elo_multiplayer(finish_order, "countdown", "countdown", scores={p.user_id: p.total_points for p in sorted_p})
             except Exception:
                 log.exception("Unhandled error in countdown.py")
 

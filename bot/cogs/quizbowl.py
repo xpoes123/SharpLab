@@ -883,7 +883,7 @@ class QBLobbyView(ui.View):
             sorted_p = sorted(table.players.values(), key=lambda p: p.score, reverse=True)
             finish_order = [p.user_id for p in sorted_p]
             try:
-                elo_changes = await update_elo_multiplayer(finish_order, "quizbowl", "quizbowl")
+                elo_changes = await update_elo_multiplayer(finish_order, "quizbowl", "quizbowl", scores={p.user_id: p.score for p in sorted_p})
             except Exception:
                 log.exception("Unhandled error in quizbowl.py")
 
