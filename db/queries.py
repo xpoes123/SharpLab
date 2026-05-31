@@ -2233,6 +2233,28 @@ async def get_all_elo_leaderboards(
     return result
 
 
+async def get_elo_game_popularity() -> list[dict]:
+    """Per-game activity, most-played first: {game, total_plays, players}.
+
+    total_plays = sum of games_played across all rated players in that game
+    (a 5-player match adds 5). Used to order the leaderboard browser so the
+    most popular games surface first.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT game,
+                      SUM(games_played) AS total_plays,
+                      COUNT(*) AS players
+               FROM elo_ratings
+               GROUP BY game
+               HAVING total_plays > 0
+               ORDER BY total_plays DESC, players DESC, game ASC""",
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
 async def get_elo_history(
     discord_user: str, game: str, limit: int = 10,
 ) -> list[dict]:
