@@ -3,6 +3,7 @@
 const sign = (n) => (n >= 0 ? "+" : "") + n;
 const cls = (n) => (n >= 0 ? "pos" : "neg");
 const num = (n) => (n == null ? "—" : Number(n).toLocaleString());
+const plink = (name) => `<a href="/hq/${encodeURIComponent(name)}">${name}</a>`;
 
 const app = document.getElementById("app");
 const navRight = document.getElementById("navRight");
@@ -87,14 +88,14 @@ function renderHome(server, me, notMember) {
   // ELO champions
   html += section("🏆 ELO Champions", table(
     [{ t: "Player" }, { t: "Pts", num: true }],
-    (server.elo_champions || []).map((r) => [{ t: r.username }, { t: r.points }])));
+    (server.elo_champions || []).map((r) => [{ t: plink(r.username) }, { t: r.points }])));
 
   // Pick'em P&L
   const myName = me && me.user.username;
   html += section("🎯 Pick'em — Market P&amp;L", table(
     [{ t: "Player" }, { t: "Units", num: true }, { t: "Record", num: true }],
     (server.pickem || []).map((r) => {
-      const row = [{ t: r.username }, { t: sign(r.units.toFixed(1)) + "u", cls: cls(r.units) },
+      const row = [{ t: plink(r.username) }, { t: sign(r.units.toFixed(1)) + "u", cls: cls(r.units) },
         { t: `${r.correct}/${r.total}`, cls: "muted" }];
       row._me = r.username === myName; return row;
     })));
@@ -102,12 +103,12 @@ function renderHome(server, me, notMember) {
   // Casino
   html += section("🪙 Casino — Top Balances", table(
     [{ t: "Player" }, { t: "Coins", num: true }],
-    (server.casino || []).map((r) => [{ t: r.username }, { t: num(r.balance) }])));
+    (server.casino || []).map((r) => [{ t: plink(r.username) }, { t: num(r.balance) }])));
 
   // Stocks
   html += section("📈 Stocks — Realized P&amp;L", table(
     [{ t: "Trader" }, { t: "P&L ($)", num: true }],
-    (server.stocks || []).map((r) => [{ t: r.username },
+    (server.stocks || []).map((r) => [{ t: plink(r.username) },
       { t: sign(num(r.realized_pnl)), cls: cls(r.realized_pnl) }])));
 
   // Chess
