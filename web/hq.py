@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import bisect
 import os
 import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import aiosqlite
 import httpx
@@ -25,6 +28,48 @@ CHESS_API = os.environ.get("CHESS_API_BASE", "https://games.djiang.xyz/chess/api
 
 _SERVER_CACHE: dict[str, tuple[float, dict]] = {}
 _SERVER_TTL = 30.0
+_SPY_CACHE: dict[str, object] = {"t": 0.0, "data": []}  # [(date_iso, close)] sorted
+
+
+async def _spy_history() -> list[tuple[str, float]]:
+    """Daily SPY closes (2y), cached for an hour. [] on failure."""
+    if _SPY_CACHE["data"] and time.monotonic() - float(_SPY_CACHE["t"]) < 3600:
+        return _SPY_CACHE["data"]  # type: ignore[return-value]
+
+    def _fetch() -> list[tuple[str, float]]:
+        import yfinance as yf
+        h = yf.Ticker("SPY").history(period="2y")
+        return [(idx.date().isoformat(), float(row["Close"])) for idx, row in h.iterrows()]
+
+    try:
+        data = await asyncio.get_running_loop().run_in_executor(None, _fetch)
+    except Exception:
+        return _SPY_CACHE["data"]  # type: ignore[return-value]
+    if data:
+        _SPY_CACHE.update(t=time.monotonic(), data=data)
+    return data
+
+
+def _benchmark(equity: list[dict], spy: list[tuple[str, float]]) -> list[dict]:
+    """SPY normalized to the portfolio's starting value, sampled at equity dates."""
+    if len(equity) < 2 or not spy:
+        return []
+    dates = [d for d, _ in spy]
+
+    def spy_at(date_iso: str) -> float | None:
+        i = bisect.bisect_right(dates, date_iso) - 1
+        return spy[i][1] if i >= 0 else None
+
+    base_v = equity[0]["v"]
+    spy0 = spy_at(equity[0]["t"][:10])
+    if not spy0 or not base_v:
+        return []
+    out = []
+    for p in equity:
+        sp = spy_at(p["t"][:10])
+        if sp:
+            out.append({"t": p["t"], "v": base_v * (sp / spy0)})
+    return out
 
 
 async def _names(user_ids: list[str]) -> dict[str, dict]:
@@ -300,6 +345,9 @@ async def hq_stocks():
         return cached[1]
 
     users = await queries.get_all_portfolio_users()
+    # "Yesterday's close" baseline = last snapshot before ET midnight today.
+    et_midnight = datetime.now(ZoneInfo("America/New_York")).replace(
+        hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
@@ -310,6 +358,15 @@ async def hq_stocks():
                  ON p.discord_user = m.discord_user AND p.captured_at = m.mc""",
         )
         snaps = {r["discord_user"]: dict(r) for r in await cur.fetchall()}
+        cur2 = await db.execute(
+            """SELECT p.discord_user, p.account_value
+               FROM portfolio_snapshots p
+               JOIN (SELECT discord_user, MAX(captured_at) mc FROM portfolio_snapshots
+                     WHERE captured_at < ? GROUP BY discord_user) m
+                 ON p.discord_user = m.discord_user AND p.captured_at = m.mc""",
+            (et_midnight,),
+        )
+        prior = {r["discord_user"]: r["account_value"] for r in await cur2.fetchall()}
     names = await _names(users)
 
     traders = []
@@ -327,14 +384,20 @@ async def hq_stocks():
         ]
         open_opts = sum(1 for o in opos if o.get("net_contracts", 0))
         snap = snaps.get(uid, {})
+        av = snap.get("account_value")
+        base = prior.get(uid)
+        day_change = round(av - base, 2) if av is not None and base else None
+        day_pct = round((day_change / base) * 100, 2) if day_change is not None and base else None
         traders.append({
             "user_id": uid,
             "username": (names.get(uid) or {}).get("username") or f"Player {uid[:6]}",
-            "account_value": snap.get("account_value"),
+            "account_value": av,
             "stock_value": snap.get("stock_value"),
             "options_value": snap.get("options_value"),
             "cash": snap.get("cash"),
             "realized_pnl": realized,
+            "day_change": day_change,
+            "day_pct": day_pct,
             "positions": len(holdings) + open_opts,
             "holdings": sorted(holdings, key=lambda h: h["cost_basis"], reverse=True),
         })
@@ -407,6 +470,7 @@ async def hq_stock_trader(handle: str):
             ),
         },
         "equity": equity,
+        "benchmark": _benchmark(equity, await _spy_history()),
         "stock_holdings": stock_holdings,
         "option_positions": option_positions,
         "transactions": txns[:150],
