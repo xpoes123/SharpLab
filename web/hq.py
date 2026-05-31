@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import os
 import time
+from datetime import datetime, timezone
 
 import aiosqlite
 import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, RedirectResponse
+from pydantic import BaseModel
 
 from db import queries
 from shared.elo import championship_points
@@ -287,6 +289,58 @@ async def hq_profile(handle: str):
         "stocks": {"realized_pnl": realized, "open_positions": open_positions},
         "chess": await _chess_for_handle(who.get("username") or ""),
     }
+
+
+@router.get("/hq/pickem/open")
+async def hq_pickem_open(request: Request):
+    """Today's still-open pick'em games, with the viewer's current bet if any."""
+    sess = auth.read_session(request)
+    uid = sess["id"] if sess else None
+    now = datetime.now(timezone.utc).isoformat()
+    games = [g for g in await queries.get_unlocked_pickem_games() if g["start_time"] > now]
+    games.sort(key=lambda g: g["start_time"])
+
+    mine: dict[str, dict] = {}
+    if uid:
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT message_id, pick, stake FROM pickem_picks WHERE discord_user = ?", (uid,),
+            )
+            mine = {r["message_id"]: dict(r) for r in await cur.fetchall()}
+
+    out = []
+    for g in games:
+        my = mine.get(g["message_id"])
+        out.append({
+            "message_id": g["message_id"], "sport": g["sport"],
+            "home_team": g["home_team"], "away_team": g["away_team"],
+            "start_time": g["start_time"], "home_prob": g["home_prob"],
+            "away_prob": g["away_prob"], "odds_source": g["odds_source"],
+            "my_pick": my["pick"] if my else None, "my_stake": my["stake"] if my else None,
+        })
+    return {"authenticated": bool(uid), "games": out}
+
+
+class BetIn(BaseModel):
+    message_id: str
+    team: str
+    stake: int
+
+
+@router.post("/hq/pickem/bet")
+async def hq_pickem_bet(body: BetIn, request: Request):
+    sess = auth.read_session(request)
+    if not sess:
+        return JSONResponse({"error": "not_authenticated"}, status_code=401)
+    if body.team not in ("home", "away") or not (1 <= body.stake <= 5):
+        return JSONResponse({"error": "bad_input"}, status_code=400)
+    game = await queries.get_pickem_game(body.message_id)
+    now = datetime.now(timezone.utc).isoformat()
+    if game is None or game["locked"] or game["start_time"] <= now:
+        return JSONResponse({"error": "closed"}, status_code=409)
+    await queries.record_pickem_pick(body.message_id, sess["id"], body.team, body.stake)
+    return {"ok": True, "team": body.team, "stake": body.stake}
 
 
 @router.get("/hq/pickem/leaderboard")
