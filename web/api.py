@@ -898,11 +898,20 @@ async def analytics_stats():
         "SELECT (ts/?)*? AS day, COUNT(*) AS views, COUNT(DISTINCT sid) AS visitors FROM web_events "
         "WHERE type='pageview' AND ts > ? GROUP BY day ORDER BY day", (day, day, now - 30 * day))
 
+    # Signed-in members: who has logged in (OAuth) and how often they visit.
+    members = await _fetch_all(
+        "SELECT json_extract(data,'$.username') AS handle, "
+        "SUM(type='member_visit') AS visits, SUM(type='login') AS logins, "
+        "MAX(ts) AS last_seen, MIN(ts) AS first_seen "
+        "FROM web_events WHERE type IN ('member_visit','login') AND data IS NOT NULL "
+        "GROUP BY handle ORDER BY visits DESC, last_seen DESC LIMIT 100")
+
     return {
         "total_pageviews": total_pv, "unique_visitors": uniques,
         "pv_24h": pv_24h, "pv_7d": pv_7d, "uniq_7d": uniq_7d,
         "top_pages": top_pages, "referrers": referrers,
         "dwell": [d for d in dwell if d.get("avg_sec")], "daily": daily,
+        "members": [m for m in members if m.get("handle")],
     }
 
 
