@@ -36,6 +36,29 @@ def _ts(s: str | None) -> datetime | None:
         return None
 
 
+def _consensus_fair(payloads) -> dict | None:
+    """Average de-vigged (no-vig) home win probability across books that quote a
+    two-way moneyline. This is the market's *fair* number — the honest CLV
+    benchmark, with the bookmaker margin stripped out."""
+    from shared.odds_utils import devig_two_way
+    probs = []
+    for p in payloads:
+        if not p:
+            continue
+        h, a = p.get("ml_home"), p.get("ml_away")
+        if h is None or a is None:
+            continue
+        try:
+            hp, _ = devig_two_way(h, a)
+        except (ValueError, ZeroDivisionError):
+            continue
+        probs.append(hp)
+    if not probs:
+        return None
+    home = sum(probs) / len(probs)
+    return {"home": round(home * 100, 1), "away": round((1 - home) * 100, 1), "books": len(probs)}
+
+
 def _is_pregame(captured_at: str | None, start_time: str | None) -> bool:
     """True if a snapshot was taken at/before tip-off. Polls captured after the
     game starts are LIVE in-game prices, not the closing line — exclude them so
@@ -675,6 +698,7 @@ async def dashboard_slate(sport: str = Query("all")):
             "home_score": g.get("home_score"),
             "away_score": g.get("away_score"),
             "odds": odds_by_game.get(g["game_id"], {}),
+            "fair": _consensus_fair(odds_by_game.get(g["game_id"], {}).values()),
         })
     return {"games": result, "updated_at": now.isoformat()}
 
@@ -782,7 +806,14 @@ async def dashboard_results(sport: str = Query("all"), limit: int = Query(10, ge
         margin = g["home_score"] - g["away_score"] if g["home_score"] is not None else None
         combined = (g["home_score"] + g["away_score"]) if g["home_score"] is not None else None
 
-        entry: dict = {**g, "book": book, "open": open_line, "close": close, "close_is_real": close_is_real}
+        # Fair (no-vig) consensus across ALL books, open vs close — the honest
+        # closing-line value benchmark.
+        open_fair = _consensus_fair([v[0] for v in poll_by.values() if v])
+        close_fair = _consensus_fair([close_by.get(s) or (poll_by.get(s) or [None])[-1]
+                                      for s in set(close_by) | set(poll_by)])
+
+        entry: dict = {**g, "book": book, "open": open_line, "close": close,
+                       "close_is_real": close_is_real, "open_fair": open_fair, "close_fair": close_fair}
         if close and margin is not None:
             spread = close.get("spread")
             total = close.get("total")
