@@ -65,6 +65,55 @@ def test_cluemaster_imports_and_basic_flow() -> None:
     assert MAX_PLAYERS >= MIN_PLAYERS
 
 
+def test_qb_clean_answer_extracts_primary_and_aliases() -> None:
+    from bot.cogs._party_categories import _clean_qb_answer
+
+    name, alts = _clean_qb_answer(
+        "<b><u>L-DOPA</u></b> [accept <b><u>levodopa</u></b>]",
+        "L-DOPA [accept levodopa]",
+    )
+    assert name == "L-DOPA"
+    assert "levodopa" in alts
+
+    name, alts = _clean_qb_answer(
+        "<b><u>Parkinson</u></b>'s disease [accept any answer containing \"Parkinson\"]",
+        "Parkinson's disease [accept any answer containing \"Parkinson\"]",
+    )
+    assert name == "Parkinson's disease"
+    assert "Parkinson" in alts  # surname alias makes it guessable
+
+
+def test_qb_clean_answer_rejects_junk() -> None:
+    from bot.cogs._party_categories import _clean_qb_answer
+
+    # Bare number words make poor guess targets
+    assert _clean_qb_answer("<b><u>two</u></b>", "two") is None
+    # Too short
+    assert _clean_qb_answer("<b><u>pi</u></b>", "pi") is None
+
+
+def test_qb_science_falls_back_when_cache_empty() -> None:
+    from bot.cogs import _party_categories as pc
+    from bot.cogs._party_categories import get_category, SCIENCE_QB_KEY
+
+    pc._SCIENCE_QB_CACHE.clear()
+    _label, _emoji, items = get_category(SCIENCE_QB_KEY)
+    assert items is pc._SCIENCE_BASIC  # fallback when nothing fetched
+
+
+def test_qb_science_serves_cache_when_populated() -> None:
+    from bot.cogs import _party_categories as pc
+    from bot.cogs._party_categories import get_category, SCIENCE_QB_KEY
+
+    pc._SCIENCE_QB_CACHE.clear()
+    pc._SCIENCE_QB_CACHE.append(("Entropy", ["disorder"]))
+    try:
+        _label, _emoji, items = get_category(SCIENCE_QB_KEY)
+        assert items == [("Entropy", ["disorder"])]
+    finally:
+        pc._SCIENCE_QB_CACHE.clear()
+
+
 def test_cluemaster_total_rounds_scale_with_players() -> None:
     from bot.cogs.cluemaster import _compute_total_rounds, MAX_ROUNDS_CAP
 
