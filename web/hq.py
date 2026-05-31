@@ -179,25 +179,28 @@ async def _chess_leaderboard() -> list[dict]:
     ]
 
 
-async def _elo_champions() -> list[dict]:
-    """Best across MANY games — cumulative rating edge (rating−1000, positive
-    only) summed over every game a player is rated in, with the game count."""
-    boards = await queries.get_all_elo_leaderboards(min_games=5)
-    agg: dict[str, dict] = {}
-    for _game, lb in boards.items():
-        for entry in lb:
-            uid = entry["discord_user"]
-            a = agg.setdefault(uid, {"edge": 0.0, "games": 0})
-            a["edge"] += max(0.0, entry["rating"] - 1000.0)
-            a["games"] += 1
-    names = await _names(list(agg))
-    out = [
-        {"user_id": uid, "username": (names.get(uid) or {}).get("username") or f"Player {uid[:6]}",
-         "edge": round(a["edge"]), "games": a["games"]}
-        for uid, a in agg.items()
-    ]
-    out.sort(key=lambda x: (x["games"], x["edge"]), reverse=True)
-    return out[:10]
+async def _elo_games() -> list[dict]:
+    """One ELO leaderboard per game that has rankings, ordered by popularity."""
+    pop = await queries.get_elo_game_popularity()  # most-played first
+    boards = await queries.get_all_elo_leaderboards(min_games=1)
+    all_uids = {e["discord_user"] for lb in boards.values() for e in lb}
+    enames = await _names(list(all_uids))
+    out = []
+    for p in pop:
+        g = p["game"]
+        lb = boards.get(g, [])[:10]
+        if not lb:
+            continue
+        out.append({
+            "key": g, "plays": p["total_plays"],
+            "rows": [
+                {"username": (enames.get(e["discord_user"]) or {}).get("username") or f"Player {e['discord_user'][:6]}",
+                 "rating": round(e["rating"]), "wins": e["wins"], "losses": e["losses"],
+                 "games_played": e["games_played"]}
+                for e in lb
+            ],
+        })
+    return out
 
 
 async def _stock_leaders() -> list[dict]:
@@ -262,7 +265,7 @@ async def hq_server():
         "totals": totals,
         "casino": casino_top,
         "pickem": pickem_top,
-        "elo_champions": await _elo_champions(),
+        "elo_games": await _elo_games(),
         "stocks": await _stock_leaders(),
         "chess": await _chess_leaderboard(),
     }
