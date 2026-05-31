@@ -20,6 +20,7 @@ from discord.ext import commands, tasks
 
 from db import queries
 from shared.odds_utils import devig_two_way
+from shared.pickem_scoring import STREAK_CAP, compute_pickem_standings  # noqa: F401 (re-exported)
 
 log = logging.getLogger(__name__)
 
@@ -65,44 +66,10 @@ HOME_EMOJI = "🏠"
 SPORT_EMOJI = {"nba": "🏀", "mlb": "⚾"}
 
 MIN_PICKS_FOR_ACCURACY = 20
-STREAK_CAP = 5  # a single correct pick is worth at most this many streak points
 COLOUR = 0x1ABC9C
 
 
-# ── Pure scoring ──────────────────────────────────────────────────────────────
-
-
-def compute_pickem_standings(rows: list[dict]) -> dict[str, dict]:
-    """Aggregate ordered scored picks into per-user standings.
-
-    rows: {discord_user, correct (0/1), start_time}, ordered by user then time.
-    Returns uid -> {correct, total, accuracy, points}. Points = 1 per correct
-    plus an escalating streak bonus (1,2,3,…) capped at STREAK_CAP per pick.
-    """
-    stats: dict[str, dict] = {}
-    for r in rows:
-        uid = r["discord_user"]
-        s = stats.setdefault(
-            uid, {"correct": 0, "total": 0, "points": 0, "units": 0.0, "_streak": 0},
-        )
-        s["total"] += 1
-        stake = r.get("stake") or 1
-        # Market P&L: a `stake`-unit bet on the pick at its devigged win prob.
-        prob = (r.get("home_prob") if r.get("pick") == "home" else r.get("away_prob")) or 0.5
-        if prob <= 0:
-            prob = 0.5
-        if r["correct"]:
-            s["correct"] += 1
-            s["_streak"] += 1
-            s["points"] += min(s["_streak"], STREAK_CAP)
-            s["units"] += stake * ((1.0 / prob) - 1.0)   # profit on the winning stake
-        else:
-            s["_streak"] = 0
-            s["units"] -= stake                          # lost the staked units
-    for s in stats.values():
-        s["accuracy"] = s["correct"] / s["total"] if s["total"] else 0.0
-        s.pop("_streak", None)
-    return stats
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 
 def _winner_from_scores(home_score: int, away_score: int) -> str:
