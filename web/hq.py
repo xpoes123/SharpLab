@@ -16,7 +16,6 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from db import queries
-from shared.elo import championship_points
 from shared.pickem_scoring import compute_pickem_standings
 from web import auth
 
@@ -181,46 +180,49 @@ async def _chess_leaderboard() -> list[dict]:
 
 
 async def _elo_champions() -> list[dict]:
-    """F1-style championship points across every ELO game."""
+    """Best across MANY games — cumulative rating edge (rating−1000, positive
+    only) summed over every game a player is rated in, with the game count."""
     boards = await queries.get_all_elo_leaderboards(min_games=5)
-    points: dict[str, int] = {}
+    agg: dict[str, dict] = {}
     for _game, lb in boards.items():
-        for pos, entry in enumerate(lb, 1):
-            pts = championship_points(pos)
-            if pts == 0:
-                break
-            points[entry["discord_user"]] = points.get(entry["discord_user"], 0) + pts
-    names = await _names(list(points))
+        for entry in lb:
+            uid = entry["discord_user"]
+            a = agg.setdefault(uid, {"edge": 0.0, "games": 0})
+            a["edge"] += max(0.0, entry["rating"] - 1000.0)
+            a["games"] += 1
+    names = await _names(list(agg))
     out = [
         {"user_id": uid, "username": (names.get(uid) or {}).get("username") or f"Player {uid[:6]}",
-         "points": pts}
-        for uid, pts in points.items()
+         "edge": round(a["edge"]), "games": a["games"]}
+        for uid, a in agg.items()
     ]
-    out.sort(key=lambda x: x["points"], reverse=True)
+    out.sort(key=lambda x: (x["games"], x["edge"]), reverse=True)
     return out[:10]
 
 
 async def _stock_leaders() -> list[dict]:
-    """Top traders by realized P&L (cheap — no live price fetch)."""
+    """Top traders by current portfolio value (latest hourly snapshot)."""
     try:
         users = await queries.get_all_portfolio_users()
     except Exception:
         return []
-    rows = []
-    for uid in users:
-        try:
-            positions = await queries.get_stock_positions_full(uid)
-        except Exception:
-            continue
-        realized = sum(p.get("realized_pnl", 0) for p in positions)
-        rows.append((uid, realized))
-    names = await _names([uid for uid, _ in rows])
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT p.discord_user, p.account_value
+               FROM portfolio_snapshots p
+               JOIN (SELECT discord_user, MAX(captured_at) mc FROM portfolio_snapshots
+                     GROUP BY discord_user) m
+                 ON p.discord_user = m.discord_user AND p.captured_at = m.mc""",
+        )
+        vals = {r["discord_user"]: r["account_value"] for r in await cur.fetchall()}
+    names = await _names(users)
     out = [
         {"user_id": uid, "username": (names.get(uid) or {}).get("username") or f"Player {uid[:6]}",
-         "realized_pnl": round(pnl, 2)}
-        for uid, pnl in rows
+         "account_value": vals.get(uid)}
+        for uid in users if vals.get(uid) is not None
     ]
-    out.sort(key=lambda x: x["realized_pnl"], reverse=True)
+    out.sort(key=lambda x: x["account_value"], reverse=True)
     return out[:10]
 
 
@@ -418,12 +420,13 @@ async def hq_stock_trader(handle: str):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT captured_at, account_value, stock_value, options_value, cash "
+            "SELECT captured_at, account_value, stock_value, options_value, cash, kind "
             "FROM portfolio_snapshots WHERE discord_user = ? ORDER BY captured_at", (uid,),
         )
         snaps = [dict(r) for r in await cur.fetchall()]
     latest = snaps[-1] if snaps else {}
-    equity = [{"t": s["captured_at"], "v": s["account_value"]} for s in snaps]
+    equity = [{"t": s["captured_at"], "v": s["account_value"], "k": s["kind"]} for s in snaps]
+    live_since = next((s["captured_at"] for s in snaps if s["kind"] == "live"), None)
 
     sp = await queries.get_stock_positions_full(uid)
     stock_realized = sum(p.get("realized_pnl", 0) for p in sp)
@@ -470,6 +473,7 @@ async def hq_stock_trader(handle: str):
             ),
         },
         "equity": equity,
+        "live_since": live_since,
         "benchmark": _benchmark(equity, await _spy_history()),
         "stock_holdings": stock_holdings,
         "option_positions": option_positions,

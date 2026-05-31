@@ -201,16 +201,17 @@ function renderHome(server, me, notMember, open) {
 
 const BOARD_DEFS = [
   { key: "pickem", label: "🎯 Pick'em — Market P&L" },
-  { key: "elo", label: "🏆 ELO Champions" },
+  { key: "elo", label: "🏆 ELO — Best Across Games" },
   { key: "casino", label: "🪙 Casino — Balances" },
-  { key: "stocks", label: "📈 Stocks — Realized P&L" },
+  { key: "stocks", label: "📈 Stocks — Portfolio Value" },
   { key: "chess", label: "♟️ Hearthstone Chess" },
 ];
 
 function boardTable(server, key, myName) {
   if (key === "elo")
-    return table([{ t: "Player" }, { t: "Pts", num: true }],
-      (server.elo_champions || []).map((r) => [{ t: plink(r.username) }, { t: r.points }]));
+    return table([{ t: "Player" }, { t: "Games", num: true }, { t: "Edge", num: true }],
+      (server.elo_champions || []).map((r) => [{ t: plink(r.username) },
+        { t: r.games }, { t: "+" + r.edge, cls: "pos" }]));
   if (key === "pickem")
     return table([{ t: "Player" }, { t: "Units", num: true }, { t: "Record", num: true }],
       (server.pickem || []).map((r) => {
@@ -222,9 +223,9 @@ function boardTable(server, key, myName) {
     return table([{ t: "Player" }, { t: "Coins", num: true }],
       (server.casino || []).map((r) => [{ t: plink(r.username) }, { t: num(r.balance) }]));
   if (key === "stocks")
-    return table([{ t: "Trader" }, { t: "P&L ($)", num: true }],
+    return table([{ t: "Trader" }, { t: "Value", num: true }],
       (server.stocks || []).map((r) => [{ t: plink(r.username) },
-        { t: sign(num(r.realized_pnl)), cls: cls(r.realized_pnl) }]));
+        { t: "$" + num(r.account_value) }]));
   if (key === "chess")
     return table([{ t: "Player" }, { t: "Rating", num: true }, { t: "Record", num: true }],
       (server.chess || []).map((r) => [{ t: r.handle }, { t: r.rating },

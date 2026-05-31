@@ -22,26 +22,36 @@ async function main() {
   render(await r.json());
 }
 
-function svgChart(series, bench, h = 220) {
+function svgChart(series, bench, liveIdx, h = 220) {
   if (series.length < 2) return `<div class="muted" style="padding:28px;text-align:center">Not enough history yet — snapshots build hourly.</div>`;
   const w = 760;
+  const n = series.length;
   const allVals = series.map((p) => p.v).concat((bench || []).map((p) => p.v));
   const min = Math.min(...allVals), max = Math.max(...allVals);
   const pad = (max - min) * 0.08 || Math.abs(max) * 0.02 || 1;
   const lo = min - pad, hi = max + pad;
+  const X = (i) => (i / (n - 1)) * w;
   const Y = (v) => h - ((v - lo) / (hi - lo)) * h;
-  const poly = (arr) => arr.map((p, i) => `${((i / (arr.length - 1)) * w).toFixed(1)},${Y(p.v).toFixed(1)}`).join(" ");
-  const pts = poly(series);
-  const up = series[series.length - 1].v >= series[0].v;
+  const ptsOf = (arr, off = 0) => arr.map((p, i) => `${X(i + off).toFixed(1)},${Y(p.v).toFixed(1)}`).join(" ");
+  const up = series[n - 1].v >= series[0].v;
   const color = up ? "var(--green)" : "var(--red)";
   const fill = up ? "rgba(158,206,106,.12)" : "rgba(247,118,142,.12)";
+
+  liveIdx = Math.max(0, Math.min(n, liveIdx));
+  const backfill = series.slice(0, liveIdx);
+  const liveStart = Math.max(0, liveIdx - 1);
+  const live = series.slice(liveStart);
+  const backLine = backfill.length >= 2
+    ? `<polyline points="${ptsOf(backfill)}" fill="none" stroke="var(--muted)" stroke-width="1.5" opacity="0.45" vector-effect="non-scaling-stroke"/>` : "";
+  const liveLine = live.length >= 2
+    ? `<polyline points="${ptsOf(live, liveStart)}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/>` : "";
+  const marker = (liveIdx > 0 && liveIdx < n)
+    ? `<line x1="${X(liveIdx).toFixed(1)}" y1="0" x2="${X(liveIdx).toFixed(1)}" y2="${h}" stroke="var(--accent)" stroke-width="1" stroke-dasharray="3 3" opacity="0.7"/>` : "";
   const benchLine = (bench && bench.length >= 2)
-    ? `<polyline points="${poly(bench)}" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"/>`
-    : "";
+    ? `<polyline points="${ptsOf(bench)}" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"/>` : "";
   return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:${h}px;display:block">
-    <polygon points="0,${h} ${pts} ${w},${h}" fill="${fill}"/>
-    ${benchLine}
-    <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`;
+    <polygon points="0,${h} ${ptsOf(series)} ${w},${h}" fill="${fill}"/>
+    ${benchLine}${backLine}${marker}${liveLine}</svg>`;
 }
 
 function pctChange(arr) {
@@ -60,7 +70,9 @@ function drawChart() {
     const k = series[0].v / bench[0].v;
     benchUse = bench.map((p) => ({ t: p.t, v: p.v * k }));
   }
-  document.getElementById("chart").innerHTML = svgChart(series, benchUse);
+  let liveIdx = series.findIndex((p) => p.k === "live");
+  if (liveIdx < 0) liveIdx = series.length;  // all backfill
+  document.getElementById("chart").innerHTML = svgChart(series, benchUse, liveIdx);
 
   const d = series.length >= 2 ? series[series.length - 1].v - series[0].v : 0;
   const port = pctChange(series), spy = pctChange(bench);
@@ -90,9 +102,10 @@ function render(d) {
         ${RANGES.map(([lbl, days]) => `<button data-days="${days}" class="rangebtn${days === range ? " on" : ""}">${lbl}</button>`).join("")}
       </div>
       <div id="chart"></div>
-      <div class="muted" style="font-size:12px;margin-top:8px;display:flex;gap:16px">
+      <div class="muted" style="font-size:12px;margin-top:8px;display:flex;gap:16px;flex-wrap:wrap">
         <span><span style="color:var(--green)">━</span> Portfolio</span>
         <span><span style="color:var(--muted)">┄</span> S&P 500</span>
+        ${d.live_since ? `<span><span style="color:var(--accent)">┊</span> Live since ${fmtDate(d.live_since)} — earlier is reconstructed</span>` : ""}
       </div></div>
 
     <div class="grid" style="margin-top:16px">
