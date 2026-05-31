@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import os
+import time
 
 import aiosqlite
+import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from db import queries
+from shared.elo import championship_points
 from shared.pickem_scoring import compute_pickem_standings
 from web import auth
 
@@ -16,6 +19,10 @@ router = APIRouter(prefix="/api/v1")
 
 DB_PATH = os.environ.get("SHARPLAB_DB_PATH", "data/sharplab.db")
 WEB_BASE_URL = os.environ.get("WEB_BASE_URL", "https://sharplab.djiang.xyz")
+CHESS_API = os.environ.get("CHESS_API_BASE", "https://games.djiang.xyz/chess/api")
+
+_SERVER_CACHE: dict[str, tuple[float, dict]] = {}
+_SERVER_TTL = 30.0
 
 
 async def _names(user_ids: list[str]) -> dict[str, dict]:
@@ -100,6 +107,118 @@ async def hq_me(request: Request):
             for r in elo
         ],
     }
+
+
+async def _fetch_one(sql: str, params: tuple = ()) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(sql, params)
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def _chess_leaderboard() -> list[dict]:
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            r = await client.get(f"{CHESS_API}/leaderboard", params={"min_games": 1, "limit": 10})
+            r.raise_for_status()
+            players = r.json().get("players", [])
+    except Exception:
+        return []
+    return [
+        {"handle": p.get("handle", "?"), "rating": p.get("rating", 1000),
+         "wins": p.get("wins", 0), "losses": p.get("losses", 0), "draws": p.get("draws", 0),
+         "games_played": p.get("games_played", 0)}
+        for p in players
+    ]
+
+
+async def _elo_champions() -> list[dict]:
+    """F1-style championship points across every ELO game."""
+    boards = await queries.get_all_elo_leaderboards(min_games=5)
+    points: dict[str, int] = {}
+    for _game, lb in boards.items():
+        for pos, entry in enumerate(lb, 1):
+            pts = championship_points(pos)
+            if pts == 0:
+                break
+            points[entry["discord_user"]] = points.get(entry["discord_user"], 0) + pts
+    names = await _names(list(points))
+    out = [
+        {"user_id": uid, "username": (names.get(uid) or {}).get("username") or f"Player {uid[:6]}",
+         "points": pts}
+        for uid, pts in points.items()
+    ]
+    out.sort(key=lambda x: x["points"], reverse=True)
+    return out[:10]
+
+
+async def _stock_leaders() -> list[dict]:
+    """Top traders by realized P&L (cheap — no live price fetch)."""
+    try:
+        users = await queries.get_all_portfolio_users()
+    except Exception:
+        return []
+    rows = []
+    for uid in users:
+        try:
+            positions = await queries.get_stock_positions_full(uid)
+        except Exception:
+            continue
+        realized = sum(p.get("realized_pnl", 0) for p in positions)
+        rows.append((uid, realized))
+    names = await _names([uid for uid, _ in rows])
+    out = [
+        {"user_id": uid, "username": (names.get(uid) or {}).get("username") or f"Player {uid[:6]}",
+         "realized_pnl": round(pnl, 2)}
+        for uid, pnl in rows
+    ]
+    out.sort(key=lambda x: x["realized_pnl"], reverse=True)
+    return out[:10]
+
+
+@router.get("/hq/server")
+async def hq_server():
+    """Server-wide stats home: leaderboards across every system, cached briefly."""
+    cached = _SERVER_CACHE.get("server")
+    if cached and (time.monotonic() - cached[0]) < _SERVER_TTL:
+        return cached[1]
+
+    # Casino top
+    casino = await queries.get_casino_leaderboard(limit=10)
+    cnames = await _names([c["discord_user"] for c in casino])
+    casino_top = [
+        {"username": (cnames.get(c["discord_user"]) or {}).get("username") or f"Player {c['discord_user'][:6]}",
+         "balance": c.get("balance", 0)}
+        for c in casino
+    ]
+
+    # Pick'em top (Market P&L)
+    standings = compute_pickem_standings(await queries.get_pickem_resolved_picks())
+    pnames = await _names(list(standings))
+    pickem_top = sorted(
+        ({"username": (pnames.get(uid) or {}).get("username") or f"Player {uid[:6]}",
+          "units": round(s["units"], 1), "correct": s["correct"], "total": s["total"]}
+         for uid, s in standings.items()),
+        key=lambda x: x["units"], reverse=True,
+    )[:10]
+
+    totals = {
+        "coins": (await _fetch_one("SELECT COALESCE(SUM(balance),0) AS v FROM casino_wallets") or {}).get("v", 0),
+        "stock_traders": (await _fetch_one("SELECT COUNT(DISTINCT discord_user) AS v FROM stock_holdings WHERE shares > 0") or {}).get("v", 0),
+        "pickem_players": len(standings),
+    }
+
+    data = {
+        "totals": totals,
+        "casino": casino_top,
+        "pickem": pickem_top,
+        "elo_champions": await _elo_champions(),
+        "stocks": await _stock_leaders(),
+        "chess": await _chess_leaderboard(),
+    }
+    _SERVER_CACHE["server"] = (time.monotonic(), data)
+    return data
 
 
 @router.get("/hq/pickem/leaderboard")
