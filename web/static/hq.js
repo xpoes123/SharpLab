@@ -38,19 +38,24 @@ function pickemSection(open, loggedIn) {
     const ap = pct(g.away_prob), hp = pct(g.home_prob);
     const em = SPORT_EMOJI[g.sport] || "🏟️";
     const mine = g.my_pick
-      ? `<span class="pill">your bet: ${g.my_stake}u on ${g.my_pick === "away" ? g.away_team : g.home_team}</span>`
+      ? `<span class="pill">🔒 locked: ${g.my_stake}u on ${g.my_pick === "away" ? g.away_team : g.home_team}</span>`
       : "";
-    const controls = loggedIn
-      ? `<div class="teamrow" data-mid="${g.message_id}">
+    let controls;
+    if (!loggedIn) {
+      controls = `<div class="teamrow muted">✈️ ${g.away_team} ${ap} · 🏠 ${g.home_team} ${hp}
+        — <a href="/api/v1/auth/discord/login">sign in to bet</a></div>`;
+    } else if (g.my_pick) {
+      controls = `<div class="teamrow muted">Bet locked — bets are final.</div>`;
+    } else {
+      controls = `<div class="teamrow" data-mid="${g.message_id}">
            <button class="btn ghost team" data-team="away">✈️ ${g.away_team} ${ap}</button>
            <button class="btn ghost team" data-team="home">🏠 ${g.home_team} ${hp}</button>
            <span class="stakebtns" data-stakes hidden>
              ${[1, 2, 3, 4, 5].map((n) => `<button data-stake="${n}">${n}u</button>`).join("")}
            </span>
            <span class="betmsg muted"></span>
-         </div>`
-      : `<div class="teamrow muted">✈️ ${g.away_team} ${ap} · 🏠 ${g.home_team} ${hp}
-           — <a href="/api/v1/auth/discord/login">sign in to bet</a></div>`;
+         </div>`;
+    }
     return `<div class="gamecard">
       <div style="margin-bottom:8px">${em} <strong>${g.away_team}</strong> @ <strong>${g.home_team}</strong> ${mine}</div>
       ${controls}</div>`;
@@ -79,8 +84,14 @@ function wireBetting() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message_id: row.dataset.mid, team, stake: Number(stakeBtn.dataset.stake) }),
       });
-      msg.textContent = r.ok ? `✅ ${stakeBtn.dataset.stake}u in` : "✖ closed";
-      msg.className = r.ok ? "betmsg pos" : "betmsg neg";
+      if (r.ok) {
+        row.innerHTML = `<span class="pos">🔒 Locked ${stakeBtn.dataset.stake}u — bets are final.</span>`;
+      } else {
+        const err = (await r.json().catch(() => ({}))).error;
+        msg.textContent = err === "already_bet" ? "✖ already bet — final" : "✖ closed";
+        msg.className = "betmsg neg";
+        row.querySelectorAll("button").forEach((b) => (b.disabled = true));
+      }
     }
   });
 }

@@ -101,21 +101,18 @@ def test_winner_from_scores():
 # ── DB lifecycle ──────────────────────────────────────────────────────────────
 
 
-def test_pick_record_change_remove(tmp_db):
+def test_pick_is_final(tmp_db):
     async def go():
         await _queries.add_pickem_game("m1", "g1", "nba", "Home", "Away", "2026-01-01T00:00:00Z", "2026-01-01")
-        await _queries.record_pickem_pick("m1", "u1", "home")
-        first = await _queries.get_pickem_pick("m1", "u1")
-        await _queries.record_pickem_pick("m1", "u1", "away")  # change vote
-        changed = await _queries.get_pickem_pick("m1", "u1")
-        await _queries.remove_pickem_pick("m1", "u1")
-        gone = await _queries.get_pickem_pick("m1", "u1")
-        return first, changed, gone
+        first_ok = await _queries.record_pickem_pick("m1", "u1", "home", 3)
+        again = await _queries.record_pickem_pick("m1", "u1", "away", 5)  # rejected — bets final
+        full = await _queries.get_pickem_pick_full("m1", "u1")
+        return first_ok, again, full
 
-    first, changed, gone = _run(go())
-    assert first == "home"
-    assert changed == "away"  # no duplicate row, vote updated
-    assert gone is None
+    first_ok, again, full = _run(go())
+    assert first_ok is True           # first bet locks in
+    assert again is False             # second attempt rejected, no overwrite
+    assert full == {"pick": "home", "stake": 3}  # original bet unchanged
 
 
 def test_resolve_scores_picks_and_counts(tmp_db):
