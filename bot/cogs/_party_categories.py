@@ -7,10 +7,16 @@ them up automatically.
 
 from __future__ import annotations
 
+import logging
+import re
 import unicodedata
 from difflib import SequenceMatcher
 
+import httpx
+
 from bot.cogs.nbaguess import NBA_PLAYERS_DATA
+
+log = logging.getLogger(__name__)
 
 
 # ── Category data ────────────────────────────────────────────────────────────
@@ -276,12 +282,87 @@ _SCIENCE_BASIC: list[CategoryItem] = [
 ]
 
 
+# ── QBReader science (live, cached) ──────────────────────────────────────────
+#
+# "Science (Quiz Bowl)" pulls real answerlines from QBReader's bonus database
+# (qbreader.org). Answers are fetched into a module cache at startup and
+# periodically refreshed (see CluemasterCog); per-round picks read the cache
+# synchronously. If the cache is empty (QBReader down / not yet loaded) the
+# category falls back to the static Basic Science bank.
+
+SCIENCE_QB_KEY = "science_qb"
+_QB_BONUS_URL = "https://www.qbreader.org/api/random-bonus"
+_SCIENCE_QB_CACHE: list[CategoryItem] = []
+
+# Bonus/tossup answers that are bare numbers make poor guess targets.
+_QB_STOPWORDS = {
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
+    "nine", "ten", "eleven", "twelve", "infinity",
+}
+
+
+def _clean_qb_answer(html_answer: str, sanitized_answer: str) -> CategoryItem | None:
+    """Turn a QBReader answerline into (primary, [accepted alts]).
+
+    The primary answer is the text before any ``[accept …]`` directive; the
+    bold/underlined spans in the HTML become aliases (e.g. "Parkinson" for
+    "Parkinson's disease"). Returns None for answers that won't play well.
+    """
+    name = re.split(r"[\[(]", sanitized_answer, maxsplit=1)[0]
+    name = re.sub(r"<.*?>", "", name).replace("_", "").strip().strip(".,;:\"'").strip()
+    if not name or len(name) > 40:
+        return None
+    norm = re.sub(r"[^a-z0-9]", "", name.lower())
+    if len(norm) < 3 or norm in _QB_STOPWORDS:
+        return None
+    alts: list[str] = []
+    for span in re.findall(r"<b><u>(.*?)</u></b>", html_answer):
+        alt = re.sub(r"<.*?>", "", span).replace("_", "").strip().strip(".,;:\"'")
+        if alt and alt.lower() != name.lower() and alt not in alts:
+            alts.append(alt)
+    return (name, alts)
+
+
+async def refresh_science_answers(target: int = 200, max_requests: int = 5) -> int:
+    """Fetch science answers from QBReader into the module cache. Returns count.
+
+    Best-effort: on any error the existing cache is left untouched so a failed
+    refresh never empties a good cache.
+    """
+    collected: dict[str, CategoryItem] = {}
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            for _ in range(max_requests):
+                resp = await client.get(
+                    _QB_BONUS_URL, params={"categories": "Science", "number": 30},
+                )
+                resp.raise_for_status()
+                for bonus in resp.json().get("bonuses", []):
+                    answers = bonus.get("answers", [])
+                    sanitized = bonus.get("answers_sanitized", [])
+                    for html_a, san_a in zip(answers, sanitized):
+                        item = _clean_qb_answer(html_a, san_a)
+                        if item:
+                            collected[item[0].lower()] = item
+                if len(collected) >= target:
+                    break
+    except Exception:
+        log.exception("refresh_science_answers: QBReader fetch failed")
+        return len(_SCIENCE_QB_CACHE)
+    if collected:
+        _SCIENCE_QB_CACHE.clear()
+        _SCIENCE_QB_CACHE.extend(collected.values())
+    return len(_SCIENCE_QB_CACHE)
+
+
 CATEGORIES: dict[str, tuple[str, str, list[CategoryItem]]] = {
     # key -> (display_name, emoji, items)
     "nba": ("NBA Players", "\U0001f3c0", _nba_items()),
     "nfl": ("NFL Players", "\U0001f3c8", _NFL_PLAYERS),
     "mlb": ("MLB Players", "\U000026be", _MLB_PLAYERS),
     "science_basic": ("Basic Science", "\U0001f9ea", _SCIENCE_BASIC),
+    # items filled live from QBReader; empty placeholder so it lists in the menu
+    "science_qb": ("Science (Quiz Bowl)", "\U0001f52c", []),
     "celebrities": ("Celebrities", "\U0001f31f", _CELEBRITIES),
     "animals": ("Animals", "\U0001f981", _ANIMALS),
     "food": ("Food & Drink", "\U0001f354", _FOOD),
@@ -340,4 +421,9 @@ def category_options(default_key: str = DEFAULT_CATEGORY) -> list[tuple[str, str
 
 
 def get_category(key: str) -> tuple[str, str, list[CategoryItem]]:
+    if key == SCIENCE_QB_KEY:
+        label, emoji, _ = CATEGORIES[SCIENCE_QB_KEY]
+        # Live cache, or fall back to the static Basic Science bank if empty.
+        items = _SCIENCE_QB_CACHE or _SCIENCE_BASIC
+        return label, emoji, items
     return CATEGORIES.get(key, CATEGORIES[DEFAULT_CATEGORY])

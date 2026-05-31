@@ -16,11 +16,12 @@ from dataclasses import dataclass, field
 
 import discord
 from discord import ui
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from bot.cogs._elo_helpers import fmt_elo_change, update_elo_multiplayer
 from bot.cogs._party_categories import (
     CATEGORIES, DEFAULT_CATEGORY, category_options, check_answer, get_category,
+    refresh_science_answers,
 )
 
 log = logging.getLogger(__name__)
@@ -662,6 +663,23 @@ class CluemasterCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.active_tables: dict[int, CMTable] = {}
+
+    async def cog_load(self) -> None:
+        # Populate the QBReader science cache shared by cluemaster + imposter.
+        # First iteration runs immediately, then every 6 hours.
+        self._refresh_science.start()
+
+    async def cog_unload(self) -> None:
+        self._refresh_science.cancel()
+
+    @tasks.loop(hours=6)
+    async def _refresh_science(self) -> None:
+        n = await refresh_science_answers()
+        log.info("cluemaster: QBReader science cache holds %d answers", n)
+
+    @_refresh_science.before_loop
+    async def _before_refresh_science(self) -> None:
+        await self.bot.wait_until_ready()
 
     def _is_replaceable(self, table: CMTable) -> tuple[bool, int]:
         """Mirror crash.py: replaceable if closed, or task dead, or idle 90s+."""
