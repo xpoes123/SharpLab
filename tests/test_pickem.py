@@ -61,6 +61,18 @@ def test_market_pnl_rewards_underdogs():
     assert s["U"]["units"] > s["F"]["units"]
 
 
+def test_market_pnl_scales_with_stake():
+    # 3-unit bet on a 25% underdog that wins → 3 × (1/0.25 − 1) = +9u
+    rows = [{"discord_user": "U", "correct": 1, "pick": "away",
+             "home_prob": 0.75, "away_prob": 0.25, "stake": 3}]
+    s = compute_pickem_standings(rows)
+    assert s["U"]["units"] == 9.0
+    # 5-unit losing bet costs the full stake
+    rows = [{"discord_user": "L", "correct": 0, "pick": "home",
+             "home_prob": 0.9, "away_prob": 0.1, "stake": 5}]
+    assert compute_pickem_standings(rows)["L"]["units"] == -5.0
+
+
 def test_market_pnl_loss_costs_a_unit():
     rows = [{"discord_user": "X", "correct": 0, "pick": "home", "home_prob": 0.9, "away_prob": 0.1}]
     s = compute_pickem_standings(rows)

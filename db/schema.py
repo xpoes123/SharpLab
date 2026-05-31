@@ -407,6 +407,7 @@ CREATE TABLE IF NOT EXISTS pickem_picks (
     message_id   TEXT NOT NULL,
     discord_user TEXT NOT NULL,
     pick         TEXT NOT NULL CHECK(pick IN ('home', 'away')),
+    stake        INTEGER NOT NULL DEFAULT 1,   -- 1-5 units wagered
     picked_at    TEXT NOT NULL,
     correct      INTEGER,            -- NULL until resolved, then 0/1
     PRIMARY KEY (message_id, discord_user)
@@ -662,3 +663,9 @@ async def init_db() -> None:
                 await db.commit()
             except Exception:
                 pass
+        # Migration: add stake to pickem_picks (1-5 units)
+        try:
+            await db.execute("ALTER TABLE pickem_picks ADD COLUMN stake INTEGER NOT NULL DEFAULT 1")
+            await db.commit()
+        except Exception:
+            pass

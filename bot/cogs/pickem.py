@@ -86,7 +86,8 @@ def compute_pickem_standings(rows: list[dict]) -> dict[str, dict]:
             uid, {"correct": 0, "total": 0, "points": 0, "units": 0.0, "_streak": 0},
         )
         s["total"] += 1
-        # Market P&L: a 1-unit bet on the pick at its devigged win prob.
+        stake = r.get("stake") or 1
+        # Market P&L: a `stake`-unit bet on the pick at its devigged win prob.
         prob = (r.get("home_prob") if r.get("pick") == "home" else r.get("away_prob")) or 0.5
         if prob <= 0:
             prob = 0.5
@@ -94,10 +95,10 @@ def compute_pickem_standings(rows: list[dict]) -> dict[str, dict]:
             s["correct"] += 1
             s["_streak"] += 1
             s["points"] += min(s["_streak"], STREAK_CAP)
-            s["units"] += (1.0 / prob) - 1.0   # profit on the winning unit
+            s["units"] += stake * ((1.0 / prob) - 1.0)   # profit on the winning stake
         else:
             s["_streak"] = 0
-            s["units"] -= 1.0                  # lost the staked unit
+            s["units"] -= stake                          # lost the staked units
     for s in stats.values():
         s["accuracy"] = s["correct"] / s["total"] if s["total"] else 0.0
         s.pop("_streak", None)
@@ -242,19 +243,107 @@ class LeaderboardView(ui.View):
                 pass
 
 
+# ── Vote buttons (stake 1-5 units) ───────────────────────────────────────────
+
+STAKE_OPTIONS = (1, 2, 3, 4, 5)
+
+
+def _potential(stake: int, prob: float | None) -> str:
+    p = prob or 0.5
+    return f"win **+{stake * ((1.0 / p) - 1.0):.1f}u** / lose **-{stake}u**"
+
+
+async def _game_open(message_id: str) -> dict | None:
+    """Return the game row if it's still accepting bets, else None."""
+    game = await queries.get_pickem_game(message_id)
+    now = datetime.now(timezone.utc).isoformat()
+    if game is None or game["locked"] or game["start_time"] <= now:
+        return None
+    return game
+
+
+class StakeButton(ui.Button):
+    def __init__(self, message_id: str, team: str, team_name: str, n: int) -> None:
+        super().__init__(label=f"{n}u", style=discord.ButtonStyle.success)
+        self.message_id = message_id
+        self.team = team
+        self.team_name = team_name
+        self.n = n
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        game = await _game_open(self.message_id)
+        if game is None:
+            await interaction.response.edit_message(content="🔒 Voting is closed for this game.", view=None)
+            return
+        await queries.record_pickem_pick(self.message_id, str(interaction.user.id), self.team, self.n)
+        prob = game["away_prob"] if self.team == "away" else game["home_prob"]
+        await interaction.response.edit_message(
+            content=f"✅ Bet **{self.n}u** on **{self.team_name}** — {_potential(self.n, prob)} when it resolves.",
+            view=None,
+        )
+
+
+class StakeView(ui.View):
+    def __init__(self, message_id: str, team: str, team_name: str) -> None:
+        super().__init__(timeout=120)
+        for n in STAKE_OPTIONS:
+            self.add_item(StakeButton(message_id, team, team_name, n))
+
+
+class TeamButton(ui.Button):
+    def __init__(self, message_id: str, team: str, team_name: str, emoji: str) -> None:
+        super().__init__(
+            label=team_name[:76], emoji=emoji, style=discord.ButtonStyle.primary,
+            custom_id=f"pkm:{message_id}:{team}",
+        )
+        self.message_id = message_id
+        self.team = team
+        self.team_name = team_name
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        game = await _game_open(self.message_id)
+        if game is None:
+            await interaction.response.send_message("🔒 Voting is closed for this game.", ephemeral=True)
+            return
+        prob = game["away_prob"] if self.team == "away" else game["home_prob"]
+        pct = f" (market win% {prob * 100:.0f}%)" if prob else ""
+        await interaction.response.send_message(
+            f"**{self.team_name}** to win{pct} — choose your stake (1–5 units):",
+            view=StakeView(self.message_id, self.team, self.team_name),
+            ephemeral=True,
+        )
+
+
+class GamePickView(ui.View):
+    """Persistent vote view — one per game message. Re-registered on startup."""
+
+    def __init__(self, message_id: str, away_team: str, home_team: str) -> None:
+        super().__init__(timeout=None)
+        self.add_item(TeamButton(message_id, "away", away_team, AWAY_EMOJI))
+        self.add_item(TeamButton(message_id, "home", home_team, HOME_EMOJI))
+
+
 # ── Cog ──────────────────────────────────────────────────────────────────────
 
 
 class PickemCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-        self._votable: set[str] = set()  # message ids currently accepting votes
 
     async def cog_load(self) -> None:
+        # Re-register persistent vote views for games still open, so buttons keep
+        # working across restarts.
+        now = datetime.now(timezone.utc).isoformat()
         try:
-            self._votable = {g["message_id"] for g in await queries.get_unlocked_pickem_games()}
+            for g in await queries.get_unlocked_pickem_games():
+                if g["start_time"] <= now:
+                    continue
+                self.bot.add_view(
+                    GamePickView(g["message_id"], g["away_team"], g["home_team"]),
+                    message_id=int(g["message_id"]),
+                )
         except Exception:
-            log.exception("pickem: failed to warm votable cache")
+            log.exception("pickem: failed to re-register vote views")
         self.post_loop.start()
         self.lock_loop.start()
         self.resolve_loop.start()
@@ -347,35 +436,35 @@ class PickemCog(commands.Cog):
 
         await channel.send(
             f"📋 **Daily Pick'em — {today}**\n"
-            f"React {AWAY_EMOJI} for the away team or {HOME_EMOJI} for the home team. "
-            "Each game locks at tip-off!"
+            "Tap a team, then stake **1–5 units**. Everyone starts at 0u and can go "
+            "negative — beat the market to climb the board. Each game locks at tip-off!"
         )
         for g in games:
             if await queries.pickem_game_exists(g.game_id, today):
                 continue
             if await queries.get_game_scores(g.game_id) is not None:
                 continue  # already final earlier today — skip voting
-            gd = {
+            await self._post_game(channel, {
                 "game_id": g.game_id, "sport": g.sport,
                 "home_team": g.home_team, "away_team": g.away_team,
                 "start_time": g.start_time_utc_iso,
-            }
-            probs = await _win_probs(g.game_id)
-            if probs:
-                gd["home_prob"], gd["away_prob"], gd["odds_source"] = probs
-            try:
-                msg = await channel.send(_game_message(gd))
-                await msg.add_reaction(AWAY_EMOJI)
-                await msg.add_reaction(HOME_EMOJI)
-            except discord.HTTPException:
-                log.exception("pickem: failed to post game %s", g.game_id)
-                continue
-            await queries.add_pickem_game(
-                str(msg.id), g.game_id, g.sport, g.home_team, g.away_team,
-                g.start_time_utc_iso, today,
-                gd.get("home_prob"), gd.get("away_prob"), gd.get("odds_source"),
-            )
-            self._votable.add(str(msg.id))
+            }, today)
+
+    async def _post_game(self, channel: discord.TextChannel, gd: dict, posted_date: str) -> None:
+        probs = await _win_probs(gd["game_id"])
+        if probs:
+            gd["home_prob"], gd["away_prob"], gd["odds_source"] = probs
+        try:
+            msg = await channel.send(_game_message(gd))
+            await msg.edit(view=GamePickView(str(msg.id), gd["away_team"], gd["home_team"]))
+        except discord.HTTPException:
+            log.exception("pickem: failed to post game %s", gd["game_id"])
+            return
+        await queries.add_pickem_game(
+            str(msg.id), gd["game_id"], gd["sport"], gd["home_team"], gd["away_team"],
+            gd["start_time"], posted_date,
+            gd.get("home_prob"), gd.get("away_prob"), gd.get("odds_source"),
+        )
 
     # ── Lock + resolve loops ─────────────────────────────────────────────────
 
@@ -392,11 +481,10 @@ class PickemCog(commands.Cog):
             if g["start_time"] > now:
                 continue
             await queries.lock_pickem_game(g["message_id"])
-            self._votable.discard(g["message_id"])
             if channel is not None:
                 try:
                     await channel.get_partial_message(int(g["message_id"])).edit(
-                        content=_game_message(g, locked=True),
+                        content=_game_message(g, locked=True), view=None,
                     )
                 except discord.HTTPException:
                     pass
@@ -420,18 +508,17 @@ class PickemCog(commands.Cog):
             home_score, away_score = scores
             winner = _winner_from_scores(home_score, away_score)
             await queries.resolve_pickem_game(g["message_id"], winner)
-            self._votable.discard(g["message_id"])
             if channel is not None:
                 g["winner"] = winner
                 counts = await queries.get_pickem_vote_counts(g["message_id"])
                 result = (
                     f"✅ **{g['home_team'] if winner == 'home' else g['away_team']}** won "
-                    f"{home_score}-{away_score} · votes {AWAY_EMOJI} {counts.get('away', 0)} "
+                    f"{home_score}-{away_score} · bets {AWAY_EMOJI} {counts.get('away', 0)} "
                     f"/ {HOME_EMOJI} {counts.get('home', 0)}"
                 )
                 try:
                     await channel.get_partial_message(int(g["message_id"])).edit(
-                        content=_game_message(g, result=result),
+                        content=_game_message(g, result=result), view=None,
                     )
                 except discord.HTTPException:
                     pass
@@ -439,50 +526,6 @@ class PickemCog(commands.Cog):
     @resolve_loop.before_loop
     async def _before_resolve(self) -> None:
         await self.bot.wait_until_ready()
-
-    # ── Reaction voting ──────────────────────────────────────────────────────
-
-    @commands.Cog.listener()
-    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
-        if self.bot.user and payload.user_id == self.bot.user.id:
-            return
-        mid = str(payload.message_id)
-        if mid not in self._votable:
-            return
-        emoji = str(payload.emoji)
-        if emoji not in (AWAY_EMOJI, HOME_EMOJI):
-            return
-        game = await queries.get_pickem_game(mid)
-        if game is None:
-            return
-        now = datetime.now(timezone.utc).isoformat()
-        if game["locked"] or game["start_time"] <= now:
-            return
-        pick = "away" if emoji == AWAY_EMOJI else "home"
-        await queries.record_pickem_pick(mid, str(payload.user_id), pick)
-        # Single choice: remove their reaction on the other team.
-        opp = HOME_EMOJI if pick == "away" else AWAY_EMOJI
-        channel = self.bot.get_channel(payload.channel_id)
-        if isinstance(channel, discord.TextChannel):
-            try:
-                await channel.get_partial_message(payload.message_id).remove_reaction(
-                    opp, discord.Object(id=payload.user_id),
-                )
-            except discord.HTTPException:
-                pass
-
-    @commands.Cog.listener()
-    async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent) -> None:
-        mid = str(payload.message_id)
-        if mid not in self._votable:
-            return
-        emoji = str(payload.emoji)
-        if emoji not in (AWAY_EMOJI, HOME_EMOJI):
-            return
-        team = "away" if emoji == AWAY_EMOJI else "home"
-        current = await queries.get_pickem_pick(mid, str(payload.user_id))
-        if current == team:  # they removed their actual vote (not the cleanup removal)
-            await queries.remove_pickem_pick(mid, str(payload.user_id))
 
     # ── Commands ─────────────────────────────────────────────────────────────
 

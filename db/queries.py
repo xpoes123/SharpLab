@@ -3513,14 +3513,17 @@ async def resolve_pickem_game(message_id: str, winner: str) -> None:
         await db.commit()
 
 
-async def record_pickem_pick(message_id: str, discord_user: str, pick: str) -> None:
+async def record_pickem_pick(
+    message_id: str, discord_user: str, pick: str, stake: int = 1,
+) -> None:
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            """INSERT INTO pickem_picks (message_id, discord_user, pick, picked_at)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(message_id, discord_user) DO UPDATE SET pick = excluded.pick""",
-            (message_id, discord_user, pick, now),
+            """INSERT INTO pickem_picks (message_id, discord_user, pick, stake, picked_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(message_id, discord_user)
+               DO UPDATE SET pick = excluded.pick, stake = excluded.stake""",
+            (message_id, discord_user, pick, stake, now),
         )
         await db.commit()
 
@@ -3584,7 +3587,7 @@ async def get_pickem_resolved_picks() -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            """SELECT p.discord_user, p.correct, p.pick, g.start_time,
+            """SELECT p.discord_user, p.correct, p.pick, p.stake, g.start_time,
                       g.home_prob, g.away_prob
                FROM pickem_picks p JOIN pickem_games g ON p.message_id = g.message_id
                WHERE p.correct IS NOT NULL
