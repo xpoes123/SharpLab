@@ -396,7 +396,10 @@ CREATE TABLE IF NOT EXISTS pickem_games (
     posted_date  TEXT NOT NULL,      -- ET date YYYY-MM-DD (one post per game/day)
     locked       INTEGER NOT NULL DEFAULT 0,
     resolved     INTEGER NOT NULL DEFAULT 0,
-    winner       TEXT                -- 'home' | 'away' once resolved
+    winner       TEXT,               -- 'home' | 'away' once resolved
+    home_prob    REAL,               -- fair win prob (devigged) at post time
+    away_prob    REAL,
+    odds_source  TEXT                -- 'kalshi' | bookmaker key
 );
 CREATE INDEX IF NOT EXISTS idx_pickem_games_state ON pickem_games(locked, resolved);
 
@@ -652,3 +655,10 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        # Migration: add win-probability columns to pickem_games
+        for col in ("home_prob REAL", "away_prob REAL", "odds_source TEXT"):
+            try:
+                await db.execute(f"ALTER TABLE pickem_games ADD COLUMN {col}")
+                await db.commit()
+            except Exception:
+                pass

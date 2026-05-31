@@ -9,6 +9,7 @@ accuracy, or streak points.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -18,8 +19,40 @@ from discord import app_commands, ui
 from discord.ext import commands, tasks
 
 from db import queries
+from shared.odds_utils import devig_two_way
 
 log = logging.getLogger(__name__)
+
+# Win-prob source preference: Kalshi first, then sharp books, then anything.
+_ODDS_PREFERENCE = ("kalshi", "pinnacle", "fanduel", "draftkings", "fanatics", "betmgm")
+
+
+async def _win_probs(game_id: str) -> tuple[float, float, str] | None:
+    """Fair (home, away) win prob + source for a game, devigged from the best
+    available two-sided moneyline (Kalshi preferred). None if unavailable."""
+    try:
+        snaps = await queries.get_latest_snapshots_for_game(game_id)
+    except Exception:
+        log.exception("pickem: snapshot fetch failed for %s", game_id)
+        return None
+    by_source: dict[str, tuple[int, int]] = {}
+    for s in snaps:
+        payload = s.payload
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except Exception:
+                continue
+        if not isinstance(payload, dict):
+            continue
+        mh, ma = payload.get("ml_home"), payload.get("ml_away")
+        if mh and ma:
+            by_source[s.source] = (int(mh), int(ma))
+    if not by_source:
+        return None
+    src = next((s for s in _ODDS_PREFERENCE if s in by_source), next(iter(by_source)))
+    hp, ap = devig_two_way(*by_source[src])
+    return hp, ap, src
 
 ET = ZoneInfo("America/New_York")
 POST_TIME = time(hour=10, minute=0, tzinfo=ET)
@@ -49,14 +82,22 @@ def compute_pickem_standings(rows: list[dict]) -> dict[str, dict]:
     stats: dict[str, dict] = {}
     for r in rows:
         uid = r["discord_user"]
-        s = stats.setdefault(uid, {"correct": 0, "total": 0, "points": 0, "_streak": 0})
+        s = stats.setdefault(
+            uid, {"correct": 0, "total": 0, "points": 0, "units": 0.0, "_streak": 0},
+        )
         s["total"] += 1
+        # Market P&L: a 1-unit bet on the pick at its devigged win prob.
+        prob = (r.get("home_prob") if r.get("pick") == "home" else r.get("away_prob")) or 0.5
+        if prob <= 0:
+            prob = 0.5
         if r["correct"]:
             s["correct"] += 1
             s["_streak"] += 1
             s["points"] += min(s["_streak"], STREAK_CAP)
+            s["units"] += (1.0 / prob) - 1.0   # profit on the winning unit
         else:
             s["_streak"] = 0
+            s["units"] -= 1.0                  # lost the staked unit
     for s in stats.values():
         s["accuracy"] = s["correct"] / s["total"] if s["total"] else 0.0
         s.pop("_streak", None)
@@ -79,14 +120,24 @@ def _fmt_et_time(start_time_iso: str) -> str:
 # ── Message / embed builders ─────────────────────────────────────────────────
 
 
+def _odds_line(game: dict) -> str:
+    hp, ap = game.get("home_prob"), game.get("away_prob")
+    if hp is None or ap is None:
+        return ""
+    src = game.get("odds_source") or "market"
+    label = "Kalshi" if src == "kalshi" else src
+    return f"\n📊 win%: {game['away_team']} {ap * 100:.0f}% · {game['home_team']} {hp * 100:.0f}% ({label})"
+
+
 def _game_message(game: dict, *, locked: bool = False, result: str | None = None) -> str:
     emoji = SPORT_EMOJI.get(game["sport"], "🏟️")
     head = f"{emoji} **{game['away_team']}** {AWAY_EMOJI} @ {HOME_EMOJI} **{game['home_team']}**"
+    odds = _odds_line(game)
     if result:
-        return f"{head}\n{result}"
+        return f"{head}{odds}\n{result}"
     if locked:
-        return f"{head}\n🔒 Voting closed — game underway."
-    return f"{head}\n🕒 {_fmt_et_time(game['start_time'])} — react to pick a winner!"
+        return f"{head}{odds}\n🔒 Voting closed — game underway."
+    return f"{head}{odds}\n🕒 {_fmt_et_time(game['start_time'])} — react to pick a winner!"
 
 
 def _result_line(game: dict, counts: dict[str, int]) -> str:
@@ -99,7 +150,10 @@ def _result_line(game: dict, counts: dict[str, int]) -> str:
 
 
 class LeaderboardView(ui.View):
-    MODES = [("Total Correct", "correct"), ("Accuracy", "accuracy"), ("Streak Points", "points")]
+    MODES = [
+        ("Total Correct", "correct"), ("Accuracy", "accuracy"),
+        ("Streak Points", "points"), ("Market P&L", "units"),
+    ]
 
     def __init__(self, bot: commands.Bot, standings: dict[str, dict]) -> None:
         super().__init__(timeout=180)
@@ -124,6 +178,8 @@ class LeaderboardView(ui.View):
         elif self.mode == "accuracy":
             items = [kv for kv in items if kv[1]["total"] >= MIN_PICKS_FOR_ACCURACY]
             items.sort(key=lambda kv: (kv[1]["accuracy"], kv[1]["correct"]), reverse=True)
+        elif self.mode == "units":
+            items.sort(key=lambda kv: (kv[1]["units"], kv[1]["correct"]), reverse=True)
         else:
             items.sort(key=lambda kv: (kv[1]["points"], kv[1]["correct"]), reverse=True)
         return items[:15]
@@ -148,6 +204,8 @@ class LeaderboardView(ui.View):
                 stat = f"**{s['correct']}** correct ({acc})"
             elif self.mode == "accuracy":
                 stat = f"**{acc}** ({s['correct']}/{s['total']})"
+            elif self.mode == "units":
+                stat = f"**{s['units']:+.1f}u** ({s['correct']}/{s['total']})"
             else:
                 stat = f"**{s['points']}** pts ({s['correct']} correct)"
             lines.append(f"{prefix} **{name}** — {stat}")
@@ -167,6 +225,11 @@ class LeaderboardView(ui.View):
     @ui.button(label="Streak Points", style=discord.ButtonStyle.secondary)
     async def pts_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
         self.mode = "points"
+        await interaction.response.edit_message(embed=await self.embed(), view=self)
+
+    @ui.button(label="Market P&L", style=discord.ButtonStyle.secondary)
+    async def units_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        self.mode = "units"
         await interaction.response.edit_message(embed=await self.embed(), view=self)
 
     async def on_timeout(self) -> None:
@@ -297,6 +360,9 @@ class PickemCog(commands.Cog):
                 "home_team": g.home_team, "away_team": g.away_team,
                 "start_time": g.start_time_utc_iso,
             }
+            probs = await _win_probs(g.game_id)
+            if probs:
+                gd["home_prob"], gd["away_prob"], gd["odds_source"] = probs
             try:
                 msg = await channel.send(_game_message(gd))
                 await msg.add_reaction(AWAY_EMOJI)
@@ -305,7 +371,9 @@ class PickemCog(commands.Cog):
                 log.exception("pickem: failed to post game %s", g.game_id)
                 continue
             await queries.add_pickem_game(
-                str(msg.id), g.game_id, g.sport, g.home_team, g.away_team, g.start_time, today,
+                str(msg.id), g.game_id, g.sport, g.home_team, g.away_team,
+                g.start_time_utc_iso, today,
+                gd.get("home_prob"), gd.get("away_prob"), gd.get("odds_source"),
             )
             self._votable.add(str(msg.id))
 
