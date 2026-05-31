@@ -669,3 +669,15 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        # Migration: site analytics events (cookieless pageviews/duration for /hq/analytics)
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS web_events ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, sid TEXT, "
+                "type TEXT NOT NULL, page TEXT, ref TEXT, ua TEXT, ip_hash TEXT, data TEXT)"
+            )
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_web_events_ts ON web_events(ts)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_web_events_type ON web_events(type)")
+            await db.commit()
+        except Exception:
+            pass
