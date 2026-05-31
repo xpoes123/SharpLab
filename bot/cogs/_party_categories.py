@@ -155,9 +155,61 @@ _OBJECTS: list[CategoryItem] = [
 ]
 
 
+# Curated well-known NFL players (current stars + a few all-time greats), kept
+# static like NBA — the live ESPN roster dict in roster.py is async-populated
+# and full of obscure depth-chart names that don't play well as guess targets.
+# Last-name matching in check_answer handles surname-only guesses; aliases add
+# nicknames and accent/punctuation-free spellings.
+_NFL_PLAYERS: list[CategoryItem] = [
+    # Quarterbacks
+    ("Patrick Mahomes", ["Mahomes"]), ("Josh Allen", []), ("Joe Burrow", []),
+    ("Justin Herbert", []), ("Lamar Jackson", []), ("Jalen Hurts", []),
+    ("Dak Prescott", []), ("Tua Tagovailoa", ["Tua"]), ("Trevor Lawrence", []),
+    ("Aaron Rodgers", []), ("Matthew Stafford", []), ("Jared Goff", []),
+    ("Brock Purdy", []), ("Jordan Love", []), ("C.J. Stroud", ["CJ Stroud"]),
+    ("Caleb Williams", []), ("Jayden Daniels", []), ("Kyler Murray", []),
+    ("Baker Mayfield", []), ("Russell Wilson", []),
+    # Running backs
+    ("Christian McCaffrey", ["CMC", "McCaffrey"]), ("Derrick Henry", ["King Henry"]),
+    ("Saquon Barkley", ["Saquon"]), ("Nick Chubb", []), ("Bijan Robinson", ["Bijan"]),
+    ("Jonathan Taylor", []), ("Josh Jacobs", []), ("Alvin Kamara", []),
+    ("Jahmyr Gibbs", []), ("Breece Hall", []), ("Joe Mixon", []),
+    ("De'Von Achane", ["Achane"]), ("James Cook", []),
+    # Wide receivers
+    ("Tyreek Hill", ["Cheetah"]), ("Justin Jefferson", ["Jettas"]),
+    ("Ja'Marr Chase", ["Jamarr Chase"]), ("CeeDee Lamb", ["CeeDee"]),
+    ("A.J. Brown", ["AJ Brown"]), ("Davante Adams", []), ("Cooper Kupp", []),
+    ("Amon-Ra St. Brown", ["Amon Ra St Brown", "St Brown"]), ("DK Metcalf", []),
+    ("Mike Evans", []), ("Garrett Wilson", []), ("Jaylen Waddle", []),
+    ("DeVonta Smith", []), ("Puka Nacua", ["Puka"]),
+    ("Marvin Harrison Jr", ["Marvin Harrison"]), ("Deebo Samuel", ["Deebo"]),
+    ("Keenan Allen", []), ("Stefon Diggs", []), ("Terry McLaurin", []),
+    ("DJ Moore", []), ("Nico Collins", []),
+    # Tight ends
+    ("Travis Kelce", ["Kelce"]), ("George Kittle", ["Kittle"]),
+    ("Mark Andrews", []), ("Sam LaPorta", []), ("T.J. Hockenson", ["Hockenson"]),
+    ("Kyle Pitts", []),
+    # Defense
+    ("Myles Garrett", []), ("T.J. Watt", ["TJ Watt"]), ("Micah Parsons", ["Micah"]),
+    ("Nick Bosa", []), ("Maxx Crosby", []), ("Chris Jones", []),
+    ("Khalil Mack", []), ("Sauce Gardner", ["Sauce"]), ("Patrick Surtain", []),
+    ("Fred Warner", []), ("Roquan Smith", []),
+    # All-time greats
+    ("Tom Brady", ["TB12"]), ("Peyton Manning", []), ("Drew Brees", []),
+    ("Brett Favre", []), ("Jerry Rice", []), ("Randy Moss", []),
+    ("Barry Sanders", []), ("Emmitt Smith", []), ("Walter Payton", []),
+    ("Ray Lewis", []), ("Reggie White", []), ("Lawrence Taylor", ["LT"]),
+    ("Deion Sanders", ["Prime Time", "Primetime"]), ("Rob Gronkowski", ["Gronk"]),
+    ("J.J. Watt", ["JJ Watt"]), ("Calvin Johnson", ["Megatron"]),
+    ("Adrian Peterson", ["AP"]), ("Marshawn Lynch", ["Beast Mode"]),
+    ("Larry Fitzgerald", []), ("Von Miller", []), ("Aaron Donald", []),
+]
+
+
 CATEGORIES: dict[str, tuple[str, str, list[CategoryItem]]] = {
     # key -> (display_name, emoji, items)
     "nba": ("NBA Players", "\U0001f3c0", _nba_items()),
+    "nfl": ("NFL Players", "\U0001f3c8", _NFL_PLAYERS),
     "celebrities": ("Celebrities", "\U0001f31f", _CELEBRITIES),
     "animals": ("Animals", "\U0001f981", _ANIMALS),
     "food": ("Food & Drink", "\U0001f354", _FOOD),
