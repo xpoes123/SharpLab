@@ -151,6 +151,34 @@ async def get_games_in_window(start_utc_iso: str, end_utc_iso: str, sport: str =
     return [_row_to_game(row) for row in rows]
 
 
+async def purge_post_tip_closes(grace_seconds: int = 0) -> int:
+    """Delete `close` snapshots captured after their game's tip-off (+grace).
+
+    These are live-contaminated: the close-capture used to fire AT tip and retry
+    into the first in-game price. Parsed in Python so mixed 'Z'/'+00:00' offsets
+    compare correctly. Returns the number deleted."""
+    def _p(s: str):
+        try:
+            return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            return None
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT s.snapshot_id, s.captured_at, g.start_time
+               FROM odds_snapshots s JOIN games g ON g.game_id = s.game_id
+               WHERE s.kind = 'close'""",
+        )
+        rows = await cursor.fetchall()
+        late = [r["snapshot_id"] for r in rows
+                if (c := _p(r["captured_at"])) and (st := _p(r["start_time"]))
+                and (c - st).total_seconds() > grace_seconds]
+        for sid in late:
+            await db.execute("DELETE FROM odds_snapshots WHERE snapshot_id = ?", (sid,))
+        await db.commit()
+    return len(late)
+
+
 async def get_games_started_before(cutoff_utc_iso: str) -> list[Game]:
     """All games (any sport) whose start_time is at/before a cutoff — i.e. their
     line has already closed. Used to backfill closing-line snapshots."""
