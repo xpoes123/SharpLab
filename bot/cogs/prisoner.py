@@ -572,7 +572,7 @@ class PDView(ui.View):
         if len(real_sorted) >= 2:
             finish_order = [p.user_id for p in real_sorted]
             try:
-                elo_changes = await update_elo_multiplayer(finish_order, "prisoner", "prisoner")
+                elo_changes = await update_elo_multiplayer(finish_order, "prisoner", "prisoner", scores={p.user_id: p.score for p in real_sorted})
             except Exception:
                 log.exception("Unhandled error in prisoner.py")
 

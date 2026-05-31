@@ -113,7 +113,7 @@ class BlottoCog(commands.Cog):
                 ]
                 if len(finish) >= 2:
                     try:
-                        await update_elo_multiplayer(finish, "blotto", "blotto")
+                        await update_elo_multiplayer(finish, "blotto", "blotto", scores={int(r["discord_user"]): r["rounds_won"] for r in result.get("results", []) if r.get("discord_user", "").isdigit()})
                     except Exception:
                         log.exception("Unhandled error in blotto.py")
             except Exception:

@@ -578,7 +578,7 @@ class SeqView(ui.View):
         if len(sorted_players) >= 2:
             finish_order = [p.user_id for p in sorted_players]
             try:
-                elo_changes = await update_elo_multiplayer(finish_order, "sequence", "sequence")
+                elo_changes = await update_elo_multiplayer(finish_order, "sequence", "sequence", scores={p.user_id: p.score for p in sorted_players})
             except Exception:
                 elo_changes = {}
         else:

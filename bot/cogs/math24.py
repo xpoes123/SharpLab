@@ -977,7 +977,7 @@ class Math24TableView(ui.View):
             sorted_p = sorted(table.players.values(), key=lambda p: p.rounds_won, reverse=True)
             finish_order = [p.user_id for p in sorted_p]
             try:
-                elo_changes = await update_elo_multiplayer(finish_order, "math24", "math24")
+                elo_changes = await update_elo_multiplayer(finish_order, "math24", "math24", scores={p.user_id: p.rounds_won for p in sorted_p})
             except Exception:
                 log.exception("Unhandled error in math24.py")
 

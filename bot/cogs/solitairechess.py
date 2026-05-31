@@ -156,7 +156,7 @@ class SolChessCog(commands.Cog):
                 finish = [int(r["discord_user"]) for r in result.get("results", []) if r.get("discord_user")]
                 if len(finish) >= 2:
                     try:
-                        await update_elo_multiplayer(finish, "solitairechess", "solitairechess")
+                        await update_elo_multiplayer(finish, "solitairechess", "solitairechess", scores={int(r["discord_user"]): r["rounds_won"] for r in result.get("results", []) if r.get("discord_user")})
                     except Exception:
                         log.exception("Unhandled error in solitairechess.py")
             except Exception:

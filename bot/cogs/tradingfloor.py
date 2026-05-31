@@ -127,7 +127,7 @@ class TradingFloorCog(commands.Cog):
                 finish = [int(r["discord_user"]) for r in result.get("results", []) if r.get("discord_user")]
                 if len(finish) >= 2:
                     try:
-                        await update_elo_multiplayer(finish, "tradingfloor", "tradingfloor")
+                        await update_elo_multiplayer(finish, "tradingfloor", "tradingfloor", scores={int(r["discord_user"]): r["final_cash"] for r in result.get("results", []) if r.get("discord_user")})
                     except Exception:
                         log.exception("Unhandled error in tradingfloor.py")
             except Exception:

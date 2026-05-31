@@ -3081,7 +3081,7 @@ class PokeTableView(ui.View):
             )
             finish_order = [p.user_id for p in sorted_players]
             try:
-                elo_changes = await update_elo_multiplayer(finish_order, "pokemon", "pokemon")
+                elo_changes = await update_elo_multiplayer(finish_order, "pokemon", "pokemon", scores={p.user_id: p.rounds_won for p in sorted_players})
             except Exception:
                 log.warning("ELO update failed for pokemon game end", exc_info=True)
 

@@ -1312,7 +1312,7 @@ class GeoTableView(ui.View):
             sorted_p = sorted(table.players.values(), key=lambda p: p.rounds_won, reverse=True)
             finish_order = [p.user_id for p in sorted_p]
             try:
-                elo_changes = await update_elo_multiplayer(finish_order, "geography", "geography")
+                elo_changes = await update_elo_multiplayer(finish_order, "geography", "geography", scores={p.user_id: p.rounds_won for p in sorted_p})
             except Exception:
                 log.exception("Unhandled error in geography.py")
 

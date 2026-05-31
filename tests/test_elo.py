@@ -147,6 +147,40 @@ def test_multiplayer_floor():
     assert new[2] >= RATING_FLOOR
 
 
+def test_multiplayer_tie_equal_ratings_no_change():
+    """Two equally-rated players who tie should both stay ~1000 — no arbitrary
+    win/loss from finish_order position."""
+    ratings = {1: 1000.0, 2: 1000.0}
+    gp = {1: 0, 2: 0}
+    scores = {1: 5, 2: 5}  # tied
+    new = compute_multiplayer(ratings, gp, [1, 2], scores=scores)
+    assert new[1] == new[2] == 1000.0
+
+
+def test_multiplayer_tie_is_order_independent():
+    """Tied players get the same delta regardless of their finish_order slot."""
+    ratings = {1: 1000.0, 2: 1000.0, 3: 1000.0}
+    gp = {1: 0, 2: 0, 3: 0}
+    scores = {1: 10, 2: 10, 3: 4}  # 1 and 2 tie for first
+    a = compute_multiplayer(ratings, gp, [1, 2, 3], scores=scores)
+    b = compute_multiplayer(ratings, gp, [2, 1, 3], scores=scores)
+    assert a[1] == a[2]          # tied players identical
+    assert a[1] == b[1] == b[2]  # and stable across ordering
+    assert a[3] < a[1]           # loser still drops
+
+
+def test_multiplayer_scores_match_strict_order_when_no_ties():
+    """With distinct scores, passing scores matches the positional fallback."""
+    ratings = {1: 1200.0, 2: 1000.0, 3: 800.0}
+    gp = {1: 5, 2: 5, 3: 5}
+    finish = [2, 1, 3]
+    positional = compute_multiplayer(ratings, gp, finish)
+    scored = compute_multiplayer(
+        ratings, gp, finish, scores={2: 9, 1: 5, 3: 1},
+    )
+    assert positional == scored
+
+
 # ── Championship points ─────────────────────────────────────────────────────
 
 

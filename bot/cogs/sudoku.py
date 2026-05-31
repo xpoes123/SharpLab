@@ -108,7 +108,7 @@ class SudokuCog(commands.Cog):
                 finish = [int(r["discord_user"]) for r in result.get("results", []) if r.get("discord_user")]
                 if len(finish) >= 2:
                     try:
-                        await update_elo_multiplayer(finish, "sudoku", "sudoku")
+                        await update_elo_multiplayer(finish, "sudoku", "sudoku", scores={int(r["discord_user"]): r["rounds_won"] for r in result.get("results", []) if r.get("discord_user")})
                     except Exception:
                         log.exception("Unhandled error in sudoku.py")
             except Exception:

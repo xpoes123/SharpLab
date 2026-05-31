@@ -737,6 +737,7 @@ class IPView(ui.View):
             try:
                 elo_changes = await update_elo_multiplayer(
                     finish_order, "indian_poker", "indian_poker",
+                    scores={p.user_id: p.chips for p in all_players},
                 )
             except Exception:
                 log.exception("Unhandled error in indianpoker.py")

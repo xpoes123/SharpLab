@@ -107,7 +107,7 @@ class FiggieCog(commands.Cog):
                 finish = [int(r["discord_user"]) for r in result.get("results", []) if r.get("discord_user")]
                 if len(finish) >= 2:
                     try:
-                        await update_elo_multiplayer(finish, "figgie", "figgie")
+                        await update_elo_multiplayer(finish, "figgie", "figgie", scores={int(r["discord_user"]): r["score"] for r in result.get("results", []) if r.get("discord_user")})
                     except Exception:
                         log.exception("Unhandled error in figgie.py")
             except Exception:

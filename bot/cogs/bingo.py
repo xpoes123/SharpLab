@@ -122,7 +122,7 @@ class BingoCog(commands.Cog):
                 elo_changes: dict[int, tuple[float, float]] = {}
                 if len(finish_order) >= 2:
                     try:
-                        elo_changes = await update_elo_multiplayer(finish_order, "bingo", "bingo")
+                        elo_changes = await update_elo_multiplayer(finish_order, "bingo", "bingo", scores={int(uid_str): r["num_cards"] for r in raw_results if (uid_str := player_map.get(r.get("display_name", "")))})
                     except Exception:
                         log.exception("Unhandled error in bingo.py")
 

@@ -612,6 +612,7 @@ class CluemasterView(ui.View):
             try:
                 elo_changes = await update_elo_multiplayer(
                     finish_order, "cluemaster", "cluemaster",
+                    scores={p.user_id: p.score for p in sorted_players},
                 )
             except Exception:
                 log.exception("cluemaster: ELO update failed")

@@ -141,10 +141,16 @@ async def update_elo_multiplayer(
     finish_order: list[int],
     game_key: str,
     context: str,
+    scores: dict[int, float] | None = None,
 ) -> dict[int, tuple[float, float]]:
     """Update ELO for a multiplayer game.
 
     finish_order: user IDs from 1st to last place.
+    scores: optional uid -> score (higher = better). When given, players who
+        tie on score are treated as drawing each other instead of getting an
+        arbitrary win/loss from their order in finish_order — pass this for any
+        game where ties are possible. Also decides who counts as a "win" (every
+        player sharing the top score) for win/loss records.
     Returns {user_id: (old_rating, new_rating)}.
     """
     if len(finish_order) < 2:
@@ -157,7 +163,9 @@ async def update_elo_multiplayer(
         ratings[uid] = data["rating"]
         games_played[uid] = data["games_played"]
 
-    new_ratings = elo.compute_multiplayer(ratings, games_played, finish_order)
+    new_ratings = elo.compute_multiplayer(ratings, games_played, finish_order, scores)
+
+    top_score = max(scores.values()) if scores else None
 
     changes: dict[int, tuple[float, float]] = {}
     for i, uid in enumerate(finish_order):
@@ -165,14 +173,18 @@ async def update_elo_multiplayer(
         new_r = new_ratings[uid]
         changes[uid] = (old_r, new_r)
 
-        result_str = "win" if i == 0 else "loss"
+        if scores is not None:
+            is_win = scores[uid] == top_score
+        else:
+            is_win = i == 0
+        result_str = "win" if is_win else "loss"
         peak_data = await queries.get_elo_rating(str(uid), game_key)
         peak = max(new_r, peak_data["peak_rating"])
 
         await queries.update_elo_rating(str(uid), game_key, new_r, result_str, peak)
         await queries.log_elo_match(
             str(uid), None, game_key,
-            1.0 if i == 0 else 0.0,
+            1.0 if is_win else 0.0,
             old_r, new_r, context,
         )
 
