@@ -572,9 +572,11 @@ class AnswerModal(ui.Modal):
         super().__init__(title="Math 24 \u2014 Answer")
         self.table = table
         self.table_view = view
-        # Pre-fill with the numbers so players can see them in the box
-        self.expression.default = "  ".join(str(n) for n in table.numbers)
-        self.expression.placeholder = "Add +, -, *, /, ( ) between the numbers"
+        # Show the numbers in the (always-visible) label instead of pre-filling
+        # the box, so players don't have to delete them before typing.
+        nums = " ".join(str(n) for n in table.numbers)
+        self.expression.label = f"Make 24 from: {nums}"[:45]
+        self.expression.placeholder = "e.g. (8-2)*(5-1) — use + - * / ( )"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         uid = interaction.user.id
