@@ -45,10 +45,14 @@ function render(traders) {
          </details>`
       : `<div class="muted" style="margin-top:8px;font-size:13px">No open positions.</div>`;
     const link = `/hq/stocks/${encodeURIComponent(t.username)}`;
+    const day = t.day_change == null ? ""
+      : `<div class="${cls(t.day_change)}" style="font-size:13px">${pnl(t.day_change)} (${t.day_pct >= 0 ? "+" : ""}${t.day_pct}%) today</div>`;
     return `<div class="card" style="margin-top:14px">
       <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap">
         <div><span class="muted">#${i + 1}</span> <a href="${link}" style="font-size:18px;font-weight:800">${t.username}</a></div>
-        <a href="${link}" style="font-size:22px;font-weight:800;color:var(--fg)">${money(t.account_value)} →</a>
+        <div style="text-align:right">
+          <a href="${link}" style="font-size:22px;font-weight:800;color:var(--fg)">${money(t.account_value)} →</a>${day}
+        </div>
       </div>
       <div class="grid" style="margin-top:12px">
         <div class="stat"><div class="label">Stocks</div><div class="value" style="font-size:18px">${money(t.stock_value)}</div></div>

@@ -8,6 +8,7 @@ const pnl = (n) => (n >= 0 ? "+" : "−") + "$" + Math.abs(n).toLocaleString(und
 
 const RANGES = [["1D", 1], ["1W", 7], ["1M", 30], ["3M", 90], ["1Y", 365], ["ALL", 1e9]];
 let EQUITY = [];
+let BENCH = [];
 let range = 7;
 
 async function main() {
@@ -21,42 +22,60 @@ async function main() {
   render(await r.json());
 }
 
-function svgChart(series, h = 220) {
+function svgChart(series, bench, h = 220) {
   if (series.length < 2) return `<div class="muted" style="padding:28px;text-align:center">Not enough history yet — snapshots build hourly.</div>`;
   const w = 760;
-  const vals = series.map((p) => p.v);
-  const min = Math.min(...vals), max = Math.max(...vals);
+  const allVals = series.map((p) => p.v).concat((bench || []).map((p) => p.v));
+  const min = Math.min(...allVals), max = Math.max(...allVals);
   const pad = (max - min) * 0.08 || Math.abs(max) * 0.02 || 1;
   const lo = min - pad, hi = max + pad;
-  const n = series.length;
-  const X = (i) => (i / (n - 1)) * w;
   const Y = (v) => h - ((v - lo) / (hi - lo)) * h;
-  const pts = series.map((p, i) => `${X(i).toFixed(1)},${Y(p.v).toFixed(1)}`).join(" ");
-  const up = series[n - 1].v >= series[0].v;
+  const poly = (arr) => arr.map((p, i) => `${((i / (arr.length - 1)) * w).toFixed(1)},${Y(p.v).toFixed(1)}`).join(" ");
+  const pts = poly(series);
+  const up = series[series.length - 1].v >= series[0].v;
   const color = up ? "var(--green)" : "var(--red)";
   const fill = up ? "rgba(158,206,106,.12)" : "rgba(247,118,142,.12)";
+  const benchLine = (bench && bench.length >= 2)
+    ? `<polyline points="${poly(bench)}" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"/>`
+    : "";
   return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:${h}px;display:block">
     <polygon points="0,${h} ${pts} ${w},${h}" fill="${fill}"/>
+    ${benchLine}
     <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`;
+}
+
+function pctChange(arr) {
+  return arr.length >= 2 && arr[0].v ? ((arr[arr.length - 1].v - arr[0].v) / arr[0].v) * 100 : 0;
 }
 
 function drawChart() {
   const cutoff = Date.now() - range * 86400000;
-  const series = EQUITY.filter((p) => new Date(p.t).getTime() >= cutoff);
-  const use = series.length >= 2 ? series : EQUITY;
-  document.getElementById("chart").innerHTML = svgChart(use);
-  let delta = "";
-  if (use.length >= 2) {
-    const d = use[use.length - 1].v - use[0].v;
-    const pctv = use[0].v ? (d / use[0].v) * 100 : 0;
-    delta = `<span class="${cls(d)}">${pnl(d)} (${d >= 0 ? "+" : ""}${pctv.toFixed(1)}%)</span>`;
+  let series = EQUITY.filter((p) => new Date(p.t).getTime() >= cutoff);
+  let bench = BENCH.filter((p) => new Date(p.t).getTime() >= cutoff);
+  if (series.length < 2) { series = EQUITY; bench = BENCH; }
+
+  // Re-base SPY to the window's starting portfolio value so both lines start together.
+  let benchUse = [];
+  if (bench.length >= 2 && bench[0].v) {
+    const k = series[0].v / bench[0].v;
+    benchUse = bench.map((p) => ({ t: p.t, v: p.v * k }));
   }
-  document.getElementById("chartDelta").innerHTML = delta;
+  document.getElementById("chart").innerHTML = svgChart(series, benchUse);
+
+  const d = series.length >= 2 ? series[series.length - 1].v - series[0].v : 0;
+  const port = pctChange(series), spy = pctChange(bench);
+  const vs = benchUse.length >= 2
+    ? ` · vs S&P <span class="${cls(port - spy)}">${port - spy >= 0 ? "beating by +" : ""}${(port - spy).toFixed(1)}%</span>`
+    : "";
+  document.getElementById("chartDelta").innerHTML = series.length >= 2
+    ? `<span class="${cls(d)}">${pnl(d)} (${port >= 0 ? "+" : ""}${port.toFixed(1)}%)</span>${vs}`
+    : "";
 }
 
 function render(d) {
   const u = d.user, s = d.summary || {};
   EQUITY = d.equity || [];
+  BENCH = d.benchmark || [];
   const av = u.avatar_url;
 
   let html = `<div class="profhead">
@@ -70,7 +89,11 @@ function render(d) {
       <div class="stakebtns" style="margin-bottom:10px">
         ${RANGES.map(([lbl, days]) => `<button data-days="${days}" class="rangebtn${days === range ? " on" : ""}">${lbl}</button>`).join("")}
       </div>
-      <div id="chart"></div></div>
+      <div id="chart"></div>
+      <div class="muted" style="font-size:12px;margin-top:8px;display:flex;gap:16px">
+        <span><span style="color:var(--green)">━</span> Portfolio</span>
+        <span><span style="color:var(--muted)">┄</span> S&P 500</span>
+      </div></div>
 
     <div class="grid" style="margin-top:16px">
       <div class="card stat"><div class="label">Stocks</div><div class="value" style="font-size:20px">${money(s.stock_value)}</div></div>
