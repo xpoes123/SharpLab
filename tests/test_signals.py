@@ -84,7 +84,7 @@ def test_steam_reports_lagging_books():
 
 
 def test_arb_min_roi_filters_marginal():
-    # ~0.7% arb — below a 1% floor.
+    # best home +110 (47.6%) + best away +110 (47.6%) = 95.2% → ~5% ROI.
     odds = {"A": {"ml_home": 110, "ml_away": -130}, "B": {"ml_home": -130, "ml_away": 110}}
     assert find_ml_arb(odds) is not None             # no floor → detected
-    assert find_ml_arb(odds, min_roi=5.0) is None    # 5% floor → filtered
+    assert find_ml_arb(odds, min_roi=6.0) is None    # 6% floor > ~5% edge → filtered
