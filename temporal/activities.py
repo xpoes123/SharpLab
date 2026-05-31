@@ -674,6 +674,7 @@ async def _fetch_nba_scores(dates: list[str]) -> list[GameResult]:
             away_last=g["visitor_team"]["full_name"].split()[-1].lower(),
             home_score=home_score,
             away_score=away_score,
+            game_date=str(g.get("date", ""))[:10],
         ))
     return results
 
@@ -726,6 +727,7 @@ async def _fetch_espn_scores(dates: list[str], sport: str) -> list[GameResult]:
                     away_last=away_name.split()[-1].lower(),
                     home_score=home_score,
                     away_score=away_score,
+                    game_date=date_str,
                 ))
     return results
 
@@ -797,15 +799,49 @@ def _resolve_bet(
 
 
 @activity.defn
+def _pick_game_for_date(candidates: list, game_date: str):
+    """From same-matchup candidates, choose the one whose start_time is on the
+    score's date (within ±18h). Prevents yesterday's final being stamped onto
+    today's not-yet-played game. Returns None if none are on that date."""
+    if not candidates:
+        return None
+    if not game_date:
+        return candidates[0]  # no date info → legacy behaviour (most recent)
+    from datetime import timedelta
+    try:
+        ref = datetime.fromisoformat(game_date).replace(tzinfo=timezone.utc) + timedelta(hours=22)
+    except ValueError:
+        return candidates[0]
+
+    def dist(g) -> float:
+        try:
+            st = datetime.fromisoformat(g.start_time_utc_iso.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            return float("inf")
+        return abs((st - ref).total_seconds())
+
+    best = min(candidates, key=dist)
+    return best if dist(best) <= 18 * 3600 else None
+
+
 async def resolve_bets_for_game(result: GameResult) -> int:
     """
-    Match a completed game to a DB game by team suffix, then resolve all open/graded bets.
-    Marks the game 'final' so it won't be reprocessed. Returns the count of bets resolved.
+    Match a completed game to a DB game by team suffix AND date, then resolve all
+    open/graded bets. Marks the game 'final'. Returns the count of bets resolved.
     """
     from datetime import timedelta
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
 
-    game = await queries.get_game_by_team_suffixes(result.home_last, result.away_last, cutoff)
+    candidates = await queries.get_games_by_team_suffixes(
+        result.home_last, result.away_last, cutoff,
+    )
+    game = _pick_game_for_date(candidates, result.game_date)
+    if game is None and candidates:
+        activity.logger.info(
+            f"[resolve_bets_for_game] {result.away_last} @ {result.home_last} final on "
+            f"{result.game_date!r} but no tracked game on that date — skipping (no premature final)"
+        )
+        return 0
     if game is None:
         # Expected steady state: every already-final game in the score window is
         # re-reported each resolution cycle and matches no *unresolved* game, so
