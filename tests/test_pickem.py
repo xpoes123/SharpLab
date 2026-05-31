@@ -38,11 +38,40 @@ def test_standings_correct_accuracy_and_streak():
         {"discord_user": "B", "correct": 1, "start_time": "3"},
     ]
     s = compute_pickem_standings(rows)
-    assert s["A"] == {"correct": 3, "total": 4, "points": 4, "accuracy": 0.75}
+    assert s["A"]["correct"] == 3
+    assert s["A"]["total"] == 4
+    assert s["A"]["points"] == 4
+    assert s["A"]["accuracy"] == 0.75
     # B and A tie on correct, but B's unbroken streak earns more points
     assert s["B"]["correct"] == 3
     assert s["B"]["points"] == 6  # 1 + 2 + 3
     assert s["B"]["points"] > s["A"]["points"]
+
+
+def test_market_pnl_rewards_underdogs():
+    # Both pick correctly once. U bet a 25% underdog; F bet a 80% favorite.
+    rows = [
+        {"discord_user": "U", "correct": 1, "pick": "away", "home_prob": 0.75, "away_prob": 0.25},
+        {"discord_user": "F", "correct": 1, "pick": "home", "home_prob": 0.80, "away_prob": 0.20},
+    ]
+    s = compute_pickem_standings(rows)
+    # underdog payout 1/0.25 - 1 = +3.0u ; favorite 1/0.80 - 1 = +0.25u
+    assert round(s["U"]["units"], 2) == 3.0
+    assert round(s["F"]["units"], 2) == 0.25
+    assert s["U"]["units"] > s["F"]["units"]
+
+
+def test_market_pnl_loss_costs_a_unit():
+    rows = [{"discord_user": "X", "correct": 0, "pick": "home", "home_prob": 0.9, "away_prob": 0.1}]
+    s = compute_pickem_standings(rows)
+    assert s["X"]["units"] == -1.0
+
+
+def test_standings_missing_probs_default_even():
+    # No prob data → treated as a coin flip (1/0.5 - 1 = +1 on a correct pick)
+    rows = [{"discord_user": "A", "correct": 1, "pick": "home"}]
+    s = compute_pickem_standings(rows)
+    assert s["A"]["units"] == 1.0
 
 
 def test_streak_points_capped():

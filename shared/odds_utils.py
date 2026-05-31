@@ -33,6 +33,17 @@ def american_to_prob(odds: int) -> float:
         return abs(odds) / (abs(odds) + 100)
 
 
+def devig_two_way(ml_home: int, ml_away: int) -> tuple[float, float]:
+    """Normalize a two-sided American moneyline into fair (home, away) win
+    probabilities summing to 1 (removes the bookmaker's vig)."""
+    hp = american_to_prob(ml_home)
+    ap = american_to_prob(ml_away)
+    total = hp + ap
+    if total <= 0:
+        return 0.5, 0.5
+    return hp / total, ap / total
+
+
 def american_to_decimal(odds: int) -> float:
     """Convert American odds to decimal odds."""
     if odds == 0:

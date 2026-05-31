@@ -3427,13 +3427,30 @@ async def get_all_stock_holdings() -> list[dict]:
 async def add_pickem_game(
     message_id: str, game_id: str, sport: str, home_team: str,
     away_team: str, start_time: str, posted_date: str,
+    home_prob: float | None = None, away_prob: float | None = None,
+    odds_source: str | None = None,
 ) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """INSERT OR IGNORE INTO pickem_games
-               (message_id, game_id, sport, home_team, away_team, start_time, posted_date)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (message_id, game_id, sport, home_team, away_team, start_time, posted_date),
+               (message_id, game_id, sport, home_team, away_team, start_time,
+                posted_date, home_prob, away_prob, odds_source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (message_id, game_id, sport, home_team, away_team, start_time,
+             posted_date, home_prob, away_prob, odds_source),
+        )
+        await db.commit()
+
+
+async def set_pickem_game_probs(
+    message_id: str, home_prob: float, away_prob: float, odds_source: str,
+) -> None:
+    """Backfill/update the win probabilities on an existing pick'em game."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE pickem_games SET home_prob = ?, away_prob = ?, odds_source = ? "
+            "WHERE message_id = ?",
+            (home_prob, away_prob, odds_source, message_id),
         )
         await db.commit()
 
@@ -3567,7 +3584,8 @@ async def get_pickem_resolved_picks() -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            """SELECT p.discord_user, p.correct, g.start_time
+            """SELECT p.discord_user, p.correct, p.pick, g.start_time,
+                      g.home_prob, g.away_prob
                FROM pickem_picks p JOIN pickem_games g ON p.message_id = g.message_id
                WHERE p.correct IS NOT NULL
                ORDER BY p.discord_user, g.start_time""",
