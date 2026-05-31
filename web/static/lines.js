@@ -199,9 +199,9 @@ function buildMovementUI(box, gid) {
   // Stable color per book; default to overlaying the two sharpest available.
   const colorOf = {};
   sources.forEach((s, i) => { colorOf[s] = LM_COLORS[i % LM_COLORS.length]; });
-  const pref = ["draftkings", "fanduel", "betmgm", "caesars", "kalshi"];
-  const def = pref.filter((b) => sources.includes(b)).slice(0, 2);
-  const selected = new Set(def.length ? def : sources.slice(0, 2));
+  const DEFAULT_BOOKS = ["betmgm", "draftkings", "kalshi"];
+  const def = DEFAULT_BOOKS.filter((b) => sources.includes(b));
+  const selected = new Set(def.length ? def : sources.slice(0, 3));
 
   box.innerHTML = `
     <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
