@@ -1,7 +1,7 @@
 """Cog for ELO ratings and F1-style championship standings."""
 
 import discord
-from discord import app_commands
+from discord import app_commands, ui
 from discord.ext import commands
 
 from db import queries
@@ -16,6 +16,95 @@ log = logging.getLogger(__name__)
 
 COLOUR_GOLD = 0xF1C40F
 COLOUR_DARK = 0x2B2D31
+
+_MEDALS = {1: "\U0001f947", 2: "\U0001f948", 3: "\U0001f949"}
+
+
+# ── Paginated all-games leaderboard ───────────────────────────────────────────
+
+
+async def _build_leaderboard_embed(
+    bot: commands.Bot, game: dict, idx: int, total: int,
+) -> discord.Embed:
+    """One page: a single game's ELO leaderboard (top 10, provisional marked)."""
+    game_key = game["game"]
+    label = ELO_GAME_LABELS.get(game_key, game_key)
+    lb = await queries.get_elo_leaderboard(game_key, min_games=1, limit=10)
+
+    embed = discord.Embed(title=f"\U0001f3c6 {label} — ELO Leaderboard", colour=COLOUR_GOLD)
+    lines: list[str] = []
+    for rank, entry in enumerate(lb, 1):
+        try:
+            user = await bot.fetch_user(int(entry["discord_user"]))
+            name = user.display_name
+        except Exception:
+            name = f"Player {entry['discord_user'][:8]}"
+        prov = "?" if entry["games_played"] < MIN_GAMES_FOR_LEADERBOARD else ""
+        record = f"{entry['wins']}W {entry['losses']}L"
+        if entry["draws"]:
+            record += f" {entry['draws']}D"
+        prefix = _MEDALS.get(rank, f"`#{rank}`")
+        lines.append(f"{prefix} **{name}** — {entry['rating']:.0f}{prov} ({record})")
+    embed.description = "\n".join(lines) or "*No rated players yet.*"
+    embed.set_footer(
+        text=(
+            f"Game {idx + 1}/{total} • {game['total_plays']} plays • "
+            f"{game['players']} players • ? = provisional (<{MIN_GAMES_FOR_LEADERBOARD} games)"
+        ),
+    )
+    return embed
+
+
+class LeaderboardView(ui.View):
+    """Flip through every game's ELO leaderboard, ordered by popularity."""
+
+    def __init__(self, bot: commands.Bot, games: list[dict]) -> None:
+        super().__init__(timeout=180)
+        self.bot = bot
+        self.games = games
+        self.index = 0
+        self.message: discord.Message | None = None
+        self._cache: dict[int, discord.Embed] = {}
+        self._sync()
+
+    def _sync(self) -> None:
+        self.prev_btn.disabled = self.index == 0
+        self.next_btn.disabled = self.index >= len(self.games) - 1
+        self.page_btn.label = f"{self.index + 1}/{len(self.games)}"
+
+    async def embed(self) -> discord.Embed:
+        if self.index not in self._cache:
+            self._cache[self.index] = await _build_leaderboard_embed(
+                self.bot, self.games[self.index], self.index, len(self.games),
+            )
+        return self._cache[self.index]
+
+    async def _show(self, interaction: discord.Interaction) -> None:
+        self._sync()
+        await interaction.response.edit_message(embed=await self.embed(), view=self)
+
+    @ui.button(emoji="◀️", style=discord.ButtonStyle.secondary)
+    async def prev_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        self.index = max(0, self.index - 1)
+        await self._show(interaction)
+
+    @ui.button(label="1/1", style=discord.ButtonStyle.primary, disabled=True)
+    async def page_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        pass  # indicator only
+
+    @ui.button(emoji="▶️", style=discord.ButtonStyle.secondary)
+    async def next_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        self.index = min(len(self.games) - 1, self.index + 1)
+        await self._show(interaction)
+
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            child.disabled = True  # type: ignore[union-attr]
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
 
 
 # ── Autocomplete ─────────────────────────────────────────────────────────────
@@ -149,6 +238,22 @@ class RatingsCog(commands.Cog):
                     )
 
         await interaction.followup.send(embed=embed)
+
+    # ── /leaderboards ─────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="leaderboards",
+        description="Browse every game's ELO leaderboard, most-played first",
+    )
+    async def leaderboards(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+        games = await queries.get_elo_game_popularity()
+        if not games:
+            await interaction.followup.send("No games have been played yet!")
+            return
+        view = LeaderboardView(self.bot, games)
+        await interaction.followup.send(embed=await view.embed(), view=view)
+        view.message = await interaction.original_response()
 
     # ── /standings ────────────────────────────────────────────────────
 
