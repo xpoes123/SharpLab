@@ -28,6 +28,16 @@ function bestML(odds) {
   return { away, home };
 }
 const mlCell = (best) => (best == null ? "—" : `${am(best.v)}<sup class="bk">${shortBook(best.book)}</sup>`);
+// No-vig consensus home win% open → close (the honest closing-line value).
+function fairLine(g) {
+  if (!g.close_fair) return "";
+  const oh = g.open_fair ? g.open_fair.home : null;
+  const ch = g.close_fair.home;
+  const arrow = oh != null && Math.abs(ch - oh) >= 0.5
+    ? ` <span class="${ch > oh ? "neg" : "pos"}">${ch > oh ? "▲" : "▼"}${Math.abs(ch - oh).toFixed(1)}</span>` : "";
+  const from = oh != null ? `${oh}% → ` : "";
+  return `<div class="muted" style="font-size:12px;margin-top:2px">fair (no-vig) ${g.home_team}: ${from}<span style="color:var(--fg)">${ch}%</span>${arrow}</div>`;
+}
 function dateKey(iso) {
   try { return new Date(iso).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", timeZone: "America/New_York" }); } catch { return ""; }
 }
@@ -80,9 +90,10 @@ function render(upcoming, results) {
         const ou = src && src.total != null ? ` · <span class="muted">O/U ${src.total}</span>` : "";
         lineHtml = `${spr}<span class="muted">ML</span> ${ml}${ou} <span class="muted" style="font-size:11px">best price</span>`;
       }
+      const fair = g.fair ? `<div class="muted" style="font-size:12px;margin-top:2px">fair (no-vig): <span style="color:var(--fg)">${g.home_team} ${g.fair.home}%</span> · ${g.away_team} ${g.fair.away}% <span style="font-size:10px">${g.fair.books} books</span></div>` : "";
       return `${hdr}<div class="gamecard">
         <div>${em} ${away} @ ${home} <span class="muted" style="font-size:12px">· ${dateTime(g.start_time)}</span></div>
-        <div style="font-size:13px;margin-top:4px">${lineHtml}</div>
+        <div style="font-size:13px;margin-top:4px">${lineHtml}</div>${fair}
         ${movementDetails(g.game_id, "📈 pre-match line movement")}</div>`;
     }).join("");
   }
@@ -110,6 +121,7 @@ function render(upcoming, results) {
         <div>${em} ${g.away_team} @ <strong>${g.home_team}</strong> · final ${score}
           <span class="muted" style="font-size:11px">${dateKey(g.start_time)} · ${g.book || ""}</span> ${ats}${ou}</div>
         <div class="muted" style="font-size:13px;margin-top:4px">ML ${mlPair(g.open)} → <span style="color:var(--fg)">${mlPair(g.close)}</span>${tag}${move}</div>
+        ${fairLine(g)}
         ${movementDetails(g.game_id, "📊 pre-match open → close (all books)")}</div>`;
     }).join("");
   }
