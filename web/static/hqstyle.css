@@ -67,3 +67,10 @@ details:not([open]) summary::before { content: "▸ "; }
 .nav a { color: var(--muted); font-weight: 600; font-size: 14px; }
 .nav a:hover { color: var(--fg); text-decoration: none; }
 .rangebtn.on { border-color: var(--accent); color: var(--fg); background: var(--panel); }
+tbody tr:hover { background: rgba(122,162,247,.06); }
+.date-hd { padding: 9px 16px; background: var(--panel2); color: var(--muted); font-size: 12px;
+  text-transform: uppercase; letter-spacing: .6px; border-bottom: 1px solid var(--line); }
+.fav { font-weight: 700; }
+.dog { color: var(--muted); }
+.spread { color: var(--gold); font-weight: 600; }
+.over { color: var(--gold); } .under { color: var(--accent); }

@@ -20,6 +20,14 @@ function fmtTime(iso) {
   try { return new Date(iso).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); }
   catch { return ""; }
 }
+function dateKey(iso) {
+  try { return new Date(iso).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", timeZone: "America/New_York" }); }
+  catch { return ""; }
+}
+function timeOnly(iso) {
+  try { return new Date(iso).toLocaleString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York", timeZoneName: "short" }); }
+  catch { return ""; }
+}
 
 async function load() {
   let slate, results;
@@ -45,21 +53,40 @@ function render(upcoming, results) {
     </select></div>`;
 
   html += `<h2>🎯 Upcoming</h2><div class="card" style="padding:0">`;
-  html += upcoming.length ? upcoming.map((g) => {
-    const [book, src] = consensus(g.odds || {});
-    const em = SPORT[g.sport] || "🏟️";
-    const lines = src
-      ? `<div class="muted" style="font-size:13px;margin-top:4px">${fmtSpread(g, src)} · ${fmtTotal(src)} · ML ${fmtML(src)} <span class="pill">${book}</span></div>`
-      : `<div class="muted" style="font-size:13px;margin-top:4px">No lines yet.</div>`;
-    return `<div class="gamecard">
-      <div>${em} <strong>${g.away_team}</strong> @ <strong>${g.home_team}</strong>
-        <span class="muted" style="font-size:12px">· ${fmtTime(g.start_time)}</span></div>
-      ${lines}
-      <details style="margin-top:6px" data-gid="${g.game_id}">
-        <summary class="muted" style="cursor:pointer;font-size:13px">📈 line movement</summary>
-        <div class="lm" style="padding:8px 2px"><span class="muted">Loading…</span></div>
-      </details></div>`;
-  }).join("") : `<div class="muted" style="padding:18px">No upcoming games on the board.</div>`;
+  if (!upcoming.length) {
+    html += `<div class="muted" style="padding:18px">No upcoming games on the board.</div>`;
+  } else {
+    let lastDate = "";
+    html += upcoming.map((g) => {
+      const dk = dateKey(g.start_time);
+      const hdr = dk !== lastDate ? `<div class="date-hd">${dk}</div>` : "";
+      lastDate = dk;
+      const [book, src] = consensus(g.odds || {});
+      const em = SPORT[g.sport] || "🏟️";
+      const homeFav = src && src.spread != null && src.spread < 0;
+      const awayFav = src && src.spread != null && src.spread > 0;
+      const away = `<span class="${awayFav ? "fav" : homeFav ? "dog" : ""}">${g.away_team}</span>`;
+      const home = `<span class="${homeFav ? "fav" : awayFav ? "dog" : ""}">${g.home_team}</span>`;
+      let lineHtml;
+      if (src && src.spread != null) {
+        const favName = src.spread < 0 ? g.home_team : g.away_team;
+        lineHtml = `<span class="spread">${favName} −${Math.abs(src.spread)}</span>
+          · <span class="muted">O/U ${src.total ?? "—"}</span>
+          · <span class="muted">ML ${fmtML(src)}</span> <span class="pill">${book}</span>`;
+      } else if (src) {
+        lineHtml = `<span class="muted">ML ${fmtML(src)} · O/U ${src.total ?? "—"}</span> <span class="pill">${book}</span>`;
+      } else {
+        lineHtml = `<span class="muted">No lines yet.</span>`;
+      }
+      return `${hdr}<div class="gamecard">
+        <div>${em} ${away} @ ${home} <span class="muted" style="font-size:12px">· ${timeOnly(g.start_time)}</span></div>
+        <div style="font-size:13px;margin-top:4px">${lineHtml}</div>
+        <details style="margin-top:6px" data-gid="${g.game_id}">
+          <summary class="muted" style="cursor:pointer;font-size:13px">📈 line movement</summary>
+          <div class="lm" style="padding:8px 2px"><span class="muted">Loading…</span></div>
+        </details></div>`;
+    }).join("");
+  }
   html += `</div>`;
 
   html += `<h2>📉 Recent Results — Open → Close</h2><div class="card" style="padding:0">`;
@@ -70,17 +97,26 @@ function render(upcoming, results) {
     html += results.map((g) => {
       const em = SPORT[g.sport] || "";
       const sp = (o) => (o && o.spread != null ? `${o.spread > 0 ? "+" : ""}${o.spread}` : "—");
-      const win = g.away_score != null && g.home_score != null && g.home_score > g.away_score;
-      const ats = g.home_covered == null ? (g.close ? "push" : "—") : (g.home_covered ? `${g.home_team} ✓` : `${g.away_team} ✓`);
-      const ou = g.total_result ? `${g.total_result}${(g.close && g.close.total != null) ? " " + g.close.total : ""}` : "—";
+      const homeWin = g.home_score != null && g.home_score > g.away_score;
+      const score = `<span class="${homeWin ? "" : "fav pos"}">${g.away_score}</span>-<span class="${homeWin ? "fav pos" : ""}">${g.home_score}</span>`;
+      // close spread coloured by movement vs open (toward home favorite = green)
+      let closeCls = "";
+      if (g.open && g.close && g.open.spread != null && g.close.spread != null) {
+        const d = g.close.spread - g.open.spread;
+        closeCls = Math.abs(d) < 0.01 ? "" : (d < 0 ? "pos" : "neg");
+      }
+      const ats = g.home_covered == null ? `<span class="muted">push</span>`
+        : `<span class="pos">${g.home_covered ? g.home_team : g.away_team} ✓</span>`;
+      const ou = !g.total_result ? "—" : g.total_result === "push" ? `<span class="muted">push</span>`
+        : `<span class="${g.total_result}">${g.total_result === "over" ? "Over" : "Under"}${(g.close && g.close.total != null) ? " " + g.close.total : ""}</span>`;
       const closeTag = g.close && !g.close_is_real ? ' <span class="muted" style="font-size:10px">(last)</span>' : "";
       return `<tr>
         <td>${em} ${g.away_team} @ <strong>${g.home_team}</strong> <span class="muted" style="font-size:11px">${g.book || ""}</span></td>
-        <td class="num">${g.away_score}-${g.home_score}</td>
+        <td class="num">${score}</td>
         <td class="num muted">${sp(g.open)}</td>
-        <td class="num">${sp(g.close)}${closeTag}</td>
-        <td class="muted">${ats}</td>
-        <td class="muted">${ou}</td></tr>`;
+        <td class="num ${closeCls}">${sp(g.close)}${closeTag}</td>
+        <td>${ats}</td>
+        <td>${ou}</td></tr>`;
     }).join("");
     html += `</tbody></table>`;
   }
