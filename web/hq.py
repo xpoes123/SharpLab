@@ -221,6 +221,74 @@ async def hq_server():
     return data
 
 
+async def _resolve_handle(handle: str) -> dict | None:
+    """Map a /hq/{handle} segment to a discord user. Numeric → id; else username."""
+    if handle.isdigit():
+        row = await _fetch_one(
+            "SELECT discord_user, username, avatar_url FROM discord_users WHERE discord_user = ?",
+            (handle,),
+        )
+        if row:
+            return row
+        return {"discord_user": handle, "username": None, "avatar_url": None}
+    return await _fetch_one(
+        "SELECT discord_user, username, avatar_url FROM discord_users "
+        "WHERE lower(username) = lower(?) LIMIT 1",
+        (handle,),
+    )
+
+
+async def _chess_for_handle(handle: str) -> dict | None:
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            r = await client.get(f"{CHESS_API}/leaderboard", params={"min_games": 0, "limit": 500})
+            r.raise_for_status()
+            for p in r.json().get("players", []):
+                if (p.get("handle") or "").lower() == handle.lower():
+                    return {"handle": p["handle"], "rating": p.get("rating"),
+                            "wins": p.get("wins", 0), "losses": p.get("losses", 0),
+                            "draws": p.get("draws", 0), "games_played": p.get("games_played", 0)}
+    except Exception:
+        return None
+    return None
+
+
+@router.get("/hq/profile/{handle}")
+async def hq_profile(handle: str):
+    who = await _resolve_handle(handle)
+    if not who:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    uid = who["discord_user"]
+
+    standings = compute_pickem_standings(await queries.get_pickem_resolved_picks())
+    pk = standings.get(uid, {"correct": 0, "total": 0, "accuracy": 0.0, "points": 0, "units": 0.0})
+
+    elo = await queries.get_elo_ratings_for_user(uid)
+    try:
+        balance = await queries.get_casino_balance(uid)
+    except Exception:
+        balance = None
+    try:
+        positions = await queries.get_stock_positions_full(uid)
+    except Exception:
+        positions = []
+    realized = round(sum(p.get("realized_pnl", 0) for p in positions), 2)
+    open_positions = sum(1 for p in positions if p.get("shares", 0) > 0)
+
+    return {
+        "user": {"id": uid, "username": who.get("username") or f"Player {uid[:6]}",
+                 "avatar_url": who.get("avatar_url")},
+        "pickem": {"units": round(pk["units"], 1), "correct": pk["correct"],
+                   "total": pk["total"], "accuracy": round(pk["accuracy"] * 100),
+                   "points": pk["points"]},
+        "elo": [{"game": r["game"], "rating": round(r["rating"]), "wins": r["wins"],
+                 "losses": r["losses"], "games_played": r["games_played"]} for r in elo],
+        "casino": {"balance": balance},
+        "stocks": {"realized_pnl": realized, "open_positions": open_positions},
+        "chess": await _chess_for_handle(who.get("username") or ""),
+    }
+
+
 @router.get("/hq/pickem/leaderboard")
 async def hq_pickem_leaderboard():
     rows = await queries.get_pickem_resolved_picks()
