@@ -601,7 +601,7 @@ async def dashboard_slate(sport: str = Query("all")):
     """Today's games with current odds from all tracked sources."""
     now = datetime.now(timezone.utc)
     start = (now - timedelta(days=1)).replace(hour=6, minute=0, second=0).isoformat()
-    end = (now + timedelta(days=1)).replace(hour=12, minute=0, second=0).isoformat()
+    end = (now + timedelta(days=3)).isoformat()
 
     if sport == "all":
         games = await _fetch_all(
