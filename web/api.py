@@ -726,28 +726,42 @@ async def dashboard_results(sport: str = Query("all"), limit: int = Query(10, ge
             (sport, limit),
         )
 
+    pref = ["draftkings", "fanduel", "betmgm", "caesars", "fanatics"]
     results = []
     for g in games:
-        # Get DraftKings close (source of truth for spread/total)
-        close_row = await _fetch_one(
-            """SELECT payload FROM odds_snapshots
-               WHERE game_id = ? AND kind = 'close' AND source = 'draftkings'
-               LIMIT 1""",
+        polls = await _fetch_all(
+            "SELECT source, payload FROM odds_snapshots WHERE game_id = ? AND kind = 'poll' "
+            "ORDER BY captured_at ASC", (g["game_id"],),
+        )
+        closes = await _fetch_all(
+            "SELECT source, payload FROM odds_snapshots WHERE game_id = ? AND kind = 'close'",
             (g["game_id"],),
         )
-        close = json.loads(close_row["payload"]) if close_row else None
+        close_by = {r["source"]: json.loads(r["payload"]) for r in closes}
+        poll_by: dict[str, list] = {}
+        for r in polls:
+            poll_by.setdefault(r["source"], []).append(json.loads(r["payload"]))
+
+        # One book for open + close: prefer one with a real close, else most polled.
+        book = (next((b for b in pref if b in close_by), None)
+                or next((b for b in pref if b in poll_by), None)
+                or next(iter(close_by), None) or next(iter(poll_by), None))
+        open_line = poll_by.get(book, [None])[0] if book else None
+        # Real close snapshot if we have one, else the last poll as a close proxy.
+        close = close_by.get(book) or (poll_by.get(book, [None])[-1] if book else None)
+        close_is_real = book in close_by
 
         margin = g["home_score"] - g["away_score"] if g["home_score"] is not None else None
         combined = (g["home_score"] + g["away_score"]) if g["home_score"] is not None else None
 
-        entry: dict = {**g, "close": close}
+        entry: dict = {**g, "book": book, "open": open_line, "close": close, "close_is_real": close_is_real}
         if close and margin is not None:
             spread = close.get("spread")
             total = close.get("total")
             if spread is not None:
-                ats = margin + spread  # positive = home covered
+                ats = margin + spread
                 entry["ats_margin"] = ats
-                entry["home_covered"] = ats > 0 if ats != 0 else None  # None = push
+                entry["home_covered"] = ats > 0 if ats != 0 else None
             if total is not None and combined is not None:
                 entry["total_result"] = "over" if combined > total else ("under" if combined < total else "push")
                 entry["total_margin"] = round(abs(combined - total), 1)
