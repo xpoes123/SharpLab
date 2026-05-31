@@ -28,9 +28,141 @@ def _nba_items() -> list[CategoryItem]:
     return out
 
 
+# Famous people across music, film, sports, and tech. Last-name matching in
+# check_answer means a guess of just the surname counts; aliases cover
+# nicknames and accent-free spellings.
+_CELEBRITIES: list[CategoryItem] = [
+    ("Taylor Swift", []),
+    ("Beyoncé", ["Beyonce"]),
+    ("Leonardo DiCaprio", ["Leo DiCaprio"]),
+    ("Tom Cruise", []),
+    ("Brad Pitt", []),
+    ("Will Smith", []),
+    ("Dwayne Johnson", ["The Rock"]),
+    ("Kim Kardashian", []),
+    ("Kanye West", ["Ye"]),
+    ("Rihanna", []),
+    ("Drake", []),
+    ("Adele", []),
+    ("Lady Gaga", []),
+    ("Justin Bieber", []),
+    ("Ariana Grande", []),
+    ("Ed Sheeran", []),
+    ("Bruno Mars", []),
+    ("Billie Eilish", []),
+    ("The Weeknd", ["Weeknd"]),
+    ("Eminem", ["Marshall Mathers", "Slim Shady"]),
+    ("Snoop Dogg", []),
+    ("Jay-Z", ["Jay Z"]),
+    ("Oprah Winfrey", ["Oprah"]),
+    ("Jennifer Lawrence", []),
+    ("Scarlett Johansson", []),
+    ("Robert Downey Jr", ["Robert Downey", "RDJ"]),
+    ("Chris Hemsworth", []),
+    ("Ryan Reynolds", []),
+    ("Keanu Reeves", []),
+    ("Morgan Freeman", []),
+    ("Denzel Washington", []),
+    ("Tom Hanks", []),
+    ("Johnny Depp", []),
+    ("Angelina Jolie", []),
+    ("Emma Watson", []),
+    ("Zendaya", []),
+    ("Timothée Chalamet", ["Timothee Chalamet"]),
+    ("Margot Robbie", []),
+    ("Elon Musk", []),
+    ("Bill Gates", []),
+    ("Jeff Bezos", []),
+    ("Cristiano Ronaldo", ["Ronaldo"]),
+    ("Lionel Messi", ["Messi"]),
+    ("Serena Williams", []),
+    ("Michael Jackson", []),
+    ("Elvis Presley", ["Elvis"]),
+    ("Kylie Jenner", []),
+    ("Selena Gomez", []),
+    ("Dua Lipa", []),
+    ("Post Malone", []),
+]
+
+# Single-word commons get a plural alias so "pizzas"/"lions" still match
+# (the fuzzy branch only fires on guesses of 5+ chars).
+_ANIMALS: list[CategoryItem] = [
+    ("Elephant", ["Elephants"]), ("Lion", ["Lions"]), ("Tiger", ["Tigers"]),
+    ("Giraffe", ["Giraffes"]), ("Penguin", ["Penguins"]), ("Kangaroo", ["Kangaroos"]),
+    ("Dolphin", ["Dolphins"]), ("Shark", ["Sharks"]), ("Octopus", ["Octopuses"]),
+    ("Panda", ["Pandas"]), ("Koala", ["Koalas"]), ("Zebra", ["Zebras"]),
+    ("Hippopotamus", ["Hippo", "Hippos"]), ("Rhinoceros", ["Rhino", "Rhinos"]),
+    ("Cheetah", ["Cheetahs"]), ("Gorilla", ["Gorillas"]), ("Crocodile", ["Crocodiles", "Croc"]),
+    ("Alligator", ["Alligators", "Gator"]), ("Eagle", ["Eagles"]), ("Owl", ["Owls"]),
+    ("Flamingo", ["Flamingos"]), ("Peacock", ["Peacocks"]), ("Squirrel", ["Squirrels"]),
+    ("Hedgehog", ["Hedgehogs"]), ("Raccoon", ["Raccoons"]), ("Wolf", ["Wolves"]),
+    ("Fox", ["Foxes"]), ("Bear", ["Bears"]), ("Rabbit", ["Rabbits", "Bunny"]),
+    ("Horse", ["Horses"]), ("Camel", ["Camels"]), ("Sloth", ["Sloths"]),
+    ("Otter", ["Otters"]), ("Walrus", ["Walruses"]), ("Whale", ["Whales"]),
+    ("Jellyfish", []), ("Butterfly", ["Butterflies"]), ("Spider", ["Spiders"]),
+    ("Snake", ["Snakes"]), ("Frog", ["Frogs"]), ("Turtle", ["Turtles"]),
+    ("Bat", ["Bats"]), ("Ostrich", ["Ostriches"]), ("Platypus", []),
+]
+
+_FOOD: list[CategoryItem] = [
+    ("Pizza", ["Pizzas"]), ("Hamburger", ["Hamburgers", "Burger"]), ("Sushi", []),
+    ("Tacos", ["Taco"]), ("Spaghetti", []), ("Ice Cream", []), ("Pancakes", ["Pancake"]),
+    ("French Fries", ["Fries"]), ("Hot Dog", ["Hotdog", "Hot Dogs"]), ("Popcorn", []),
+    ("Chocolate", []), ("Donut", ["Donuts", "Doughnut"]), ("Bacon", []),
+    ("Cheeseburger", ["Cheeseburgers"]), ("Burrito", ["Burritos"]), ("Ramen", []),
+    ("Steak", ["Steaks"]), ("Sandwich", ["Sandwiches"]), ("Cookie", ["Cookies"]),
+    ("Cupcake", ["Cupcakes"]), ("Waffle", ["Waffles"]), ("Nachos", ["Nacho"]),
+    ("Lasagna", []), ("Pretzel", ["Pretzels"]), ("Bagel", ["Bagels"]),
+    ("Croissant", ["Croissants"]), ("Muffin", ["Muffins"]), ("Pie", ["Pies"]),
+    ("Brownie", ["Brownies"]), ("Omelette", ["Omelet"]),
+    ("Dumpling", ["Dumplings"]), ("Quesadilla", ["Quesadillas"]), ("Meatball", ["Meatballs"]),
+    ("Pickle", ["Pickles"]), ("Watermelon", ["Watermelons"]), ("Pineapple", ["Pineapples"]),
+    ("Avocado", ["Avocados"]), ("Marshmallow", ["Marshmallows"]), ("Cotton Candy", []),
+]
+
+_MOVIES: list[CategoryItem] = [
+    ("Titanic", []), ("Avatar", []), ("The Godfather", ["Godfather"]),
+    ("Jurassic Park", []), ("Star Wars", []), ("The Lion King", ["Lion King"]),
+    ("Frozen", []), ("Inception", []), ("The Matrix", ["Matrix"]),
+    ("Forrest Gump", []), ("Jaws", []), ("Gladiator", []),
+    ("The Avengers", ["Avengers"]), ("Spider-Man", ["Spiderman"]), ("Batman", []),
+    ("Shrek", []), ("Toy Story", []), ("Finding Nemo", []),
+    ("Harry Potter", []), ("The Dark Knight", ["Dark Knight"]), ("Pulp Fiction", []),
+    ("Interstellar", []), ("Joker", []), ("Aladdin", []),
+    ("Up", []), ("Moana", []), ("Encanto", []), ("Barbie", []),
+    ("Oppenheimer", []), ("The Wizard of Oz", ["Wizard of Oz"]),
+    ("Ghostbusters", []), ("Home Alone", []), ("Top Gun", []),
+    ("Pirates of the Caribbean", []), ("The Lord of the Rings", ["Lord of the Rings"]),
+    ("Back to the Future", []), ("Jumanji", []), ("Coco", []),
+    ("The Incredibles", ["Incredibles"]), ("Despicable Me", []),
+]
+
+_OBJECTS: list[CategoryItem] = [
+    ("Umbrella", ["Umbrellas"]), ("Toothbrush", ["Toothbrushes"]), ("Bicycle", ["Bicycles", "Bike"]),
+    ("Backpack", ["Backpacks"]), ("Refrigerator", ["Fridge"]), ("Microwave", ["Microwaves"]),
+    ("Television", ["TV", "Televisions"]), ("Headphones", ["Headphone"]), ("Sunglasses", []),
+    ("Pillow", ["Pillows"]), ("Blanket", ["Blankets"]), ("Scissors", []),
+    ("Hammer", ["Hammers"]), ("Ladder", ["Ladders"]), ("Vacuum", ["Vacuums"]),
+    ("Toaster", ["Toasters"]), ("Wallet", ["Wallets"]), ("Mirror", ["Mirrors"]),
+    ("Candle", ["Candles"]), ("Flashlight", ["Flashlights"]), ("Stapler", ["Staplers"]),
+    ("Calculator", ["Calculators"]), ("Telescope", ["Telescopes"]), ("Compass", []),
+    ("Hourglass", []), ("Lawnmower", ["Lawn Mower"]), ("Skateboard", ["Skateboards"]),
+    ("Surfboard", ["Surfboards"]), ("Guitar", ["Guitars"]), ("Piano", ["Pianos"]),
+    ("Trumpet", ["Trumpets"]), ("Camera", ["Cameras"]), ("Clock", ["Clocks"]),
+    ("Lamp", ["Lamps"]), ("Broom", ["Brooms"]), ("Anchor", ["Anchors"]),
+    ("Helmet", ["Helmets"]), ("Whistle", ["Whistles"]), ("Magnet", ["Magnets"]),
+    ("Wheelbarrow", ["Wheelbarrows"]),
+]
+
+
 CATEGORIES: dict[str, tuple[str, str, list[CategoryItem]]] = {
     # key -> (display_name, emoji, items)
     "nba": ("NBA Players", "\U0001f3c0", _nba_items()),
+    "celebrities": ("Celebrities", "\U0001f31f", _CELEBRITIES),
+    "animals": ("Animals", "\U0001f981", _ANIMALS),
+    "food": ("Food & Drink", "\U0001f354", _FOOD),
+    "movies": ("Movies", "\U0001f3ac", _MOVIES),
+    "objects": ("Everyday Things", "\U0001f4a1", _OBJECTS),
 }
 
 DEFAULT_CATEGORY = "nba"
