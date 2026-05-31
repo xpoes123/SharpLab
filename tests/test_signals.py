@@ -1,0 +1,74 @@
+"""Market-signal detection: arb, middles, steam, divergence."""
+from __future__ import annotations
+
+from shared.signals import (
+    find_ml_arb, find_total_middle, find_spread_middle, detect_ml_moves,
+)
+
+
+def test_ml_arb_detected():
+    # Book A prices home +110, Book B prices away +110 → 47.6% + 47.6% = 95.2% < 100%.
+    odds = {"A": {"ml_home": 110, "ml_away": -130}, "B": {"ml_home": -130, "ml_away": 110}}
+    arb = find_ml_arb(odds)
+    assert arb and arb["kind"] == "arb"
+    assert arb["home_book"] == "A" and arb["away_book"] == "B"
+    assert arb["roi_pct"] > 0
+    assert round(arb["home_stake_pct"] + arb["away_stake_pct"]) == 100
+
+
+def test_ml_no_arb_when_vig_present():
+    odds = {"A": {"ml_home": -130, "ml_away": 110}, "B": {"ml_home": -135, "ml_away": 115}}
+    assert find_ml_arb(odds) is None
+
+
+def test_total_middle():
+    odds = {"A": {"total": 220.5, "total_over_odds": -110},
+            "B": {"total": 223.5, "total_under_odds": -110}}
+    m = find_total_middle(odds)
+    assert m and m["kind"] == "total_middle"
+    assert m["over_book"] == "A" and m["under_book"] == "B"
+    assert m["gap"] == 3.0
+
+
+def test_total_no_middle_when_lines_equal_and_vigged():
+    odds = {"A": {"total": 220.5, "total_over_odds": -110},
+            "B": {"total": 220.5, "total_under_odds": -110}}
+    assert find_total_middle(odds) is None
+
+
+def test_total_arb_same_line_plus_prices():
+    odds = {"A": {"total": 220.5, "total_over_odds": 105},
+            "B": {"total": 220.5, "total_under_odds": 105}}
+    m = find_total_middle(odds)
+    assert m and m["kind"] == "total_arb"
+
+
+def test_spread_middle():
+    odds = {"A": {"spread": -2.5}, "B": {"spread": -3.5}}
+    m = find_spread_middle(odds)
+    assert m and m["gap"] == 1.0
+    assert m["home_book"] == "A" and m["home_line"] == -2.5
+    assert m["away_book"] == "B" and m["away_line"] == 3.5
+
+
+def test_steam_same_direction():
+    base = {b: {"ml_home": -130} for b in ("A", "B", "C", "D")}
+    cur = {b: {"ml_home": -150} for b in ("A", "B", "C", "D")}  # all home steamed
+    s = detect_ml_moves(base, cur)
+    assert s and s["kind"] == "steam" and s["toward"] == "home"
+    assert len(s["books"]) == 4
+
+
+def test_divergence_books_disagree():
+    base = {b: {"ml_home": -130} for b in ("A", "B", "C", "D")}
+    cur = {"A": {"ml_home": -150}, "B": {"ml_home": -148},   # home
+           "C": {"ml_home": -110}, "D": {"ml_home": -112}}   # away
+    s = detect_ml_moves(base, cur)
+    assert s and s["kind"] == "divergence"
+    assert set(s["home_books"]) == {"A", "B"} and set(s["away_books"]) == {"C", "D"}
+
+
+def test_no_move_below_threshold():
+    base = {b: {"ml_home": -130} for b in ("A", "B", "C")}
+    cur = {b: {"ml_home": -135} for b in ("A", "B", "C")}  # only 5c, below 12
+    assert detect_ml_moves(base, cur) is None
