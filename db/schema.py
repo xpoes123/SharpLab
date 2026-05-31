@@ -361,6 +361,13 @@ CREATE TABLE IF NOT EXISTS reaction_roles (
     channel_id  TEXT NOT NULL,
     PRIMARY KEY (message_id, emoji)
 );
+
+CREATE TABLE IF NOT EXISTS qb_answers (
+    answer      TEXT PRIMARY KEY,  -- primary answer / display name
+    category    TEXT NOT NULL,     -- 'science' (room for other QBReader categories)
+    aliases     TEXT,              -- JSON list of accepted alternates
+    created_at  TEXT NOT NULL      -- UTC ISO 8601, first time we saw it
+);
 """
 
 
@@ -555,6 +562,16 @@ async def init_db() -> None:
                 "message_id TEXT NOT NULL, emoji TEXT NOT NULL, role_id TEXT NOT NULL, "
                 "guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, "
                 "PRIMARY KEY (message_id, emoji))"
+            )
+            await db.commit()
+        except Exception:
+            pass
+        # Migration: add qb_answers cache for party-game QBReader science pool
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS qb_answers ("
+                "answer TEXT PRIMARY KEY, category TEXT NOT NULL, "
+                "aliases TEXT, created_at TEXT NOT NULL)"
             )
             await db.commit()
         except Exception:

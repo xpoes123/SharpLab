@@ -92,6 +92,64 @@ def test_qb_clean_answer_rejects_junk() -> None:
     assert _clean_qb_answer("<b><u>pi</u></b>", "pi") is None
 
 
+@pytest.fixture()
+def tmp_db(tmp_path):
+    import db.schema as _schema
+    import db.queries as _queries
+
+    db_path = str(tmp_path / "test.db")
+    orig_s, orig_q = _schema.DB_PATH, _queries.DB_PATH
+    _schema.DB_PATH = _queries.DB_PATH = db_path
+    asyncio.run(_schema.init_db())
+    yield db_path
+    _schema.DB_PATH, _queries.DB_PATH = orig_s, orig_q
+
+
+def test_qb_answers_persist_and_accumulate(tmp_db) -> None:
+    import db.queries as _queries
+
+    async def go():
+        await _queries.upsert_qb_answers("science", [("Entropy", ["disorder"]), ("Photon", [])])
+        await _queries.upsert_qb_answers("science", [("Quark", ["quarks"])])  # accumulates
+        return dict(await _queries.get_qb_answers("science"))
+
+    pool = asyncio.run(go())
+    assert set(pool) == {"Entropy", "Photon", "Quark"}  # pool grows, not replaced
+    assert pool["Entropy"] == ["disorder"]
+
+
+def test_qb_answers_upsert_refreshes_aliases(tmp_db) -> None:
+    import db.queries as _queries
+
+    async def go():
+        await _queries.upsert_qb_answers("science", [("Entropy", ["disorder"])])
+        await _queries.upsert_qb_answers("science", [("Entropy", ["disorder", "S"])])
+        rows = await _queries.get_qb_answers("science")
+        return rows
+
+    rows = asyncio.run(go())
+    assert len(rows) == 1  # same answer, no duplicate row
+    assert dict(rows)["Entropy"] == ["disorder", "S"]  # aliases refreshed
+
+
+def test_qb_load_cache_from_db_warms_pool(tmp_db) -> None:
+    import db.queries as _queries
+    from bot.cogs import _party_categories as pc
+
+    async def go():
+        await _queries.upsert_qb_answers("science", [("Boson", []), ("Lepton", ["leptons"])])
+        pc._SCIENCE_QB_CACHE.clear()
+        n = await pc._load_science_cache_from_db()
+        return n, list(pc._SCIENCE_QB_CACHE)
+
+    try:
+        n, cache = asyncio.run(go())
+        assert n == 2
+        assert {name for name, _alts in cache} == {"Boson", "Lepton"}
+    finally:
+        pc._SCIENCE_QB_CACHE.clear()
+
+
 def test_qb_science_falls_back_when_cache_empty() -> None:
     from bot.cogs import _party_categories as pc
     from bot.cogs._party_categories import get_category, SCIENCE_QB_KEY
