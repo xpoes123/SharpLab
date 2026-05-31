@@ -26,6 +26,28 @@ from web.hq import router as hq_router
 DB_PATH = os.environ.get("SHARPLAB_DB_PATH", "data/sharplab.db")
 
 
+def _ts(s: str | None) -> datetime | None:
+    """Parse a UTC ISO 8601 string (tolerating a trailing 'Z') to a datetime."""
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _is_pregame(captured_at: str | None, start_time: str | None) -> bool:
+    """True if a snapshot was taken at/before tip-off. Polls captured after the
+    game starts are LIVE in-game prices, not the closing line — exclude them so
+    every open/close reflects the pre-match market only."""
+    c, s = _ts(captured_at), _ts(start_time)
+    if c is None:
+        return False
+    if s is None:
+        return True  # unknown start → keep (can't prove it's in-game)
+    return c <= s + timedelta(minutes=2)  # tiny grace for clock skew
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
@@ -684,6 +706,9 @@ async def dashboard_line_movement(game_id: str = Path(...)):
 
     snap_list = []
     for s in polls:
+        # Pre-match analysis only — drop in-game live prices captured after tip.
+        if not _is_pregame(s["captured_at"], game["start_time"]):
+            continue
         snap_list.append({
             "source": s["source"],
             "captured_at": s["captured_at"],
@@ -730,7 +755,7 @@ async def dashboard_results(sport: str = Query("all"), limit: int = Query(10, ge
     results = []
     for g in games:
         polls = await _fetch_all(
-            "SELECT source, payload FROM odds_snapshots WHERE game_id = ? AND kind = 'poll' "
+            "SELECT source, captured_at, payload FROM odds_snapshots WHERE game_id = ? AND kind = 'poll' "
             "ORDER BY captured_at ASC", (g["game_id"],),
         )
         closes = await _fetch_all(
@@ -740,6 +765,9 @@ async def dashboard_results(sport: str = Query("all"), limit: int = Query(10, ge
         close_by = {r["source"]: json.loads(r["payload"]) for r in closes}
         poll_by: dict[str, list] = {}
         for r in polls:
+            # Pre-match only: the closing line is the last poll BEFORE tip-off.
+            if not _is_pregame(r["captured_at"], g["start_time"]):
+                continue
             poll_by.setdefault(r["source"], []).append(json.loads(r["payload"]))
 
         # One book for open + close: prefer one with a real close, else most polled.

@@ -45,15 +45,18 @@ class OddsPollingWorkflow:
             )
 
             # ── Step 2: spawn CloseCaptureWorkflow per upcoming game ──────────
-            game_ids: list[str] = []
+            # Only poll odds for games that haven't tipped yet. Once a game
+            # starts, The Odds API serves LIVE in-game prices — polling those
+            # pollutes the closing-line history and burns quota. The last
+            # pre-tip poll IS the closing line.
+            upcoming_games = []
             for game in games:
-                game_ids.append(game.game_id)
-
                 start_dt = datetime.fromisoformat(game.start_time_utc_iso)
                 if start_dt.tzinfo is None:
                     start_dt = start_dt.replace(tzinfo=timezone.utc)
                 if start_dt <= workflow.now():
-                    continue  # already tipped — don't start a new close-capture
+                    continue  # already tipped — don't poll or start close-capture
+                upcoming_games.append(game)
 
                 close_wf_id = f"close-capture-{game.game_id}"
                 try:
@@ -80,7 +83,13 @@ class OddsPollingWorkflow:
                 except WorkflowAlreadyStartedError:
                     pass
 
-            # ── Step 3: fetch odds for all today's games ──────────────────────
+            game_ids = [g.game_id for g in upcoming_games]
+            if not game_ids:
+                # Nothing left to poll this cycle — skip the odds fetches.
+                await workflow.sleep(timedelta(minutes=interval_minutes))
+                workflow.continue_as_new(args=[interval_minutes, sport])
+
+            # ── Step 3: fetch odds for pre-tip games only ─────────────────────
             batch = await workflow.execute_activity(
                 fetch_odds_batch,
                 args=[game_ids, sport],
@@ -97,10 +106,10 @@ class OddsPollingWorkflow:
                     retry_policy=RetryPolicy(maximum_attempts=3),
                 )
 
-            # ── Step 5: fetch Kalshi ML for all today's games ─────────────────
+            # ── Step 5: fetch Kalshi ML for pre-tip games only ────────────────
             kalshi_batch = await workflow.execute_activity(
                 fetch_kalshi_odds_batch,
-                args=[games, sport],
+                args=[upcoming_games, sport],
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )
@@ -114,10 +123,10 @@ class OddsPollingWorkflow:
                     retry_policy=RetryPolicy(maximum_attempts=3),
                 )
 
-            # ── Step 7: fetch Polymarket ML for all today's games ─────────────
+            # ── Step 7: fetch Polymarket ML for pre-tip games only ────────────
             polymarket_batch = await workflow.execute_activity(
                 fetch_polymarket_odds_batch,
-                games,
+                upcoming_games,
                 start_to_close_timeout=timedelta(seconds=60),
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )
