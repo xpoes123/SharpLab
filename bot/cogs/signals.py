@@ -27,6 +27,7 @@ BASELINE_MINUTES = 30     # steam/divergence compare-against window
 ALERT_TTL_SEC = 6 * 3600  # re-alert the same signal at most once per this period
 STALE_MINUTES = 45        # ignore games whose latest odds are older than this
 ARB_MIN_ROI = 1.0         # ignore arbs below this % (snapshots aren't simultaneous)
+MIDDLE_MIN_EV = 0.0       # only fire middles the base-rate model scores as +EV
 
 
 def _am(v: int) -> str:
@@ -131,12 +132,21 @@ class Signals(commands.Cog):
                     await self._post(self._arb_embed(emoji, label, g, arb)); posted += 1
 
                 tot = sig.find_total_middle(current)
-                if tot and self._fresh(f"{tot['kind']}:{g.game_id}:{tot['over_book']}:{tot['under_book']}:{tot['over_line']}:{tot['under_line']}"):
-                    await self._post(self._total_embed(emoji, label, g, tot)); posted += 1
+                if tot:
+                    prof = (None if tot["kind"] == "total_arb" else
+                            sig.middle_profit(tot["over_odds"], tot["under_odds"],
+                                              sig.estimate_middle_hit(g.sport, "total", tot["over_line"], tot["under_line"])))
+                    if self._middle_fires(tot["kind"], prof) and self._fresh(
+                            f"{tot['kind']}:{g.game_id}:{tot['over_book']}:{tot['under_book']}:{tot['over_line']}:{tot['under_line']}"):
+                        await self._post(self._total_embed(emoji, label, g, tot, prof)); posted += 1
 
                 spr = sig.find_spread_middle(current)
-                if spr and self._fresh(f"spread_middle:{g.game_id}:{spr['home_book']}:{spr['away_book']}:{spr['home_line']}:{spr['away_line']}"):
-                    await self._post(self._spread_embed(emoji, label, g, spr)); posted += 1
+                if spr:
+                    prof = sig.middle_profit(spr["home_odds"], spr["away_odds"],
+                                             sig.estimate_middle_hit(g.sport, "spread", spr["home_line"], spr["away_line"]))
+                    if self._middle_fires("spread_middle", prof) and self._fresh(
+                            f"spread_middle:{g.game_id}:{spr['home_book']}:{spr['away_book']}:{spr['home_line']}:{spr['away_line']}"):
+                        await self._post(self._spread_embed(emoji, label, g, spr, prof)); posted += 1
 
                 # Steam / divergence compare to ~30 min ago.
                 since = await queries.get_snapshots_for_game_since(g.game_id, baseline_cut)
@@ -168,28 +178,61 @@ class Signals(commands.Cog):
         e.set_footer(text="Moneyline arb across books — verify prices are still live before betting.")
         return e
 
-    def _total_embed(self, emoji, label, g, t) -> discord.Embed:
+    @staticmethod
+    def _middle_fires(kind: str, prof: dict | None) -> bool:
+        """Arbs always; middles only when the base-rate model says +EV (so we don't
+        flag losing 'both can win' bets like a -200/-195 run-line middle)."""
+        if kind.endswith("arb"):
+            return True
+        return bool(prof) and prof["ev_roi"] >= MIDDLE_MIN_EV
+
+    @staticmethod
+    def _window_text(lo: float, hi: float) -> str:
+        a, b = min(lo, hi), max(lo, hi)
+        ints = [n for n in range(int(a) - 2, int(b) + 3) if a < n < b]
+        if not ints:
+            return f"{a:g}–{b:g}"
+        return str(ints[0]) if len(ints) == 1 else f"{ints[0]}–{ints[-1]}"
+
+    @staticmethod
+    def _ev_field(e: discord.Embed, prof: dict) -> None:
+        roi = prof["ev_roi"]
+        verdict = "✅ +EV" if roi >= 1 else "🟡 thin +EV" if roi >= 0 else "🔴 −EV as priced"
+        e.add_field(name="Profitability",
+                    value=(f"hits ~**{prof['hit_p'] * 100:.0f}%** · breakeven **{prof['breakeven'] * 100:.0f}%** · "
+                           f"est **{roi:+.1f}%** ROI  {verdict}\n"
+                           f"*base-rate model — better for low-total / pick'em games; verify the line isn't stale*"),
+                    inline=False)
+
+    def _total_embed(self, emoji, label, g, t, prof) -> discord.Embed:
         is_arb = t["kind"] == "total_arb"
         e = discord.Embed(
             title=f"{'🚨 Total Arb' if is_arb else '🎯 Total Middle'} — {label}",
-            description=(f"{emoji} Bet **Over {t['over_line']}** ({_am(t['over_odds'])}) on `{t['over_book']}` "
-                        f"and **Under {t['under_line']}** ({_am(t['under_odds'])}) on `{t['under_book']}`."),
+            description=(f"{emoji} **Over {t['over_line']} ({_am(t['over_odds'])})** on `{t['over_book']}`  +  "
+                        f"**Under {t['under_line']} ({_am(t['under_odds'])})** on `{t['under_book']}`"),
             color=0x9ece6a if is_arb else 0xe0af68,
         )
         if is_arb:
             e.add_field(name="Edge", value=f"{(1 - t['cost']) * 100:.2f}% guaranteed", inline=True)
         else:
-            e.add_field(name="Middle", value=f"both win if total lands in **{t['over_line']}–{t['under_line']}** ({t['gap']:g} pts)", inline=True)
+            e.add_field(name="Window", value=f"both cash if the total is **{self._window_text(t['over_line'], t['under_line'])}**", inline=True)
+            if prof:
+                self._ev_field(e, prof)
         return e
 
-    def _spread_embed(self, emoji, label, g, s) -> discord.Embed:
+    def _spread_embed(self, emoji, label, g, s, prof) -> discord.Embed:
+        ho, ao = s.get("home_odds"), s.get("away_odds")
+        run_line = g.sport == "mlb"
         e = discord.Embed(
-            title=f"🎯 Spread Middle — {label}",
-            description=(f"{emoji} **{g.home_team} {s['home_line']:+g}** on `{s['home_book']}` and "
-                        f"**{g.away_team} {s['away_line']:+g}** on `{s['away_book']}`."),
+            title=f"🎯 {'Run-Line' if run_line else 'Spread'} Middle — {label}",
+            description=(f"{emoji} **{g.home_team} {s['home_line']:+g} ({_am(ho) if ho else '?'})** on `{s['home_book']}`  +  "
+                        f"**{g.away_team} {s['away_line']:+g} ({_am(ao) if ao else '?'})** on `{s['away_book']}`"),
             color=0xe0af68,
         )
-        e.add_field(name="Middle", value=f"{s['gap']:g}-pt window — both can win", inline=True)
+        win = "decided by exactly 1 run" if run_line else f"the margin is **{self._window_text(-s['home_line'], s['away_line'])}**"
+        e.add_field(name="Window", value=f"both cash if {win}", inline=True)
+        if prof:
+            self._ev_field(e, prof)
         return e
 
     def _move_embed(self, emoji, label, g, m) -> discord.Embed:
