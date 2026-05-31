@@ -3271,3 +3271,37 @@ async def get_users_with_option_trades() -> list[str]:
         )
         rows = await cur.fetchall()
         return [r[0] for r in rows]
+
+
+# ── QBReader answer cache (party-game science pool) ──────────────────────────
+
+
+async def upsert_qb_answers(
+    category: str, items: list[tuple[str, list[str]]]
+) -> int:
+    """Persist (answer, aliases) pairs for a QBReader category. Idempotent:
+    re-seeing an answer refreshes its aliases but keeps the original created_at.
+    Returns the number of rows written."""
+    if not items:
+        return 0
+    now = datetime.now(timezone.utc).isoformat()
+    rows = [(ans, category, json.dumps(aliases), now) for ans, aliases in items]
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.executemany(
+            "INSERT INTO qb_answers (answer, category, aliases, created_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(answer) DO UPDATE SET aliases=excluded.aliases",
+            rows,
+        )
+        await db.commit()
+    return len(rows)
+
+
+async def get_qb_answers(category: str) -> list[tuple[str, list[str]]]:
+    """All accumulated (answer, aliases) for a QBReader category."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT answer, aliases FROM qb_answers WHERE category = ?", (category,)
+        )
+        rows = await cur.fetchall()
+    return [(r[0], json.loads(r[1]) if r[1] else []) for r in rows]

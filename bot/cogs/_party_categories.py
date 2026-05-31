@@ -15,8 +15,11 @@ from difflib import SequenceMatcher
 import httpx
 
 from bot.cogs.nbaguess import NBA_PLAYERS_DATA
+from db import queries
 
 log = logging.getLogger(__name__)
+
+SCIENCE_DB_CATEGORY = "science"  # qb_answers.category value for the science pool
 
 
 # ── Category data ────────────────────────────────────────────────────────────
@@ -323,12 +326,31 @@ def _clean_qb_answer(html_answer: str, sanitized_answer: str) -> CategoryItem | 
     return (name, alts)
 
 
-async def refresh_science_answers(target: int = 200, max_requests: int = 5) -> int:
-    """Fetch science answers from QBReader into the module cache. Returns count.
+async def _load_science_cache_from_db() -> int:
+    """Warm the in-memory cache from the accumulated DB pool. Returns count."""
+    try:
+        stored = await queries.get_qb_answers(SCIENCE_DB_CATEGORY)
+    except Exception:
+        log.exception("refresh_science_answers: DB load failed")
+        return len(_SCIENCE_QB_CACHE)
+    if stored:
+        _SCIENCE_QB_CACHE.clear()
+        _SCIENCE_QB_CACHE.extend((name, list(alts)) for name, alts in stored)
+    return len(_SCIENCE_QB_CACHE)
 
-    Best-effort: on any error the existing cache is left untouched so a failed
-    refresh never empties a good cache.
+
+async def refresh_science_answers(target: int = 200, max_requests: int = 5) -> int:
+    """Top up the persistent science pool from QBReader, then reload the cache.
+
+    The DB accumulates every answer ever seen, so the pool grows across games
+    and survives restarts. Flow: warm cache from DB → fetch a fresh batch from
+    QBReader → persist new answers → reload the full pool. Best-effort at every
+    step: a failed fetch or DB call never empties a good cache.
     """
+    # 1. Warm from the accumulated DB pool first (fast, offline-safe).
+    await _load_science_cache_from_db()
+
+    # 2. Fetch a fresh batch from QBReader.
     collected: dict[str, CategoryItem] = {}
     try:
         async with httpx.AsyncClient(timeout=20) as client:
@@ -349,9 +371,17 @@ async def refresh_science_answers(target: int = 200, max_requests: int = 5) -> i
     except Exception:
         log.exception("refresh_science_answers: QBReader fetch failed")
         return len(_SCIENCE_QB_CACHE)
+
+    # 3. Persist new answers, then reload the full accumulated pool.
     if collected:
-        _SCIENCE_QB_CACHE.clear()
-        _SCIENCE_QB_CACHE.extend(collected.values())
+        try:
+            await queries.upsert_qb_answers(SCIENCE_DB_CATEGORY, list(collected.values()))
+        except Exception:
+            log.exception("refresh_science_answers: DB upsert failed")
+        if not await _load_science_cache_from_db() and collected:
+            # DB unavailable — fall back to just this batch in memory.
+            _SCIENCE_QB_CACHE.clear()
+            _SCIENCE_QB_CACHE.extend(collected.values())
     return len(_SCIENCE_QB_CACHE)
 
 
