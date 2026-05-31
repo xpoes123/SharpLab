@@ -44,13 +44,15 @@ function render(traders) {
              <th class="num">Avg</th><th class="num">Cost basis</th></tr></thead><tbody>${rows}</tbody></table>
          </details>`
       : `<div class="muted" style="margin-top:8px;font-size:13px">No open positions.</div>`;
+    const link = `/hq/stocks/${encodeURIComponent(t.username)}`;
     return `<div class="card" style="margin-top:14px">
       <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap">
-        <div><span class="muted">#${i + 1}</span> <strong style="font-size:18px">${plink(t.username)}</strong></div>
-        <div style="font-size:22px;font-weight:800">${money(t.account_value)}</div>
+        <div><span class="muted">#${i + 1}</span> <a href="${link}" style="font-size:18px;font-weight:800">${t.username}</a></div>
+        <a href="${link}" style="font-size:22px;font-weight:800;color:var(--fg)">${money(t.account_value)} →</a>
       </div>
       <div class="grid" style="margin-top:12px">
         <div class="stat"><div class="label">Stocks</div><div class="value" style="font-size:18px">${money(t.stock_value)}</div></div>
+        <div class="stat"><div class="label">Options</div><div class="value" style="font-size:18px">${money(t.options_value)}</div></div>
         <div class="stat"><div class="label">Cash</div><div class="value" style="font-size:18px">${money(t.cash)}</div></div>
         <div class="stat"><div class="label">Realized P&L</div>
           <div class="value ${cls(rp)}" style="font-size:18px">${pnl(rp)}</div></div>
