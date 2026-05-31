@@ -22,7 +22,7 @@ from temporalio import activity
 
 from db import queries, schema
 from shared.models import Bet, Game, GameResult, InjuryAlert, OddsBatch, OddsSnapshot, get_team_abbr, get_kalshi_code
-from shared.odds_utils import fetch_polymarket_ml, prob_to_american, kalshi_exec_price
+from shared.odds_utils import prob_to_american, kalshi_exec_price
 
 load_dotenv()
 
@@ -574,30 +574,100 @@ async def fetch_kalshi_close_snapshot(inp: FetchCloseSnapshotInput) -> list[Odds
 
 # ── Polymarket activities ────────────────────────────────────────────────────
 
+POLYMARKET_GAMMA = "https://gamma-api.polymarket.com"
+
+
+def _poly_et_date(iso: str) -> str:
+    """Game's ET date (YYYY-MM-DD) — Polymarket slugs end with it."""
+    try:
+        from zoneinfo import ZoneInfo
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(ZoneInfo("America/New_York"))
+        return dt.strftime("%Y-%m-%d")
+    except Exception:
+        return ""
+
+
+def _poly_ml_from_event(event: dict, home_team: str, away_team: str) -> tuple[int, int] | None:
+    """Extract (ml_home, ml_away) from a Polymarket game event. The moneyline
+    market is the one whose question equals the event title; its two outcomes are
+    the full team names with normalized (no-vig) prices."""
+    title = (event.get("title") or "").strip()
+    hl, al = home_team.split()[-1].lower(), away_team.split()[-1].lower()
+    ml = next((m for m in event.get("markets", []) if (m.get("question") or "").strip() == title), None)
+    if not ml:
+        return None
+    try:
+        outs = json.loads(ml.get("outcomes") or "[]")
+        prices = [float(p) for p in json.loads(ml.get("outcomePrices") or "[]")]
+    except (ValueError, TypeError):
+        return None
+    if len(outs) != 2 or len(prices) != 2:
+        return None
+    home_prob = away_prob = None
+    for name, price in zip(outs, prices):
+        nl = name.lower()
+        if hl in nl:
+            home_prob = price
+        elif al in nl:
+            away_prob = price
+    if home_prob is None or away_prob is None or not (0 < home_prob < 1 and 0 < away_prob < 1):
+        return None
+    try:
+        return prob_to_american(home_prob), prob_to_american(away_prob)
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
 @activity.defn
 async def fetch_polymarket_odds_batch(games: list[Game]) -> OddsBatch:
     """
-    Fetch Polymarket game winner market prices for today's games.
-    Searches open markets via the Gamma API (no auth required).
-    Returns one OddsSnapshot per matched game with {ml_home, ml_away}.
+    Fetch Polymarket game-winner prices via the Gamma API (no auth). Matches each
+    game to a Polymarket event by both team names in the title + the ET date in
+    the slug. One events call per sport. {ml_home, ml_away} per matched game.
     """
     captured_at = datetime.now(timezone.utc).isoformat()
     snapshots: list[OddsSnapshot] = []
 
+    # Fetch game events once per sport.
+    by_sport: dict[str, list[dict]] = {}
     async with httpx.AsyncClient() as client:
-        for game in games:
-            result = await fetch_polymarket_ml(client, game.home_team, game.away_team)
-            if result is None:
-                continue
-            ml_home, ml_away = result
-            snapshots.append(OddsSnapshot(
-                snapshot_id=f"poll:{game.game_id}:polymarket:{captured_at}",
-                game_id=game.game_id,
-                kind="poll",
-                source="polymarket",
-                captured_at_utc_iso=captured_at,
-                payload={"ml_home": ml_home, "ml_away": ml_away},
-            ))
+        for sport in {g.sport for g in games}:
+            try:
+                r = await client.get(
+                    f"{POLYMARKET_GAMMA}/events",
+                    params={"tag_slug": sport, "active": "true", "closed": "false", "limit": 300},
+                    timeout=20.0,
+                )
+                evs = r.json() if isinstance(r.json(), list) else r.json().get("data", [])
+            except Exception:
+                evs = []
+            by_sport[sport] = [e for e in evs if " vs" in (e.get("title") or "").lower()]
+
+    for game in games:
+        evs = by_sport.get(game.sport, [])
+        hl, al = game.home_team.split()[-1].lower(), game.away_team.split()[-1].lower()
+        et_date = _poly_et_date(game.start_time_utc_iso)
+
+        def _title_match(e):
+            t = (e.get("title") or "").lower()
+            return hl in t and al in t
+
+        ev = next((e for e in evs if _title_match(e) and (not et_date or (e.get("slug") or "").endswith(et_date))), None)
+        ev = ev or next((e for e in evs if _title_match(e)), None)
+        if not ev:
+            continue
+        result = _poly_ml_from_event(ev, game.home_team, game.away_team)
+        if result is None:
+            continue
+        ml_home, ml_away = result
+        snapshots.append(OddsSnapshot(
+            snapshot_id=f"poll:{game.game_id}:polymarket:{captured_at}",
+            game_id=game.game_id,
+            kind="poll",
+            source="polymarket",
+            captured_at_utc_iso=captured_at,
+            payload={"ml_home": ml_home, "ml_away": ml_away},
+        ))
 
     activity.logger.info(
         f"[fetch_polymarket_odds_batch] matched {len(snapshots)}/{len(games)} games"
@@ -622,8 +692,21 @@ async def fetch_polymarket_close_snapshot(inp: FetchCloseSnapshotInput) -> list[
         )
         return []
 
+    hl, al = game.home_team.split()[-1].lower(), game.away_team.split()[-1].lower()
+    et_date = _poly_et_date(game.start_time_utc_iso)
     async with httpx.AsyncClient() as client:
-        result = await fetch_polymarket_ml(client, game.home_team, game.away_team)
+        try:
+            r = await client.get(
+                f"{POLYMARKET_GAMMA}/events",
+                params={"tag_slug": inp.sport, "active": "true", "closed": "false", "limit": 300},
+                timeout=20.0,
+            )
+            evs = r.json() if isinstance(r.json(), list) else r.json().get("data", [])
+        except Exception:
+            evs = []
+    games_ev = [e for e in evs if hl in (e.get("title") or "").lower() and al in (e.get("title") or "").lower()]
+    ev = next((e for e in games_ev if (e.get("slug") or "").endswith(et_date)), None) or (games_ev[0] if games_ev else None)
+    result = _poly_ml_from_event(ev, game.home_team, game.away_team) if ev else None
 
     if result is None:
         activity.logger.warning(
