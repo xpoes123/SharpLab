@@ -139,24 +139,52 @@ function wireMovement() {
   });
 }
 
+// Distinct, legible line colors for overlaying multiple books.
+const LM_COLORS = ["#7aa2f7", "#bb9af7", "#9ece6a", "#e0af68", "#f7768e", "#7dcfff", "#ff9e64", "#73daca", "#2ac3de", "#b4f9f8", "#ff75a0", "#c0caf5"];
+
 function buildMovementUI(box, gid) {
   const lm = LM[gid];
-  const sources = [...new Set((lm.snapshots || []).map((s) => s.source))];
+  const sources = [...new Set((lm.snapshots || []).map((s) => s.source))].sort();
   if (!sources.length) { box.innerHTML = `<span class="muted">No line history yet.</span>`; return; }
-  const def = ["draftkings", "fanduel"].find((b) => sources.includes(b)) || sources[0];
+
+  // Stable color per book; default to overlaying the two sharpest available.
+  const colorOf = {};
+  sources.forEach((s, i) => { colorOf[s] = LM_COLORS[i % LM_COLORS.length]; });
+  const pref = ["draftkings", "fanduel", "betmgm", "caesars", "kalshi"];
+  const def = pref.filter((b) => sources.includes(b)).slice(0, 2);
+  const selected = new Set(def.length ? def : sources.slice(0, 2));
+
   box.innerHTML = `
-    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+    <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
       <select class="metricSel lbselect"><option value="ml_home">Moneyline</option><option value="spread">Spread</option><option value="total">Total</option></select>
-      <select class="bookSel lbselect">${sources.map((s) => `<option${s === def ? " selected" : ""}>${s}</option>`).join("")}</select>
+      <span class="muted" style="font-size:12px">overlay books — click to toggle:</span>
     </div>
+    <div class="bookChips" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"></div>
     <div class="bookTbl" style="margin-bottom:12px"></div>
     <div class="lmchart"></div>
-    <div class="lmvals muted" style="font-size:12px;margin-top:6px"></div>`;
-  const metricSel = box.querySelector(".metricSel"), bookSel = box.querySelector(".bookSel");
-  const all = () => { renderBookTable(box, gid, metricSel.value); drawGraph(box, gid); };
-  metricSel.addEventListener("change", all);
-  bookSel.addEventListener("change", () => drawGraph(box, gid));
-  all();
+    <div class="lmvals" style="font-size:12px;margin-top:8px;display:flex;gap:16px;flex-wrap:wrap"></div>`;
+
+  const metricSel = box.querySelector(".metricSel"), chips = box.querySelector(".bookChips");
+  const redraw = () => { renderBookTable(box, gid, metricSel.value); drawGraph(box, gid, [...selected], colorOf); };
+
+  function renderChips() {
+    chips.innerHTML = sources.map((s) => {
+      const on = selected.has(s), c = colorOf[s];
+      return `<button class="bookchip" data-src="${s}" aria-pressed="${on}"
+        style="border-color:${on ? c : "var(--line)"};background:${on ? c + "22" : "transparent"};color:${on ? "var(--fg)" : "var(--muted)"}">
+        <span class="dot" style="background:${on ? c : "var(--muted)"}"></span>${s}</button>`;
+    }).join("");
+    chips.querySelectorAll(".bookchip").forEach((b) => b.addEventListener("click", () => {
+      const s = b.dataset.src;
+      if (selected.has(s)) { if (selected.size > 1) selected.delete(s); }  // keep at least one
+      else selected.add(s);
+      renderChips(); redraw();
+    }));
+  }
+
+  metricSel.addEventListener("change", redraw);
+  renderChips();
+  redraw();
 }
 
 function bySource(lm) {
@@ -185,17 +213,29 @@ function renderBookTable(box, gid, metric) {
     `<table><thead><tr><th>Book</th><th class="num">Open</th><th class="num">Close</th><th class="num">Δ</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
 }
 
-function drawGraph(box, gid) {
-  const lm = LM[gid];
-  const src = box.querySelector(".bookSel").value, metric = box.querySelector(".metricSel").value;
-  const snaps = (lm.snapshots || []).filter((s) => s.source === src).sort((a, b) => new Date(a.captured_at) - new Date(b.captured_at));
-  const closeVal = lm.close && lm.close[src] ? lm.close[src][metric] : null;
-  box.querySelector(".lmchart").innerHTML = lineChart(snaps, metric, closeVal);
-  const pts = snaps.map((s) => s[metric]).filter((v) => v != null);
+function drawGraph(box, gid, books, colorOf) {
+  const lm = LM[gid], metric = box.querySelector(".metricSel").value;
+  const series = books.map((src) => {
+    const snaps = (lm.snapshots || []).filter((s) => s.source === src).sort((a, b) => new Date(a.captured_at) - new Date(b.captured_at));
+    const pts = snaps.map((s) => ({ t: new Date(s.captured_at).getTime(), v: s[metric] })).filter((p) => p.v != null);
+    const closeVal = lm.close && lm.close[src] ? lm.close[src][metric] : null;
+    return { src, color: colorOf[src], pts, closeVal };
+  }).filter((s) => s.pts.length);
+
+  box.querySelector(".lmchart").innerHTML = multiLineChart(series, metric);
+
   const f = metric === "total" ? (v) => v : am;
-  box.querySelector(".lmvals").innerHTML = pts.length
-    ? `${src}: Open <strong>${f(pts[0])}</strong> → ${closeVal != null ? "Close" : "Now"} <strong>${f(closeVal != null ? closeVal : pts[pts.length - 1])}</strong>`
-    : "No data for this book/metric.";
+  box.querySelector(".lmvals").innerHTML = series.length
+    ? series.map((s) => {
+      const last = s.closeVal != null ? s.closeVal : s.pts[s.pts.length - 1].v;
+      const d = s.pts[0].v != null && last != null ? last - s.pts[0].v : null;
+      const dStr = d == null || Math.abs(d) < (metric === "total" ? 0.05 : 1) ? "" :
+        ` <span class="${d < 0 ? "pos" : "neg"}">(${d > 0 ? "+" : ""}${metric === "total" ? d.toFixed(1) : Math.round(d)})</span>`;
+      return `<span style="display:inline-flex;align-items:center;gap:6px">
+        <span class="dot" style="background:${s.color}"></span><strong>${s.src}</strong>
+        <span class="muted">${f(s.pts[0].v)} → <span style="color:var(--fg)">${f(last)}</span></span>${dStr}</span>`;
+    }).join("")
+    : `<span class="muted">No data for these books on this metric.</span>`;
 }
 
 const METRIC_LABEL = { ml_home: "Home moneyline", spread: "Spread", total: "Total (O/U)" };
@@ -203,49 +243,62 @@ function axisTime(t) {
   try { return new Date(t).toLocaleString("en-US", { month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }); } catch { return ""; }
 }
 
-function lineChart(snaps, metric, closeVal) {
-  const pts = snaps.map((s) => ({ t: new Date(s.captured_at).getTime(), v: s[metric] })).filter((p) => p.v != null);
-  if (pts.length < 2) return `<div class="muted" style="padding:16px">Not enough data points yet.</div>`;
-  // Margins leave room for a Y-axis title + value labels and X-axis times.
-  const W = 760, H = 220, mL = 60, mR = 16, mT = 14, mB = 36;
+// Overlay one or more books' movement for a metric on a shared, labeled axis.
+// Each series ends with a ringed marker at its closing value so you can see how
+// the books moved relative to one another (steam, lead-steam, disagreement).
+function multiLineChart(series, metric) {
+  const allT = [];
+  series.forEach((s) => s.pts.forEach((p) => allT.push(p.t)));
+  if (!allT.length) return `<div class="muted" style="padding:16px">Not enough data points yet.</div>`;
+  const tmin = Math.min(...allT), tmax = Math.max(...allT);
+
+  // Build drawable series: append the closing value at tmax so the line visibly
+  // settles to where it closed (real closes can differ from the last poll).
+  const allV = [];
+  const draw = series.map((s) => {
+    const dpts = s.pts.slice();
+    if (s.closeVal != null) dpts.push({ t: tmax, v: s.closeVal, close: true });
+    dpts.forEach((p) => allV.push(p.v));
+    return { ...s, dpts };
+  });
+  if (draw.reduce((n, s) => n + s.dpts.length, 0) < 2)
+    return `<div class="muted" style="padding:16px">Not enough data points yet.</div>`;
+
+  const W = 760, H = 230, mL = 60, mR = 16, mT = 14, mB = 36;
   const pw = W - mL - mR, ph = H - mT - mB;
-  const ts = pts.map((p) => p.t), vs = pts.map((p) => p.v);
-  const tmin = Math.min(...ts), tmax = Math.max(...ts);
-  let vmin = Math.min(...vs), vmax = Math.max(...vs);
-  if (closeVal != null) { vmin = Math.min(vmin, closeVal); vmax = Math.max(vmax, closeVal); }
+  let vmin = Math.min(...allV), vmax = Math.max(...allV);
   const pad = (vmax - vmin) * 0.15 || 1; vmin -= pad; vmax += pad;
   const X = (t) => mL + (tmax > tmin ? (t - tmin) / (tmax - tmin) : 0.5) * pw;
   const Y = (v) => mT + ph - ((v - vmin) / (vmax - vmin)) * ph;
   const fmtV = metric === "total" ? (v) => Math.round(v * 10) / 10 : (v) => am(Math.round(v));
 
-  // Horizontal gridlines + Y value labels (bottom / mid / top).
   const yvals = [vmin, (vmin + vmax) / 2, vmax];
   const grid = yvals.map((v) => {
     const y = Y(v);
     return `<line x1="${mL}" y1="${y.toFixed(1)}" x2="${W - mR}" y2="${y.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>`
       + `<text x="${mL - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="12" fill="var(--muted)">${fmtV(v)}</text>`;
   }).join("");
-
-  // X time labels at first + last snapshot.
   const xlab = [tmin, tmax].map((t, i) =>
     `<text x="${X(t).toFixed(1)}" y="${H - 12}" text-anchor="${i === 0 ? "start" : "end"}" font-size="12" fill="var(--muted)">${axisTime(t)}</text>`
   ).join("");
-
-  const poly = pts.map((p) => `${X(p.t).toFixed(1)},${Y(p.v).toFixed(1)}`).join(" ");
-  const dots = pts.map((p) => `<circle cx="${X(p.t).toFixed(1)}" cy="${Y(p.v).toFixed(1)}" r="2.5" fill="var(--accent)"/>`).join("");
-  const closeLine = closeVal != null
-    ? `<line x1="${mL}" y1="${Y(closeVal).toFixed(1)}" x2="${W - mR}" y2="${Y(closeVal).toFixed(1)}" stroke="var(--gold)" stroke-width="1" stroke-dasharray="4 3"/>`
-      + `<text x="${W - mR}" y="${(Y(closeVal) - 5).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--gold)">close ${fmtV(closeVal)}</text>`
-    : "";
   const ytitle = `<text x="16" y="${mT + ph / 2}" text-anchor="middle" font-size="12" fill="var(--muted)" transform="rotate(-90 16 ${(mT + ph / 2).toFixed(1)})">${METRIC_LABEL[metric] || metric}</text>`;
+
+  const lines = draw.map((s) => {
+    if (!s.dpts.length) return "";
+    const poly = s.dpts.map((p) => `${X(p.t).toFixed(1)},${Y(p.v).toFixed(1)}`).join(" ");
+    const line = s.dpts.length > 1
+      ? `<polyline points="${poly}" fill="none" stroke="${s.color}" stroke-width="2"/>` : "";
+    const dots = s.dpts.map((p) => p.close
+      ? `<circle cx="${X(p.t).toFixed(1)}" cy="${Y(p.v).toFixed(1)}" r="3.6" fill="${s.color}" stroke="var(--panel2)" stroke-width="1.5"/>`
+      : `<circle cx="${X(p.t).toFixed(1)}" cy="${Y(p.v).toFixed(1)}" r="2.3" fill="${s.color}"/>`).join("");
+    return line + dots;
+  }).join("");
 
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;background:var(--panel2);border-radius:8px">
     ${ytitle}${grid}
     <line x1="${mL}" y1="${mT}" x2="${mL}" y2="${mT + ph}" stroke="var(--line)" stroke-width="1.5"/>
     <line x1="${mL}" y1="${(mT + ph).toFixed(1)}" x2="${W - mR}" y2="${(mT + ph).toFixed(1)}" stroke="var(--line)" stroke-width="1.5"/>
-    ${closeLine}
-    <polyline points="${poly}" fill="none" stroke="var(--accent)" stroke-width="2"/>${dots}
-    ${xlab}</svg>`;
+    ${lines}${xlab}</svg>`;
 }
 
 load();
