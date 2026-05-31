@@ -385,6 +385,30 @@ CREATE TABLE IF NOT EXISTS bot_settings (
     key    TEXT PRIMARY KEY,
     value  TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS pickem_games (
+    message_id   TEXT PRIMARY KEY,   -- the vote message
+    game_id      TEXT NOT NULL,
+    sport        TEXT NOT NULL,
+    home_team    TEXT NOT NULL,
+    away_team    TEXT NOT NULL,
+    start_time   TEXT NOT NULL,      -- UTC ISO 8601
+    posted_date  TEXT NOT NULL,      -- ET date YYYY-MM-DD (one post per game/day)
+    locked       INTEGER NOT NULL DEFAULT 0,
+    resolved     INTEGER NOT NULL DEFAULT 0,
+    winner       TEXT                -- 'home' | 'away' once resolved
+);
+CREATE INDEX IF NOT EXISTS idx_pickem_games_state ON pickem_games(locked, resolved);
+
+CREATE TABLE IF NOT EXISTS pickem_picks (
+    message_id   TEXT NOT NULL,
+    discord_user TEXT NOT NULL,
+    pick         TEXT NOT NULL CHECK(pick IN ('home', 'away')),
+    picked_at    TEXT NOT NULL,
+    correct      INTEGER,            -- NULL until resolved, then 0/1
+    PRIMARY KEY (message_id, discord_user)
+);
+CREATE INDEX IF NOT EXISTS idx_pickem_picks_user ON pickem_picks(discord_user);
 """
 
 
@@ -606,6 +630,24 @@ async def init_db() -> None:
             await db.execute(
                 "CREATE TABLE IF NOT EXISTS bot_settings ("
                 "key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+            )
+            await db.commit()
+        except Exception:
+            pass
+        # Migration: add pickem tables for the daily NBA/MLB pick'em
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS pickem_games ("
+                "message_id TEXT PRIMARY KEY, game_id TEXT NOT NULL, sport TEXT NOT NULL, "
+                "home_team TEXT NOT NULL, away_team TEXT NOT NULL, start_time TEXT NOT NULL, "
+                "posted_date TEXT NOT NULL, locked INTEGER NOT NULL DEFAULT 0, "
+                "resolved INTEGER NOT NULL DEFAULT 0, winner TEXT)"
+            )
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS pickem_picks ("
+                "message_id TEXT NOT NULL, discord_user TEXT NOT NULL, "
+                "pick TEXT NOT NULL CHECK(pick IN ('home','away')), picked_at TEXT NOT NULL, "
+                "correct INTEGER, PRIMARY KEY (message_id, discord_user))"
             )
             await db.commit()
         except Exception:
