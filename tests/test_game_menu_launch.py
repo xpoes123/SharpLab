@@ -63,3 +63,21 @@ def test_launch_app_command(monkeypatch):
     interaction = MagicMock()
     _run(game_menu._launch(_fake_bot(cog), interaction, "x"))
     assert cog.called_with is interaction
+
+
+def test_launch_strips_leaked_autocomplete_label(monkeypatch):
+    """Typing a suggestion instead of clicking it sends the full label
+    ('x — X — does a thing'), not the value ('x'). _launch must still dispatch."""
+    cog = _PlainCog()
+    _patch_dispatch(monkeypatch, "_PlainCog", "launch")
+    interaction = MagicMock()
+    _run(game_menu._launch(_fake_bot(cog), interaction, "x — X — does a thing"))
+    assert cog.called_with is interaction
+
+
+def test_launch_is_case_insensitive(monkeypatch):
+    cog = _PlainCog()
+    _patch_dispatch(monkeypatch, "_PlainCog", "launch")
+    interaction = MagicMock()
+    _run(game_menu._launch(_fake_bot(cog), interaction, "X"))
+    assert cog.called_with is interaction
