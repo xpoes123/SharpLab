@@ -400,6 +400,11 @@ async def hq_stock_trader(handle: str):
             "options_value": latest.get("options_value"),
             "cash": latest.get("cash"),
             "realized_pnl": round(stock_realized + opt_realized, 2),
+            # Open P&L on stocks = current market value − cost basis (snapshot-fresh).
+            "unrealized_pnl": (
+                round(latest["stock_value"] - sum(h["cost_basis"] for h in stock_holdings), 2)
+                if latest.get("stock_value") is not None and stock_holdings else None
+            ),
         },
         "equity": equity,
         "stock_holdings": stock_holdings,

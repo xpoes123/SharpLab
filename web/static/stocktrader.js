@@ -6,9 +6,9 @@ const money = (n) => (n == null ? "—" : "$" + Number(n).toLocaleString(undefin
 const money2 = (n) => (n == null ? "—" : "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 const pnl = (n) => (n >= 0 ? "+" : "−") + "$" + Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
 
-const RANGES = [["1W", 7], ["1M", 30], ["3M", 90], ["1Y", 365], ["ALL", 1e9]];
+const RANGES = [["1D", 1], ["1W", 7], ["1M", 30], ["3M", 90], ["1Y", 365], ["ALL", 1e9]];
 let EQUITY = [];
-let range = 30;
+let range = 7;
 
 async function main() {
   const parts = location.pathname.split("/").filter(Boolean); // ["hq","stocks","xpoes"]
@@ -76,6 +76,8 @@ function render(d) {
       <div class="card stat"><div class="label">Stocks</div><div class="value" style="font-size:20px">${money(s.stock_value)}</div></div>
       <div class="card stat"><div class="label">Options</div><div class="value" style="font-size:20px">${money(s.options_value)}</div></div>
       <div class="card stat"><div class="label">Cash</div><div class="value" style="font-size:20px">${money(s.cash)}</div></div>
+      <div class="card stat"><div class="label">Unrealized P&L</div>
+        <div class="value ${cls(s.unrealized_pnl || 0)}" style="font-size:20px">${s.unrealized_pnl == null ? "—" : pnl(s.unrealized_pnl)}</div></div>
       <div class="card stat"><div class="label">Realized P&L</div>
         <div class="value ${cls(s.realized_pnl || 0)}" style="font-size:20px">${pnl(s.realized_pnl || 0)}</div></div>
     </div>`;
