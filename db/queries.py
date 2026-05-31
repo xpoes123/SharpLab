@@ -485,6 +485,28 @@ async def get_game_by_team_suffixes(
     return _row_to_game(row)
 
 
+async def get_games_by_team_suffixes(
+    home_last: str, away_last: str, after_utc_iso: str
+) -> list[Game]:
+    """All non-final games for a matchup (so the caller can date-match the right
+    one — the same two teams often play on consecutive days)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM games
+            WHERE lower(home_team) LIKE ?
+              AND lower(away_team) LIKE ?
+              AND start_time >= ?
+              AND status != 'final'
+            ORDER BY start_time DESC
+            """,
+            (f"%{home_last.lower()}", f"%{away_last.lower()}", after_utc_iso),
+        )
+        rows = await cursor.fetchall()
+    return [_row_to_game(r) for r in rows]
+
+
 async def update_bet_result(bet_id: int, status: str) -> None:
     """Set the final result (won/lost/push/void) on a resolved bet."""
     async with aiosqlite.connect(DB_PATH) as db:

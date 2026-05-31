@@ -136,6 +136,8 @@ class GameResult:
     away_last: str   # last word of away team full_name, lowercased (e.g. "knicks")
     home_score: int
     away_score: int
+    game_date: str = ""  # the game's date 'YYYY-MM-DD' (so a score isn't applied
+    #                      to the wrong day's game for the same matchup)
 
 
 @dataclass(frozen=True)
