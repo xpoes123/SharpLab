@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from math import isqrt
 
 import aiosqlite
-from fastapi import FastAPI, Path, Query, WebSocket
+from fastapi import FastAPI, Path, Query, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -828,6 +828,71 @@ async def dashboard_results(sport: str = Query("all"), limit: int = Query(10, ge
         results.append(entry)
 
     return {"results": results}
+
+
+@app.post("/api/v1/analytics/event")
+async def analytics_event(request: Request):
+    """Record a cookieless analytics event (pageview / duration). Privacy-friendly:
+    IPs are SHA-256 hashed and truncated, never stored raw."""
+    import hashlib
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False}, status_code=400)
+    etype = str(body.get("type", ""))[:32]
+    if etype not in ("pageview", "duration"):
+        return JSONResponse({"ok": False}, status_code=400)
+    ua = (request.headers.get("user-agent") or "")[:240]
+    fwd = request.headers.get("x-forwarded-for", "")
+    ip = fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "")
+    ip_hash = hashlib.sha256(ip.encode()).hexdigest()[:16] if ip else ""
+    extras = {k: v for k, v in body.items() if k not in ("type", "sid", "page", "ref", "ts")}
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO web_events (ts, sid, type, page, ref, ua, ip_hash, data) VALUES (?,?,?,?,?,?,?,?)",
+            (int(body.get("ts") or 0), str(body.get("sid", ""))[:64], etype,
+             str(body.get("page", ""))[:300], str(body.get("ref", ""))[:300], ua, ip_hash,
+             json.dumps(extras) if extras else None),
+        )
+        await db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/v1/analytics/stats")
+async def analytics_stats():
+    """Aggregate site analytics for the /hq/analytics dashboard."""
+    now = int(datetime.now(timezone.utc).timestamp() * 1000)
+    day = 86_400_000
+
+    async def one(sql, args=()):
+        row = await _fetch_one(sql, args)
+        return (list(row.values())[0] if row else 0) or 0
+
+    total_pv = await one("SELECT COUNT(*) FROM web_events WHERE type='pageview'")
+    uniques = await one("SELECT COUNT(DISTINCT sid) FROM web_events")
+    pv_24h = await one("SELECT COUNT(*) FROM web_events WHERE type='pageview' AND ts > ?", (now - day,))
+    pv_7d = await one("SELECT COUNT(*) FROM web_events WHERE type='pageview' AND ts > ?", (now - 7 * day,))
+    uniq_7d = await one("SELECT COUNT(DISTINCT sid) FROM web_events WHERE ts > ?", (now - 7 * day,))
+
+    top_pages = await _fetch_all(
+        "SELECT page, COUNT(*) AS views, COUNT(DISTINCT sid) AS visitors FROM web_events "
+        "WHERE type='pageview' GROUP BY page ORDER BY views DESC LIMIT 20")
+    referrers = await _fetch_all(
+        "SELECT ref, COUNT(*) AS count FROM web_events WHERE type='pageview' AND ref != '' "
+        "AND ref NOT LIKE '%sharplab.djiang.xyz%' GROUP BY ref ORDER BY count DESC LIMIT 12")
+    dwell = await _fetch_all(
+        "SELECT page, AVG(CAST(json_extract(data,'$.ms') AS REAL))/1000.0 AS avg_sec, COUNT(*) AS n "
+        "FROM web_events WHERE type='duration' AND data IS NOT NULL GROUP BY page ORDER BY n DESC LIMIT 20")
+    daily = await _fetch_all(
+        "SELECT (ts/?)*? AS day, COUNT(*) AS views, COUNT(DISTINCT sid) AS visitors FROM web_events "
+        "WHERE type='pageview' AND ts > ? GROUP BY day ORDER BY day", (day, day, now - 30 * day))
+
+    return {
+        "total_pageviews": total_pv, "unique_visitors": uniques,
+        "pv_24h": pv_24h, "pv_7d": pv_7d, "uniq_7d": uniq_7d,
+        "top_pages": top_pages, "referrers": referrers,
+        "dwell": [d for d in dwell if d.get("avg_sec")], "daily": daily,
+    }
 
 
 @app.get("/api/v1/dashboard/injuries")
