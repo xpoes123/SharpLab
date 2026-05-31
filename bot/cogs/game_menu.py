@@ -80,6 +80,12 @@ def _categorized_games() -> dict[str, list[tuple[str, str, str]]]:
 
 
 async def _launch(bot: commands.Bot, interaction: discord.Interaction, game: str) -> None:
+    # Discord sends the autocomplete *value* ("imposter") when a suggestion is
+    # clicked, but the full *label* ("imposter — Imposter — …") when the user
+    # types and hits Enter without selecting one. Normalize back to the key.
+    game = game.strip().lower()
+    if game not in GAME_DISPATCH and " — " in game:
+        game = game.split(" — ", 1)[0].strip()
     entry = GAME_DISPATCH.get(game)
     if entry is None:
         await interaction.response.send_message(
