@@ -140,8 +140,37 @@ class OddsPollingWorkflow:
                     retry_policy=RetryPolicy(maximum_attempts=3),
                 )
 
-            await workflow.sleep(timedelta(minutes=interval_minutes))
+            # Burst-poll near tip: if any game tips within BURST_WINDOW, poll every
+            # BURST_INTERVAL so the closing line is fresh; otherwise the base
+            # cadence. Patched so an in-flight run that already recorded its sleep
+            # replays deterministically.
+            sleep_min = interval_minutes
+            if workflow.patched("burst-poll-near-tip"):
+                sleep_min = _next_poll_minutes(upcoming_games, workflow.now(), interval_minutes)
+            await workflow.sleep(timedelta(minutes=sleep_min))
             workflow.continue_as_new(args=[interval_minutes, sport])
+
+
+BURST_WINDOW_MIN = 35   # within this many minutes of a tip, poll densely
+BURST_INTERVAL_MIN = 5  # the dense cadence near tip
+
+
+def _next_poll_minutes(upcoming_games, now, base: int) -> int:
+    """Minutes to sleep before the next poll: dense near the soonest tip, else base."""
+    soonest = None
+    for g in upcoming_games:
+        try:
+            st = datetime.fromisoformat(g.start_time_utc_iso.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            continue
+        if st.tzinfo is None:
+            st = st.replace(tzinfo=timezone.utc)
+        mins = (st - now).total_seconds() / 60
+        if mins > 0 and (soonest is None or mins < soonest):
+            soonest = mins
+    if soonest is not None and soonest <= BURST_WINDOW_MIN:
+        return min(base, BURST_INTERVAL_MIN)
+    return base
 
 
 # Capture the closing line this many seconds BEFORE tip-off. Capturing AT tip
