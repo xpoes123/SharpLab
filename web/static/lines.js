@@ -28,6 +28,28 @@ function bestML(odds) {
   return { away, home };
 }
 const mlCell = (best) => (best == null ? "—" : `${am(best.v)}<sup class="bk">${shortBook(best.book)}</sup>`);
+// How trustworthy the close is: a real tip-off capture vs a stale last-poll proxy.
+function freshnessTag(g) {
+  if (g.close_lead_min == null) return "";
+  const m = g.close_lead_min;
+  if (g.close_is_real) {
+    const ok = m >= 0 && m <= 5;
+    return `<div style="font-size:11px;margin-top:1px"><span class="${ok ? "pos" : "muted"}">●</span> <span class="muted">close captured ${m <= 0 ? "right at" : m + " min before"} tip</span></div>`;
+  }
+  return `<div style="font-size:11px;margin-top:1px"><span class="neg">●</span> <span class="muted">proxy — last line ${m} min before tip</span></div>`;
+}
+
+// Freshness of the live line on an upcoming card: how long ago we last polled.
+function liveFreshness(g) {
+  const caps = Object.values(g.odds || {}).map((p) => p && p.captured_at).filter(Boolean);
+  if (!caps.length) return "";
+  const newest = Math.max(...caps.map((c) => new Date(c).getTime()));
+  if (!isFinite(newest)) return "";
+  const mins = Math.round((Date.now() - newest) / 60000);
+  const txt = mins <= 1 ? "just now" : mins < 60 ? `${mins} min ago` : `${Math.floor(mins / 60)}h ago`;
+  return ` <span class="muted" style="font-size:11px">· updated ${txt}</span>`;
+}
+
 // No-vig consensus home win% open → close (the honest closing-line value).
 function fairLine(g) {
   if (!g.close_fair) return "";
@@ -92,7 +114,7 @@ function render(upcoming, results) {
       }
       const fair = g.fair ? `<div class="muted" style="font-size:12px;margin-top:2px">fair (no-vig): <span style="color:var(--fg)">${g.home_team} ${g.fair.home}%</span> · ${g.away_team} ${g.fair.away}% <span style="font-size:10px">${g.fair.books} books</span></div>` : "";
       return `${hdr}<div class="gamecard">
-        <div>${em} ${away} @ ${home} <span class="muted" style="font-size:12px">· ${dateTime(g.start_time)}</span></div>
+        <div>${em} ${away} @ ${home} <span class="muted" style="font-size:12px">· ${dateTime(g.start_time)}</span>${liveFreshness(g)}</div>
         <div style="font-size:13px;margin-top:4px">${lineHtml}</div>${fair}
         ${movementDetails(g.game_id, "📈 pre-match line movement")}</div>`;
     }).join("");
@@ -121,6 +143,7 @@ function render(upcoming, results) {
         <div>${em} ${g.away_team} @ <strong>${g.home_team}</strong> · final ${score}
           <span class="muted" style="font-size:11px">${dateKey(g.start_time)} · ${g.book || ""}</span> ${ats}${ou}</div>
         <div class="muted" style="font-size:13px;margin-top:4px">ML ${mlPair(g.open)} → <span style="color:var(--fg)">${mlPair(g.close)}</span>${tag}${move}</div>
+        ${freshnessTag(g)}
         ${fairLine(g)}
         ${movementDetails(g.game_id, "📊 pre-match open → close (all books)")}</div>`;
     }).join("");
@@ -172,6 +195,7 @@ function buildMovementUI(box, gid) {
       <span class="muted" style="font-size:12px">overlay books — click to toggle:</span>
     </div>
     <div class="bookChips" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"></div>
+    ${bestBoard(lm)}
     <div class="bookTbl" style="margin-bottom:12px"></div>
     <div class="lmchart"></div>
     <div class="lmvals" style="font-size:12px;margin-top:8px;display:flex;gap:16px;flex-wrap:wrap"></div>`;
@@ -199,6 +223,40 @@ function buildMovementUI(box, gid) {
   redraw();
 }
 
+// Best available number for each side across books (the /best-line view), from
+// each book's latest snapshot. Shown when you expand a game.
+function bestBoard(lm) {
+  const grp = bySource(lm);
+  const cur = {};
+  for (const s in grp) cur[s] = grp[s][grp[s].length - 1];  // latest line per book
+  const books = Object.keys(cur);
+  if (!books.length) return "";
+  let mlH = null, mlA = null, sprH = null, sprA = null, totO = null, totU = null;
+  for (const s of books) {
+    const p = cur[s];
+    if (p.ml_home != null && (!mlH || p.ml_home > mlH.v)) mlH = { v: p.ml_home, b: s };
+    if (p.ml_away != null && (!mlA || p.ml_away > mlA.v)) mlA = { v: p.ml_away, b: s };
+    if (p.spread != null) {
+      if (!sprH || p.spread > sprH.v) sprH = { v: p.spread, b: s };   // most points for home backer
+      if (!sprA || p.spread < sprA.v) sprA = { v: p.spread, b: s };   // most points for away backer
+    }
+    if (p.total != null) {
+      if (!totO || p.total < totO.v) totO = { v: p.total, b: s };     // lowest line = best over
+      if (!totU || p.total > totU.v) totU = { v: p.total, b: s };     // highest line = best under
+    }
+  }
+  const cell = (label, side) => side == null ? "" :
+    `${label} <strong style="color:var(--gold)">${side.val}</strong><sup class="bk">${shortBook(side.b)}</sup>`;
+  const rows = [];
+  if (mlH || mlA) rows.push(`<div>ML &nbsp;${cell(`<span class="muted">${lm.home_team}</span>`, mlH && { val: am(mlH.v), b: mlH.b })} &nbsp;·&nbsp; ${cell(`<span class="muted">${lm.away_team}</span>`, mlA && { val: am(mlA.v), b: mlA.b })}</div>`);
+  if (sprH || sprA) rows.push(`<div>Spread &nbsp;${cell(`<span class="muted">${lm.home_team}</span>`, sprH && { val: (sprH.v > 0 ? "+" : "") + sprH.v, b: sprH.b })} &nbsp;·&nbsp; ${cell(`<span class="muted">${lm.away_team}</span>`, sprA && { val: (-sprA.v > 0 ? "+" : "") + (-sprA.v), b: sprA.b })}</div>`);
+  if (totO || totU) rows.push(`<div>Total &nbsp;${cell("Over", totO && { val: totO.v, b: totO.b })} &nbsp;·&nbsp; ${cell("Under", totU && { val: totU.v, b: totU.b })}</div>`);
+  if (!rows.length) return "";
+  return `<div class="card" style="padding:10px 12px;margin-bottom:12px;font-size:13px;line-height:1.7">
+    <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">🏆 Best available across books</div>
+    ${rows.join("")}</div>`;
+}
+
 function bySource(lm) {
   const m = {};
   for (const s of lm.snapshots || []) (m[s.source] ||= []).push(s);
@@ -208,6 +266,8 @@ function bySource(lm) {
 
 function renderBookTable(box, gid, metric) {
   const lm = LM[gid], grp = bySource(lm);
+  const isFinal = lm.status === "final";   // upcoming → the latest value is "Current", not a close
+  const colLabel = isFinal ? "Close" : "Current";
   const fmt = metric === "total" ? (v) => (v == null ? "—" : v) : (v) => am(v);
   const rows = Object.keys(grp).sort().map((src) => {
     const arr = grp[src];
@@ -215,14 +275,16 @@ function renderBookTable(box, gid, metric) {
     const closeObj = (lm.close && lm.close[src]) || arr[arr.length - 1];
     const close = closeObj[metric];
     const real = lm.close && lm.close[src];
+    // For an upcoming game the latest poll IS the current line — no "(last)" caveat.
+    const tag = (!isFinal || real) ? "" : ` <span class="muted" style="font-size:10px">(last)</span>`;
     let d = (typeof open === "number" && typeof close === "number") ? close - open : null;
     const dStr = d == null ? "—" : (Math.abs(d) < (metric === "total" ? 0.05 : 1) ? `<span class="muted">0</span>`
       : `<span class="${d < 0 ? "pos" : "neg"}">${d > 0 ? "+" : ""}${metric === "total" ? d.toFixed(1) : d}</span>`);
     return `<tr><td><span class="pill">${src}</span></td><td class="num muted">${fmt(open)}</td>
-      <td class="num">${fmt(close)}${real ? "" : ` <span class="muted" style="font-size:10px">(last)</span>`}</td><td class="num">${dStr}</td></tr>`;
+      <td class="num">${fmt(close)}${tag}</td><td class="num">${dStr}</td></tr>`;
   });
   box.querySelector(".bookTbl").innerHTML =
-    `<table><thead><tr><th>Book</th><th class="num">Open</th><th class="num">Close</th><th class="num">Δ</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
+    `<table><thead><tr><th>Book</th><th class="num">Open</th><th class="num">${colLabel}</th><th class="num">Δ</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
 }
 
 function drawGraph(box, gid, books, colorOf) {
