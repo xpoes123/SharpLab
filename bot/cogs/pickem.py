@@ -529,18 +529,40 @@ class PickemCog(commands.Cog):
             await queries.resolve_pickem_game(g["message_id"], winner)
             if channel is not None:
                 g["winner"] = winner
-                counts = await queries.get_pickem_vote_counts(g["message_id"])
-                result = (
-                    f"✅ **{g['home_team'] if winner == 'home' else g['away_team']}** won "
-                    f"{home_score}-{away_score} · bets {AWAY_EMOJI} {counts.get('away', 0)} "
-                    f"/ {HOME_EMOJI} {counts.get('home', 0)}"
-                )
+                result = await self._resolved_content(g, home_score, away_score)
                 try:
                     await channel.get_partial_message(int(g["message_id"])).edit(
                         content=_game_message(g, result=result), view=None,
                     )
                 except discord.HTTPException:
                     pass
+
+    async def _resolved_content(self, game: dict, home_score: int, away_score: int) -> str:
+        """Outcome recap: who called it right (with units won) and who missed."""
+        winner = game["winner"]
+        winner_team = game["home_team"] if winner == "home" else game["away_team"]
+        picks = await queries.get_pickem_picks_for_message(game["message_id"])
+        correct, wrong = [], []
+        for p in picks:
+            try:
+                name = (await self.bot.fetch_user(int(p["discord_user"]))).display_name
+            except Exception:
+                name = f"Player {p['discord_user'][:6]}"
+            prob = (game["home_prob"] if p["pick"] == "home" else game["away_prob"]) or 0.5
+            if p["pick"] == winner:
+                gain = p["stake"] * ((1.0 / prob) - 1.0)
+                correct.append(f"{name} {p['stake']}u (+{gain:.1f}u)")
+            else:
+                wrong.append(f"{name} {p['stake']}u (−{p['stake']}u)")
+        lines = [f"✅ **{winner_team}** won {home_score}–{away_score}"]
+        if not correct and not wrong:
+            lines.append("No bets were placed.")
+        else:
+            if correct:
+                lines.append("🟢 Called it: " + ", ".join(correct))
+            if wrong:
+                lines.append("🔴 Missed: " + ", ".join(wrong))
+        return "\n".join(lines)
 
     @resolve_loop.before_loop
     async def _before_resolve(self) -> None:
