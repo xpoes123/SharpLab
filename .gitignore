@@ -12,3 +12,6 @@ wheels/
 # Environment / secrets
 .env
 data/
+
+# deploy announcer marker (VPS-local)
+.last_announced_sha
