@@ -167,6 +167,7 @@ async def hq_me(request: Request):
 
     return {
         "authenticated": True,
+        "is_owner": bool(os.environ.get("OWNER_DISCORD_ID")) and uid == os.environ.get("OWNER_DISCORD_ID"),
         "user": {"id": uid, "username": sess.get("username"), "avatar": sess.get("avatar")},
         "balance": balance,
         "pickem": me,
