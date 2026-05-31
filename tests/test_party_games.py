@@ -127,6 +127,47 @@ def test_cluemaster_total_rounds_scale_with_players() -> None:
     assert _compute_total_rounds(2, 0) == 1
 
 
+def test_imposter_total_rounds_scale_and_cap() -> None:
+    from bot.cogs.imposter import _compute_total_rounds, MAX_ROUNDS_CAP
+
+    assert _compute_total_rounds(1, 3) == 3   # each of 3 players imposter once
+    assert _compute_total_rounds(2, 5) == 10
+    assert _compute_total_rounds(3, 10) == MAX_ROUNDS_CAP  # capped
+    assert _compute_total_rounds(1, 0) == 1   # never zero
+
+
+def test_imposter_rotation_is_fair() -> None:
+    """Over total_rounds, the rotated imposter role is spread evenly."""
+    from bot.cogs.imposter import _compute_total_rounds
+
+    order = [10, 20, 30, 40]
+    total = _compute_total_rounds(2, len(order))  # 8 rounds
+    counts: dict[int, int] = {uid: 0 for uid in order}
+    for rnd in range(1, total + 1):
+        imposter = order[(rnd - 1) % len(order)]
+        counts[imposter] += 1
+    assert set(counts.values()) == {2}  # each player imposter exactly twice
+
+
+def test_imposter_setup_round_resets_state() -> None:
+    from bot.cogs.imposter import ImpTable, ImpPlayer, ImposterLobbyView
+
+    table = ImpTable(channel_id=1, host_id=1, host_name="h")
+    for uid in (1, 2, 3):
+        table.players[uid] = ImpPlayer(user_id=uid, display_name=f"p{uid}", score=5)
+    table.imposter_order = [1, 2, 3]
+    table.total_rounds = 3
+    view = ImposterLobbyView.__new__(ImposterLobbyView)
+    view.table = table
+    view._setup_round(2)
+    assert table.round_num == 2
+    assert table.imposter_id == 2  # order[(2-1) % 3]
+    assert table.answer
+    assert all(not p.role_seen and p.hint is None and p.voted_for is None
+               for p in table.players.values())
+    assert all(p.score == 5 for p in table.players.values())  # scores carry over
+
+
 def test_imposter_imports_and_setup_payouts() -> None:
     from bot.cogs.imposter import (
         ImpTable, ImpPlayer, _betting_embed, _pick_secret,

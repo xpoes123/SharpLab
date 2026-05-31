@@ -33,11 +33,20 @@ MAX_PLAYERS = 10
 HINT_TIME = 30
 VOTE_TIME = 45
 ROLE_REVEAL_TIME = 30
+ROUND_DELAY = 5
 IDLE_REPLACEABLE_SECS = 90
+DEFAULT_ROUNDS_PER_PLAYER = 1  # each player is the imposter this many times
+MAX_ROUNDS_CAP = 12  # imposter rounds are long (reveal + hints + vote)
 
 PLAYER_WIN_POINTS = 2
 IMPOSTER_WIN_POINTS = 3
 CORRECT_VOTE_POINTS = 1
+
+
+def _compute_total_rounds(rounds_per_player: int, n_players: int) -> int:
+    """Total rounds so each player is imposter rounds_per_player times,
+    capped at MAX_ROUNDS_CAP since imposter rounds run long."""
+    return min(MAX_ROUNDS_CAP, max(1, rounds_per_player * n_players))
 
 
 # ── Dataclasses ──────────────────────────────────────────────────────────────
@@ -59,6 +68,11 @@ class ImpTable:
     host_id: int
     host_name: str
     category_key: str = DEFAULT_CATEGORY
+    rounds_per_player: int = DEFAULT_ROUNDS_PER_PLAYER
+    total_rounds: int = 0  # computed at game start: rounds_per_player × player count
+    round_num: int = 0
+    imposter_order: list[int] = field(default_factory=list)
+    used_secrets: set[str] = field(default_factory=set)
     phase: str = "betting"  # betting | reveal | hints | voting | results | closed
     players: dict[int, ImpPlayer] = field(default_factory=dict)
     hint_order: list[int] = field(default_factory=list)
@@ -83,8 +97,23 @@ def _category_label(key: str) -> str:
     return f"{emoji} {label}"
 
 
-def _pick_secret(category_key: str) -> str:
+def _round_tag(table: ImpTable) -> str:
+    """' — Round 2/4' when the game spans multiple rounds, else ''."""
+    if table.total_rounds > 1:
+        return f" — Round {table.round_num}/{table.total_rounds}"
+    return ""
+
+
+def _pick_secret(category_key: str, used: set[str] | None = None) -> str:
     _label, _emoji, items = get_category(category_key)
+    if used is not None:
+        pool = [it for it in items if it[0] not in used]
+        if not pool:
+            used.clear()
+            pool = list(items)
+        choice = random.choice(pool)[0]
+        used.add(choice)
+        return choice
     return random.choice(items)[0]
 
 
@@ -92,13 +121,21 @@ def _pick_secret(category_key: str) -> str:
 
 
 def _betting_embed(table: ImpTable) -> discord.Embed:
+    n_players = len(table.players)
+    total = table.rounds_per_player * n_players if n_players else table.rounds_per_player
+    rounds_line = (
+        f"**Rounds:** {table.rounds_per_player} per player"
+        + (f" ({total} total)" if n_players else "")
+    )
     embed = discord.Embed(
         title="\U0001f575️ Imposter",
         description=(
-            f"**Category:** {_category_label(table.category_key)}\n\n"
+            f"**Category:** {_category_label(table.category_key)}\n"
+            f"{rounds_line}\n\n"
             "Everyone except one player will see a secret. The imposter "
             "only knows the category and must bluff. Each player gives a "
-            "one-word hint, then votes on who the imposter is."
+            "one-word hint, then votes on who the imposter is. A new imposter "
+            "is chosen each round; scores carry over."
         ),
         colour=discord.Colour.purple(),
     )
@@ -119,7 +156,7 @@ def _reveal_embed(table: ImpTable, deadline: float | None = None) -> discord.Emb
     secs = max(0, int(deadline - time.monotonic())) if deadline else ROLE_REVEAL_TIME
     seen = sum(1 for p in table.players.values() if p.role_seen)
     embed = discord.Embed(
-        title="\U0001f575️ Imposter — Role Reveal",
+        title=f"\U0001f575️ Imposter — Role Reveal{_round_tag(table)}",
         description=(
             f"**Category:** {_category_label(table.category_key)}\n\n"
             "Click below to see your role privately. "
@@ -138,7 +175,7 @@ def _hints_embed(
 ) -> discord.Embed:
     secs = max(0, int(deadline - time.monotonic())) if deadline else HINT_TIME
     embed = discord.Embed(
-        title="\U0001f575️ Imposter — Hints",
+        title=f"\U0001f575️ Imposter — Hints{_round_tag(table)}",
         colour=discord.Colour.dark_purple(),
     )
     cur = table.players.get(table.current_hinter) if table.current_hinter else None
@@ -165,7 +202,7 @@ def _hints_embed(
 def _voting_embed(table: ImpTable, deadline: float | None = None) -> discord.Embed:
     secs = max(0, int(deadline - time.monotonic())) if deadline else VOTE_TIME
     embed = discord.Embed(
-        title="\U0001f575️ Imposter — Vote!",
+        title=f"\U0001f575️ Imposter — Vote!{_round_tag(table)}",
         description="Pick who you think is the imposter. You can't vote for yourself.",
         colour=discord.Colour.gold(),
     )
@@ -184,7 +221,6 @@ def _results_embed(
     table: ImpTable,
     imposter_caught: bool,
     vote_counts: dict[int, int],
-    elo_changes: dict[int, tuple[float, float]] | None = None,
 ) -> discord.Embed:
     imposter = table.players.get(table.imposter_id) if table.imposter_id else None
     title = "🎉 Players Win!" if imposter_caught else "😈 Imposter Wins!"
@@ -193,7 +229,7 @@ def _results_embed(
         f"**Imposter:** {imposter.display_name if imposter else '?'}",
     ]
     embed = discord.Embed(
-        title=f"\U0001f575️ Imposter — {title}",
+        title=f"\U0001f575️ Imposter{_round_tag(table)} — {title}",
         description="\n".join(desc_lines),
         colour=discord.Colour.green() if imposter_caught else discord.Colour.red(),
     )
@@ -223,12 +259,43 @@ def _results_embed(
             if uid in table.players
         ]
         embed.add_field(name="Tally", value="\n".join(tally_lines), inline=False)
-    # Scores
+    # Running standings
     score_lines = [
         f"**{p.display_name}** — {p.score} pts"
         for p in sorted(table.players.values(), key=lambda x: -x.score)
     ]
-    embed.add_field(name="Scores (this game)", value="\n".join(score_lines), inline=False)
+    label = "Standings" if table.total_rounds > 1 else "Scores (this game)"
+    embed.add_field(name=label, value="\n".join(score_lines), inline=False)
+    if table.total_rounds > 1 and table.round_num < table.total_rounds:
+        embed.set_footer(text="Next round in a few seconds…")
+    return embed
+
+
+def _final_standings_embed(
+    table: ImpTable, elo_changes: dict[int, tuple[float, float]] | None = None,
+) -> discord.Embed:
+    sorted_players = sorted(table.players.values(), key=lambda p: p.score, reverse=True)
+    top = sorted_players[0].score if sorted_players else 0
+    embed = discord.Embed(
+        title="\U0001f575️ Imposter — Final Standings",
+        colour=discord.Colour.gold() if top > 0 else discord.Colour.dark_grey(),
+    )
+    if sorted_players and top > 0:
+        winner = sorted_players[0]
+        embed.description = (
+            f"\U0001f3c6 **{winner.display_name}** wins with "
+            f"**{winner.score}** point{'s' if winner.score != 1 else ''}!"
+        )
+    else:
+        embed.description = "Game over!"
+    medals = ["\U0001f947", "\U0001f948", "\U0001f949"]
+    lines = [
+        f"{medals[i] if i < len(medals) and p.score > 0 else '▪️'} "
+        f"**{p.display_name}** — {p.score} pts"
+        for i, p in enumerate(sorted_players)
+    ]
+    embed.add_field(name="Results", value="\n".join(lines) or "*—*", inline=False)
+    embed.add_field(name="Rounds Played", value=str(table.round_num), inline=True)
     if elo_changes:
         elo_lines = [
             f"**{table.players[uid].display_name}**: {fmt_elo_change(old, new)}"
@@ -236,6 +303,7 @@ def _results_embed(
         ]
         if elo_lines:
             embed.add_field(name="\U0001f4c8 ELO", value="\n".join(elo_lines), inline=False)
+    embed.set_footer(text=f"Host: {table.host_name}")
     return embed
 
 
@@ -247,6 +315,13 @@ def _category_select_options(default_key: str) -> list[discord.SelectOption]:
         discord.SelectOption(label=label, value=value, emoji=emoji, default=is_def)
         for label, value, emoji, is_def in category_options(default_key)
     ]
+
+
+_ROUNDS_OPTIONS = [
+    discord.SelectOption(label="1 round each", value="1", default=True, description="Each player is imposter once"),
+    discord.SelectOption(label="2 rounds each", value="2", description="Each player is imposter twice"),
+    discord.SelectOption(label="3 rounds each", value="3", description="Each player is imposter 3×"),
+]
 
 
 # ── In-thread role reveal view ───────────────────────────────────────────────
@@ -403,6 +478,7 @@ class ImposterLobbyView(ui.View):
         self.leave_btn.disabled = not betting
         self.close_btn.disabled = not betting
         self.category_select.disabled = not betting
+        self.rounds_select.disabled = not betting
 
     @ui.button(label="Start", style=discord.ButtonStyle.success, emoji="▶️", row=0)
     async def start_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
@@ -485,23 +561,33 @@ class ImposterLobbyView(ui.View):
             opt.default = opt.value == key
         await interaction.response.edit_message(embed=_betting_embed(self.table), view=self)
 
+    @ui.select(placeholder="Rounds each: 1", options=_ROUNDS_OPTIONS, row=3)
+    async def rounds_select(self, interaction: discord.Interaction, select: ui.Select) -> None:
+        if interaction.user.id != self.table.host_id:
+            await interaction.response.send_message("Only the host can change!", ephemeral=True)
+            return
+        if self.table.phase != "betting":
+            await interaction.response.send_message("Can't change mid-game!", ephemeral=True)
+            return
+        val = int(select.values[0])
+        self.table.rounds_per_player = val
+        select.placeholder = f"Rounds each: {val}"
+        for opt in select.options:
+            opt.default = opt.value == str(val)
+        await interaction.response.edit_message(embed=_betting_embed(self.table), view=self)
+
     # ── Game flow ────────────────────────────────────────────────────────
 
     async def _start_game(self, interaction: discord.Interaction) -> None:
         table = self.table
         table.phase = "reveal"
-        table.answer = _pick_secret(table.category_key)
-        uids = list(table.players.keys())
-        random.shuffle(uids)
-        table.imposter_id = uids[0]
-        table.hint_order = list(uids)
-        random.shuffle(table.hint_order)
-        for p in table.players.values():
-            p.role_seen = False
-            p.hint = None
-            p.voted_for = None
-        table.all_revealed_event.clear()
-        table.voting_done_event.clear()
+        # Rotate the imposter role so each player is imposter equally; total
+        # rounds scale with the table.
+        table.imposter_order = list(table.players.keys())
+        random.shuffle(table.imposter_order)
+        table.total_rounds = _compute_total_rounds(
+            table.rounds_per_player, len(table.imposter_order),
+        )
         self._update_buttons()
 
         in_progress = discord.Embed(
@@ -523,23 +609,51 @@ class ImposterLobbyView(ui.View):
         )
         table.game_task = asyncio.create_task(self._run_game())
 
+    def _setup_round(self, rnd: int) -> None:
+        """Per-round reset: new secret, rotated imposter, fresh hint order."""
+        table = self.table
+        table.round_num = rnd
+        table.phase = "reveal"
+        table.answer = _pick_secret(table.category_key, table.used_secrets)
+        table.imposter_id = table.imposter_order[(rnd - 1) % len(table.imposter_order)]
+        table.hint_order = list(table.players.keys())
+        random.shuffle(table.hint_order)
+        for p in table.players.values():
+            p.role_seen = False
+            p.hint = None
+            p.voted_for = None
+        table.current_hinter = None
+        table.all_revealed_event.clear()
+        table.current_hint_event.clear()
+        table.voting_done_event.clear()
+
     async def _run_game(self) -> None:
         table = self.table
         try:
-            # Phase 1: role reveal
-            await self._phase_reveal()
-            if table.stop_requested:
-                return
-            # Phase 2: hints in turn order
-            await self._phase_hints()
-            if table.stop_requested:
-                return
-            # Phase 3: voting
-            await self._phase_voting()
-            if table.stop_requested:
-                return
-            # Phase 4: results
-            await self._phase_results()
+            for rnd in range(1, table.total_rounds + 1):
+                if table.stop_requested:
+                    break
+                self._setup_round(rnd)
+                if table.thread and table.total_rounds > 1:
+                    try:
+                        await table.thread.send(
+                            f"\U0001f575️ **Round {rnd}/{table.total_rounds}** — new secret, new imposter!"
+                        )
+                    except discord.HTTPException:
+                        pass
+                await self._phase_reveal()
+                if table.stop_requested:
+                    break
+                await self._phase_hints()
+                if table.stop_requested:
+                    break
+                await self._phase_voting()
+                if table.stop_requested:
+                    break
+                await self._score_round()
+                if rnd < table.total_rounds:
+                    await asyncio.sleep(ROUND_DELAY)
+            await self._finish_game()
         except asyncio.CancelledError:
             await self._safe_close()
         except Exception:
@@ -652,35 +766,40 @@ class ImposterLobbyView(ui.View):
         except discord.HTTPException:
             pass
 
-    async def _phase_results(self) -> None:
+    async def _score_round(self) -> None:
+        """Tally one round's votes, award points (cumulative), post the result."""
         table = self.table
         table.phase = "results"
-        # Tally votes
         vote_counts: dict[int, int] = {}
         for p in table.players.values():
             if p.voted_for is not None:
                 vote_counts[p.voted_for] = vote_counts.get(p.voted_for, 0) + 1
-        # Determine outcome
+        # Imposter caught only if they got the unique plurality
         imposter_caught = False
         if vote_counts:
             max_votes = max(vote_counts.values())
             top = [uid for uid, n in vote_counts.items() if n == max_votes]
-            # Imposter caught only if they got the unique plurality
             if top == [table.imposter_id]:
                 imposter_caught = True
-        # Award points
         if imposter_caught:
             for p in table.players.values():
                 if p.user_id != table.imposter_id:
                     p.score += PLAYER_WIN_POINTS
                 if p.voted_for == table.imposter_id:
                     p.score += CORRECT_VOTE_POINTS
-        else:
-            if table.imposter_id and table.imposter_id in table.players:
-                table.players[table.imposter_id].score += IMPOSTER_WIN_POINTS
-        # ELO: rank players by score this game (imposter as a 1-player team if won)
+        elif table.imposter_id and table.imposter_id in table.players:
+            table.players[table.imposter_id].score += IMPOSTER_WIN_POINTS
+        if table.thread:
+            try:
+                await table.thread.send(embed=_results_embed(table, imposter_caught, vote_counts))
+            except discord.HTTPException:
+                pass
+
+    async def _finish_game(self) -> None:
+        """After the last round: apply ELO on cumulative scores, post standings."""
+        table = self.table
         elo_changes: dict[int, tuple[float, float]] = {}
-        if len(table.players) >= 2:
+        if len(table.players) >= 2 and table.round_num > 0:
             sorted_players = sorted(
                 table.players.values(), key=lambda p: p.score, reverse=True,
             )
@@ -691,10 +810,9 @@ class ImposterLobbyView(ui.View):
                 )
             except Exception:
                 log.exception("imposter: ELO update failed")
-        embed = _results_embed(table, imposter_caught, vote_counts, elo_changes)
-        if table.thread:
+        if table.thread and table.round_num > 0:
             try:
-                await table.thread.send(embed=embed)
+                await table.thread.send(embed=_final_standings_embed(table, elo_changes))
             except discord.HTTPException:
                 pass
         await self._end_game()
