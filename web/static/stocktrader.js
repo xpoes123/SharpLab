@@ -20,7 +20,16 @@ function holdingsTable() {
   if (!HOLD.length) return `<div class="muted" style="padding:18px">No open stock positions.</div>`;
   const chgCell = (h) => {
     const v = (h.changes || {})[tblRange];
-    return v == null ? `<span class="muted">—</span>` : `<span class="${cls(v)}">${v >= 0 ? "+" : ""}${v.toFixed(2)}%</span>`;
+    if (v == null) return `<span class="muted">—</span>`;
+    // Dollar move for the period = current shares × per-share price move.
+    // price_then = price_now / (1 + pct/100); $Δ = shares × (price_now − price_then).
+    const pct = `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
+    let dol = "";
+    if (h.price && h.shares) {
+      const then = h.price / (1 + v / 100);
+      dol = ` <span class="muted" style="font-size:11px">${pnl(h.shares * (h.price - then))}</span>`;
+    }
+    return `<span class="${cls(v)}">${pct}</span>${dol}`;
   };
   const hRow = (h) => {
     const u = h.unrealized;
