@@ -44,6 +44,10 @@ MONITOR_POLL_MINUTES = 5
 SWING_THRESHOLD_PCT = 10.0  # auto-alert when a held ticker moves this % on the day
 _ALERTS_CHANNEL_SETTING = "stock_alerts_channel"
 
+# Rohan's picks: ping the "rohan stock picks" role whenever he trades.
+ROHAN_USER_ID = "688444350325456939"
+_ROHAN_PICKS_CHANNEL_SETTING = "rohan_picks_channel"
+
 
 def _manual_triggered(direction: str, target: float, price: float) -> bool:
     """True when an above/below monitor's condition is met."""
@@ -2163,6 +2167,37 @@ class StockCog(commands.Cog):
         except ValueError:
             return DEFAULT_STOCK_ALERTS_CHANNEL_ID
 
+    # ── Rohan's picks ─────────────────────────────────────────────────────────
+    @stock.command(name="picks-channel", description="Set the channel for Rohan's stock-pick alerts")
+    @app_commands.describe(channel="Where to ping the 'rohan stock picks' role on each of his trades")
+    async def picks_channel(self, interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+        if not interaction.user.guild_permissions.manage_guild:
+            await interaction.response.send_message("You need **Manage Server**.", ephemeral=True)
+            return
+        await queries.set_bot_setting(_ROHAN_PICKS_CHANNEL_SETTING, str(channel.id))
+        await interaction.response.send_message(
+            f"✅ Rohan's pick alerts will post in {channel.mention}.", ephemeral=True)
+
+    async def _maybe_post_rohan_pick(self, interaction: discord.Interaction, action: str, detail: str) -> None:
+        """Ping the 'rohan stock picks' role when Rohan records a trade."""
+        if str(interaction.user.id) != ROHAN_USER_ID:
+            return
+        try:
+            raw = await queries.get_bot_setting(_ROHAN_PICKS_CHANNEL_SETTING)
+            cid = int(raw) if raw else DEFAULT_STOCK_ALERTS_CHANNEL_ID
+            ch = self.bot.get_channel(cid) or await self.bot.fetch_channel(cid)
+            guild = getattr(ch, "guild", None) or interaction.guild
+            role = discord.utils.find(
+                lambda r: "rohan" in r.name.lower() and "pick" in r.name.lower(), guild.roles) if guild else None
+            mention = role.mention if role else "**rohan stock picks**"
+            color = 0x9ece6a if action == "BOUGHT" else 0xf7768e if action == "SOLD" else 0x7aa2f7
+            embed = discord.Embed(title="📈 New Rohan pick", description=f"Rohan just **{action}** {detail}", color=color)
+            embed.set_footer(text="You're getting this because you have the rohan stock picks role.")
+            await ch.send(content=f"{mention}", embed=embed,
+                          allowed_mentions=discord.AllowedMentions(roles=True))
+        except Exception:
+            log.exception("failed to post Rohan pick alert")
+
     # ── Monitor polling loop ─────────────────────────────────────────────────
 
     @tasks.loop(minutes=MONITOR_POLL_MINUTES)
@@ -2465,6 +2500,7 @@ class StockCog(commands.Cog):
             f"Recorded **BUY** `{symbol}` — {shares:g} sh @ `{price:,.2f}`.\n{position_line}",
             ephemeral=True,
         )
+        await self._maybe_post_rohan_pick(interaction, "BOUGHT", f"**{shares:g}** {symbol} @ ${price:,.2f}")
 
     # ── /stock sell ──────────────────────────────────────────────────────────
 
@@ -2527,6 +2563,7 @@ class StockCog(commands.Cog):
             f"· realized P/L `{_fmt_pnl(realized)}`.\n{position_line}",
             ephemeral=True,
         )
+        await self._maybe_post_rohan_pick(interaction, "SOLD", f"**{shares:g}** {symbol} @ ${price:,.2f}")
 
     # ── /stock trades ────────────────────────────────────────────────────────
 
@@ -2709,6 +2746,9 @@ class StockCog(commands.Cog):
             f"{realized_line}.\n{position_line}",
             ephemeral=True,
         )
+        await self._maybe_post_rohan_pick(
+            interaction, "BOUGHT" if side == "buy" else "SOLD",
+            f"{contracts} × `{spec}` option @ ${premium:,.2f}")
 
     _OPT_TYPE = [
         app_commands.Choice(name="call", value="call"),
