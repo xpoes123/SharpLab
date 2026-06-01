@@ -5,23 +5,19 @@ game, and a confirm button writes it to the bettor's record. Lowers the friction
 that means nobody but the owner logs bets."""
 from __future__ import annotations
 
-import json
 import logging
 import os
 from datetime import datetime, timezone
 
 import discord
-import httpx
 from discord.ext import commands
 
 from db import queries
+from shared.llm import haiku_json
 from shared.models import Bet
 from shared.odds_utils import fmt_prob, parse_odds_input
 
 log = logging.getLogger(__name__)
-
-HAIKU = "claude-haiku-4-5-20251001"
-ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 
 # Channels to watch (discussion + closing-lines by default).
 _DEFAULT_CHANNELS = {1477512816863740092, 1485475287054418151}
@@ -105,22 +101,7 @@ class BetNLP(commands.Cog):
 
     async def _classify(self, content: str) -> dict | None:
         prompt = _PROMPT % content
-        async with httpx.AsyncClient() as client:
-            r = await client.post(
-                ANTHROPIC_URL,
-                headers={"x-api-key": self.api_key, "anthropic-version": "2023-06-01",
-                         "content-type": "application/json"},
-                json={"model": HAIKU, "max_tokens": 300,
-                      "messages": [{"role": "user", "content": prompt}]},
-                timeout=30.0,
-            )
-            if r.status_code != 200:
-                return None
-            text = "".join(b.get("text", "") for b in r.json().get("content", []))
-        try:
-            return json.loads(text[text.find("{"): text.rfind("}") + 1])
-        except (ValueError, json.JSONDecodeError):
-            return None
+        return await haiku_json(prompt, api_key=self.api_key, max_tokens=300)
 
     async def _build(self, bet: dict) -> dict | None:
         """Match the team to a game, normalize side/odds/units, default the gaps."""
