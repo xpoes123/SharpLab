@@ -1,15 +1,22 @@
 """Natural-language trade entry for Rohan.
 
-When Rohan posts in the stock channel, Claude decides whether the message reports
-a CONCRETE executed/committed trade (not a hypothetical like "I want to buy").
-If so, the bot replies with the parsed trade and a Confirm / Reject button — only
-on Confirm is it recorded (and the @rohan stock picks alert fires).
+When Rohan posts in the stock channel, Claude decides whether the message is a
+COMMITTED trade (not a hypothetical like "I want to buy"). If so, the bot replies
+with a parsed card and buttons:
+  • Confirm  — record it (only enabled when complete & valid)
+  • Edit / Add details — opens a pre-filled form to fill missing fields or fix a misparse
+  • Reject   — dismiss
+
+Before recording it runs safety checks: blocks selling more than you hold, and
+warns if the entered price is far from the live market price (fat-finger guard).
+Only Confirm/Edit by Rohan records anything.
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 
 import discord
@@ -17,6 +24,7 @@ import httpx
 from discord.ext import commands
 
 from db import queries
+from .stock import fetch_quote, _normalize_symbol
 
 log = logging.getLogger(__name__)
 
@@ -25,34 +33,86 @@ NLP_CHANNEL_ID = 1510100250411536495
 HAIKU = "claude-haiku-4-5-20251001"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 
+# Cheap pre-filter so we don't call Claude on ordinary chatter.
+_HINTS = ("bought", "sold", "buy", "sell", "grab", "adding", "added", "wrote",
+          "writing", "short", "long", "call", "put", "trim", "closed", "close",
+          "scalp", "sold to close", "btc", "eth", "shares", "contracts")
+
 _PROMPT = """You watch a Discord channel where a trader named Rohan posts. Decide if his \
-message reports a CONCRETE trade he has just made or is firmly executing RIGHT NOW, \
-with enough detail to record it.
+message is a COMMITTED trade — one he has made or is firmly executing right now \
+("bought", "sold", "buying", "grabbed", "adding", "writing", "sold to close", \
+"shorting", "trimmed"). It counts as committed even if some specifics are missing — \
+extract whatever is given and use null for anything absent (we'll ask him for the rest).
 
-Record ONLY when the message is committed (past tense or firm present — "bought", \
-"sold", "buying", "grabbed", "adding", "sold to close", "writing") AND has ALL of:
-- a side (buy or sell)
-- a ticker
-- a size (shares / contracts / coin amount)
-- a price (per share, per coin, or option premium per share)
+Set is_trade=false for hypothetical/uncommitted messages: "I want to buy", "I think \
+I'll buy", "should I buy?", "thinking about", "might", "considering", "watching", \
+"eyeing", price targets, and questions.
 
-Do NOT record hesitant or hypothetical messages — return is_trade=false for: \
-"I want to buy", "I think I'll buy", "should I buy?", "thinking about", "might", \
-"considering", "watching", "eyeing", price targets, questions, or anything missing \
-a concrete price or size.
-
-For options also require: call/put, strike, and expiry as YYYY-MM-DD. Use the \
-provided current date to resolve dates like "6/20" to the SOONEST FUTURE such date \
-(never a past date).
+kind is "option" if it mentions calls/puts/strikes/expiry, "crypto" for coins \
+(BTC, ETH, SOL, …), else "stock". For options resolve the expiry to YYYY-MM-DD using \
+the provided current date (soonest FUTURE such date; never the past).
 
 Respond with ONLY JSON, no prose:
-{"is_trade": true|false, "side": "buy"|"sell", "kind": "stock"|"crypto"|"option",
- "ticker": "AAPL", "quantity": <number>, "price": <number>,
+{"is_trade": true|false, "side": "buy"|"sell"|null, "kind": "stock"|"crypto"|"option"|null,
+ "ticker": "AAPL"|null, "quantity": <number>|null, "price": <number>|null,
  "opt_type": "call"|"put"|null, "strike": <number>|null, "expiry": "YYYY-MM-DD"|null,
- "summary": "<one-line human summary>"}
-If it is not a concrete trade, return {"is_trade": false}.
+ "summary": "<one-line summary>"}
 
 Rohan's message: %s"""
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _num(x):
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
+def _missing(t: dict) -> list[str]:
+    """Required fields still absent for this trade kind."""
+    need = []
+    if t.get("side") not in ("buy", "sell"):
+        need.append("side")
+    if not t.get("ticker"):
+        need.append("ticker")
+    if not (_num(t.get("quantity")) and _num(t.get("quantity")) > 0):
+        need.append("quantity")
+    if not (_num(t.get("price")) and _num(t.get("price")) > 0):
+        need.append("price")
+    if t.get("kind") == "option":
+        if t.get("opt_type") not in ("call", "put"):
+            need.append("call/put")
+        if not (_num(t.get("strike")) and _num(t.get("strike")) > 0):
+            need.append("strike")
+        if not t.get("expiry"):
+            need.append("expiry")
+    return need
+
+
+def _parse_strike_type(raw: str):
+    """'130c' / '130 put' / '4.5P' → (strike, opt_type)."""
+    raw = (raw or "").strip().lower()
+    m = re.search(r"(\d+(?:\.\d+)?)", raw)
+    strike = float(m.group(1)) if m else None
+    opt = "call" if ("c" in raw or "call" in raw) else "put" if ("p" in raw or "put" in raw) else None
+    return strike, opt
+
+
+def _describe(t: dict) -> str:
+    side = (t.get("side") or "?").upper()
+    tk = str(t.get("ticker") or "?").upper()
+    q = _num(t.get("quantity"))
+    px = _num(t.get("price"))
+    qty = f"{q:g}" if q else "?"
+    pxs = f"${px:,.2f}" if px else "$?"
+    if t.get("kind") == "option":
+        strike = _num(t.get("strike"))
+        ot = (t.get("opt_type") or "?")[0].upper()
+        strike_s = f"{strike:g}" if strike else "?"
+        return f"**{side}** {qty} × {tk} {strike_s}{ot} {t.get('expiry') or '?'} @ {pxs}"
+    return f"**{side}** {qty} {tk} @ {pxs}"
 
 
 class RohanNLP(commands.Cog):
@@ -62,31 +122,29 @@ class RohanNLP(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
+        c = message.content.strip()
         if (message.author.id != ROHAN_USER_ID or message.channel.id != NLP_CHANNEL_ID
-                or message.author.bot or not message.content.strip() or not self.api_key):
+                or message.author.bot or not c or not self.api_key):
             return
-        # Ignore slash/prefix commands and very short noise.
-        if message.content.startswith(("/", "!", "?")) or len(message.content) < 6:
+        if c.startswith(("/", "!", "?")) or len(c) < 5 or len(c) > 300:
+            return
+        if not any(h in c.lower() for h in _HINTS):
             return
         try:
-            trade = await self._classify(message.content)
+            trade = await self._classify(c)
         except Exception:
             log.exception("rohan nlp classify failed")
             return
         if not trade or not trade.get("is_trade"):
             return
-        if not self._valid(trade):
+        # Need at least a side or ticker to be actionable.
+        if not trade.get("ticker") and trade.get("side") not in ("buy", "sell"):
             return
-        embed = discord.Embed(
-            title="🤖 Detected a trade — confirm?",
-            description=trade.get("summary") or self._describe(trade),
-            color=0xe0af68,
-        )
-        embed.add_field(name="Parsed", value=self._describe(trade), inline=False)
-        embed.set_footer(text="Only you can confirm. Reject if this isn't right.")
-        await message.reply(embed=embed, view=TradeConfirmView(self, trade, ROHAN_USER_ID),
-                            mention_author=False)
+        review = await self._review(trade)
+        await message.reply(embed=self._card(trade, review),
+                            view=TradeReviewView(self, trade), mention_author=False)
 
+    # ── classification ────────────────────────────────────────────────────────
     async def _classify(self, content: str) -> dict | None:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         prompt = f"The current date is {today}.\n\n" + (_PROMPT % content)
@@ -107,85 +165,189 @@ class RohanNLP(commands.Cog):
         except (ValueError, json.JSONDecodeError):
             return None
 
-    @staticmethod
-    def _valid(t: dict) -> bool:
-        if t.get("side") not in ("buy", "sell") or not t.get("ticker"):
-            return False
-        try:
-            if float(t.get("quantity") or 0) <= 0 or float(t.get("price") or 0) <= 0:
-                return False
-        except (TypeError, ValueError):
-            return False
-        if t.get("kind") == "option":
-            return t.get("opt_type") in ("call", "put") and bool(t.get("strike")) and bool(t.get("expiry"))
-        return True
+    # ── review: missing fields, blocking errors, warnings ─────────────────────
+    async def _review(self, t: dict) -> dict:
+        missing = _missing(t)
+        blocking: list[str] = []
+        warnings: list[str] = []
+        tk = (t.get("ticker") or "").upper()
+        q = _num(t.get("quantity"))
+        px = _num(t.get("price"))
 
-    @staticmethod
-    def _describe(t: dict) -> str:
-        verb = "Buy" if t["side"] == "buy" else "Sell"
-        tk = str(t["ticker"]).upper()
-        if t.get("kind") == "option":
-            return f"**{verb}** {int(t['quantity'])} × {tk} {float(t['strike']):g}{t['opt_type'][0].upper()} {t['expiry']} @ ${float(t['price']):,.2f}"
-        return f"**{verb}** {float(t['quantity']):g} {tk} @ ${float(t['price']):,.2f}"
+        if t.get("side") == "sell" and t.get("kind") != "option" and tk and q:
+            holding = await queries.get_stock_holding(str(ROHAN_USER_ID), tk)
+            held = holding["shares"] if holding else 0.0
+            if q > held + 1e-9:
+                blocking.append(f"You only hold **{held:g}** {tk} — can't sell {q:g}.")
 
+        if t.get("kind") != "option" and tk and px:
+            try:
+                live = (await fetch_quote(_normalize_symbol(tk))).get("price")
+            except Exception:
+                live = None
+            if live and live > 0 and not (0.66 < px / live < 1.5):
+                warnings.append(f"You entered **${px:,.2f}** but {tk} is trading ~**${live:,.2f}** — double-check.")
+
+        return {"missing": missing, "blocking": blocking, "warnings": warnings,
+                "ok": not missing and not blocking}
+
+    def _card(self, t: dict, review: dict) -> discord.Embed:
+        ok = review["ok"]
+        color = 0x9ece6a if ok else 0xf7768e if review["blocking"] else 0xe0af68
+        title = "🤖 Trade detected — confirm?" if ok else "🤖 Trade detected — needs a detail"
+        e = discord.Embed(title=title, description=_describe(t), color=color)
+        if review["missing"]:
+            e.add_field(name="📝 Missing", value="Add it with **Edit**: " + ", ".join(review["missing"]), inline=False)
+        for b in review["blocking"]:
+            e.add_field(name="🚫 Can't record", value=b, inline=False)
+        for w in review["warnings"]:
+            e.add_field(name="⚠️ Heads up", value=w, inline=False)
+        e.set_footer(text="Only Rohan can act. Edit to fix/complete, Confirm to log, Reject to dismiss.")
+        return e
+
+    # ── recording ─────────────────────────────────────────────────────────────
     async def record(self, t: dict) -> None:
-        uid = str(ROHAN_USER_ID)
-        now = datetime.now(timezone.utc).isoformat()
+        uid, now = str(ROHAN_USER_ID), datetime.now(timezone.utc).isoformat()
         if t.get("kind") == "option":
             await queries.add_option_trade(
                 uid, str(t["ticker"]).upper(), t["opt_type"], float(t["strike"]), str(t["expiry"]),
-                t["side"], int(t["quantity"]), float(t["price"]), now, "via NLP")
+                t["side"], int(float(t["quantity"])), float(t["price"]), now, "via NLP")
         else:
             await queries.add_stock_trade(
                 uid, str(t["ticker"]).upper(), t["side"], float(t["quantity"]), float(t["price"]), now, "via NLP")
 
     async def fire_pick_alert(self, interaction: discord.Interaction, t: dict) -> None:
-        stock_cog = self.bot.get_cog("StockCog")
-        if not stock_cog:
+        cog = self.bot.get_cog("StockCog")
+        if not cog:
             return
         action = "BOUGHT" if t["side"] == "buy" else "SOLD"
         if t.get("kind") == "option":
-            detail = f"{int(t['quantity'])} × `{str(t['ticker']).upper()} {float(t['strike']):g}{t['opt_type'][0].upper()} {t['expiry']}` option @ ${float(t['price']):,.2f}"
+            detail = f"{int(float(t['quantity']))} × `{str(t['ticker']).upper()} {float(t['strike']):g}{t['opt_type'][0].upper()} {t['expiry']}` @ ${float(t['price']):,.2f}"
         else:
             detail = f"**{float(t['quantity']):g}** {str(t['ticker']).upper()} @ ${float(t['price']):,.2f}"
-        await stock_cog._maybe_post_rohan_pick(interaction, action, detail)
+        await cog._maybe_post_rohan_pick(interaction, action, detail)
 
 
-class TradeConfirmView(discord.ui.View):
-    def __init__(self, cog: RohanNLP, trade: dict, author_id: int) -> None:
+# ── interactive views / modals ────────────────────────────────────────────────
+
+class TradeReviewView(discord.ui.View):
+    def __init__(self, cog: RohanNLP, trade: dict) -> None:
         super().__init__(timeout=1800)
         self.cog = cog
         self.trade = trade
-        self.author_id = author_id
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.author_id:
-            await interaction.response.send_message("Only Rohan can confirm his own trade.", ephemeral=True)
+        if interaction.user.id != ROHAN_USER_ID:
+            await interaction.response.send_message("Only Rohan can act on his trade.", ephemeral=True)
             return False
         return True
 
     @discord.ui.button(label="✅ Confirm", style=discord.ButtonStyle.success)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        review = await self.cog._review(self.trade)
+        if not review["ok"]:
+            await interaction.response.send_message(
+                "Not ready — " + (review["blocking"][0] if review["blocking"]
+                                  else "still missing: " + ", ".join(review["missing"]) + ". Use **Edit**."),
+                ephemeral=True)
+            return
         try:
             await self.cog.record(self.trade)
         except Exception:
-            log.exception("rohan nlp record failed")
-            await interaction.response.send_message("Couldn't record that — log it manually with `/stock buy`.", ephemeral=True)
+            log.exception("nlp record failed")
+            await interaction.response.send_message("Couldn't record — try `/stock buy`.", ephemeral=True)
             return
-        for c in self.children:
-            c.disabled = True
-        e = discord.Embed(title="✅ Trade recorded", description=self.cog._describe(self.trade), color=0x9ece6a)
-        await interaction.response.edit_message(embed=e, view=self)
+        e = discord.Embed(title="✅ Trade recorded", description=_describe(self.trade), color=0x9ece6a)
+        await interaction.response.edit_message(embed=e, view=None)
         await self.cog.fire_pick_alert(interaction, self.trade)
         self.stop()
 
+    @discord.ui.button(label="✏️ Edit / Add details", style=discord.ButtonStyle.secondary)
+    async def edit(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        modal = (_OptionModal if self.trade.get("kind") == "option" else _StockModal)(self, interaction.message)
+        await interaction.response.send_modal(modal)
+
     @discord.ui.button(label="✖ Reject", style=discord.ButtonStyle.danger)
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        for c in self.children:
-            c.disabled = True
         e = discord.Embed(title="✖ Dismissed", description="Not recorded.", color=0x565f89)
-        await interaction.response.edit_message(embed=e, view=self)
+        await interaction.response.edit_message(embed=e, view=None)
         self.stop()
+
+
+class _StockModal(discord.ui.Modal, title="Trade details"):
+    def __init__(self, view: TradeReviewView, message: discord.Message) -> None:
+        super().__init__()
+        self.view = view
+        self.message = message
+        t = view.trade
+        self.ticker = discord.ui.TextInput(label="Ticker", default=(t.get("ticker") or "").upper(), max_length=12)
+        self.qty = discord.ui.TextInput(label="Shares", default=(f"{_num(t.get('quantity')):g}" if _num(t.get("quantity")) else ""), required=True)
+        self.price = discord.ui.TextInput(label="Price per share", default=(f"{_num(t.get('price')):g}" if _num(t.get("price")) else ""), required=True)
+        self.side = discord.ui.TextInput(label="buy or sell", default=t.get("side") or "buy", max_length=4)
+        for f in (self.ticker, self.qty, self.price, self.side):
+            self.add_item(f)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        t = dict(self.view.trade)
+        t["ticker"] = self.ticker.value.strip().upper()
+        t["side"] = self.side.value.strip().lower()
+        t["quantity"] = _num(self.qty.value)
+        t["price"] = _num(self.price.value)
+        if t.get("kind") not in ("stock", "crypto"):
+            t["kind"] = "stock"
+        await _finish_modal(self, interaction, t)
+
+
+class _OptionModal(discord.ui.Modal, title="Option trade details"):
+    def __init__(self, view: TradeReviewView, message: discord.Message) -> None:
+        super().__init__()
+        self.view = view
+        self.message = message
+        t = view.trade
+        st = _num(t.get("strike"))
+        st_default = (f"{st:g}{(t.get('opt_type') or '')[:1].upper()}" if st else "")
+        self.underlying = discord.ui.TextInput(label="Underlying", default=(t.get("ticker") or "").upper(), max_length=12)
+        self.qty = discord.ui.TextInput(label="Contracts", default=(f"{int(_num(t.get('quantity')))}" if _num(t.get("quantity")) else ""))
+        self.price = discord.ui.TextInput(label="Premium per share", default=(f"{_num(t.get('price')):g}" if _num(t.get("price")) else ""))
+        self.strike = discord.ui.TextInput(label="Strike & type (e.g. 130C / 4.5P)", default=st_default)
+        self.expiry = discord.ui.TextInput(label="Expiry (YYYY-MM-DD)", default=t.get("expiry") or "")
+        for f in (self.underlying, self.qty, self.price, self.strike, self.expiry):
+            self.add_item(f)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        t = dict(self.view.trade)
+        t["kind"] = "option"
+        t["ticker"] = self.underlying.value.strip().upper()
+        t["quantity"] = _num(self.qty.value)
+        t["price"] = _num(self.price.value)
+        t["expiry"] = self.expiry.value.strip()
+        strike, opt = _parse_strike_type(self.strike.value)
+        t["strike"], t["opt_type"] = strike, opt
+        if t.get("side") not in ("buy", "sell"):
+            t["side"] = "buy"
+        await _finish_modal(self, interaction, t)
+
+
+async def _finish_modal(modal, interaction: discord.Interaction, t: dict) -> None:
+    cog = modal.view.cog
+    review = await cog._review(t)
+    if not review["ok"]:
+        problem = review["blocking"][0] if review["blocking"] else "still missing: " + ", ".join(review["missing"])
+        modal.view.trade = t  # keep edits for the next attempt
+        await modal.message.edit(embed=cog._card(t, review), view=modal.view)
+        await interaction.response.send_message("Almost — " + problem, ephemeral=True)
+        return
+    try:
+        await cog.record(t)
+    except Exception:
+        log.exception("nlp modal record failed")
+        await interaction.response.send_message("Couldn't record — try `/stock buy`.", ephemeral=True)
+        return
+    e = discord.Embed(title="✅ Trade recorded", description=_describe(t), color=0x9ece6a)
+    await modal.message.edit(embed=e, view=None)
+    await interaction.response.send_message("✅ Logged.", ephemeral=True)
+    await cog.fire_pick_alert(interaction, t)
+    modal.view.stop()
 
 
 async def setup(bot: commands.Bot) -> None:
