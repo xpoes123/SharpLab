@@ -474,19 +474,25 @@ class PickemCog(commands.Cog):
                 continue
             await queries.lock_pickem_game(g["message_id"])
             if channel is not None:
+                # Fold "who bet what" into the existing game message instead of posting a
+                # new one — a fresh message notifies everyone with server alerts on (noisy).
+                breakdown = await self._bet_breakdown(g)
+                content = _game_message(g, locked=True)
+                if breakdown:
+                    content += "\n" + breakdown
                 try:
                     await channel.get_partial_message(int(g["message_id"])).edit(
-                        content=_game_message(g, locked=True), view=None,
+                        content=content, view=None,
                     )
                 except discord.HTTPException:
                     pass
-                await self._post_bet_summary(channel, g)
 
-    async def _post_bet_summary(self, channel: discord.TextChannel, game: dict) -> None:
-        """When a game locks, post who bet what."""
+    async def _bet_breakdown(self, game: dict) -> str:
+        """Who bet what, as lines folded into the locked game message (no new post = no
+        ping). Win% already shows in the message header, so it's omitted here."""
         picks = await queries.get_pickem_picks_for_message(game["message_id"])
         if not picks:
-            return
+            return ""
         away_list, home_list = [], []
         for p in picks:
             try:
@@ -495,21 +501,10 @@ class PickemCog(commands.Cog):
                 name = f"Player {p['discord_user'][:6]}"
             entry = f"{name} {p['stake']}u"
             (away_list if p["pick"] == "away" else home_list).append(entry)
-        ap, hp = game.get("away_prob"), game.get("home_prob")
-        apct = f" ({ap * 100:.0f}%)" if ap else ""
-        hpct = f" ({hp * 100:.0f}%)" if hp else ""
-        lines = [
-            f"🔒 **{game['away_team']} @ {game['home_team']}** is underway — bets locked:",
-            f"{AWAY_EMOJI} **{game['away_team']}**{apct}: " + (", ".join(away_list) or "—"),
-            f"{HOME_EMOJI} **{game['home_team']}**{hpct}: " + (", ".join(home_list) or "—"),
-        ]
-        try:
-            # Names only — never ping the bettors when a game locks (it's an FYI, not a
-            # call-to-action). AllowedMentions.none() guarantees no notification even if a
-            # display name happens to contain mention-like text.
-            await channel.send("\n".join(lines), allowed_mentions=discord.AllowedMentions.none())
-        except discord.HTTPException:
-            log.exception("pickem: failed to post bet summary")
+        return (
+            f"{AWAY_EMOJI} **{game['away_team']}**: " + (", ".join(away_list) or "—") + "\n"
+            f"{HOME_EMOJI} **{game['home_team']}**: " + (", ".join(home_list) or "—")
+        )
 
     @lock_loop.before_loop
     async def _before_lock(self) -> None:
