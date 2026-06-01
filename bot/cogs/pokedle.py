@@ -1,0 +1,206 @@
+"""Pokédle — a Squirdle-style Pokémon DEDUCTION game (problem-solving, not recall).
+
+A mystery Pokémon is chosen. Players guess any Pokémon and get Wordle-style
+feedback — generation ⬆️/⬇️/✓, each type 🟩/🟨/⬛, height & weight ⬆️/⬇️/✓ — and
+deduce the answer within a handful of guesses. Runs in-channel (no thread) for
+robustness; first to solve wins coins (logged for XP/achievements)."""
+from __future__ import annotations
+
+import asyncio
+import logging
+import random
+import re
+
+import discord
+import httpx
+from discord import app_commands
+from discord.ext import commands
+
+from db import queries
+
+log = logging.getLogger(__name__)
+
+POKEAPI = "https://pokeapi.co/api/v2"
+MAX_GUESSES = 8
+INACTIVITY_SECS = 120
+REWARD_BASE = 200  # coins for solving; scaled down by guesses used
+
+# Recognizable secret pool (guesses can be ANY valid Pokémon — validated live).
+POOL = [
+    "bulbasaur", "charizard", "blastoise", "butterfree", "pikachu", "raichu", "sandslash",
+    "nidoking", "clefable", "ninetales", "arcanine", "poliwrath", "alakazam", "machamp",
+    "golem", "rapidash", "slowbro", "gengar", "onix", "hypno", "kingler", "exeggutor",
+    "marowak", "hitmonlee", "lickitung", "weezing", "rhydon", "chansey", "kangaskhan",
+    "seadra", "starmie", "scyther", "jynx", "electabuzz", "magmar", "pinsir", "tauros",
+    "gyarados", "lapras", "ditto", "vaporeon", "jolteon", "flareon", "snorlax", "dragonite",
+    "mewtwo", "mew", "meganium", "typhlosion", "feraligatr", "ampharos", "bellossom",
+    "azumarill", "sudowoodo", "espeon", "umbreon", "forretress", "steelix", "scizor",
+    "heracross", "ursaring", "houndoom", "kingdra", "donphan", "porygon2", "tyranitar",
+    "lugia", "ho-oh", "celebi", "sceptile", "blaziken", "swampert", "gardevoir", "breloom",
+    "slaking", "aggron", "flygon", "altaria", "milotic", "salamence", "metagross", "latias",
+    "latios", "kyogre", "groudon", "rayquaza", "jirachi", "torterra", "infernape", "empoleon",
+    "staraptor", "luxray", "roserade", "garchomp", "lucario", "hippowdon", "drapion", "toxicroak",
+    "weavile", "magnezone", "rhyperior", "mamoswine", "porygon-z", "gallade", "froslass",
+    "rotom", "dialga", "palkia", "giratina", "darkrai", "arceus", "serperior", "emboar",
+    "samurott", "zoroark", "krookodile", "darmanitan", "scrafty", "sigilyph", "ferrothorn",
+    "klinklang", "eelektross", "haxorus", "beartic", "cryogonal", "golurk", "bisharp",
+    "braviary", "hydreigon", "volcarona", "cobalion", "terrakion", "virizion", "reshiram",
+    "zekrom", "kyurem", "greninja", "talonflame", "aegislash", "sylveon", "goodra", "trevenant",
+    "noivern", "xerneas", "yveltal", "zygarde", "decidueye", "incineroar", "primarina",
+    "lycanroc", "mimikyu", "kommo-o", "solgaleo", "lunala", "necrozma", "corviknight",
+    "dragapult", "zacian", "zamazenta", "eternatus", "grimmsnarl", "toxapex", "mimikyu",
+    "cinderace", "rillaboom", "inteleon", "meowscarada", "skeledirge", "quaquaval",
+    "gholdengo", "kingambit", "annihilape", "garganacl", "tinkaton", "baxcalibur",
+    "koraidon", "miraidon", "flutter-mane", "iron-valiant", "ogerpon",
+]
+
+_ROMAN = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6, "vii": 7, "viii": 8, "ix": 9}
+_mon_cache: dict[str, dict | None] = {}
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+
+async def _fetch_mon(name: str) -> dict | None:
+    """Return {name, gen, types, height, weight} for a Pokémon, or None if invalid.
+    Cached. Combines /pokemon (types/size) and /pokemon-species (generation)."""
+    key = _norm(name)
+    if key in _mon_cache:
+        return _mon_cache[key]
+    slug = re.sub(r"[^a-z0-9-]", "", name.lower().strip().replace(" ", "-"))
+    result = None
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            p = await client.get(f"{POKEAPI}/pokemon/{slug}")
+            if p.status_code == 200:
+                pd = p.json()
+                sp = await client.get(f"{POKEAPI}/pokemon-species/{pd['species']['name']}")
+                gen = 0
+                if sp.status_code == 200:
+                    roman = sp.json()["generation"]["name"].split("-")[-1]
+                    gen = _ROMAN.get(roman, 0)
+                result = {
+                    "name": pd["name"], "gen": gen,
+                    "types": [t["type"]["name"] for t in sorted(pd["types"], key=lambda t: t["slot"])],
+                    "height": pd["height"], "weight": pd["weight"],
+                }
+    except Exception:
+        log.debug("pokeapi fetch failed for %s", name, exc_info=True)
+        return None  # don't cache transient failures
+    _mon_cache[key] = result
+    return result
+
+
+def _arrow(guess_v: int, secret_v: int) -> str:
+    if guess_v == secret_v:
+        return "✅"
+    return "⬆️" if secret_v > guess_v else "⬇️"
+
+
+def _type_cells(guess_types: list[str], secret_types: list[str]) -> str:
+    cells = []
+    for i in range(2):
+        gt = guess_types[i] if i < len(guess_types) else None
+        if gt is None:
+            cells.append("`—`")
+        elif i < len(secret_types) and gt == secret_types[i]:
+            cells.append(f"🟩`{gt[:4]}`")
+        elif gt in secret_types:
+            cells.append(f"🟨`{gt[:4]}`")
+        else:
+            cells.append(f"⬛`{gt[:4]}`")
+    return " ".join(cells)
+
+
+def _feedback_row(guess: dict, secret: dict) -> str:
+    return (f"**{guess['name'].title()}** — Gen {guess['gen']}{_arrow(guess['gen'], secret['gen'])} · "
+            f"{_type_cells(guess['types'], secret['types'])} · "
+            f"Ht {_arrow(guess['height'], secret['height'])} · Wt {_arrow(guess['weight'], secret['weight'])}")
+
+
+class PokedleCog(commands.Cog):
+    def __init__(self, bot: commands.Bot) -> None:
+        self.bot = bot
+        self._active: set[int] = set()  # channel ids with a live game
+
+    @app_commands.command(name="pokedle", description="Pokédle — deduce the mystery Pokémon from clues")
+    async def pokedle(self, interaction: discord.Interaction) -> None:
+        if interaction.channel_id in self._active:
+            await interaction.response.send_message("A Pokédle game is already running here!", ephemeral=True)
+            return
+        await interaction.response.defer()
+        secret = None
+        for name in random.sample(POOL, k=min(8, len(POOL))):  # tolerate a few bad slugs
+            secret = await _fetch_mon(name)
+            if secret:
+                break
+        if not secret:
+            await interaction.followup.send("Couldn't reach PokéAPI right now — try again shortly.")
+            return
+
+        self._active.add(interaction.channel_id)
+        try:
+            await self._run(interaction, secret)
+        finally:
+            self._active.discard(interaction.channel_id)
+
+    async def _run(self, interaction: discord.Interaction, secret: dict) -> None:
+        embed = discord.Embed(
+            title="🔍 Pokédle — guess the mystery Pokémon!",
+            description=(
+                f"Type any Pokémon name to guess. You have **{MAX_GUESSES}** guesses.\n"
+                "Feedback per guess:\n"
+                "• **Gen / Height / Weight**: ✅ exact · ⬆️ secret is higher · ⬇️ lower\n"
+                "• **Types**: 🟩 right type & slot · 🟨 right type, wrong slot · ⬛ not a type\n\n"
+                "*First to solve wins coins. Go!*"
+            ),
+            colour=0xF1C40F,
+        )
+        await interaction.followup.send(embed=embed)
+
+        guessed = 0
+        history: list[str] = []
+        while guessed < MAX_GUESSES:
+            try:
+                msg = await self.bot.wait_for(
+                    "message",
+                    timeout=INACTIVITY_SECS,
+                    check=lambda m: m.channel.id == interaction.channel_id and not m.author.bot and len(m.content) <= 25,
+                )
+            except asyncio.TimeoutError:
+                await interaction.channel.send(f"⏰ Pokédle ended — it was **{secret['name'].title()}**. (no guesses)")
+                return
+
+            guess = await _fetch_mon(msg.content)
+            if guess is None:
+                continue  # not a valid Pokémon name — ignore quietly (could be normal chat)
+
+            guessed += 1
+            if _norm(guess["name"]) == _norm(secret["name"]):
+                reward = max(REWARD_BASE - (guessed - 1) * 20, 40)
+                try:
+                    await queries.give_casino_coins(str(msg.author.id), reward)
+                    await queries.log_casino_result(str(msg.author.id), "pokedle", 0, reward)
+                except Exception:
+                    log.debug("pokedle reward failed", exc_info=True)
+                history.append(f"✅ **{msg.author.display_name}** got it!")
+                await interaction.channel.send(embed=discord.Embed(
+                    title=f"🎉 {msg.author.display_name} solved it — {secret['name'].title()}!",
+                    description="\n".join(history) + f"\n\nSolved in **{guessed}** guess(es) · **+{reward}** coins 🪙",
+                    colour=0x57F287,
+                ))
+                return
+
+            history.append(_feedback_row(guess, secret))
+            left = MAX_GUESSES - guessed
+            await interaction.channel.send(embed=discord.Embed(
+                description="\n".join(history) + (f"\n\n*{left} guess(es) left*" if left else ""),
+                colour=0xF1C40F if left else 0xED4245,
+            ))
+
+        await interaction.channel.send(f"❌ Out of guesses — it was **{secret['name'].title()}**!")
+
+
+async def setup(bot: commands.Bot) -> None:
+    await bot.add_cog(PokedleCog(bot))
