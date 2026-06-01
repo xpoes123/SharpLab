@@ -1,7 +1,7 @@
 """Unit tests for the sports-news cog's pure helpers (no network / no Haiku)."""
 from datetime import datetime, timezone
 
-from bot.cogs.sportsnews import _merge, _parse_ts, _primary
+from bot.cogs.sportsnews import _merge, _parse_ts, _ping_leagues, _primary
 
 
 def _art(aid, league, headline="h", typ="HeadlineNews"):
@@ -27,6 +27,12 @@ def test_primary_follows_league_order():
     assert _primary({"mlb", "nba"}) == "nba"
     assert _primary({"mlb", "nfl"}) == "nfl"
     assert _primary({"mlb"}) == "mlb"
+
+
+def test_ping_only_single_feed_articles():
+    assert _ping_leagues({"nfl"}) == {"nfl"}          # league-specific → ping
+    assert _ping_leagues({"nba", "nfl", "mlb"}) == set()  # cross-promo → no ping
+    assert _ping_leagues({"nba", "mlb"}) == set()
 
 
 def test_parse_ts_handles_z_suffix_and_naive():

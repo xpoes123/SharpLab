@@ -81,6 +81,14 @@ def _primary(leagues: set[str]) -> str:
     return next((k for k in LEAGUES if k in leagues), next(iter(leagues)))
 
 
+def _ping_leagues(leagues: set[str]) -> set[str]:
+    """Which league roles to ping. Only league-specific (single-feed) articles
+    ping a fanbase; ESPN cross-promotes general stories into every feed, so an
+    article in 2+ feeds posts without pinging (avoids e.g. MLB fans pinged for
+    an OBJ football story)."""
+    return set(leagues) if len(leagues) == 1 else set()
+
+
 def _merge(batches: list[list[dict]]) -> dict[str, dict]:
     """Dedupe articles by id across league feeds, unioning the leagues each appears in."""
     merged: dict[str, dict] = {}
@@ -215,7 +223,8 @@ class SportsNewsCog(commands.Cog):
             for a in fresh:
                 if a["id"] not in major:
                     continue
-                content = " ".join(f"<@&{LEAGUES[k]['role']}>" for k in LEAGUES if k in a["leagues"])
+                ping = _ping_leagues(a["leagues"])
+                content = " ".join(f"<@&{LEAGUES[k]['role']}>" for k in LEAGUES if k in ping)
                 await channel.send(content=content or None, embed=self._embed(a),
                                    allowed_mentions=discord.AllowedMentions(roles=True))
         except Exception:
