@@ -3222,6 +3222,34 @@ async def get_stock_positions_full(discord_user: str) -> list[dict]:
     ]
 
 
+async def get_all_stock_positions() -> dict[str, list[dict]]:
+    """Bulk version of get_stock_positions_full for EVERY user, in one query.
+
+    Reads all of stock_trades ordered by (discord_user, ticker, executed_at) and
+    runs the same _aggregate_trades per (user, ticker). Returns
+    {discord_user: [position dict, ...]} where each list is identical in shape to
+    what get_stock_positions_full(uid) returns. Users with no trades are absent."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT discord_user, trade_id, ticker, side, shares, price, executed_at, notes "
+            "FROM stock_trades "
+            "ORDER BY discord_user ASC, ticker ASC, executed_at ASC, trade_id ASC"
+        )
+        rows = await cur.fetchall()
+    by_user: dict[str, dict[str, list[dict]]] = {}
+    for r in rows:
+        d = dict(r)
+        by_user.setdefault(d["discord_user"], {}).setdefault(d["ticker"], []).append(d)
+    out: dict[str, list[dict]] = {}
+    for uid, by_ticker in by_user.items():
+        out[uid] = [
+            {"ticker": ticker, **_aggregate_trades(by_ticker[ticker])}
+            for ticker in sorted(by_ticker)
+        ]
+    return out
+
+
 async def get_users_with_trades() -> list[str]:
     """All discord_user IDs that have at least one stock trade recorded.
     Used by the /stock leaderboard."""
@@ -3316,6 +3344,16 @@ async def get_stock_cash(discord_user: str) -> float:
         )
         row = await cur.fetchone()
         return float(row[0]) if row else 0.0
+
+
+async def get_all_stock_cash() -> dict[str, float]:
+    """Bulk version of get_stock_cash for every user, in one query. Returns
+    {discord_user: balance}. Users with no row are absent — default to 0.0 at
+    the call site (matching get_stock_cash's per-user default)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT discord_user, balance FROM stock_cash")
+        rows = await cur.fetchall()
+        return {r[0]: float(r[1]) for r in rows}
 
 
 async def set_stock_cash(discord_user: str, amount: float) -> float:
@@ -3657,6 +3695,45 @@ async def get_option_positions_full(discord_user: str) -> list[dict]:
     return out
 
 
+async def get_all_option_positions() -> dict[str, list[dict]]:
+    """Bulk version of get_option_positions_full for EVERY user, in one query.
+
+    Reads all of option_trades ordered by (discord_user, contract spec,
+    executed_at) and runs the same _aggregate_option_trades per (user, spec).
+    Returns {discord_user: [position dict, ...]} identical in shape to what
+    get_option_positions_full(uid) returns. Users with no trades are absent."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT discord_user, trade_id, underlying, opt_type, strike, expiry, "
+            "side, contracts, premium, executed_at, notes "
+            "FROM option_trades "
+            "ORDER BY discord_user ASC, underlying ASC, opt_type ASC, strike ASC, "
+            "expiry ASC, executed_at ASC, trade_id ASC"
+        )
+        rows = await cur.fetchall()
+    by_user: dict[str, dict[tuple, list[dict]]] = {}
+    for r in rows:
+        d = dict(r)
+        key = (d["underlying"], d["opt_type"], d["strike"], d["expiry"])
+        by_user.setdefault(d["discord_user"], {}).setdefault(key, []).append(d)
+    out: dict[str, list[dict]] = {}
+    for uid, by_spec in by_user.items():
+        positions = []
+        for key in sorted(by_spec):
+            underlying, opt_type, strike, expiry = key
+            agg = _aggregate_option_trades(by_spec[key])
+            positions.append({
+                "underlying": underlying,
+                "opt_type": opt_type,
+                "strike": strike,
+                "expiry": expiry,
+                **agg,
+            })
+        out[uid] = positions
+    return out
+
+
 async def get_users_with_option_trades() -> list[str]:
     """All discord_user IDs with at least one option trade. Used by the
     /stock leaderboard to union option traders with stock traders."""
@@ -3788,8 +3865,8 @@ async def get_all_stock_holdings() -> list[dict]:
     computed from the trade log — the authoritative source. (The old stock_holdings
     table is no longer maintained, so reading it missed every recent position.)"""
     out: list[dict] = []
-    for uid in await get_users_with_trades():
-        for p in await get_stock_positions_full(uid):
+    for uid, positions in (await get_all_stock_positions()).items():
+        for p in positions:
             if not p.get("closed") and (p.get("shares") or 0) > 0:
                 out.append({"discord_user": uid, "ticker": p["ticker"], "shares": p["shares"]})
     return out
