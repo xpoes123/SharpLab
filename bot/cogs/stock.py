@@ -344,12 +344,13 @@ def _close_on_or_before(series: list, cutoff_iso: str) -> float | None:
 
 
 async def fetch_period_changes(tickers: list[str], now_prices: dict[str, float]) -> dict[str, dict]:
-    """{ticker: {'1D':pct,'1W':pct,'1M':pct,'YTD':pct,'1Y':pct}} — the ticker's price
+    """{ticker: {'1D','1W','1M','3M','YTD','1Y','ALL': pct}} — the ticker's price
     change over each window, using live `now_prices` and cached daily history."""
     from datetime import date, timedelta as _td
     today = date.today()
     cuts = {"1D": today - _td(days=1), "1W": today - _td(days=7),
-            "1M": today - _td(days=30), "1Y": today - _td(days=365)}
+            "1M": today - _td(days=30), "3M": today - _td(days=90),
+            "1Y": today - _td(days=365)}
     series_list = await asyncio.gather(*[_ticker_history(s) for s in tickers])
     out: dict[str, dict] = {}
     for sym, series in zip(tickers, series_list):
@@ -361,6 +362,8 @@ async def fetch_period_changes(tickers: list[str], now_prices: dict[str, float])
                 ch[label] = round((now - then) / then * 100, 2) if then else None
             year_start = next((c for d, c in series if d >= f"{today.year}-01-01"), None)
             ch["YTD"] = round((now - year_start) / year_start * 100, 2) if year_start else None
+            first = series[0][1]  # earliest available close (≤1y; full life for young tickers)
+            ch["ALL"] = round((now - first) / first * 100, 2) if first else None
         out[sym] = ch
     return out
 

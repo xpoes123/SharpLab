@@ -501,23 +501,34 @@ async def hq_stock_trader(handle: str):
     sp = await queries.get_stock_positions_full(uid)
     stock_realized = sum(p.get("realized_pnl", 0) for p in sp)
     open_pos = [p for p in sp if p.get("shares", 0) > 0]
-    from bot.cogs.stock import fetch_quotes, fetch_period_changes  # lazy import (heavy deps)
+    # lazy import (heavy deps); _ticker_history is cache-shared with fetch_period_changes
+    from bot.cogs.stock import fetch_quotes, fetch_period_changes, _ticker_history
     quotes = await fetch_quotes([p["ticker"] for p in open_pos]) if open_pos else {}
     now_prices = {p["ticker"]: quotes[p["ticker"]]["price"]
                   for p in open_pos if quotes.get(p["ticker"]) and quotes[p["ticker"]].get("price")}
     changes = await fetch_period_changes(list(now_prices), now_prices) if now_prices else {}
+    # 1y daily-close series per holding (already cached for the % changes above), so the
+    # browser can chart any ticker instantly without a second round-trip.
+    hist_list = await asyncio.gather(*[_ticker_history(p["ticker"]) for p in open_pos]) if open_pos else []
+    hist_map = dict(zip((p["ticker"] for p in open_pos), hist_list))
+    today_iso = datetime.now(timezone.utc).date().isoformat()
     stock_holdings = []
     for p in open_pos:
         q = quotes.get(p["ticker"])
         price = q["price"] if q else None
         unreal = round(p["shares"] * (price - p["dca_price"]), 2) if price is not None else None
+        # Daily closes + a live "today" point so the line ends at the current price.
+        hist = [[d, round(c, 2)] for d, c in (hist_map.get(p["ticker"]) or [])]
+        if price is not None and (not hist or hist[-1][0] < today_iso):
+            hist.append([today_iso, round(price, 2)])
         stock_holdings.append({
             "ticker": p["ticker"], "shares": round(p.get("shares", 0), 4),
             "dca": round(p.get("dca_price", 0), 2), "cost_basis": round(p.get("cost_basis", 0), 2),
             "price": round(price, 2) if price is not None else None,
             "unrealized": unreal,
             "realized": round(p.get("realized_pnl", 0), 2),
-            "changes": changes.get(p["ticker"], {}),  # {1D,1W,1M,YTD,1Y} % change
+            "changes": changes.get(p["ticker"], {}),  # {1D,1W,1M,3M,YTD,1Y,ALL} % change
+            "history": hist,                            # [[date_iso, close], ...] ascending
         })
     stock_holdings.sort(key=lambda h: h["cost_basis"], reverse=True)
 

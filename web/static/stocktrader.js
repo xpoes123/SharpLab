@@ -6,20 +6,24 @@ const money = (n) => (n == null ? "—" : "$" + Number(n).toLocaleString(undefin
 const money2 = (n) => (n == null ? "—" : "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 const pnl = (n) => (n >= 0 ? "+" : "−") + "$" + Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
 
-const RANGES = [["1D", 1], ["1W", 7], ["1M", 30], ["3M", 90], ["YTD", "ytd"], ["1Y", 365], ["ALL", 1e9]];
-const rangeCutoff = (r) => (r === "ytd" ? Date.UTC(new Date().getFullYear(), 0, 1) : Date.now() - r * 86400000);
+// One shared range selector drives both the chart window and the holdings change column.
+const RANGES = ["1D", "1W", "1M", "3M", "YTD", "1Y", "ALL"];
+const RANGE_DAYS = { "1D": 1, "1W": 7, "1M": 30, "3M": 90, "YTD": "ytd", "1Y": 365, "ALL": 1e9 };
+const rangeCutoff = (label) => {
+  const r = RANGE_DAYS[label];
+  return r === "ytd" ? Date.UTC(new Date().getFullYear(), 0, 1) : Date.now() - r * 86400000;
+};
 let EQUITY = [];
 let BENCH = [];
-let range = 7;
-let HOLD = [];                     // holdings (for the per-stock change table)
-let tblRange = "1D";               // selected period for the holdings change column
-const TBL_RANGES = ["1D", "1W", "1M", "YTD", "1Y"];
+let HOLD = [];                     // holdings (each carries a `history` daily-close series)
+let range = "1W";                  // shared selected range label
+let view = "portfolio";            // "portfolio" | <ticker> — what the main chart shows
 const BENCH_COLOR = "#58a6ff";     // S&P line — distinct from grey reconstructed segment
 
 function holdingsTable() {
   if (!HOLD.length) return `<div class="muted" style="padding:18px">No open stock positions.</div>`;
   const chgCell = (h) => {
-    const v = (h.changes || {})[tblRange];
+    const v = (h.changes || {})[range];
     if (v == null) return `<span class="muted">—</span>`;
     // Dollar move for the period = current shares × per-share price move.
     // price_then = price_now / (1 + pct/100); $Δ = shares × (price_now − price_then).
@@ -36,14 +40,12 @@ function holdingsTable() {
     const upct = (u != null && h.cost_basis) ? ` <span class="muted" style="font-size:11px">${u >= 0 ? "+" : ""}${(u / h.cost_basis * 100).toFixed(1)}%</span>` : "";
     const ucell = u == null ? `<span class="muted">—</span>` : `<span class="${cls(u)}">${pnl(u)}</span>${upct}`;
     const rcell = h.realized ? `<span class="${cls(h.realized)}">${pnl(h.realized)}</span>` : `<span class="muted">—</span>`;
-    return `<tr><td><strong>${h.ticker}</strong></td><td class="num">${h.shares}</td>
+    const sel = h.ticker === view ? ";background:var(--accent-dim)" : "";
+    return `<tr data-ticker="${h.ticker}" style="cursor:pointer${sel}"><td><strong>${h.ticker}</strong></td><td class="num">${h.shares}</td>
       <td class="num muted">${money2(h.dca)}</td><td class="num">${money(h.cost_basis)}</td>
       <td class="num">${chgCell(h)}</td><td class="num">${ucell}</td><td class="num">${rcell}</td></tr>`;
   };
-  return `<div class="stakebtns" style="padding:10px 12px 2px">
-      ${TBL_RANGES.map((r) => `<button data-hrange="${r}" class="rangebtn${r === tblRange ? " on" : ""}">${r}</button>`).join("")}
-    </div>
-    <table><thead><tr><th>Ticker</th><th class="num">Shares</th><th class="num">Avg</th><th class="num">Cost basis</th>
+  return `<table><thead><tr><th>Ticker</th><th class="num">Shares</th><th class="num">Avg</th><th class="num">Cost basis</th>
       <th class="num">Change</th><th class="num">Unrealized</th><th class="num">Realized</th></tr></thead>
     <tbody>${HOLD.map(hRow).join("")}</tbody></table>`;
 }
@@ -96,6 +98,8 @@ function pctChange(arr) {
 }
 
 function drawChart() {
+  if (view !== "portfolio") return drawTicker(view);
+
   const cutoff = rangeCutoff(range);
   let series = EQUITY.filter((p) => new Date(p.t).getTime() >= cutoff);
   let bench = BENCH.filter((p) => new Date(p.t).getTime() >= cutoff);
@@ -121,6 +125,48 @@ function drawChart() {
     : "";
 }
 
+// Individual ticker's price history (daily closes + a live point), sliced to the range.
+function drawTicker(sym) {
+  const h = HOLD.find((x) => x.ticker === sym);
+  const all = ((h && h.history) || []).map(([t, v]) => ({ t, v, k: "live" }));
+  const cutoff = rangeCutoff(range);
+  let series = all.filter((p) => new Date(p.t).getTime() >= cutoff);
+  if (series.length < 2) series = all.slice(-7);   // daily closes can't render a 1D intraday line
+  if (series.length < 2) series = all;
+  document.getElementById("chart").innerHTML = svgChart(series, [], 0);  // all live, no benchmark
+
+  const d = series.length >= 2 ? series[series.length - 1].v - series[0].v : 0;
+  const pc = pctChange(series);
+  document.getElementById("chartDelta").innerHTML = series.length >= 2
+    ? `<span class="${cls(d)}">${pnl(d)}/sh (${pc >= 0 ? "+" : ""}${pc.toFixed(1)}%)</span>`
+    : `<span class="muted">No price history</span>`;
+}
+
+// Swap chart between portfolio and a ticker; keep head/legend/highlight in sync.
+function updateChart() {
+  const head = document.getElementById("chartHead");
+  const legend = document.getElementById("chartLegend");
+  if (view === "portfolio") {
+    head.style.display = "none";
+    head.innerHTML = "";
+    legend.style.display = "flex";
+  } else {
+    const h = HOLD.find((x) => x.ticker === view);
+    const px = h && h.price != null ? money2(h.price) : "";
+    head.style.display = "flex";
+    head.innerHTML = `<button data-back class="rangebtn">← Portfolio</button>
+      <strong style="font-size:16px">${view}</strong> <span class="muted">${px}</span>`;
+    legend.style.display = "none";
+  }
+  drawChart();
+}
+
+function setView(v) {
+  view = v;
+  document.getElementById("holdBox").innerHTML = holdingsTable();  // refresh row highlight
+  updateChart();
+}
+
 function render(d) {
   const u = d.user, s = d.summary || {};
   EQUITY = d.equity || [];
@@ -136,10 +182,11 @@ function render(d) {
 
     <div class="card" style="margin-top:8px">
       <div class="stakebtns" style="margin-bottom:10px">
-        ${RANGES.map(([lbl, days]) => `<button data-days="${days}" class="rangebtn${days === range ? " on" : ""}">${lbl}</button>`).join("")}
+        ${RANGES.map((lbl) => `<button data-range="${lbl}" class="rangebtn${lbl === range ? " on" : ""}">${lbl}</button>`).join("")}
       </div>
+      <div id="chartHead" style="display:none;align-items:center;gap:10px;margin-bottom:6px"></div>
       <div id="chart"></div>
-      <div class="muted" style="font-size:12px;margin-top:8px;display:flex;gap:16px;flex-wrap:wrap">
+      <div id="chartLegend" class="muted" style="font-size:12px;margin-top:8px;display:flex;gap:16px;flex-wrap:wrap">
         <span><span style="color:var(--green)">━</span> Portfolio</span>
         <span><span style="color:${BENCH_COLOR}">┄</span> S&P 500</span>
         ${d.live_since ? `<span><span style="color:var(--accent)">┊</span> Live since ${fmtDate(d.live_since)} — earlier is reconstructed</span>` : ""}
@@ -156,7 +203,8 @@ function render(d) {
     </div>`;
 
   HOLD = d.stock_holdings || [];
-  html += `<h2>Stock Holdings</h2><div class="card" style="padding:0" id="holdBox">${holdingsTable()}</div>`;
+  html += `<h2>Stock Holdings <span class="muted" style="font-size:13px;font-weight:400">— click a row to chart it</span></h2>
+    <div class="card" style="padding:0" id="holdBox">${holdingsTable()}</div>`;
 
   const op = d.option_positions || [];
   html += `<h2>Options</h2><div class="card" style="padding:0">
@@ -174,18 +222,22 @@ function render(d) {
       : `<div class="muted" style="padding:18px">No trades yet.</div>`}</div>`;
 
   app.innerHTML = html;
-  drawChart();
+  updateChart();
   app.addEventListener("click", (e) => {
-    const b = e.target.closest(".rangebtn");
-    if (!b) return;
-    if (b.dataset.hrange) {  // holdings-table period toggle
-      tblRange = b.dataset.hrange;
+    const back = e.target.closest("[data-back]");
+    if (back) { setView("portfolio"); return; }
+
+    const rb = e.target.closest(".rangebtn[data-range]");
+    if (rb) {  // shared range — updates both the chart and the holdings change column
+      range = rb.dataset.range;
+      document.querySelectorAll(".rangebtn[data-range]").forEach((x) => x.classList.toggle("on", x === rb));
       document.getElementById("holdBox").innerHTML = holdingsTable();
+      updateChart();
       return;
     }
-    range = b.dataset.days === "ytd" ? "ytd" : Number(b.dataset.days);
-    document.querySelectorAll(".rangebtn[data-days]").forEach((x) => x.classList.toggle("on", x === b));
-    drawChart();
+
+    const row = e.target.closest("tr[data-ticker]");
+    if (row) { setView(row.dataset.ticker); return; }
   });
 }
 
