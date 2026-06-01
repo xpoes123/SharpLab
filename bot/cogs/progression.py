@@ -288,8 +288,11 @@ async def announce_achievements(bot, uid: str, newly: list[str], channel=None) -
             f"{a.emoji} **{a.name}** — {a.description} `+{a.xp_reward} XP`" for a in achs
         )
     embed = discord.Embed(title=title, description=desc, colour=0xF1C40F)
+    embed.set_author(name="Achievement")
+    embed.description = f"<@{uid}>\n{desc}"
     try:
-        await channel.send(content=f"<@{uid}>", embed=embed)
+        # No ping — the mention renders as a name but doesn't notify.
+        await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
     except Exception:
         log.debug("could not announce achievements to %s", uid, exc_info=True)
 
@@ -340,7 +343,8 @@ async def _announce_levelup(bot, uid: str, level: int, channel) -> None:
         colour=_level_color(level),
     )
     try:
-        await channel.send(content=f"<@{uid}>", embed=embed)
+        # No ping — the mention renders as a name but doesn't notify.
+        await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
     except Exception:
         log.debug("levelup announce failed for %s", uid, exc_info=True)
 
