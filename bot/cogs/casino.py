@@ -1299,6 +1299,9 @@ RANDOM_GAME_CHOICES = [
 
 
 class CasinoCog(commands.Cog):
+    coins_group = app_commands.Group(name="coins", description="Coin balance, tips & casino stats")
+    admin_group = app_commands.Group(name="admin", description="Admin & debug tools")
+
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.active_tables: dict[int, BlackjackTable] = {}
@@ -1546,7 +1549,7 @@ class CasinoCog(commands.Cog):
             "\u23f9\ufe0f Game force-stopped.", ephemeral=False,
         )
 
-    @app_commands.command(name="balance", description="Check your coin balance")
+    @coins_group.command(name="balance", description="Check your coin balance")
     @app_commands.describe(user="Check another user's balance (optional)")
     async def balance(
         self, interaction: discord.Interaction, user: discord.User | None = None
@@ -1566,7 +1569,7 @@ class CasinoCog(commands.Cog):
 
         await interaction.response.send_message(msg)
 
-    @app_commands.command(name="give-coins", description="Give casino coins to a user (admin)")
+    @coins_group.command(name="give", description="Give casino coins to a user (admin)")
     @app_commands.describe(user="User to give coins to", amount="Number of coins to give")
     async def give_coins(
         self, interaction: discord.Interaction, user: discord.User, amount: int,
@@ -1583,7 +1586,7 @@ class CasinoCog(commands.Cog):
             f"Their balance: **{new_balance}** coins."
         )
 
-    @app_commands.command(name="tip", description="Send casino coins to another player")
+    @coins_group.command(name="tip", description="Send casino coins to another player")
     @app_commands.describe(user="Player to tip", amount="Number of coins to send")
     async def tip(self, interaction: discord.Interaction, user: discord.User, amount: int) -> None:
         if amount < 1:
@@ -1611,7 +1614,7 @@ class CasinoCog(commands.Cog):
             f"{user.display_name}: **{recipient_bal:,}** coins"
         )
 
-    @app_commands.command(name="status", description="Dump active game state (admin)")
+    @admin_group.command(name="status", description="Dump active game state (admin)")
     async def status(self, interaction: discord.Interaction) -> None:
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("Admin only.", ephemeral=True)
@@ -1751,7 +1754,7 @@ class CasinoCog(commands.Cog):
             f"{prefix}You should play **{_game_invocation(name)}** \u2014 {desc}"
         )
 
-    @app_commands.command(name="casino-stats", description="View casino PnL stats")
+    @coins_group.command(name="stats", description="View casino PnL stats")
     @app_commands.describe(user="View another user's stats (optional)")
     async def casino_stats(
         self, interaction: discord.Interaction, user: discord.User | None = None,
@@ -1919,7 +1922,7 @@ class CasinoCog(commands.Cog):
         embed.description = "\n".join(lines)
         await interaction.followup.send(embed=embed)
 
-    @app_commands.command(name="explain", description="Learn the rules of any casino game")
+    @admin_group.command(name="explain", description="Learn the rules of any casino game")
     async def explain(self, interaction: discord.Interaction) -> None:
         view = ExplainSelectView()
         await interaction.response.send_message(

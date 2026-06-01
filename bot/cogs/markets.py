@@ -135,6 +135,8 @@ def _mid_cell(bid: float | None, ask: float | None, last: float | None) -> tuple
 
 
 class MarketsCog(commands.Cog):
+    kalshi_group = app_commands.Group(name="kalshi", description="Kalshi prediction-market depth & orderbooks")
+
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
@@ -287,25 +289,25 @@ class MarketsCog(commands.Cog):
             embed.add_field(name="📊 Total", value="\n".join(tot_rows)[:1024], inline=False)
         await interaction.followup.send(embed=embed)
 
-    @app_commands.command(name="kalshi", description="Kalshi market depth for an NBA game")
+    @kalshi_group.command(name="nba", description="Kalshi market depth for an NBA game")
     @app_commands.describe(game="Select a game")
     @app_commands.autocomplete(game=game_autocomplete)
     async def kalshi(self, interaction: discord.Interaction, game: str) -> None:
         await self._kalshi_impl(interaction, game, "nba")
 
-    @app_commands.command(name="mlb-kalshi", description="Kalshi market depth for an MLB game")
+    @kalshi_group.command(name="mlb", description="Kalshi market depth for an MLB game")
     @app_commands.describe(game="Select a game")
     @app_commands.autocomplete(game=mlb_game_autocomplete)
     async def mlb_kalshi(self, interaction: discord.Interaction, game: str) -> None:
         await self._kalshi_impl(interaction, game, "mlb")
 
-    @app_commands.command(name="kalshi-orderbook", description="Full Kalshi orderbook + spread/total markets for an NBA game")
+    @kalshi_group.command(name="nba-book", description="Full Kalshi orderbook + spread/total markets for an NBA game")
     @app_commands.describe(game="Select a game")
     @app_commands.autocomplete(game=game_autocomplete)
     async def kalshi_orderbook(self, interaction: discord.Interaction, game: str) -> None:
         await self._orderbook_impl(interaction, game, "nba")
 
-    @app_commands.command(name="mlb-kalshi-orderbook", description="Full Kalshi orderbook + run line/total markets for an MLB game")
+    @kalshi_group.command(name="mlb-book", description="Full Kalshi orderbook + run line/total markets for an MLB game")
     @app_commands.describe(game="Select a game")
     @app_commands.autocomplete(game=mlb_game_autocomplete)
     async def mlb_kalshi_orderbook(self, interaction: discord.Interaction, game: str) -> None:
