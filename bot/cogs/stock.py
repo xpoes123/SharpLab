@@ -328,6 +328,53 @@ async def live_price_check(symbol: str, price: float, *, tol: float = PRICE_TOLE
     return price_within_tolerance(price, live, tol), live
 
 
+async def live_option_check(underlying: str, opt_type: str, strike: float, expiry: str,
+                            premium: float, *, tol: float = PRICE_TOLERANCE) -> tuple[bool, str | None]:
+    """Validate an option contract actually exists in the live chain (right expiry +
+    strike) and that the premium is near market. Returns (ok, reason). Rejects the
+    HPE-$65-call-that-doesn't-exist / malformed-expiry / fat-finger-premium cases.
+    Returns (True, None) when the chain can't be fetched (don't block on a yfinance hiccup)."""
+    import yfinance as yf
+    from datetime import date as _date
+    try:
+        _date.fromisoformat(expiry)
+    except ValueError:
+        return False, f"expiry `{expiry}` must be YYYY-MM-DD"
+
+    def _blocking():
+        try:
+            tk = yf.Ticker(underlying)
+            opts = list(tk.options)
+            if expiry not in opts:
+                return ("no_expiry", opts[:5])
+            df = (tk.option_chain(expiry).calls if opt_type == "call"
+                  else tk.option_chain(expiry).puts)
+            sel = df[(df["strike"] - strike).abs() < 1e-6]
+            if sel.empty:
+                ss = sorted(df["strike"].tolist())
+                return ("no_strike", (ss[0], ss[-1]) if ss else None)
+            last = float(sel["lastPrice"].iloc[0])
+            bid, ask = float(sel["bid"].iloc[0]), float(sel["ask"].iloc[0])
+            live = last if last > 0 else ((bid + ask) / 2 if bid > 0 and ask > 0 else None)
+            return ("ok", live)
+        except Exception:
+            return ("error", None)
+
+    kind, info = await asyncio.get_running_loop().run_in_executor(None, _blocking)
+    if kind == "error":
+        return True, None
+    if kind == "no_expiry":
+        ex = ", ".join(info) if info else "none listed"
+        return False, f"**{underlying}** has no `{expiry}` expiration (try: {ex})"
+    if kind == "no_strike":
+        rng = f" — listed strikes ${info[0]:g}–${info[1]:g}" if info else ""
+        return False, f"**{underlying}** has no ${strike:g} {opt_type} for {expiry}{rng}"
+    live = info
+    if live and not price_within_tolerance(premium, live, tol):
+        return False, f"premium ${premium:g} is far off the live **${live:.2f}**"
+    return True, None
+
+
 # ── Per-ticker period changes (1D / 1W / 1M / YTD / 1Y) ───────────────────────
 _HIST_TTL = 900.0  # 15 min — daily closes move slowly
 _hist_cache: dict[str, tuple[float, list]] = {}
@@ -2935,6 +2982,14 @@ class StockCog(commands.Cog):
         except ValueError as e:
             await interaction.response.send_message(str(e), ephemeral=True)
             return
+
+        if date is None:   # a "now" option trade must reference a real, fairly-priced contract
+            ok, reason = await live_option_check(sym, otype, strike, expiry_iso, premium)
+            if not ok:
+                await interaction.response.send_message(
+                    f"⚠️ Can't record that — {reason}. (Pass `date:` to log a real past fill.)",
+                    ephemeral=True)
+                return
 
         uid = str(interaction.user.id)
 

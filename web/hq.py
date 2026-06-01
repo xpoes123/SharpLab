@@ -911,6 +911,11 @@ async def hq_option_trade(body: OptionTradeIn, request: Request):
             or not (0 < body.strike <= 1_000_000) or not (0 < body.premium <= 1_000_000)
             or not (0 < abs(body.contracts) <= 100_000)):
         return JSONResponse({"error": "bad_input"}, status_code=400)
+    # HQ trades are always "now" — verify the contract exists in the live chain + fair premium.
+    from bot.cogs.stock import live_option_check
+    ok, reason = await live_option_check(underlying, body.opt_type, body.strike, expiry, body.premium)
+    if not ok:
+        return JSONResponse({"error": reason}, status_code=400)
     try:
         await queries.add_option_trade(sess["id"], underlying, body.opt_type,
                                        body.strike, body.expiry.strip(), body.side, body.contracts,
