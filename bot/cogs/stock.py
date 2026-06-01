@@ -2369,7 +2369,7 @@ class StockCog(commands.Cog):
                 return
 
             held = {h["ticker"] for h in await queries.get_all_stock_holdings()}
-            MC_FLOOR, CAP = 2e9, 18   # notable large-caps only; keep it readable
+            MC_FLOOR, CAP = 5e8, 30   # ≥$500M (skip micro/penny-caps); top 30 by market cap
 
             def group_lines(items: list[dict]) -> list[str]:
                 notable = sorted((e for e in items if e["mc"] >= MC_FLOOR),
