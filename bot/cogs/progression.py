@@ -563,6 +563,14 @@ class ProgressionCog(commands.Cog):
         await interaction.response.send_message(
             f"✅ Your odds will now display as **{format}** (e.g. in `/bet view`).", ephemeral=True)
 
+    @profile_group.command(name="books", description="Set which sportsbooks you have — personalizes /odds best")
+    async def my_books(self, interaction: discord.Interaction) -> None:
+        current = await queries.get_user_books(str(interaction.user.id))
+        await interaction.response.send_message(
+            "Select every sportsbook you have an account on — `/odds best` will then also "
+            "show the best line **among your books**:",
+            view=_BookSelectView(current), ephemeral=True)
+
     @tasks.loop(seconds=30)
     async def check_achievements(self) -> None:
         try:
@@ -623,6 +631,29 @@ class ProgressionCog(commands.Cog):
 
     async def _check_user_achievements(self, uid: str) -> None:
         await evaluate_user_achievements(uid)
+
+
+class _BookSelect(discord.ui.Select):
+    def __init__(self, current: list[str]) -> None:
+        from .odds import MY_BOOK_CHOICES
+        opts = [discord.SelectOption(label=label, value=key, default=(key in current))
+                for key, label in MY_BOOK_CHOICES]
+        super().__init__(placeholder="Pick the books you have…", min_values=0,
+                         max_values=len(opts), options=opts)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        from .odds import BOOK_LABELS
+        await queries.set_user_books(str(interaction.user.id), self.values)
+        names = ", ".join(BOOK_LABELS.get(b, b) for b in self.values) or "none"
+        await interaction.response.edit_message(
+            content=f"✅ Saved your books: **{names}**.\n`/odds best` now also shows the best line among them.",
+            view=None)
+
+
+class _BookSelectView(discord.ui.View):
+    def __init__(self, current: list[str]) -> None:
+        super().__init__(timeout=120)
+        self.add_item(_BookSelect(current))
 
 
 async def setup(bot: commands.Bot) -> None:

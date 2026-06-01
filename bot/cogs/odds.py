@@ -108,7 +108,18 @@ BOOK_LABELS = {
     "pinnacle": "Pinnacle",
     "kalshi": "Kalshi",
     "polymarket": "Polymarket",
+    "williamhill_us": "Caesars",
+    "betrivers": "BetRivers",
+    "fanatics": "Fanatics",
+    "bovada": "Bovada",
 }
+
+# Books a user can mark as "held" (→ The Odds API source key; Caesars = williamhill_us).
+MY_BOOK_CHOICES = [
+    ("draftkings", "DraftKings"), ("fanduel", "FanDuel"), ("betmgm", "BetMGM"),
+    ("williamhill_us", "Caesars"), ("betrivers", "BetRivers"), ("fanatics", "Fanatics"),
+    ("bovada", "Bovada"), ("pinnacle", "Pinnacle"), ("kalshi", "Kalshi"), ("polymarket", "Polymarket"),
+]
 
 
 def _fmt_move(open_odds: int | None, curr_odds: int | None) -> str:
@@ -466,8 +477,9 @@ class OddsCog(commands.Cog):
                 snapshots.append(OddsSnapshot(snapshot_id="polymarket-live", game_id=game, kind="poll", source="polymarket", captured_at_utc_iso=now_iso, payload={"ml_home": home_ml, "ml_away": away_ml}))
         _non_live = [s for s in snapshots if s.source not in LIVE_SOURCES]
         most_recent = max(_non_live or snapshots, key=lambda s: s.captured_at_utc_iso)
-        def best(key: str, reverse: bool) -> tuple[str, float | int] | None:
-            candidates = [(s.source, s.payload[key]) for s in snapshots if s.payload.get(key) is not None]
+        def best(key: str, reverse: bool, pool: list | None = None) -> tuple[str, float | int] | None:
+            src_pool = pool if pool is not None else snapshots
+            candidates = [(s.source, s.payload[key]) for s in src_pool if s.payload.get(key) is not None]
             return sorted(candidates, key=lambda x: x[1], reverse=reverse)[0] if candidates else None
         home, away = target.home_team, target.away_team
         fields = []
@@ -498,6 +510,44 @@ class OddsCog(commands.Cog):
         embed = discord.Embed(title=f"Best Lines — {away} @ {home}", description=f"*updated {_staleness(most_recent.captured_at_utc_iso)}*", color=0x57F287)
         for name, value in fields:
             embed.add_field(name=name, value=value, inline=True)
+
+        # Personalized: best line restricted to the books this user actually has.
+        my_books = set(await queries.get_user_books(str(interaction.user.id)))
+        if my_books:
+            all_live = await _fetch_live_book_odds(game, target.home_team, sport)
+            seen: set[str] = set()
+            pool = []
+            for s in all_live + snapshots:  # all API books + the kalshi/poly live snapshots
+                if s.source in my_books and s.source not in seen:
+                    seen.add(s.source)
+                    pool.append(s)
+            hs, as_ = home.split()[-1], away.split()[-1]
+            rows = []
+            mb = best("spread", True, pool)
+            if mb:
+                src, val = mb; snap = next(x for x in pool if x.source == src)
+                rows.append(f"Spread {hs} `{val:+.1f}` ({_fmt_prob(snap.payload.get('spread_odds'))}) — {BOOK_LABELS.get(src, src)}")
+            mb = best("ml_home", True, pool)
+            if mb:
+                src, val = mb; rows.append(f"ML {hs} `{_fmt_prob(int(val))}` — {BOOK_LABELS.get(src, src)}")
+            mb = best("ml_away", True, pool)
+            if mb:
+                src, val = mb; rows.append(f"ML {as_} `{_fmt_prob(int(val))}` — {BOOK_LABELS.get(src, src)}")
+            mb = best("total", False, pool)
+            if mb:
+                src, val = mb; snap = next(x for x in pool if x.source == src)
+                rows.append(f"Over `{val}` ({_fmt_prob(snap.payload.get('total_over_odds'))}) — {BOOK_LABELS.get(src, src)}")
+            mb = best("total", True, pool)
+            if mb:
+                src, val = mb; snap = next(x for x in pool if x.source == src)
+                rows.append(f"Under `{val}` ({_fmt_prob(snap.payload.get('total_under_odds'))}) — {BOOK_LABELS.get(src, src)}")
+            held = ", ".join(BOOK_LABELS.get(b, b) for b in my_books)
+            embed.add_field(
+                name="📍 Best among your books",
+                value="\n".join(rows) if rows else "*No lines on your books right now.*",
+                inline=False,
+            )
+            embed.set_footer(text=f"Your books: {held} · change with /profile books")
         await interaction.followup.send(embed=embed)
 
     async def _line_move_impl(self, interaction: discord.Interaction, game: str) -> None:
