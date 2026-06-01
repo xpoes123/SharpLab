@@ -1,6 +1,6 @@
 # SharpLab — Current Status
 
-Last updated: 2026-04-26
+Last updated: 2026-06-01
 
 ## Architecture
 
@@ -24,7 +24,7 @@ Shared DB (`data/sharplab.db` SQLite, WAL mode). All access through `db/queries.
 ### DB layer
 - `db/schema.py` — all tables + `init_db()` with migrations
 - `db/queries.py` — all DB access (games, odds_snapshots, bets, injuries, paper_bets, casino_history, user_xp, user_achievements, elo_ratings, elo_match_history, game_sessions, game_tokens, discord_users, etc.)
-- Tables: games, odds_snapshots, bets, injuries, paper_bets, casino_history, user_xp, user_achievements, daily_challenges, daily_bonus_claimed, duels, tournaments, tournament_entries, elo_ratings, elo_match_history, game_sessions, game_tokens, discord_users
+- ~40 tables (see `db/schema.py`). Beyond the core odds/bets set: player_props + player_prop_alts, pickem_games/pickem_picks, stock_trades/option_trades/stock_cash/portfolio_snapshots/ticker_meta/stock_monitors, reaction_roles, error_logs, web_events, user_engagement, bot_settings. ⚠️ `stock_holdings` is DEAD — holdings computed from `stock_trades`.
 
 ### Temporal pipeline
 - **OddsPollingWorkflow** — every 30 min: fetch games → The Odds API → Kalshi → Polymarket → DB
@@ -33,13 +33,18 @@ Shared DB (`data/sharplab.db` SQLite, WAL mode). All access through `db/queries.
 - **BetResolutionWorkflow** — every 2 hours: balldontlie/ESPN scores → resolve open/graded bets → mark games final
 - Activities: fetch_games_for_today, fetch_odds_batch, upsert_odds_snapshot, fetch_close_odds_snapshot, fetch_kalshi_odds_batch, fetch_kalshi_close_snapshot, fetch_polymarket_odds_batch, fetch_polymarket_close_snapshot, fetch_injuries, fetch_final_scores, resolve_bets_for_game
 
-### Discord bot — Slash commands
-**Odds & Lines:** /odds, /best-line, /line-move, /scores, /kalshi, /rosters
-**Bet Tracking:** /log, /bets, /void, /record, /clv-summary
-**Utilities:** /convert, /ev, /kelly, /parlay, /help
+### Discord bot — Slash commands (nested groups; sport is a sub-group, not an arg)
+**Odds & Lines:** /odds nba|mlb (lines/best/move/props/scores), /kalshi, /rosters
+**Bet Tracking:** /bet (log nba|mlb|prop, view, void, record, clv, leaderboard)
+**Markets & Signals:** /signals (channel/scan — arb/middle/steam), /pickem (leaderboard/channel/post)
+**Player Props:** NBA props via /odds nba props (props.py renders, pipeline ingests)
+**Stock/Options Brokerage:** /stock (buy/sell/trades/edit/profile/graph/server/leaderboard/movers/cash/lookup), /option (buy/sell/positions), /monitor (add/list/remove/channel)
+**Sports News:** sportsnews.py — auto NBA/NFL/MLB breaking-news posts that ping the league role (no slash cmd)
+**Reaction Roles:** /reactionrole (create/bind/unbind/list)
+**Utilities:** /calc (convert/ev/kelly/parlay), /help
 **History:** /db (paginated game browser)
-**Paper Trading:** /trade, /mlb-trade, /portfolio, /leaderboard, /void-trade
-**Casino:** 13+ games via cogs (poker, blackjack, pokemon, geography, quizbowl, etc.)
+**Paper Trading:** /paper (trade nba|mlb, portfolio, profile, leaderboard, cashout)
+**Casino:** ~80 game cogs, browse /games, launch /play (registry in casino.py, dispatch in game_menu.py)
 **Engagement:** /daily (challenges), /duel, /tournament, /achievements, /profile, /level
 **Ratings:** /ratings, /standings (F1 championship), /game-ratings
 
@@ -51,15 +56,16 @@ Shared DB (`data/sharplab.db` SQLite, WAL mode). All access through `db/queries.
 
 ### Web layer
 - FastAPI backend (`web/api.py`) — leaderboard API + game WebSocket engine
-- Static frontend (`web/static/`) — dark theme, vanilla HTML/CSS/JS
-- Games: sudoku, figgie, bingo (all WebSocket-based, session-link auth)
-- Live at `sharplab.djiang.xyz` (Caddy reverse proxy, auto-HTTPS)
+- **HQ dashboard** (`web/hq.py`) — portfolio/P&L + leaderboards; `_period_pnl` (holding-aware, trade-adjusted P/L per window), cached via `AsyncTTLCache`. OAuth/sessions in `web/auth.py`.
+- Static frontend (`web/static/`) — dark theme, vanilla HTML/CSS/JS (incl. hq, stocks, player pages)
+- Games: sudoku, figgie, bingo, blotto, minesweeper, solitaire-chess, trading floor (WebSocket, session-link auth)
+- Live at `sharplab.djiang.xyz` (Caddy reverse proxy, auto-HTTPS) — `sharplab-web` systemd service
 
 ### Engagement & ELO
 - Daily challenges: 3 rotating objectives, 100c each + 200c all-3 bonus
 - Duels: `/duel @user [amount]` — best-of-3 mini-games, optional coin wager
 - Tournaments: `/tournament <4|8> [buy_in]` — single elimination brackets
-- Achievements: 25 badges in 6 categories
+- Achievements: ~53 badges across ~11 categories (Progression, Winning, Diversity, Social, Daily, Wealth, Betting, Investing, Web, Voice, Chat) — see `shared/achievements.py`
 - XP & Leveling: auto-awarded on game completion. `level = isqrt(xp/50)+1`
 - ELO: per-game for 13 mini-games + Pokemon. Start 1000, K=32/24/16, floor 100
 - F1 Championship: position points per game leaderboard. Min 5 games to qualify.
@@ -84,8 +90,9 @@ Shared DB (`data/sharplab.db` SQLite, WAL mode). All access through `db/queries.
 
 ## What Doesn't Exist Yet
 
-1. Pick'em (daily free contest on real games)
-2. Poker (web game)
-3. `/record` improvements (time-period filter, per-book ROI)
-4. Sharp move flag in `/line-move` (reverse line movement detection)
-5. Line alerts (`/alert` — ping on threshold crossing)
+1. Poker (web game)
+2. `/bet record` improvements (time-period filter, per-book ROI)
+3. Sharp move flag in `/odds nba move` (reverse line movement detection)
+4. A predictive model to compare against the market (the original "find edge" goal)
+
+(Pick'em, market signals, stock/options brokerage, and reaction roles now exist.)
