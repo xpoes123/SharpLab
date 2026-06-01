@@ -120,10 +120,18 @@ function render(d) {
     </div>`;
 
   const sh = d.stock_holdings || [];
+  const hRow = (h) => {
+    const u = h.unrealized;
+    const upct = (u != null && h.cost_basis) ? ` <span class="muted" style="font-size:11px">${u >= 0 ? "+" : ""}${(u / h.cost_basis * 100).toFixed(1)}%</span>` : "";
+    const ucell = u == null ? `<span class="muted">—</span>` : `<span class="${cls(u)}">${pnl(u)}</span>${upct}`;
+    const rcell = h.realized ? `<span class="${cls(h.realized)}">${pnl(h.realized)}</span>` : `<span class="muted">—</span>`;
+    return `<tr><td><strong>${h.ticker}</strong></td><td class="num">${h.shares}</td>
+      <td class="num muted">${money2(h.dca)}</td><td class="num">${money(h.cost_basis)}</td>
+      <td class="num">${ucell}</td><td class="num">${rcell}</td></tr>`;
+  };
   html += `<h2>Stock Holdings</h2><div class="card" style="padding:0">
-    ${sh.length ? `<table><thead><tr><th>Ticker</th><th class="num">Shares</th><th class="num">Avg</th><th class="num">Cost basis</th></tr></thead>
-      <tbody>${sh.map((h) => `<tr><td><strong>${h.ticker}</strong></td><td class="num">${h.shares}</td>
-        <td class="num muted">${money2(h.dca)}</td><td class="num">${money(h.cost_basis)}</td></tr>`).join("")}</tbody></table>`
+    ${sh.length ? `<table><thead><tr><th>Ticker</th><th class="num">Shares</th><th class="num">Avg</th><th class="num">Cost basis</th><th class="num">Unrealized</th><th class="num">Realized</th></tr></thead>
+      <tbody>${sh.map(hRow).join("")}</tbody></table>`
       : `<div class="muted" style="padding:18px">No open stock positions.</div>`}</div>`;
 
   const op = d.option_positions || [];
