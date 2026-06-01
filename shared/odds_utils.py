@@ -93,6 +93,18 @@ def fmt_prob(odds: int) -> str:
     return f"{american_to_prob(odds) * 100:.1f}%"
 
 
+ODDS_FORMATS = ("american", "decimal", "probability")
+
+
+def fmt_odds(odds: int, fmt: str = "american") -> str:
+    """Render American odds in a user's preferred format."""
+    if fmt == "decimal":
+        return f"{american_to_decimal(odds):.2f}"
+    if fmt == "probability":
+        return fmt_prob(odds)
+    return f"+{odds}" if odds > 0 else str(odds)  # american (default)
+
+
 # ── Number-adjusted CLV ──────────────────────────────────────────────────────
 # Approximate win-probability change per half-point of line movement.
 # Standard industry approximation for NBA.

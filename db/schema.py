@@ -720,3 +720,12 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        # Migration: per-user display preferences (e.g. preferred odds format).
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS user_settings ("
+                "discord_user TEXT PRIMARY KEY, odds_format TEXT NOT NULL DEFAULT 'american')"
+            )
+            await db.commit()
+        except Exception:
+            pass

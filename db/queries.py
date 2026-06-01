@@ -1885,6 +1885,25 @@ async def get_engagement(discord_user: str) -> dict:
     return {"voice_minutes": row[0], "messages": row[1]} if row else {"voice_minutes": 0, "messages": 0}
 
 
+async def get_user_odds_format(discord_user: str) -> str:
+    """A user's preferred odds display format ('american' default)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT odds_format FROM user_settings WHERE discord_user = ?", (discord_user,))
+        row = await cur.fetchone()
+    return row[0] if row else "american"
+
+
+async def set_user_odds_format(discord_user: str, fmt: str) -> None:
+    """Set a user's preferred odds display format."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO user_settings (discord_user, odds_format) VALUES (?, ?) "
+            "ON CONFLICT(discord_user) DO UPDATE SET odds_format = excluded.odds_format",
+            (discord_user, fmt),
+        )
+        await db.commit()
+
+
 async def get_user_achievements(discord_user: str) -> list[dict]:
     """All achievements a user has unlocked."""
     async with aiosqlite.connect(DB_PATH) as db:

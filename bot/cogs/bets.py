@@ -12,7 +12,7 @@ from discord.ext import commands
 
 from db import queries
 from shared.models import Bet, Game, OddsSnapshot
-from shared.odds_utils import american_to_decimal, compute_clv, fmt_prob, parse_odds_input, side_is_home
+from shared.odds_utils import american_to_decimal, compute_clv, fmt_odds, fmt_prob, parse_odds_input, side_is_home
 from shared.prop_clv import parse_prop_note, consensus_main_line, prop_clv_at_line
 from .odds import (game_autocomplete, mlb_game_autocomplete, log_game_autocomplete,
                    mlb_log_game_autocomplete, props_player_autocomplete)
@@ -490,6 +490,8 @@ class BetsCog(commands.Cog):
             await interaction.followup.send("You have no open or graded bets.", ephemeral=True)
             return
 
+        odds_fmt = await queries.get_user_odds_format(str(interaction.user.id))
+
         # Pre-fetch games and latest snapshots per game (for live CLV)
         game_cache: dict[str, Game | None] = {}
         snap_cache: dict[str, list[OddsSnapshot]] = {}
@@ -561,10 +563,10 @@ class BetsCog(commands.Cog):
                         is_home=side_is_home(bet.side, game.home_team, game.away_team) if market == "spread" else None,
                         is_over=(bet.side.lower() == "over") if market == "total" else None,
                     )
-                    now_str = f"→{fmt_prob(current_odds)}"
+                    now_str = f"→{fmt_odds(current_odds, odds_fmt)}"
                     clv_str = f"  {live_clv:+.1f}pp"
 
-            odds_str = f"{fmt_prob(bet.odds)}{now_str}"
+            odds_str = f"{fmt_odds(bet.odds, odds_fmt)}{now_str}"
             lines.append(
                 f"{icon}  {game_str}  {market_str}  {bet.side}  {odds_str}  {bet.units}u{clv_str}  #{bet.bet_id}"
             )
