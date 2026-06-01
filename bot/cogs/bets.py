@@ -1,14 +1,19 @@
 """Bet tracking commands — /log and /record."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import os
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 _ET = ZoneInfo("America/New_York")
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
+
+# Where the weekly CLV/record digest posts (falls back to the injury/closing-lines channel).
+_DIGEST_CHANNEL_ID = int(os.getenv("BET_DIGEST_CHANNEL_ID") or os.getenv("INJURY_CHANNEL_ID") or 0)
+_DIGEST_SETTING = "last_bet_digest"
 
 from db import queries
 from shared.models import Bet, Game, OddsSnapshot
@@ -316,6 +321,43 @@ def _record_embed(
 class BetsCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
+        self.weekly_digest.start()
+
+    def cog_unload(self) -> None:
+        self.weekly_digest.cancel()
+
+    @tasks.loop(hours=12)
+    async def weekly_digest(self) -> None:
+        """Once a week, post the past 7 days' CLV/record leaderboard to the digest
+        channel — turns logged bets into a recurring competition."""
+        try:
+            if not _DIGEST_CHANNEL_ID:
+                return
+            now = datetime.now(timezone.utc)
+            last = await queries.get_bot_setting(_DIGEST_SETTING)
+            if last is None:
+                await queries.set_bot_setting(_DIGEST_SETTING, now.isoformat())  # seed; don't post on first boot
+                return
+            last_dt = datetime.fromisoformat(last)
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=timezone.utc)
+            if (now - last_dt) < timedelta(days=7):
+                return
+            rows = _aggregate_leaderboard(await queries.get_all_settled_bets((now - timedelta(days=7)).isoformat()))
+            await queries.set_bot_setting(_DIGEST_SETTING, now.isoformat())
+            if not rows:
+                return
+            channel = self.bot.get_channel(_DIGEST_CHANNEL_ID)
+            if channel is None:
+                return
+            embed = _leaderboard_embed(getattr(channel, "guild", None), rows, "clv", title_prefix="📅 This Week · ")
+            await channel.send(embed=embed)
+        except Exception:
+            log.exception("weekly bet digest failed")
+
+    @weekly_digest.before_loop
+    async def _before_digest(self) -> None:
+        await self.bot.wait_until_ready()
 
     # ── /log ──────────────────────────────────────────────────────────────────
 
@@ -748,6 +790,79 @@ class BetsCog(commands.Cog):
 
         embed = _record_embed(target_user, bets, game_labels)
         await interaction.followup.send(embed=embed)
+
+    @bet_group.command(name="leaderboard", description="Who's beating the closing line — CLV, ROI & record leaderboard")
+    @app_commands.describe(metric="Rank by (default: CLV)")
+    @app_commands.choices(metric=[
+        app_commands.Choice(name="CLV — avg beat vs close", value="clv"),
+        app_commands.Choice(name="EV gained — units of edge", value="ev"),
+        app_commands.Choice(name="Profit — net units", value="profit"),
+        app_commands.Choice(name="ROI %", value="roi"),
+        app_commands.Choice(name="Wins", value="wins"),
+    ])
+    async def leaderboard(self, interaction: discord.Interaction, metric: str = "clv") -> None:
+        await interaction.response.defer()
+        rows = _aggregate_leaderboard(await queries.get_all_settled_bets())
+        embed = _leaderboard_embed(interaction.guild, rows, metric)
+        await interaction.followup.send(embed=embed)
+
+
+def _aggregate_leaderboard(bets: list[Bet]) -> list[dict]:
+    """Per-user betting stats from settled bets: record, net units, ROI, CLV, EV gained."""
+    by_user: dict[str, list[Bet]] = {}
+    for b in bets:
+        by_user.setdefault(b.discord_user, []).append(b)
+    out = []
+    for uid, ub in by_user.items():
+        won = [b for b in ub if b.status == "won"]
+        lost = [b for b in ub if b.status == "lost"]
+        push = [b for b in ub if b.status == "push"]
+        net = sum(b.units * (american_to_decimal(b.odds) - 1) for b in won) - sum(b.units for b in lost)
+        risked = sum(b.units for b in won + lost + push)
+        clvs = [b.clv for b in ub if b.clv is not None]
+        out.append({
+            "uid": uid, "n": len(ub), "w": len(won), "l": len(lost), "p": len(push),
+            "net": net, "roi": (net / risked * 100) if risked else 0.0,
+            "avg_clv": (sum(clvs) / len(clvs)) if clvs else None,
+            "ev": sum(b.units * (b.clv / 100) for b in ub if b.clv is not None),
+        })
+    return out
+
+
+_LB_META = {
+    "clv":    ("🎯 CLV Leaderboard", lambda r: r["avg_clv"] if r["avg_clv"] is not None else -1e9,
+               lambda r: f"{r['avg_clv']:+.1f}pp" if r["avg_clv"] is not None else "—"),
+    "ev":     ("📈 EV Gained Leaderboard", lambda r: r["ev"], lambda r: f"{r['ev']:+.2f}u"),
+    "profit": ("💰 Profit Leaderboard", lambda r: r["net"], lambda r: f"{r['net']:+.2f}u"),
+    "roi":    ("📊 ROI Leaderboard", lambda r: r["roi"], lambda r: f"{r['roi']:+.1f}%"),
+    "wins":   ("🏆 Wins Leaderboard", lambda r: r["w"], lambda r: f"{r['w']}W"),
+}
+
+
+def _leaderboard_embed(guild, rows: list[dict], metric: str, title_prefix: str = "") -> discord.Embed:
+    title, key, fmt = _LB_META.get(metric, _LB_META["clv"])
+    title = title_prefix + title
+    # ROI/CLV need a minimum sample to be meaningful
+    pool = [r for r in rows if r["n"] >= (3 if metric in ("roi", "clv") else 1)]
+    if metric == "clv":
+        pool = [r for r in pool if r["avg_clv"] is not None]
+    pool.sort(key=key, reverse=True)
+    if not pool:
+        return discord.Embed(title=title, description="No graded bets yet — log some with `/bet log`!", color=0x5865F2)
+
+    def name(uid: str) -> str:
+        m = guild.get_member(int(uid)) if guild and uid.isdigit() else None
+        return m.display_name if m else f"User {uid[:6]}"
+
+    medals = ["🥇", "🥈", "🥉"]
+    lines = []
+    for i, r in enumerate(pool[:10]):
+        rank = medals[i] if i < 3 else f"`{i+1}.`"
+        rec = f"{r['w']}-{r['l']}" + (f"-{r['p']}" if r["p"] else "")
+        lines.append(f"{rank} **{name(r['uid'])}** — {fmt(r)}  ·  {rec} ({r['n']})")
+    embed = discord.Embed(title=title, description="\n".join(lines), color=0x5865F2)
+    embed.set_footer(text="CLV = avg points beaten vs the closing line · (n) = settled bets · /bet leaderboard metric:…")
+    return embed
 
 
 async def setup(bot: commands.Bot) -> None:

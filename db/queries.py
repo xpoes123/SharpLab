@@ -347,6 +347,22 @@ async def get_bets_for_user(discord_user: str) -> list[Bet]:
     return [_row_to_bet(r) for r in rows]
 
 
+async def get_all_settled_bets(since_iso: str | None = None) -> list[Bet]:
+    """Every settled (won/lost/push) bet across all users — for leaderboards. If
+    `since_iso` is given, only bets placed at/after it (for a weekly digest)."""
+    q = "SELECT * FROM bets WHERE status IN ('won','lost','push')"
+    params: tuple = ()
+    if since_iso:
+        q += " AND placed_at >= ?"
+        params = (since_iso,)
+    q += " ORDER BY placed_at DESC"
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(q, params)
+        rows = await cursor.fetchall()
+    return [_row_to_bet(r) for r in rows]
+
+
 async def get_graded_bets_for_user(discord_user: str) -> list[Bet]:
     """Return all bets with CLV computed (graded/won/lost/push/void), newest first."""
     async with aiosqlite.connect(DB_PATH) as db:
