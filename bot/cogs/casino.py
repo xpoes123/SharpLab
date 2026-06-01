@@ -2429,7 +2429,7 @@ def _game_invocation(name: str) -> str:
     """How a user should launch this game from chat."""
     if name in _DIRECT_SLASH_GAMES:
         return f"/{name}"
-    return f"/game {name}"
+    return f"/play {name}"
 
 
 def _games_page_embed(page: int, total_pages: int) -> discord.Embed:
