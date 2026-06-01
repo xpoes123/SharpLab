@@ -22,6 +22,32 @@ def test_ml_no_arb_when_vig_present():
     assert find_ml_arb(odds) is None
 
 
+def test_arb_suspect_when_one_book_off_market():
+    # The real Royals/Reds case: the field agrees on the away side (~+106..+124) but one
+    # soft book (mybookieag) is way off at +157, which is the only thing creating the arb.
+    odds = {
+        "fanduel":    {"ml_home": -127, "ml_away": 106},
+        "fanatics":   {"ml_home": -132, "ml_away": 110},
+        "kalshi":     {"ml_home": -148, "ml_away": 124},
+        "mybookieag": {"ml_home": -180, "ml_away": 157},   # stale outlier
+    }
+    arb = find_ml_arb(odds)
+    assert arb and arb["away_book"] == "mybookieag"
+    assert arb["suspect"] is True       # cog suppresses these
+
+
+def test_arb_not_suspect_when_edge_is_tight():
+    # A genuine thin arb: the best prices are only slightly better than the field, no
+    # single book wildly off → not flagged.
+    odds = {
+        "A": {"ml_home": 102, "ml_away": -108},
+        "B": {"ml_home": -106, "ml_away": 104},
+        "C": {"ml_home": -104, "ml_away": 100},
+    }
+    arb = find_ml_arb(odds)
+    assert arb and arb["suspect"] is False
+
+
 def test_total_middle():
     odds = {"A": {"total": 220.5, "total_over_odds": -110},
             "B": {"total": 223.5, "total_under_odds": -110}}

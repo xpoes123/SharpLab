@@ -9,7 +9,13 @@ A "payload" is the standardized dict stored in odds_snapshots:
 """
 from __future__ import annotations
 
+import statistics
+
 from shared.odds_utils import american_to_prob
+
+# If the best price on a side is more than this (implied-prob) below the field's
+# median, one book is well off-market — almost always a stale line, not a real arb.
+ARB_OUTLIER_MARGIN = 0.045
 
 # Defaults — tuned to keep alerts rare and meaningful.
 SPREAD_MIDDLE_MIN = 1.0   # points of gap to flag a spread middle
@@ -40,11 +46,23 @@ def _best(odds: dict, key: str, *, highest: bool) -> tuple[str, float] | None:
     return best
 
 
+def _field_outlier(odds: dict, key: str, best_prob: float,
+                   margin: float = ARB_OUTLIER_MARGIN) -> bool:
+    """True if `best_prob` (the best/cheapest implied prob on a side) sits more than
+    `margin` below the median of the field on that side — i.e. a single book is well
+    off-market. Needs ≥3 books to have a meaningful median."""
+    probs = [american_to_prob(p[key]) for p in odds.values() if p.get(key) is not None]
+    if len(probs) < 3:
+        return False
+    return (statistics.median(probs) - best_prob) > margin
+
+
 def find_ml_arb(odds: dict, min_roi: float = 0.0) -> dict | None:
     """Two-way moneyline arbitrage: best home price + best away price across all
     books (incl. Kalshi). Arb exists when their implied probabilities sum < 1.
     min_roi filters marginal arbs (our per-book snapshots aren't simultaneous, so
-    sub-~1% edges are unreliable)."""
+    sub-~1% edges are unreliable). `suspect` flags arbs whose edge comes from a single
+    book far off the field's median — usually a stale line, not a real lock."""
     bh = _best(odds, "ml_home", highest=True)
     ba = _best(odds, "ml_away", highest=True)
     if not bh or not ba:
@@ -61,6 +79,7 @@ def find_ml_arb(odds: dict, min_roi: float = 0.0) -> dict | None:
         "roi_pct": (1.0 / s - 1.0) * 100,
         "home_stake_pct": ph / s * 100,
         "away_stake_pct": pa / s * 100,
+        "suspect": _field_outlier(odds, "ml_home", ph) or _field_outlier(odds, "ml_away", pa),
     }
 
 
