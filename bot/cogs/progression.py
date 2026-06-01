@@ -73,12 +73,22 @@ ALL_ACHIEVEMENTS: list[Achievement] = [
     Achievement("stock_bull", "Bull Market", "Reach $10,000 realized stock profit", "Investing", "\U0001f402", 300),
     Achievement("crypto_first", "Crypto Curious", "Buy your first crypto", "Investing", "\U0001fa99", 25),
     Achievement("options_first", "Optioned Up", "Trade your first option contract", "Investing", "\U0001f4d1", 25),
+    Achievement("stock_50", "Day Trader", "Make 50 stock trades", "Investing", "\U0001f4ca", 150),
+    Achievement("options_5", "Contract Killer", "Make 5 option trades", "Investing", "\U0001f9fe", 75),
+    Achievement("bet_100", "Wiseguy", "Log 100 bets", "Betting", "\U0001f3b0", 300),
+    # ── Web / HQ ──
+    Achievement("web_login", "Plugged In", "Sign in to SharpLab HQ", "Web", "\U0001f50c", 20),
+    Achievement("web_trade", "Browser Trader", "Log a trade from the website", "Web", "\U0001f5b1️", 30),
+    Achievement("web_regular", "HQ Regular", "Rack up 25 visits to SharpLab HQ", "Web", "\U0001f310", 75),
+    # ── Progression (level milestones) ──
+    Achievement("level_10", "Seasoned", "Reach level 10", "Progression", "\U0001f396️", 150),
+    Achievement("level_25", "Elite", "Reach level 25", "Progression", "\U0001f451", 500),
 ]
 
 ACHIEVEMENTS_BY_ID: dict[str, Achievement] = {a.id: a for a in ALL_ACHIEVEMENTS}
 
 # Ordered category list for display
-_CATEGORIES = ["Progression", "Winning", "Diversity", "Social", "Daily", "Wealth", "Betting", "Investing"]
+_CATEGORIES = ["Progression", "Winning", "Diversity", "Social", "Daily", "Wealth", "Betting", "Investing", "Web"]
 
 # Thresholds for progress display on countable achievements
 _PROGRESS_TARGETS: dict[str, tuple[str, int]] = {
@@ -111,9 +121,16 @@ _PROGRESS_TARGETS: dict[str, tuple[str, int]] = {
     "clv_10": ("pos_clv", 10),
     "stock_first": ("num_trades", 1),
     "stock_10": ("num_trades", 10),
+    "stock_50": ("num_trades", 50),
     "stock_diversified": ("distinct_holdings", 10),
     "stock_green": ("realized_pnl", 1000),
     "stock_bull": ("realized_pnl", 10000),
+    "options_5": ("num_option_trades", 5),
+    "bet_100": ("num_bets", 100),
+    "web_login": ("web_logins", 1),
+    "web_regular": ("web_visits", 25),
+    "level_10": ("level", 10),
+    "level_25": ("level", 25),
 }
 
 # Level color thresholds
@@ -153,6 +170,9 @@ async def gather_achievement_stats(uid: str) -> dict:
     open_positions = [p for p in positions if not p["closed"]]
     trades = await queries.get_stock_trades(uid)
     options = await queries.get_option_positions_full(uid)
+    option_trades = await queries.get_option_trades(uid)
+    web = await queries.get_web_activity(uid)
+    xp = await queries.get_or_create_xp(uid)
 
     return {
         "rounds": stats["rounds"],
@@ -169,10 +189,16 @@ async def gather_achievement_stats(uid: str) -> dict:
         "pos_clv": sum(1 for b in bets if b.clv is not None and b.clv > 0),
         # Investing
         "num_trades": len(trades),
+        "num_option_trades": len(option_trades),
         "distinct_holdings": len(open_positions),
         "realized_pnl": sum(p["realized_pnl"] for p in positions),
         "traded_crypto": any(t["ticker"].upper().endswith("-USD") for t in trades),
         "has_options": len(options) > 0,
+        "web_traded": any((t.get("notes") or "") == "via HQ" for t in trades),
+        # Web / HQ
+        "web_logins": web["logins"],
+        "web_visits": web["visits"],
+        "level": xp["level"],
     }
 
 
@@ -212,11 +238,19 @@ def _achievement_checks(s: dict) -> list[tuple[str, bool]]:
         ("clv_10", s["pos_clv"] >= 10),
         ("stock_first", s["num_trades"] >= 1),
         ("stock_10", s["num_trades"] >= 10),
+        ("stock_50", s["num_trades"] >= 50),
         ("stock_diversified", s["distinct_holdings"] >= 10),
         ("stock_green", s["realized_pnl"] >= 1000),
         ("stock_bull", s["realized_pnl"] >= 10000),
         ("crypto_first", s["traded_crypto"]),
         ("options_first", s["has_options"]),
+        ("options_5", s["num_option_trades"] >= 5),
+        ("bet_100", s["num_bets"] >= 100),
+        ("web_login", s["web_logins"] >= 1),
+        ("web_trade", s["web_traded"]),
+        ("web_regular", s["web_visits"] >= 25),
+        ("level_10", s["level"] >= 10),
+        ("level_25", s["level"] >= 25),
     ]
 
 
@@ -263,6 +297,49 @@ async def announce_achievements(bot, uid: str, newly: list[str], channel=None) -
                 await user.send(embed=embed)
     except Exception:
         log.debug("could not announce achievements to %s", uid, exc_info=True)
+
+
+# ── XP for actions + level-up announcements ──────────────────────────────────
+XP_GAME = 10     # per casino game played
+XP_BET = 40      # per bet logged (worth more — real-money tracking)
+XP_STOCK = 40    # per stock/option/crypto trade logged
+_LEVELUP_CHANNEL_SETTING = "levelup_channel"
+
+
+async def award_xp(bot, uid: str, amount: int, channel=None) -> None:
+    """Add XP for an action and post a server level-up message if it bumped a level.
+    Best-effort: never raises into the caller."""
+    try:
+        res = await queries.add_xp(uid, amount)
+        if res.get("leveled_up"):
+            await _announce_levelup(bot, uid, res["level"], channel)
+    except Exception:
+        log.debug("award_xp failed for %s", uid, exc_info=True)
+
+
+async def _announce_levelup(bot, uid: str, level: int, channel=None) -> None:
+    target = channel
+    if target is None:
+        raw = await queries.get_bot_setting(_LEVELUP_CHANNEL_SETTING)
+        if raw and raw.isdigit():
+            target = bot.get_channel(int(raw))
+            if target is None:
+                try:
+                    target = await bot.fetch_channel(int(raw))
+                except Exception:
+                    target = None
+    if target is None:
+        return
+    next_xp = queries.xp_for_level(level + 1)
+    embed = discord.Embed(
+        title="\U0001f389 Level Up!",
+        description=f"<@{uid}> just reached **Level {level}**! \U0001f680\nNext level at **{next_xp:,} XP**.",
+        colour=_level_color(level),
+    )
+    try:
+        await target.send(content=f"<@{uid}>", embed=embed)
+    except Exception:
+        log.debug("levelup announce failed for %s", uid, exc_info=True)
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────
@@ -480,6 +557,15 @@ class ProgressionCog(commands.Cog):
 
     # ── Background achievement checker ───────────────────────────────────────
 
+    @app_commands.command(name="levelchannel", description="Set the channel for level-up announcements")
+    @app_commands.describe(channel="Where level-up messages are posted")
+    async def levelchannel(self, interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+        if not interaction.user.guild_permissions.manage_guild:
+            await interaction.response.send_message("You need **Manage Server**.", ephemeral=True)
+            return
+        await queries.set_bot_setting(_LEVELUP_CHANNEL_SETTING, str(channel.id))
+        await interaction.response.send_message(f"✅ Level-ups will post in {channel.mention}.", ephemeral=True)
+
     @tasks.loop(seconds=30)
     async def check_achievements(self) -> None:
         try:
@@ -487,9 +573,11 @@ class ProgressionCog(commands.Cog):
             if not new_entries:
                 return
             self._last_check_id = new_entries[-1]["id"]
-            users = {e["discord_user"] for e in new_entries}
-            for uid in users:
+            from collections import Counter
+            plays = Counter(e["discord_user"] for e in new_entries)
+            for uid, n in plays.items():
                 try:
+                    await award_xp(self.bot, uid, n * XP_GAME)  # XP for playing
                     newly = await evaluate_user_achievements(uid)
                     if newly:
                         await announce_achievements(self.bot, uid, newly)

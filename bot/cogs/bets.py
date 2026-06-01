@@ -374,6 +374,11 @@ class BetsCog(commands.Cog):
             notes=notes,
         )
         bet_id = await queries.insert_bet(bet)
+        try:
+            from bot.cogs.progression import award_xp, XP_BET
+            await award_xp(interaction.client, str(interaction.user.id), XP_BET, interaction.channel)
+        except Exception:
+            log.debug("bet xp award failed", exc_info=True)
         await _check_achievements(interaction)
 
         line_str = f" {final_line:+.1f}" if final_line is not None else ""

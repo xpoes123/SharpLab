@@ -85,6 +85,15 @@ async def _check_achievements(interaction: discord.Interaction) -> None:
         log.debug("achievement check failed for %s", interaction.user.id, exc_info=True)
 
 
+async def _award_trade_xp(interaction: discord.Interaction) -> None:
+    """Grant XP for logging a stock/option/crypto trade (best-effort)."""
+    try:
+        from bot.cogs.progression import award_xp, XP_STOCK
+        await award_xp(interaction.client, str(interaction.user.id), XP_STOCK, interaction.channel)
+    except Exception:
+        log.debug("trade xp award failed for %s", interaction.user.id, exc_info=True)
+
+
 # Common crypto tickers — typed bare (BTC) they map to Yahoo's BTC-USD form.
 # Anything with an explicit -USD suffix is also treated as crypto/FX.
 CRYPTO_SYMBOLS = {
@@ -2565,6 +2574,7 @@ class StockCog(commands.Cog):
             ephemeral=True,
         )
         await self._maybe_post_rohan_pick(interaction, "BOUGHT", f"**{shares:g}** {symbol} @ ${price:,.2f}")
+        await _award_trade_xp(interaction)
 
     # ── /stock sell ──────────────────────────────────────────────────────────
 
@@ -2628,6 +2638,7 @@ class StockCog(commands.Cog):
             ephemeral=True,
         )
         await self._maybe_post_rohan_pick(interaction, "SOLD", f"**{shares:g}** {symbol} @ ${price:,.2f}")
+        await _award_trade_xp(interaction)
 
     # ── /stock trades ────────────────────────────────────────────────────────
 
@@ -2833,6 +2844,7 @@ class StockCog(commands.Cog):
         await self._maybe_post_rohan_pick(
             interaction, "BOUGHT" if side == "buy" else "SOLD",
             f"{contracts} × `{spec}` option @ ${premium:,.2f}")
+        await _award_trade_xp(interaction)
 
     _OPT_TYPE = [
         app_commands.Choice(name="call", value="call"),
