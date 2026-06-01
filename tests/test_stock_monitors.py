@@ -109,16 +109,19 @@ def test_bot_settings_roundtrip_and_upsert(tmp_db):
 
 
 def test_get_all_stock_holdings(tmp_db):
+    # Holdings are computed from the trade log (the dead stock_holdings table is no
+    # longer read), so seed stock_trades. u4 buys then sells out → 0 shares, filtered.
     async def go():
         async with aiosqlite.connect(tmp_db) as db:
             await db.executemany(
-                "INSERT INTO stock_holdings (discord_user, ticker, shares, dca_price, updated_at) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO stock_trades (discord_user, ticker, side, shares, price, executed_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 [
-                    ("u1", "MU", 10.0, 90.0, "2026-01-01"),
-                    ("u2", "MU", 5.0, 95.0, "2026-01-01"),
-                    ("u3", "NVDA", 2.0, 800.0, "2026-01-01"),
-                    ("u4", "ZERO", 0.0, 1.0, "2026-01-01"),  # filtered out (0 shares)
+                    ("u1", "MU", "buy", 10.0, 90.0, "2026-01-01T00:00:00+00:00"),
+                    ("u2", "MU", "buy", 5.0, 95.0, "2026-01-01T00:00:00+00:00"),
+                    ("u3", "NVDA", "buy", 2.0, 800.0, "2026-01-01T00:00:00+00:00"),
+                    ("u4", "ZERO", "buy", 5.0, 1.0, "2026-01-01T00:00:00+00:00"),
+                    ("u4", "ZERO", "sell", 5.0, 2.0, "2026-01-02T00:00:00+00:00"),  # net 0 → filtered
                 ],
             )
             await db.commit()
