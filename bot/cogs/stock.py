@@ -43,6 +43,7 @@ DEFAULT_STOCK_ALERTS_CHANNEL_ID = 1510100250411536495  # auto-swing alerts land 
 MONITOR_POLL_MINUTES = 5
 SWING_THRESHOLD_PCT = 10.0  # auto-alert when a held ticker moves this % on the day
 _ALERTS_CHANNEL_SETTING = "stock_alerts_channel"
+_DIGEST_SETTING = "last_stock_digest"  # ET date of the last daily portfolio report
 
 # Rohan's picks: ping the "rohan stock picks" role whenever he trades.
 ROHAN_USER_ID = "688444350325456939"
@@ -2102,10 +2103,53 @@ class StockCog(commands.Cog):
         self._swing_alerted: dict[tuple[str, str], str] = {}
         self.snapshot_loop.start()
         self.monitor_loop.start()
+        self.daily_digest.start()
 
     def cog_unload(self) -> None:
         self.snapshot_loop.cancel()
         self.monitor_loop.cancel()
+        self.daily_digest.cancel()
+
+    @tasks.loop(hours=1)
+    async def daily_digest(self) -> None:
+        """Once a day after the US close, post every trader's day move % (sorted,
+        no pings) to the stocks channel."""
+        try:
+            from zoneinfo import ZoneInfo
+            et = datetime.now(ZoneInfo("America/New_York"))
+            if et.hour < 16:  # before market close — wait
+                return
+            today = et.date().isoformat()
+            if await queries.get_bot_setting(_DIGEST_SETTING) == today:
+                return
+            users = list(set(await queries.get_users_with_trades())
+                         | set(await queries.get_users_with_option_trades()))
+            rows = await _leaderboard_rows(users) if users else []
+            scored = [{**r, "day_pct": r["day_gain"] / r["day_base"] * 100}
+                      for r in rows if r.get("day_base") and r["day_base"] > 0]
+            channel = self.bot.get_channel(await self._alerts_channel_id())
+            if not scored or channel is None:
+                await queries.set_bot_setting(_DIGEST_SETTING, today)  # nothing to post today
+                return
+            scored.sort(key=lambda r: r["day_pct"], reverse=True)
+            names = await self._resolve_names([r["user_id"] for r in scored])
+            lines = []
+            for i, r in enumerate(scored[:25], 1):
+                medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"`#{i:>2}`")
+                nm = names.get(r["user_id"], f"Player {r['user_id'][:6]}")
+                emoji = "🟢" if r["day_pct"] >= 0 else "🔴"
+                lines.append(f"{medal} **{nm}** {emoji} {r['day_pct']:+.2f}% · {_fmt_money(r['day_gain'])}")
+            embed = discord.Embed(title="📊 Daily Portfolio Report",
+                                  description="\n".join(lines), colour=0x57F287)
+            embed.set_footer(text=f"{et.strftime('%b %d')} close · stocks only · sorted by % move")
+            await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+            await queries.set_bot_setting(_DIGEST_SETTING, today)
+        except Exception:
+            log.exception("daily stock digest failed")
+
+    @daily_digest.before_loop
+    async def _before_daily_digest(self) -> None:
+        await self.bot.wait_until_ready()
 
     stock = app_commands.Group(name="stock", description="Stock quotes, portfolio, and market data")
     option = app_commands.Group(
