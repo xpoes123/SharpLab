@@ -3784,14 +3784,15 @@ async def set_bot_setting(key: str, value: str) -> None:
 
 
 async def get_all_stock_holdings() -> list[dict]:
-    """Every user's holdings across the server (for the auto swing monitor)."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            "SELECT discord_user, ticker, shares FROM stock_holdings WHERE shares > 0",
-        )
-        rows = await cur.fetchall()
-    return [dict(r) for r in rows]
+    """Every user's CURRENT open holdings across the server (for the swing monitor),
+    computed from the trade log — the authoritative source. (The old stock_holdings
+    table is no longer maintained, so reading it missed every recent position.)"""
+    out: list[dict] = []
+    for uid in await get_users_with_trades():
+        for p in await get_stock_positions_full(uid):
+            if not p.get("closed") and (p.get("shares") or 0) > 0:
+                out.append({"discord_user": uid, "ticker": p["ticker"], "shares": p["shares"]})
+    return out
 
 
 # ── Daily NBA/MLB pick'em ─────────────────────────────────────────────────────
