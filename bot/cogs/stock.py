@@ -2019,6 +2019,70 @@ async def _build_risk(
     return _build_risk_embed(name, risk, tq)
 
 
+# ── Trade edit: dropdown → modal ──────────────────────────────────────────────
+
+
+class _TradeEditModal(discord.ui.Modal):
+    def __init__(self, trade: dict) -> None:
+        super().__init__(title=f"Edit #{trade['trade_id']} · {trade['ticker']}")
+        self.trade = trade
+        self.shares = discord.ui.TextInput(
+            label="Shares", default=f"{trade['shares']:g}", max_length=20)
+        self.price = discord.ui.TextInput(
+            label="Price", default=f"{trade['price']:g}", max_length=20)
+        self.date = discord.ui.TextInput(
+            label="Date (YYYY-MM-DD)", default=trade["executed_at"][:10], required=False, max_length=20)
+        for f in (self.shares, self.price, self.date):
+            self.add_item(f)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        try:
+            new_shares, new_price = float(self.shares.value), float(self.price.value)
+        except ValueError:
+            await interaction.response.send_message("Shares and price must be numbers.", ephemeral=True)
+            return
+        if new_shares <= 0 or new_price <= 0:
+            await interaction.response.send_message("Shares and price must be > 0.", ephemeral=True)
+            return
+        try:
+            executed_at = _parse_executed_at(self.date.value.strip()) if self.date.value.strip() else None
+        except ValueError as e:
+            await interaction.response.send_message(str(e), ephemeral=True)
+            return
+        ok = await queries.update_stock_trade(
+            str(interaction.user.id), self.trade["trade_id"], new_shares, new_price, executed_at)
+        if not ok:
+            await interaction.response.send_message("Couldn't update that trade.", ephemeral=True)
+            return
+        t = self.trade
+        date_note = f" · {executed_at[:10]}" if executed_at else ""
+        await interaction.response.send_message(
+            f"✏️ Updated **#{t['trade_id']}** `{t['ticker']}` — "
+            f"~~{t['shares']:g} @ {t['price']:,.2f}~~ → **{new_shares:g} @ {new_price:,.2f}**{date_note}",
+            ephemeral=True)
+
+
+class _TradeEditSelect(discord.ui.Select):
+    def __init__(self, trades: list[dict]) -> None:
+        self._by_id = {str(t["trade_id"]): t for t in trades}
+        options = [
+            discord.SelectOption(
+                label=f"#{t['trade_id']} {t['side'].upper()} {t['shares']:g} {t['ticker']} @ {t['price']:,.2f}"[:100],
+                description=t["executed_at"][:10] + (f" · {t['notes']}" if t.get("notes") else ""),
+                value=str(t["trade_id"]))
+            for t in trades]
+        super().__init__(placeholder="Pick a trade to fix…", options=options, min_values=1, max_values=1)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(_TradeEditModal(self._by_id[self.values[0]]))
+
+
+class _TradeEditView(discord.ui.View):
+    def __init__(self, trades: list[dict]) -> None:
+        super().__init__(timeout=300)
+        self.add_item(_TradeEditSelect(trades))
+
+
 # ── Cog ─────────────────────────────────────────────────────────────────────
 
 
@@ -2609,6 +2673,26 @@ class StockCog(commands.Cog):
         if len(trades) > 25:
             embed.set_footer(text=f"Showing 25 of {len(trades)} total trades.")
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+    # ── /stock edit ──────────────────────────────────────────────────────────
+
+    @stock.command(name="edit", description="Fix one of your trades — pick it from a dropdown")
+    @app_commands.describe(ticker="Optional: only show trades for this ticker")
+    async def edit_trade(
+        self, interaction: discord.Interaction, ticker: str | None = None,
+    ) -> None:
+        uid = str(interaction.user.id)
+        symbol = _normalize_symbol(ticker) if ticker else None
+        trades = await queries.get_stock_trades(uid, symbol)
+        if not trades:
+            await interaction.response.send_message(
+                "You have no trades to edit." + (f" (none for `{symbol}`)" if symbol else ""),
+                ephemeral=True)
+            return
+        recent = list(reversed(trades))[:25]
+        await interaction.response.send_message(
+            "Pick a trade to fix — you'll get a form to correct the shares / price / date:",
+            view=_TradeEditView(recent), ephemeral=True)
 
     # ── /stock leaderboard ───────────────────────────────────────────────────
 
