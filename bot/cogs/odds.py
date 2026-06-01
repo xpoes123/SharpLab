@@ -287,6 +287,27 @@ def _make_game_autocomplete(sport: str):
     return _autocomplete
 
 
+def _make_log_autocomplete(sport: str):
+    """Like the game autocomplete but also includes LIVE (in-progress) games, so
+    you can log an in-game bet. Live games are flagged 🔴."""
+    async def _autocomplete(_interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        now = datetime.now(timezone.utc)
+        games = await queries.get_loggable_games(current, sport=sport)
+        choices = []
+        for g in games:
+            try:
+                live = datetime.fromisoformat(g.start_time_utc_iso.replace("Z", "+00:00")) <= now
+            except (ValueError, AttributeError):
+                live = False
+            tag = "🔴 LIVE · " if live else ""
+            choices.append(app_commands.Choice(
+                name=f"{tag}{g.away_team} @ {g.home_team} — {_fmt_game_time(g.start_time_utc_iso)}"[:100],
+                value=g.game_id,
+            ))
+        return choices
+    return _autocomplete
+
+
 def _make_historical_autocomplete(sport: str):
     async def _autocomplete(_interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         stripped = current.strip().lower()
@@ -307,6 +328,8 @@ def _make_historical_autocomplete(sport: str):
 # Exported for use by other cogs
 game_autocomplete = _make_game_autocomplete("nba")
 mlb_game_autocomplete = _make_game_autocomplete("mlb")
+log_game_autocomplete = _make_log_autocomplete("nba")
+mlb_log_game_autocomplete = _make_log_autocomplete("mlb")
 historical_game_autocomplete = _make_historical_autocomplete("nba")
 mlb_historical_game_autocomplete = _make_historical_autocomplete("mlb")
 
