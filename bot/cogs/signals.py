@@ -16,6 +16,7 @@ from discord.ext import commands, tasks
 from db import queries
 from shared import signals as sig
 from shared.odds_utils import american_to_prob
+from bot.cogs.odds import _fetch_live_book_odds, _fetch_kalshi_ml, _fetch_polymarket_ml
 
 log = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ LOOKAHEAD_HOURS = 18      # only games tipping within this window
 BASELINE_MINUTES = 30     # steam/divergence compare-against window
 ALERT_TTL_SEC = 6 * 3600  # re-alert the same signal at most once per this period
 STALE_MINUTES = 45        # ignore games whose latest odds are older than this
+FRESH_MINUTES = 20        # a source must have updated within this to feed a signal (no stale-vs-fresh pairing)
 ARB_MIN_ROI = 1.5         # ignore arbs below this % (snapshots aren't simultaneous + residual spread)
 MIDDLE_MIN_EV = 0.0       # only fire middles the base-rate model scores as +EV
 
@@ -41,6 +43,16 @@ def _cents(odds: int) -> float:
 
 def _by_source(snaps) -> dict:
     return {s.source: s.payload for s in snaps}
+
+
+def _age_min(iso: str, now: datetime) -> float:
+    try:
+        t = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        return (now - t).total_seconds() / 60
+    except ValueError:
+        return 1e9
 
 
 class Signals(commands.Cog):
@@ -103,6 +115,29 @@ class Signals(commands.Cog):
         self._alerted[sig_key] = now
         return True
 
+    async def _live_current(self, g) -> dict:
+        """Live cross-book ML/spread/total for re-confirming a tripped signal — books
+        from The Odds API plus the Kalshi/Polymarket exchanges (executable prices)."""
+        out: dict = {}
+        try:
+            for s in await _fetch_live_book_odds(g.game_id, g.home_team, g.sport):
+                out[s.source] = s.payload
+        except Exception:
+            log.debug("signals: live book fetch failed for %s", g.game_id, exc_info=True)
+        try:
+            k = await _fetch_kalshi_ml(g.home_team, g.away_team, g.sport)
+            if k:
+                out["kalshi"] = {"ml_home": k[0], "ml_away": k[1]}
+        except Exception:
+            pass
+        try:
+            p = await _fetch_polymarket_ml(g.home_team, g.away_team)
+            if p:
+                out["polymarket"] = {"ml_home": p[0], "ml_away": p[1]}
+        except Exception:
+            pass
+        return out
+
     async def _scan(self) -> int:
         now = datetime.now(timezone.utc)
         horizon = (now + timedelta(hours=LOOKAHEAD_HOURS)).isoformat()
@@ -126,32 +161,39 @@ class Signals(commands.Cog):
                         continue
                 except ValueError:
                     pass
-                current = _by_source(snaps)
+                # Per-source freshness gate: only let recently-updated sources feed a
+                # signal, so we never pair a 3-min price against a 40-min stale one.
+                current = _by_source([s for s in snaps if _age_min(s.captured_at_utc_iso, now) <= FRESH_MINUTES])
                 label = f"{g.away_team} @ {g.home_team}"
                 emoji = "🏀" if g.sport == "nba" else "⚾"
 
-                # Arbitrage / middles use the current cross-book picture. The arb
-                # floor filters marginal/stale edges (snapshots aren't simultaneous).
-                arb = sig.find_ml_arb(current, min_roi=ARB_MIN_ROI)
-                if arb and self._fresh(f"arb:{g.game_id}:{arb['home_book']}:{arb['away_book']}:{round(arb['roi_pct'])}"):
-                    await self._post(self._arb_embed(emoji, label, g, arb)); posted += 1
+                # Arb/middle are "lock" signals — too dangerous to fire off DB snapshots.
+                # Detect cheaply on the DB picture; if anything trips, pull LIVE prices
+                # once and re-detect on those. Only a live-confirmed signal is posted.
+                if sig.find_ml_arb(current, min_roi=ARB_MIN_ROI) or sig.find_total_middle(current) or sig.find_spread_middle(current):
+                    live = await self._live_current(g)
+                    if not live:
+                        continue
+                    arb = sig.find_ml_arb(live, min_roi=ARB_MIN_ROI)
+                    if arb and self._fresh(f"arb:{g.game_id}:{arb['home_book']}:{arb['away_book']}:{round(arb['roi_pct'])}"):
+                        await self._post(self._arb_embed(emoji, label, g, arb)); posted += 1
 
-                tot = sig.find_total_middle(current)
-                if tot:
-                    prof = (None if tot["kind"] == "total_arb" else
-                            sig.middle_profit(tot["over_odds"], tot["under_odds"],
-                                              sig.estimate_middle_hit(g.sport, "total", tot["over_line"], tot["under_line"])))
-                    if self._middle_fires(tot["kind"], prof) and self._fresh(
-                            f"{tot['kind']}:{g.game_id}:{tot['over_book']}:{tot['under_book']}:{tot['over_line']}:{tot['under_line']}"):
-                        await self._post(self._total_embed(emoji, label, g, tot, prof)); posted += 1
+                    tot = sig.find_total_middle(live)
+                    if tot:
+                        prof = (None if tot["kind"] == "total_arb" else
+                                sig.middle_profit(tot["over_odds"], tot["under_odds"],
+                                                  sig.estimate_middle_hit(g.sport, "total", tot["over_line"], tot["under_line"])))
+                        if self._middle_fires(tot["kind"], prof) and self._fresh(
+                                f"{tot['kind']}:{g.game_id}:{tot['over_book']}:{tot['under_book']}:{tot['over_line']}:{tot['under_line']}"):
+                            await self._post(self._total_embed(emoji, label, g, tot, prof)); posted += 1
 
-                spr = sig.find_spread_middle(current)
-                if spr:
-                    prof = sig.middle_profit(spr["home_odds"], spr["away_odds"],
-                                             sig.estimate_middle_hit(g.sport, "spread", spr["home_line"], spr["away_line"]))
-                    if self._middle_fires("spread_middle", prof) and self._fresh(
-                            f"spread_middle:{g.game_id}:{spr['home_book']}:{spr['away_book']}:{spr['home_line']}:{spr['away_line']}"):
-                        await self._post(self._spread_embed(emoji, label, g, spr, prof)); posted += 1
+                    spr = sig.find_spread_middle(live)
+                    if spr:
+                        prof = sig.middle_profit(spr["home_odds"], spr["away_odds"],
+                                                 sig.estimate_middle_hit(g.sport, "spread", spr["home_line"], spr["away_line"]))
+                        if self._middle_fires("spread_middle", prof) and self._fresh(
+                                f"spread_middle:{g.game_id}:{spr['home_book']}:{spr['away_book']}:{spr['home_line']}:{spr['away_line']}"):
+                            await self._post(self._spread_embed(emoji, label, g, spr, prof)); posted += 1
 
                 # Steam / divergence compare to ~30 min ago.
                 since = await queries.get_snapshots_for_game_since(g.game_id, baseline_cut)
