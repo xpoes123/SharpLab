@@ -89,7 +89,7 @@ async def _launch(bot: commands.Bot, interaction: discord.Interaction, game: str
     entry = GAME_DISPATCH.get(game)
     if entry is None:
         await interaction.response.send_message(
-            f"Unknown game: `{game}`. Try `/game` with no arg to browse.",
+            f"Unknown game: `{game}`. Try `/play` with no arg to browse.",
             ephemeral=True,
         )
         return
@@ -186,7 +186,7 @@ class GameMenuCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
-    @app_commands.command(name="game", description="Launch a casino/party/brain game")
+    @app_commands.command(name="play", description="Play any casino/party/brain game")
     @app_commands.describe(name="Game to play (leave empty to browse by category)")
     @app_commands.autocomplete(name=_game_autocomplete)
     async def game(self, interaction: discord.Interaction, name: str | None = None) -> None:

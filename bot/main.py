@@ -29,6 +29,7 @@ _THREAD_BLOCKED_COMMANDS: set[str] = {
     "nbasim", "nflsim", "mlbsim", "tennissim", "soccersim",
     "penalties", "liarsdice",
     "soccersim-tournament",
+    "play",  # /play launches games that create their own threads
 }
 
 
@@ -151,6 +152,25 @@ class SharpBot(commands.Bot):
                 await self.load_extension(cog)
             except Exception as e:
                 log.error(f"Failed to load cog {cog}", exc_info=e)
+
+        # Drop the per-game top-level slash commands — every game is launched via
+        # /play (game_menu dispatches to each cog's launcher method, which stays
+        # in place). This reclaims ~40 slots toward Discord's 100-command cap.
+        from bot.cogs.game_menu import GAME_DISPATCH
+        _GROUP_GAMES = {"craps", "crapless", "paigow"}  # these are command groups — keep
+        removed = []
+        for game, (cog_name, method_name) in GAME_DISPATCH.items():
+            if game in _GROUP_GAMES:
+                continue
+            cog = self.get_cog(cog_name)
+            method = getattr(cog, method_name, None) if cog else None
+            # only a top-level Command (not a group subcommand) is worth pruning
+            if isinstance(method, app_commands.Command) and method.parent is None:
+                if self.tree.get_command(method.name) is not None:
+                    self.tree.remove_command(method.name)
+                    removed.append(method.name)
+        log.info(f"Pruned {len(removed)} per-game commands (now under /play): {sorted(removed)}")
+
         for gid in GUILD_IDS:
             guild = discord.Object(id=gid)
             self.tree.copy_global_to(guild=guild)
