@@ -162,9 +162,12 @@ class SharpBot(commands.Bot):
         # in place). This reclaims ~40 slots toward Discord's 100-command cap.
         from bot.cogs.game_menu import GAME_DISPATCH
         _GROUP_GAMES = {"craps", "crapless", "paigow"}  # these are command groups — keep
+        # Keep the standalone command too: /play launches these at their default,
+        # but the top-level slash command carries options (e.g. /pokedle difficulty).
+        _KEEP_STANDALONE = {"pokedle"}
         removed = []
         for game, (cog_name, method_name) in GAME_DISPATCH.items():
-            if game in _GROUP_GAMES:
+            if game in _GROUP_GAMES or game in _KEEP_STANDALONE:
                 continue
             cog = self.get_cog(cog_name)
             method = getattr(cog, method_name, None) if cog else None
