@@ -255,6 +255,65 @@ async def fetch_close_odds_snapshot(inp: FetchCloseSnapshotInput) -> list[OddsSn
     ]
 
 
+# ── NBA player props ─────────────────────────────────────────────────────────
+NBA_PROP_MARKETS = "player_points,player_rebounds,player_assists,player_threes,player_points_rebounds_assists"
+
+
+def _parse_player_props(game_id: str, captured_at: str, data: dict) -> list[dict]:
+    """Flatten The Odds API event-props response into per (book, player, market)
+    rows, pairing Over/Under into one row."""
+    records: list[dict] = []
+    for bm in data.get("bookmakers", []):
+        src = bm.get("key")
+        for m in bm.get("markets", []):
+            mkt = m.get("key")
+            paired: dict[tuple, dict] = {}
+            for o in m.get("outcomes", []):
+                player, name, point, price = o.get("description"), o.get("name"), o.get("point"), o.get("price")
+                if not player or point is None or price is None:
+                    continue
+                d = paired.setdefault((player, point), {
+                    "game_id": game_id, "source": src, "player": player, "market": mkt,
+                    "line": point, "over_odds": None, "under_odds": None, "captured_at": captured_at,
+                })
+                if name == "Over":
+                    d["over_odds"] = int(price)
+                elif name == "Under":
+                    d["under_odds"] = int(price)
+            records.extend(paired.values())
+    return records
+
+
+@activity.defn
+async def fetch_nba_player_props(game_ids: list[str]) -> int:
+    """Fetch + upsert NBA player props for the given games (one Odds API call per
+    game, billed per market). Returns the number of prop lines stored."""
+    if not ODDS_API_KEY or not game_ids:
+        return 0
+    captured_at = datetime.now(timezone.utc).isoformat()
+    total = 0
+    async with httpx.AsyncClient() as client:
+        for gid in game_ids:
+            try:
+                resp = await client.get(
+                    f"{ODDS_API_BASE}/sports/basketball_nba/events/{gid}/odds",
+                    params={"apiKey": ODDS_API_KEY, "regions": "us",
+                            "markets": NBA_PROP_MARKETS, "oddsFormat": "american"},
+                    timeout=25.0,
+                )
+                if resp.status_code != 200:
+                    continue
+                records = _parse_player_props(gid, captured_at, resp.json())
+            except Exception:
+                activity.logger.warning(f"[fetch_nba_player_props] failed for {gid}", exc_info=True)
+                continue
+            if records:
+                await queries.upsert_player_props(records)
+                total += len(records)
+    activity.logger.info(f"[fetch_nba_player_props] stored {total} prop lines for {len(game_ids)} games")
+    return total
+
+
 # ── Kalshi helpers ──────────────────────────────────────────────────────────────
 
 def _kalshi_ml_from_markets(
