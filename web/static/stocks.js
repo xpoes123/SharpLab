@@ -9,13 +9,14 @@ const plink = (name) => `<a href="/hq/${encodeURIComponent(name)}">${name}</a>`;
 const pct = (n) => (n == null ? "—" : (n >= 0 ? "+" : "") + n.toFixed(2) + "%");
 
 const STYLE = `<style>
-.lbhero{display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap;background:linear-gradient(135deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:16px;padding:22px 24px;margin:6px 0 18px}
+.lbhero{background:linear-gradient(135deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:16px;padding:22px 24px;margin:6px 0 18px}
 .lbhero .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.6px}
-.lbhero .bigval{font-size:40px;font-weight:800;line-height:1.1;margin:2px 0 10px}
-.herometa{display:flex;gap:18px;flex-wrap:wrap;font-size:14px;font-weight:600}
-.herometa b{color:var(--fg)}
-.lbhero-side{display:flex;flex-direction:column;gap:14px;justify-content:center;min-width:170px}
-.sidestat .v{font-size:15px;margin-top:2px;font-weight:600}
+.lbhero .bigval{font-size:38px;font-weight:800;line-height:1.1;margin-top:2px}
+.lbhero-top{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;flex-wrap:wrap}
+.herostats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:16px;margin-top:18px;padding-top:16px;border-top:1px solid var(--line)}
+.hstat .k{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px}
+.hstat .hv{font-size:16px;font-weight:700}
+.hstat .hv b{color:var(--fg)}
 .lblist{display:flex;flex-direction:column;gap:12px}
 .lbcard{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px;transition:border-color .15s}
 .lbcard:hover{border-color:var(--accent)}
@@ -185,22 +186,29 @@ function render(traders) {
   traders.forEach((t) => (t.holdings || []).forEach((h) => (counts[h.ticker] = (counts[h.ticker] || 0) + 1)));
   const popular = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
 
+  const totPnl = totUnreal + totReal;
+  const totPos = traders.reduce((s, t) => s + (t.positions || 0), 0);
+  // Total invested ≈ combined value − total P&L; gives a server-wide return %.
+  const invested = totVal - totPnl;
+  const totRet = invested > 0 ? (totPnl / invested) * 100 : null;
+  const hstat = (k, v) => `<div class="hstat"><div class="k">${k}</div><div class="hv">${v}</div></div>`;
+
   let html = STYLE + tradePanel() + `<div class="lbhero">
-    <div class="lbhero-main">
-      <div class="muted lbl">Combined portfolio value</div>
-      <div class="bigval">${money(totVal)}</div>
-      <div class="herometa">
-        <span><b>${traders.length}</b> traders</span>
-        <span class="${cls(totDay)}">${pnl(totDay)} today</span>
-        <span class="${cls(totUnreal)}">${pnl(totUnreal)} unrealized</span>
-        <span class="${cls(totReal)}">${pnl(totReal)} realized</span>
+    <div class="lbhero-top">
+      <div><div class="muted lbl">Combined portfolio value</div><div class="bigval">${money(totVal)}</div></div>
+      <div style="text-align:right">
+        <div class="muted lbl">Server total P&L</div>
+        <div class="bigval ${cls(totPnl)}">${pnl(totPnl)}${totRet != null ? ` <span style="font-size:18px">(${pct(totRet)})</span>` : ""}</div>
       </div>
     </div>
-    <div class="lbhero-side">
-      ${top ? `<div class="sidestat"><div class="muted lbl">Top mover today</div>
-        <div class="v">${plink2(top)} <span class="${cls(top.day_pct)}">${pct(top.day_pct)}</span></div></div>` : ""}
-      ${popular ? `<div class="sidestat"><div class="muted lbl">Most held</div>
-        <div class="v"><b>${popular[0]}</b> <span class="muted">held by ${popular[1]}</span></div></div>` : ""}
+    <div class="herostats">
+      ${hstat("Today", `<span class="${cls(totDay)}">${pnl(totDay)}</span>`)}
+      ${hstat("Unrealized", `<span class="${cls(totUnreal)}">${pnl(totUnreal)}</span>`)}
+      ${hstat("Realized", `<span class="${cls(totReal)}">${pnl(totReal)}</span>`)}
+      ${hstat("Traders", traders.length)}
+      ${hstat("Open positions", totPos)}
+      ${top ? hstat("Top mover today", `${plink2(top)} <span class="${cls(top.day_pct)}">${pct(top.day_pct)}</span>`) : ""}
+      ${popular ? hstat("Most held", `<b>${popular[0]}</b> <span class="muted" style="font-weight:500">×${popular[1]}</span>`) : ""}
     </div>
   </div>
   <div class="lblist">${traders.map(tradeCard).join("")}</div>`;
