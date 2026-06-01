@@ -479,6 +479,39 @@ async def hq_stocks():
     return data
 
 
+def _period_pnl(trades, series, shares_now, price_now, cuts, close_on_or_before):
+    """A position's *actual* P/L over each window, accounting for trades made inside it
+    — so a stock bought partway through the period only counts gains since the buy
+    (not the stock's full move). Per window:
+        P/L = current_value − value_at_window_start − net_cash_invested_during_window
+    `trades`: ascending [{executed_at, side, shares, price}] for ONE ticker.
+    `series`: ascending [(date_iso, close)]. `cuts`: {label: date_iso | None(=inception)}."""
+    out = {}
+    cur_val = shares_now * price_now
+    for label, cd in cuts.items():
+        if cd is None:                                  # ALL → from inception (held 0 before)
+            shares_at_t, start_val, window = 0.0, 0.0, trades
+        else:
+            shares_at_t = sum((t["shares"] if t["side"] == "buy" else -t["shares"])
+                              for t in trades if t["executed_at"][:10] <= cd)
+            if abs(shares_at_t) > 1e-9:
+                price_at_t = close_on_or_before(series, cd)
+                if not price_at_t:                      # no history that far back
+                    out[label] = {"pnl": None, "pct": None}
+                    continue
+                start_val = shares_at_t * price_at_t
+            else:
+                start_val = 0.0
+            window = [t for t in trades if t["executed_at"][:10] > cd]
+        buys = sum(t["shares"] * t["price"] for t in window if t["side"] == "buy")
+        sells = sum(t["shares"] * t["price"] for t in window if t["side"] == "sell")
+        pnl = cur_val - start_val - (buys - sells)
+        denom = start_val + buys                        # capital exposed during the window
+        out[label] = {"pnl": round(pnl, 2),
+                      "pct": round(pnl / denom * 100, 2) if denom > 1e-9 else None}
+    return out
+
+
 @router.get("/hq/stocks/{handle}")
 async def hq_stock_trader(handle: str):
     """One trader's full portfolio: equity curve, stock + option positions, txns."""
@@ -502,33 +535,49 @@ async def hq_stock_trader(handle: str):
     stock_realized = sum(p.get("realized_pnl", 0) for p in sp)
     open_pos = [p for p in sp if p.get("shares", 0) > 0]
     # lazy import (heavy deps); _ticker_history is cache-shared with fetch_period_changes
-    from bot.cogs.stock import fetch_quotes, fetch_period_changes, _ticker_history
+    from datetime import timedelta
+    from bot.cogs.stock import fetch_quotes, _ticker_history, _close_on_or_before
     quotes = await fetch_quotes([p["ticker"] for p in open_pos]) if open_pos else {}
-    now_prices = {p["ticker"]: quotes[p["ticker"]]["price"]
-                  for p in open_pos if quotes.get(p["ticker"]) and quotes[p["ticker"]].get("price")}
-    changes = await fetch_period_changes(list(now_prices), now_prices) if now_prices else {}
-    # 1y daily-close series per holding (already cached for the % changes above), so the
-    # browser can chart any ticker instantly without a second round-trip.
+    # 1y daily-close series per holding (cached), so the browser can chart any ticker
+    # instantly without a second round-trip.
     hist_list = await asyncio.gather(*[_ticker_history(p["ticker"]) for p in open_pos]) if open_pos else []
     hist_map = dict(zip((p["ticker"] for p in open_pos), hist_list))
-    today_iso = datetime.now(timezone.utc).date().isoformat()
+
+    # Trade log grouped by ticker — drives holding-aware period P/L (so a stock bought
+    # mid-period only counts gains since the buy, not the stock's full move).
+    all_trades = await queries.get_stock_trades(uid)
+    trades_by_tkr: dict[str, list] = {}
+    for t in all_trades:
+        trades_by_tkr.setdefault(t["ticker"], []).append(dict(t))
+    for lst in trades_by_tkr.values():
+        lst.sort(key=lambda t: t["executed_at"])
+    _today = datetime.now(timezone.utc).date()
+    _cut = lambda days: (_today - timedelta(days=days)).isoformat()
+    period_cuts = {"1D": _cut(1), "1W": _cut(7), "1M": _cut(30), "3M": _cut(90),
+                   "YTD": f"{_today.year}-01-01", "1Y": _cut(365), "ALL": None}
+    today_iso = _today.isoformat()
+
     stock_holdings = []
     for p in open_pos:
         q = quotes.get(p["ticker"])
         price = q["price"] if q else None
         unreal = round(p["shares"] * (price - p["dca_price"]), 2) if price is not None else None
+        series = hist_map.get(p["ticker"]) or []
         # Daily closes + a live "today" point so the line ends at the current price.
-        hist = [[d, round(c, 2)] for d, c in (hist_map.get(p["ticker"]) or [])]
+        hist = [[d, round(c, 2)] for d, c in series]
         if price is not None and (not hist or hist[-1][0] < today_iso):
             hist.append([today_iso, round(price, 2)])
+        period = (_period_pnl(trades_by_tkr.get(p["ticker"], []), series,
+                              p.get("shares", 0), price, period_cuts, _close_on_or_before)
+                  if price is not None else {})
         stock_holdings.append({
             "ticker": p["ticker"], "shares": round(p.get("shares", 0), 4),
             "dca": round(p.get("dca_price", 0), 2), "cost_basis": round(p.get("cost_basis", 0), 2),
             "price": round(price, 2) if price is not None else None,
             "unrealized": unreal,
             "realized": round(p.get("realized_pnl", 0), 2),
-            "changes": changes.get(p["ticker"], {}),  # {1D,1W,1M,3M,YTD,1Y,ALL} % change
-            "history": hist,                            # [[date_iso, close], ...] ascending
+            "period": period,        # {label: {pnl, pct}} — her ACTUAL P/L over each window
+            "history": hist,         # [[date_iso, close], ...] ascending
         })
     stock_holdings.sort(key=lambda h: h["cost_basis"], reverse=True)
 
@@ -542,7 +591,7 @@ async def hq_stock_trader(handle: str):
     ]
 
     txns = []
-    for t in await queries.get_stock_trades(uid):
+    for t in all_trades:
         txns.append({"at": t["executed_at"], "kind": "stock",
                      "desc": f"{t['side'].upper()} {t['shares']:g} {t['ticker']} @ ${t['price']:,.2f}"})
     for t in await queries.get_option_trades(uid):
