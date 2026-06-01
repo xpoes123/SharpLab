@@ -330,6 +330,20 @@ game_autocomplete = _make_game_autocomplete("nba")
 mlb_game_autocomplete = _make_game_autocomplete("mlb")
 log_game_autocomplete = _make_log_autocomplete("nba")
 mlb_log_game_autocomplete = _make_log_autocomplete("mlb")
+
+
+async def props_player_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    """Players with props for the game currently selected in the same command."""
+    game = getattr(interaction.namespace, "game", None)
+    if not game:
+        return []
+    try:
+        rows = await queries.get_player_props_for_game(game)
+    except Exception:
+        return []
+    cur = current.lower()
+    players = sorted({r["player"] for r in rows})
+    return [app_commands.Choice(name=p, value=p) for p in players if cur in p.lower()][:25]
 historical_game_autocomplete = _make_historical_autocomplete("nba")
 mlb_historical_game_autocomplete = _make_historical_autocomplete("mlb")
 
@@ -578,7 +592,7 @@ class OddsCog(commands.Cog):
 
     @nba_group.command(name="props", description="NBA player props for a game (best line across books)")
     @app_commands.describe(game="Select an NBA game", player="Filter to one player (optional)")
-    @app_commands.autocomplete(game=game_autocomplete)
+    @app_commands.autocomplete(game=game_autocomplete, player=props_player_autocomplete)
     async def nba_props(self, interaction: discord.Interaction, game: str, player: str | None = None) -> None:
         await interaction.response.defer()
         from .props import build_props_embed
