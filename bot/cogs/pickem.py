@@ -504,7 +504,10 @@ class PickemCog(commands.Cog):
             f"{HOME_EMOJI} **{game['home_team']}**{hpct}: " + (", ".join(home_list) or "—"),
         ]
         try:
-            await channel.send("\n".join(lines))
+            # Names only — never ping the bettors when a game locks (it's an FYI, not a
+            # call-to-action). AllowedMentions.none() guarantees no notification even if a
+            # display name happens to contain mention-like text.
+            await channel.send("\n".join(lines), allowed_mentions=discord.AllowedMentions.none())
         except discord.HTTPException:
             log.exception("pickem: failed to post bet summary")
 
