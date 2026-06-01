@@ -551,6 +551,18 @@ class ProgressionCog(commands.Cog):
         await queries.set_bot_setting(_LEVELUP_CHANNEL_SETTING, str(channel.id))
         await interaction.response.send_message(f"✅ Level-ups will post in {channel.mention}.", ephemeral=True)
 
+    @profile_group.command(name="odds", description="Choose how odds are shown to you (american / decimal / probability)")
+    @app_commands.describe(format="Your preferred odds format")
+    @app_commands.choices(format=[
+        app_commands.Choice(name="American (-110 / +150)", value="american"),
+        app_commands.Choice(name="Decimal (1.91)", value="decimal"),
+        app_commands.Choice(name="Probability (52.4%)", value="probability"),
+    ])
+    async def odds_format(self, interaction: discord.Interaction, format: str) -> None:
+        await queries.set_user_odds_format(str(interaction.user.id), format)
+        await interaction.response.send_message(
+            f"✅ Your odds will now display as **{format}** (e.g. in `/bet view`).", ephemeral=True)
+
     @tasks.loop(seconds=30)
     async def check_achievements(self) -> None:
         try:
