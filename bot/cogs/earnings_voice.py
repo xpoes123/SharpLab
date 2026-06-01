@@ -21,6 +21,8 @@ log = logging.getLogger(__name__)
 
 LIVE_EVENTS_URL = os.getenv("EARNINGSCALL_LIVE_URL", "https://prod.earningscall.dev/live-events")
 API_KEY = os.getenv("EARNINGSCALL_API_KEY", "demo")
+# Always stream into this dedicated voice channel, regardless of where the caller is.
+EARNINGS_VC_ID = int(os.getenv("EARNINGS_VOICE_CHANNEL_ID", "1477512816863740093"))
 COLOUR = 0x1ABC9C
 
 # Live HLS can hiccup — reconnect rather than drop the call. No video.
@@ -64,9 +66,9 @@ class EarningsVoiceCog(commands.Cog):
     @app_commands.describe(ticker="Ticker symbol, e.g. AAPL")
     async def listen(self, interaction: discord.Interaction, ticker: str) -> None:
         await interaction.response.defer()
-        channel = getattr(interaction.user.voice, "channel", None)
-        if channel is None:
-            await interaction.followup.send("Join a voice channel first, then run this.", ephemeral=True)
+        channel = interaction.guild.get_channel(EARNINGS_VC_ID) if interaction.guild else None
+        if not isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
+            await interaction.followup.send("The earnings voice channel isn't set up correctly.", ephemeral=True)
             return
 
         sym = ticker.strip().upper()
