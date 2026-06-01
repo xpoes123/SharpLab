@@ -306,7 +306,7 @@ async def hq_server():
 
     totals = {
         "coins": (await _fetch_one("SELECT COALESCE(SUM(balance),0) AS v FROM casino_wallets") or {}).get("v", 0),
-        "stock_traders": (await _fetch_one("SELECT COUNT(DISTINCT discord_user) AS v FROM stock_holdings WHERE shares > 0") or {}).get("v", 0),
+        "stock_traders": (await _fetch_one("SELECT COUNT(DISTINCT discord_user) AS v FROM stock_trades") or {}).get("v", 0),
         "pickem_players": len(standings),
     }
 
