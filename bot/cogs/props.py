@@ -1,17 +1,9 @@
-"""/props — NBA player props for a game, read from the polled player_props table."""
+"""NBA player-props display helpers. The command lives under /odds nba props."""
 from __future__ import annotations
 
-import logging
 from collections import Counter, defaultdict
 
 import discord
-from discord import app_commands
-from discord.ext import commands
-
-from db import queries
-from .odds import game_autocomplete
-
-log = logging.getLogger(__name__)
 
 _LABELS = {
     "player_points": "🏀 Points",
@@ -47,44 +39,22 @@ def _aggregate(rows: list[dict]) -> dict[str, list[dict]]:
     return out
 
 
-class PropsCog(commands.Cog):
-    def __init__(self, bot: commands.Bot) -> None:
-        self.bot = bot
-
-    @app_commands.command(name="props", description="NBA player props for a game (best line across books)")
-    @app_commands.describe(game="Select an NBA game", player="Filter to one player (optional)")
-    @app_commands.autocomplete(game=game_autocomplete)
-    async def props(self, interaction: discord.Interaction, game: str, player: str | None = None) -> None:
-        await interaction.response.defer()
-        g = await queries.get_game_by_id(game)
-        rows = await queries.get_player_props_for_game(game)
-        if player:
-            rows = [r for r in rows if player.lower() in r["player"].lower()]
-        if not rows:
-            await interaction.followup.send(
-                "No props yet for that game." + (" Try a different name." if player else
-                " The pipeline polls NBA props each cycle — check back shortly."))
-            return
-
-        grouped = _aggregate(rows)
-        title = f"Player Props — {g.away_team} @ {g.home_team}" if g else "Player Props"
-        if player:
-            title += f" · {player}"
-        embed = discord.Embed(title=f"🏀 {title}", color=0x7aa2f7)
-        for market in _ORDER:
-            entries = grouped.get(market)
-            if not entries:
-                continue
-            lines = [f"**{e['player']}** {e['line']:g} · O {_am(e['over'])} / U {_am(e['under'])}"
-                     for e in entries[:12]]
-            val = "\n".join(lines)
-            if len(entries) > 12:
-                val += f"\n*+{len(entries) - 12} more*"
-            embed.add_field(name=_LABELS[market], value=val[:1024], inline=False)
-        nbooks = len({r["source"] for r in rows})
-        embed.set_footer(text=f"Best line across {nbooks} book(s) · O=Over U=Under")
-        await interaction.followup.send(embed=embed)
-
-
-async def setup(bot: commands.Bot) -> None:
-    await bot.add_cog(PropsCog(bot))
+def build_props_embed(game, rows: list[dict], player: str | None) -> discord.Embed:
+    grouped = _aggregate(rows)
+    title = f"{game.away_team} @ {game.home_team}" if game else "Player Props"
+    if player:
+        title += f" · {player}"
+    embed = discord.Embed(title=f"🏀 Player Props — {title}", color=0x7aa2f7)
+    for market in _ORDER:
+        entries = grouped.get(market)
+        if not entries:
+            continue
+        lines = [f"**{e['player']}** {e['line']:g} · O {_am(e['over'])} / U {_am(e['under'])}"
+                 for e in entries[:12]]
+        val = "\n".join(lines)
+        if len(entries) > 12:
+            val += f"\n*+{len(entries) - 12} more*"
+        embed.add_field(name=_LABELS[market], value=val[:1024], inline=False)
+    nbooks = len({r["source"] for r in rows})
+    embed.set_footer(text=f"Best line across {nbooks} book(s) · O=Over U=Under")
+    return embed
