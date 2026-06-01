@@ -343,31 +343,6 @@ def _close_on_or_before(series: list, cutoff_iso: str) -> float | None:
     return prev
 
 
-async def fetch_period_changes(tickers: list[str], now_prices: dict[str, float]) -> dict[str, dict]:
-    """{ticker: {'1D','1W','1M','3M','YTD','1Y','ALL': pct}} — the ticker's price
-    change over each window, using live `now_prices` and cached daily history."""
-    from datetime import date, timedelta as _td
-    today = date.today()
-    cuts = {"1D": today - _td(days=1), "1W": today - _td(days=7),
-            "1M": today - _td(days=30), "3M": today - _td(days=90),
-            "1Y": today - _td(days=365)}
-    series_list = await asyncio.gather(*[_ticker_history(s) for s in tickers])
-    out: dict[str, dict] = {}
-    for sym, series in zip(tickers, series_list):
-        now = now_prices.get(sym)
-        ch: dict[str, float | None] = {}
-        if series and now:
-            for label, cut in cuts.items():
-                then = _close_on_or_before(series, cut.isoformat())
-                ch[label] = round((now - then) / then * 100, 2) if then else None
-            year_start = next((c for d, c in series if d >= f"{today.year}-01-01"), None)
-            ch["YTD"] = round((now - year_start) / year_start * 100, 2) if year_start else None
-            first = series[0][1]  # earliest available close (≤1y; full life for young tickers)
-            ch["ALL"] = round((now - first) / first * 100, 2) if first else None
-        out[sym] = ch
-    return out
-
-
 # ── Ticker metadata (sector / quote type / beta), cached ─────────────────────
 
 _TICKER_META_TTL = timedelta(days=14)
@@ -1233,13 +1208,18 @@ async def _leaderboard_rows(users: list[str]) -> list[dict]:
     """Price every trader once and return per-user metrics for all periods:
     all-time P/L, today's stock move, current account value, and the snapshot
     baselines used for weekly / YTD gains."""
+    # Bulk-load every trader's positions/options/cash in one query each, rather
+    # than a connection-per-user round-trip inside the loop.
+    bulk_positions = await queries.get_all_stock_positions()
+    bulk_options = await queries.get_all_option_positions()
+    bulk_cash = await queries.get_all_stock_cash()
     all_positions: dict[str, list[dict]] = {}
     all_options: dict[str, list[dict]] = {}
     ticker_set: set[str] = set()
     open_option_specs: list[dict] = []
     for uid in users:
-        positions = await queries.get_stock_positions_full(uid)
-        options = await queries.get_option_positions_full(uid)
+        positions = bulk_positions.get(uid, [])
+        options = bulk_options.get(uid, [])
         all_positions[uid] = positions
         all_options[uid] = options
         for p in positions:
@@ -1288,7 +1268,7 @@ async def _leaderboard_rows(users: list[str]) -> list[dict]:
             unrealized += pl["unrealized"]
             options_value += pl["value"]
 
-        cash = await queries.get_stock_cash(uid)
+        cash = bulk_cash.get(uid, 0.0)
         total = unrealized + realized
         rows.append({
             "user_id": uid,
@@ -1427,13 +1407,18 @@ async def _compute_server_portfolio() -> dict | None:
     if not users:
         return None
 
+    # Bulk-load every trader's positions/options/cash in one query each, rather
+    # than a connection-per-user round-trip inside the loop.
+    bulk_positions = await queries.get_all_stock_positions()
+    bulk_options = await queries.get_all_option_positions()
+    bulk_cash = await queries.get_all_stock_cash()
     all_positions: dict[str, list[dict]] = {}
     all_options: dict[str, list[dict]] = {}
     ticker_set: set[str] = set()
     open_option_specs: list[dict] = []
     for uid in users:
-        positions = await queries.get_stock_positions_full(uid)
-        options = await queries.get_option_positions_full(uid)
+        positions = bulk_positions.get(uid, [])
+        options = bulk_options.get(uid, [])
         all_positions[uid] = positions
         all_options[uid] = options
         for p in positions:
@@ -1491,9 +1476,7 @@ async def _compute_server_portfolio() -> dict | None:
         if held:
             holders.add(uid)
 
-    cash_total = 0.0
-    for uid in users:
-        cash_total += await queries.get_stock_cash(uid)
+    cash_total = sum(bulk_cash.get(uid, 0.0) for uid in users)
 
     unrealized = (stock_value - stock_cost) + options_unrealized
     base = stock_value - day_change

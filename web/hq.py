@@ -523,13 +523,14 @@ async def _build_stocks():
         today_trades.setdefault((r["discord_user"], r["ticker"]), []).append(dict(r))
     names = await _names(users)
 
-    # Prefetch positions/options for everyone (concurrently — these are independent
-    # per-user reads), then one batched live-quote call so we can show each trader's
-    # open (unrealized) P&L and per-holding market value.
-    pos_list = await asyncio.gather(*[queries.get_stock_positions_full(u) for u in users])
-    opt_list = await asyncio.gather(*[queries.get_option_positions_full(u) for u in users])
-    user_positions = dict(zip(users, pos_list))
-    user_options = dict(zip(users, opt_list))
+    # Prefetch positions/options for everyone in two bulk queries (one full scan of
+    # stock_trades / option_trades each, vs. a connection-per-user), then one batched
+    # live-quote call so we can show each trader's open (unrealized) P&L and
+    # per-holding market value.
+    all_positions = await queries.get_all_stock_positions()
+    all_options = await queries.get_all_option_positions()
+    user_positions = {u: all_positions.get(u, []) for u in users}
+    user_options = {u: all_options.get(u, []) for u in users}
     all_tickers = sorted({p["ticker"] for ps in user_positions.values()
                           for p in ps if p.get("shares", 0) > 0})
     from bot.cogs.stock import fetch_quotes  # lazy import (heavy deps)
@@ -688,7 +689,7 @@ async def _build_trader(uid: str, who: dict):
     sp = await queries.get_stock_positions_full(uid)
     stock_realized = sum(p.get("realized_pnl", 0) for p in sp)
     open_pos = [p for p in sp if p.get("shares", 0) > 0]
-    # lazy import (heavy deps); _ticker_history is cache-shared with fetch_period_changes
+    # lazy import (heavy deps)
     from datetime import timedelta
     from bot.cogs.stock import fetch_quotes, _ticker_history, _close_on_or_before
     quotes = await fetch_quotes([p["ticker"] for p in open_pos]) if open_pos else {}
