@@ -45,6 +45,7 @@ GAME_DISPATCH: dict[str, tuple[str, str]] = {
     "stockguess": ("StockGuessCog", "stockguess"),
     "mathsprint": ("MathSprintCog", "mathsprint"),
     "pokemon": ("PokemonCog", "pokemon"),
+    "pokedle": ("PokedleCog", "pokedle"),
     "quizbowl": ("QuizBowlCog", "quizbowl"),
     "valorant": ("ValorantCog", "valorant"),
     "solitaire-chess": ("SolChessCog", "solitaire_chess"),
