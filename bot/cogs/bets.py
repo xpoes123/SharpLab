@@ -13,7 +13,8 @@ from discord.ext import commands
 from db import queries
 from shared.models import Bet, Game, OddsSnapshot
 from shared.odds_utils import american_to_decimal, compute_clv, fmt_prob, parse_odds_input, side_is_home
-from .odds import game_autocomplete, mlb_game_autocomplete, log_game_autocomplete, mlb_log_game_autocomplete
+from .odds import (game_autocomplete, mlb_game_autocomplete, log_game_autocomplete,
+                   mlb_log_game_autocomplete, props_player_autocomplete)
 import logging
 
 log = logging.getLogger(__name__)
@@ -426,6 +427,55 @@ class BetsCog(commands.Cog):
     @app_commands.choices(book=BOOK_CHOICES, market=MARKET_CHOICES)
     async def bet_log_mlb(self, interaction: discord.Interaction, game: str, book: str, market: str, pick: str, odds: str, units: float, line: float | None = None, notes: str | None = None) -> None:
         await self._log_impl(interaction, game, book, market, pick, odds, units, line, notes)
+
+    _PROP_STATS = [
+        app_commands.Choice(name="Points", value="points"),
+        app_commands.Choice(name="Rebounds", value="rebounds"),
+        app_commands.Choice(name="Assists", value="assists"),
+        app_commands.Choice(name="Threes", value="threes"),
+        app_commands.Choice(name="PRA (pts+reb+ast)", value="PRA"),
+    ]
+    _OU = [app_commands.Choice(name="Over", value="over"), app_commands.Choice(name="Under", value="under")]
+
+    @log_group.command(name="prop", description="Log an NBA player-prop bet")
+    @app_commands.autocomplete(game=log_game_autocomplete, player=props_player_autocomplete)
+    @app_commands.describe(game="NBA game", player="Player (pick the game first)", stat="Stat",
+                           side="Over or Under", line="The prop line (e.g. 15.5)",
+                           odds="American (-115), decimal (1.87), or cents", units="Units risked",
+                           book="Sportsbook", notes="Optional note")
+    @app_commands.choices(book=BOOK_CHOICES, stat=_PROP_STATS, side=_OU)
+    async def bet_log_prop(self, interaction: discord.Interaction, game: str, player: str, stat: str,
+                           side: str, line: float, odds: str, units: float, book: str,
+                           notes: str | None = None) -> None:
+        await interaction.response.defer()
+        try:
+            american_odds, _ = parse_odds_input(odds)
+        except Exception:
+            await interaction.followup.send(f"Couldn't parse odds `{odds}`. Use American (-115), decimal, or cents.", ephemeral=True)
+            return
+        target = await queries.get_game_by_id(game)
+        if target is None:
+            await interaction.followup.send("Game not found — pick from the dropdown.", ephemeral=True)
+            return
+        stat_label = next((c.name for c in self._PROP_STATS if c.value == stat), stat)
+        prop = f"{player} {stat_label}"
+        bet = Bet(
+            game_id=target.game_id, placed_at=datetime.now(timezone.utc).isoformat(),
+            discord_user=str(interaction.user.id), book=book, market="prop", side=side,
+            odds=american_odds, units=units, line=line,
+            notes=prop + (f" — {notes}" if notes else ""),
+        )
+        await queries.insert_bet(bet)
+        try:
+            from bot.cogs.progression import award_xp, XP_BET
+            await award_xp(interaction.client, str(interaction.user.id), XP_BET, interaction.channel)
+        except Exception:
+            log.debug("prop xp failed", exc_info=True)
+        await _check_achievements(interaction)
+        am = f"+{american_odds}" if american_odds > 0 else str(american_odds)
+        await interaction.followup.send(
+            f"✅ Logged prop — **{player} {side.title()} {line:g} {stat_label}** @ `{am}` · {units:g}u on `{book}`\n"
+            f"*{target.away_team} @ {target.home_team}*  ·  grade it later with `/bet record` once the game's final.")
 
     # ── /bet view ─────────────────────────────────────────────────────────────
 
