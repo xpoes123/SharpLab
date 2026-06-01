@@ -170,6 +170,65 @@ function tradeCard(t, i) {
   </div>`;
 }
 
+const SPIE_COLORS = ["#7aa2f7", "#bb9af7", "#9ece6a", "#e0af68", "#f7768e", "#7dcfff",
+  "#ff9e64", "#2ac3de", "#c0caf5", "#9d7cd8", "#41a6b5", "#73daca"];
+const SPIE_GREY = "#565f89";
+const SPIE_MODES = [["stock", "By stock"], ["trader", "By trader"], ["account", "Stocks / Options / Cash"]];
+let serverPieMode = "stock";
+let TRADERS = [];
+
+function serverSlices() {
+  if (serverPieMode === "account") {
+    const s = (f) => TRADERS.reduce((a, t) => a + (f(t) || 0), 0);
+    return [{ label: "Stocks", value: s((t) => t.stock_value) },
+            { label: "Options", value: s((t) => t.options_value) },
+            { label: "Cash", value: s((t) => t.cash), grey: true }].filter((x) => x.value > 0);
+  }
+  if (serverPieMode === "trader") {
+    return TRADERS.map((t) => ({ label: t.username, value: t.account_value || 0 }))
+      .filter((x) => x.value > 0).sort((a, b) => b.value - a.value);
+  }
+  const agg = {};
+  TRADERS.forEach((t) => (t.holdings || []).forEach((h) => {
+    if (h.value) agg[h.ticker] = (agg[h.ticker] || 0) + h.value;
+  }));
+  return Object.entries(agg).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
+}
+
+function sDonut(slices, total) {
+  const r = 70, sw = 30, cx = 90, cy = 90, C = 2 * Math.PI * r;
+  let off = 0;
+  const arcs = slices.map((x, i) => {
+    const len = (x.value / total) * C;
+    const col = x.grey ? SPIE_GREY : SPIE_COLORS[i % SPIE_COLORS.length];
+    const a = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${col}" stroke-width="${sw}" stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-dashoffset="${(-off).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"/>`;
+    off += len;
+    return a;
+  }).join("");
+  return `<svg width="180" height="180" viewBox="0 0 180 180" style="flex:none">${arcs}
+    <text x="${cx}" y="${cy - 4}" text-anchor="middle" fill="var(--muted)" font-size="11">Server</text>
+    <text x="${cx}" y="${cy + 14}" text-anchor="middle" fill="var(--fg)" font-size="15" font-weight="700">${money(total)}</text></svg>`;
+}
+
+function serverPieBody() {
+  let slices = serverSlices();
+  const total = slices.reduce((s, x) => s + x.value, 0);
+  if (!total) return `<div class="muted" style="padding:18px">No holdings yet.</div>`;
+  if (slices.length > 11) {
+    const rest = slices.slice(11).reduce((s, x) => s + x.value, 0);
+    slices = [...slices.slice(0, 11), { label: "Other", value: rest, grey: true }];
+  }
+  const toggle = `<div class="seg" id="spieToggle" style="margin-bottom:14px">${SPIE_MODES.map(([m, lbl]) =>
+    `<button data-spie="${m}" class="${m === serverPieMode ? "on" : ""}">${lbl}</button>`).join("")}</div>`;
+  const legend = `<div style="flex:1;min-width:220px;display:flex;flex-direction:column;gap:6px">${slices.map((x, i) =>
+    `<div style="display:flex;align-items:center;gap:8px;font-size:13px">
+      <span style="width:11px;height:11px;border-radius:3px;background:${x.grey ? SPIE_GREY : SPIE_COLORS[i % SPIE_COLORS.length]};flex:none"></span>
+      <span style="font-weight:600">${x.label}</span>
+      <span class="muted" style="margin-left:auto">${money(x.value)} · ${(x.value / total * 100).toFixed(1)}%</span>
+    </div>`).join("")}</div>`;
+  return `${toggle}<div style="display:flex;gap:24px;align-items:center;flex-wrap:wrap">${sDonut(slices, total)}${legend}</div>`;
+}
+
 function render(traders) {
   if (!traders.length) {
     app.innerHTML = tradePanel() + `<div class="hero"><h1>No traders yet</h1>
@@ -177,6 +236,7 @@ function render(traders) {
     wireTradePanel();
     return;
   }
+  TRADERS = traders;
   const sum = (f) => traders.reduce((s, t) => s + (f(t) || 0), 0);
   const totVal = sum((t) => t.account_value), totDay = sum((t) => t.day_change);
   const totReal = sum((t) => t.realized_pnl), totUnreal = sum((t) => t.unrealized_pnl);
@@ -211,10 +271,18 @@ function render(traders) {
       ${popular ? hstat("Most held", `<b>${popular[0]}</b> <span class="muted" style="font-weight:500">×${popular[1]}</span>`) : ""}
     </div>
   </div>
+  <h2 style="margin:18px 0 10px">Server allocation</h2>
+  <div class="card" id="spieBox">${serverPieBody()}</div>
   <div class="lblist">${traders.map(tradeCard).join("")}</div>`;
 
   app.innerHTML = html;
   wireTradePanel();
+  app.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-spie]");
+    if (!b) return;
+    serverPieMode = b.dataset.spie;
+    document.getElementById("spieBox").innerHTML = serverPieBody();
+  });
 }
 
 function plink2(t) {
