@@ -17,13 +17,9 @@ Core loop:
 
 All trading/paper-trading happens on **Kalshi** and **sportsbooks**. Polymarket is a secondary market signal.
 
-### Local Copies
+### Local Checkout
 
-This project has two local checkouts (same repo, same code):
-- **`C:\Users\David\CS\SharpLab\`** — primary
-- **`C:\Users\David\CS\hobbies\sports\betlab\`** — alternate working directory
-
-Both point to the same GitHub repo (`xpoes123/sharplab`). Changes in one should be committed+pushed so the other stays in sync.
+Single local checkout (Linux): **`/home/david/code/SharpLab/`**, tracking the GitHub repo `xpoes123/sharplab`.
 
 ---
 
@@ -36,22 +32,46 @@ sharplab/
 │   ├── activities.py   # all side effects: API calls, DB writes
 │   └── worker.py       # worker entrypoint
 ├── bot/                # Discord bot
-│   ├── main.py         # bot entrypoint
-│   └── cogs/
-│       ├── odds.py     # /odds, /line-move, /best-line
-│       ├── bets.py     # /log, /record
-│       ├── markets.py  # /kalshi
-│       └── utils.py    # /ev, /kelly, /parlay, /convert
+│   ├── main.py         # bot entrypoint (COGS list)
+│   └── cogs/           # ~80 cogs. Highlights:
+│       ├── odds.py     # /odds nba|mlb (lines/best/move/props/scores)
+│       ├── bets.py     # /bet (log/view/void/record/clv/leaderboard)
+│       ├── trading.py  # /paper (trade/portfolio/profile/leaderboard/cashout)
+│       ├── stock.py    # /stock + /option brokerage, /monitor price alerts
+│       ├── markets.py  # /kalshi prediction-market lookups
+│       ├── signals.py  # /signals — arb/middle/steam market alerts
+│       ├── pickem.py   # /pickem daily NBA/MLB pick'em
+│       ├── props.py    # NBA player-props embed (used by /odds nba props)
+│       ├── sportsnews.py    # auto NBA/NFL/MLB breaking-news role pings (no slash cmd)
+│       ├── reactionroles.py # /reactionrole panels
+│       ├── casino.py        # game registry: GAME_LABELS, CASINO_GAMES, GAME_CATEGORIES
+│       ├── game_menu.py      # /play launcher — GAME_DISPATCH, PARAMETERIZED_SHORTCUTS
+│       ├── utils.py    # /calc (ev/kelly/parlay/convert)
+│       └── …           # ~70 casino/party/mini-game cogs (blackjack, wordle, sims, …)
+├── web/                # FastAPI + WebSocket server (sharplab.djiang.xyz)
+│   ├── api.py          # app entrypoint: leaderboard API + game WebSocket engine
+│   ├── hq.py           # HQ dashboard (portfolio/leaderboards); _period_pnl, AsyncTTLCache
+│   ├── auth.py         # Discord OAuth / session cookies
+│   ├── _apisec.py      # API auth helpers
+│   ├── sudoku.py figgie.py bingo.py blotto.py minesweeper.py solitairechess.py  # game routers
+│   ├── trading_floor.py
+│   └── static/         # vanilla HTML/CSS/JS frontend (dark theme)
 ├── db/
-│   ├── schema.py       # CREATE TABLE statements + init_db()
+│   ├── schema.py       # CREATE TABLE statements + init_db() (~40 tables)
 │   └── queries.py      # all DB access lives here, nowhere else
 ├── shared/
 │   ├── models.py       # dataclasses shared between pipeline + bot
+│   ├── achievements.py # ~53 achievements across ~11 categories
 │   └── odds_utils.py   # American ↔ decimal ↔ implied prob conversions
+├── scripts/
+│   ├── announce_deploy.py     # post a Claude-written deploy update to Discord
+│   ├── backfill_achievements.py
+│   └── backup_db.sh           # SQLite backups (→ backups/)
 ├── data/
 │   └── sharplab.db     # SQLite, source of truth
 ├── memory/
 │   └── status.md       # current project state, updated each session
+├── justfile            # task runner — the real entrypoints (just dev/worker/bot/web/deploy)
 └── tests/
 ```
 
@@ -74,64 +94,77 @@ sharplab/
 
 ## Running the Project
 
+The real entrypoints are the **`justfile`** recipes — prefer these over raw commands:
+
 ```bash
-# Install deps
-uv sync
-
-# Start Temporal server (required for pipeline)
-temporal server start-dev
-
-# Start the worker
-python -m temporal.worker
-
-# Start odds polling workflow
-python -m temporal.start_odds_polling
-
-# Start the Discord bot
-python -m bot.main
-
-# Run tests
-uv run pytest
+just install   # uv sync
+just dev       # Temporal server + worker + pollers + resolver + bot (everything)
+just temporal  # Temporal dev server only
+just worker    # Temporal worker
+just bot       # Discord bot
+just web       # FastAPI web server (uvicorn, auto-reload, :8000)
+just poll nba  # kick off an odds-polling workflow (sport arg)
+just test      # fast unit tests (tests/test_activities.py)
+just deploy    # push + VPS deploy (restarts all services)
+just status    # VPS service status + recent logs
 ```
+
+Production runs as three systemd services on the VPS: **`sharplab-bot`**, **`sharplab-worker`**, **`sharplab-web`** (plus the shared `temporal` service). See `docs/vps-hosting.md`.
 
 ---
 
 ## Discord Bot — Features
 
-The bot serves two purposes: **info** (what are the lines, what's the market saying) and **tracking** (logging bets, computing CLV, quick math). No social features.
+The bot does **info** (lines, market signals), **tracking** (bets, CLV), a stock/options **brokerage**, and a large **casino** (~80 cogs).
 
-Most commands are organized into subcommand groups (`/odds`, `/bet`, `/paper`, `/calc`) to stay under Discord's 100-command-per-guild cap. The `<sport>` slot is `nba` or `mlb`.
+Commands are organized into nested subcommand groups to stay under Discord's 100-command-per-guild cap. Sport is a nested GROUP, **not** an argument — it's `/odds nba lines`, not `/odds lines nba`.
 
-### Odds & Lines — `/odds <sport> ...`
+### Odds & Lines — `/odds nba|mlb ...`
 | Command | What it does |
 |---|---|
-| `/odds <sport> lines [game]` | Live lines for a game across all major books (spread, ML, total) |
-| `/odds <sport> move [game]` | How the line has moved since open — reads from `odds_snapshots` history |
-| `/odds <sport> best [game]` | Surfaces the best number available across all tracked books |
-| `/odds <sport> scores` | Live scores for today's slate |
+| `/odds nba lines [game]` / `/odds mlb lines [game]` | Live lines across all major books (spread, ML, total) |
+| `/odds nba move [game]` | How the line has moved since open — reads `odds_snapshots` history |
+| `/odds nba best [game]` | Best number available across all tracked books |
+| `/odds nba props [game] [player]` | NBA player props (best line across books) |
+| `/odds nba scores` / `/odds mlb scores` | Live scores for today's slate |
 
 ### Bet Tracking — `/bet ...`
 | Command | What it does |
 |---|---|
-| `/bet log <sport> [game] [book] [market] [pick] [odds] [units]` | Log a bet to the DB |
+| `/bet log nba|mlb|prop ...` | Log a bet to the DB (`/bet log` is itself a group; pick the sport/prop subcommand) |
 | `/bet view` | Open + graded bets with live CLV |
 | `/bet void <bet_id>` | Void a logged bet (cancelled game / entry error) |
-| `/bet record [@user]` | Pull up a user's W/L record and ROI |
-| `/bet clv [@user]` | CLV breakdown and EV gained from beating the closing line |
+| `/bet record [@user]` | A user's W/L record and ROI |
+| `/bet clv [@user]` | CLV breakdown and EV gained from beating the close |
+| `/bet leaderboard` | CLV / ROI / record leaderboard |
 
-### Paper Trading — `/paper ...`
+### Paper Trading — `/paper ...` (`bot/cogs/trading.py`)
 | Command | What it does |
 |---|---|
-| `/paper trade <sport> [game] [market] [pick] [wager]` | Open a paper trade with coins |
+| `/paper trade nba|mlb ...` | Open a paper trade with coins (`/paper trade` is a group; pick the sport) |
 | `/paper portfolio` | Open trades + at-risk |
 | `/paper profile` | Stats and history |
 | `/paper leaderboard` | Top paper traders |
 | `/paper cashout <trade_id>` | Cash out an open trade at current odds |
 
-### Kalshi / Prediction Markets
+### Stock & Options Brokerage — `/stock ...`, `/option ...`, `/monitor ...` (`bot/cogs/stock.py`)
 | Command | What it does |
 |---|---|
-| `/kalshi [market]` / `/mlb-kalshi [market]` | Current yes/no price + market depth on a Kalshi contract |
+| `/stock buy|sell|trades|edit` | Record stock trades; holdings are derived from the trade log |
+| `/stock profile|graph|server|leaderboard|movers|lookup` | Portfolio views, equity curve, server P/L, S&P 100 movers |
+| `/stock cash` | Set/deposit/withdraw portfolio cash (manual — buys/sells don't touch cash) |
+| `/option buy|sell|positions` | Record option trades; show open option positions |
+| `/monitor add|list|remove|channel` | Price-cross alerts; swing-alert channel |
+| HQ web pages | `/hq` dashboard renders portfolios, P/L (`_period_pnl`), leaderboards |
+
+### Markets & Signals
+| Command | What it does |
+|---|---|
+| `/kalshi [market]` / `/mlb-kalshi [market]` | Yes/no price + depth on a Kalshi contract |
+| `/signals channel|scan` | Arbitrage / middle / steam-move market alerts |
+| `/pickem leaderboard|channel|post` | Daily NBA/MLB pick'em contest |
+| `/reactionrole create|bind|unbind|list` | Reaction-role (auto-role) panels |
+| Sports news (auto) | `sportsnews.py` posts NBA/NFL/MLB breaking news + pings the league role |
 | CLV (auto) | When a game closes, bot posts CLV for anyone who logged a bet on it |
 
 ### Math — `/calc ...`
@@ -142,60 +175,51 @@ Most commands are organized into subcommand groups (`/odds`, `/bet`, `/paper`, `
 | `/calc parlay [legs]` | Parlay odds calculator |
 | `/calc convert [odds]` | Odds format converter: American ↔ decimal ↔ implied % |
 
+### Casino & Games
+~80 game cogs (blackjack, roulette, wordle, sports sims, party games, …). Browse with `/games`, launch with `/play` (registry in `bot/cogs/casino.py`, dispatch in `bot/cogs/game_menu.py`). Use the `/new-game` skill to add one — see GAMES.md.
+
+### Gotchas an AI should know
+- **`stock_holdings` table is DEAD.** Do NOT read it. Current holdings are computed from `stock_trades` (the authoritative log) via `get_stock_positions_full` / `get_all_stock_holdings` in `db/queries.py`.
+- **Buys/sells don't touch `stock_cash`.** Cash is set manually with `/stock cash`. An account's value = positions (stocks + options) **+** cash; the two are tracked independently.
+- **`_period_pnl`** (holding-aware, trade-adjusted P/L per time window) lives in `web/hq.py` — not in `db/queries.py`. It accounts for trades made *inside* a period so a mid-period buy only counts gains since the buy.
+- **HQ pages are cached** via `AsyncTTLCache` in `web/hq.py` (short TTL) — expect slightly stale numbers right after a trade.
+
 ---
 
 ## How the Pipeline and Bot Connect
 
 The Temporal pipeline is the **data producer**. The Discord bot is a **read-mostly consumer** on the same DB.
 
-- `/line-move` reads `odds_snapshots` rows the pipeline writes every 15 min
-- `/best-line` compares the most recent poll snapshot across sources
+- `/odds nba move` reads `odds_snapshots` rows the pipeline writes each poll
+- `/odds nba best` compares the most recent poll snapshot across sources
 - CLV auto-post reads the `close` snapshot the `CloseCaptureWorkflow` writes at tip-off
-- `/odds` can either query the DB (fast, slightly stale) or hit The Odds API live (fresh, costs quota)
+- `/odds nba lines` can either query the DB (fast, slightly stale) or hit The Odds API live (fresh, costs quota)
 
-Default behavior: `/odds` and `/best-line` hit the API live. `/line-move` reads the DB history.
+Default behavior: `/odds nba lines` and `/odds nba best` hit the API live; `/odds nba move` reads the DB history.
 
 ---
 
 ## Database Schema
 
-```sql
-CREATE TABLE games (
-    game_id     TEXT PRIMARY KEY,
-    home_team   TEXT NOT NULL,
-    away_team   TEXT NOT NULL,
-    start_time  TEXT NOT NULL,   -- UTC ISO 8601
-    season      TEXT,
-    status      TEXT DEFAULT 'scheduled'  -- scheduled | live | final
-);
+The schema lives in **`db/schema.py`** — `_SCHEMA` plus a long list of idempotent
+`ALTER`/`CREATE` migrations in `init_db()`. There are **~40 tables** (57 `CREATE TABLE`
+statements once you count migration restatements). Read `db/schema.py` for the truth; the
+major groups:
 
-CREATE TABLE odds_snapshots (
-    snapshot_id  TEXT PRIMARY KEY,
-    game_id      TEXT REFERENCES games(game_id),
-    kind         TEXT NOT NULL,   -- 'poll' | 'close'
-    source       TEXT NOT NULL,   -- 'draftkings' | 'fanduel' | 'kalshi' | 'polymarket' | ...
-    captured_at  TEXT NOT NULL,   -- UTC ISO 8601
-    payload      TEXT NOT NULL    -- JSON: {spread, spread_odds, ml_home, ml_away, total, total_odds}
-);
+| Group | Tables |
+|---|---|
+| **Odds & games** | `games`, `odds_snapshots`, `injuries` |
+| **Bets & CLV** | `bets`, `paper_bets` |
+| **Player props** | `player_props`, `player_prop_alts` (alternate ladders for exact alt-line CLV) |
+| **Pick'em** | `pickem_games`, `pickem_picks` |
+| **Casino economy** | `wallets`, `casino_wallets`, `casino_history`, `user_settings`, `discord_users`, `active_discord_tables` |
+| **Progression / achievements** | `user_xp`, `user_achievements`, `daily_challenges`, `daily_bonus_claimed`, `elo_ratings`, `elo_match_history`, `user_engagement` |
+| **Competition** | `duels`, `tournaments`, `tournament_entries`, `game_sessions`, `game_tokens`, `geo_accuracy`, `qb_answers` |
+| **Stock / options brokerage** | `stock_trades`, `option_trades`, `stock_cash`, `portfolio_snapshots`, `ticker_meta`, `stock_monitors`, `bot_settings`. ⚠️ `stock_holdings` exists but is **dead** — compute holdings from `stock_trades`. |
+| **Reaction roles** | `reaction_roles` |
+| **Ops / web** | `error_logs`, `web_events` |
 
-CREATE TABLE bets (
-    bet_id        INTEGER PRIMARY KEY AUTOINCREMENT,
-    game_id       TEXT REFERENCES games(game_id),
-    placed_at     TEXT NOT NULL,   -- UTC ISO 8601
-    discord_user  TEXT NOT NULL,
-    book          TEXT NOT NULL,   -- 'draftkings' | 'fanduel' | 'kalshi' | ...
-    market        TEXT NOT NULL,   -- 'spread' | 'moneyline' | 'total' | 'kalshi'
-    side          TEXT NOT NULL,   -- team name, 'over', 'under', 'yes', 'no'
-    line          REAL,            -- spread or total number (null for ML/kalshi)
-    odds          INTEGER NOT NULL, -- American odds (-110, +150, etc.)
-    units         REAL NOT NULL,
-    status        TEXT DEFAULT 'open',  -- open | won | lost | push | void
-    clv           REAL,            -- filled after close, positive = beat the close
-    notes         TEXT
-);
-```
-
-**payload JSON shape** (standardized across all sources):
+**`odds_snapshots.payload` JSON shape** (standardized across all sources):
 ```json
 {
   "spread": -4.5,
@@ -207,6 +231,10 @@ CREATE TABLE bets (
   "total_under_odds": -110
 }
 ```
+
+Core columns: `games(game_id, home_team, away_team, start_time, sport, season, status)`;
+`bets(bet_id, game_id, placed_at, discord_user, book, market, side, line, odds, units, status, clv, notes)`.
+American odds in the DB; convert to implied probability for Discord embeds.
 
 ---
 
@@ -253,8 +281,8 @@ SharpLab runs on a shared Hetzner VPS (`87.99.136.82`). Full details in [`docs/v
 **Quick reference:**
 - **SSH**: `ssh root@87.99.136.82`
 - **Install dir**: `/opt/sharplab/` (venv, .env, data/)
-- **Services**: `temporal.service` → `sharplab-worker.service` + `sharplab-bot.service`
-- **Deploy**: `git pull` → `pip install -e .` → restart services (temporal first, wait 3s, then bot+worker)
+- **Services**: `temporal.service` → `sharplab-worker` + `sharplab-bot` + `sharplab-web`
+- **Deploy**: `git pull` → `pip install -e .` → restart services (temporal first, wait 3s, then bot+worker+web). Sentinel is decommissioned, so deploys are manual — see `/deploy` skill.
 - **Logs**: `journalctl -u sharplab-bot.service -n 50 --no-pager`
 - **DB**: SQLite at `/opt/sharplab/data/sharplab.db`
 
@@ -273,6 +301,7 @@ Slash commands in `.claude/commands/`. Type to invoke.
 - `/clv-check` — compute CLV for recent bets against close snapshots.
 - `/sanity-check` — adversarial data quality pass before trusting results.
 - `/pre-deploy` — pre-deployment checklist. **Always run before deploying to VPS.**
+- `/deploy` — the full ship flow: branch → PR → merge → VPS pull + restart → announce.
 - `/debug-discord` — common Discord.py interaction bugs and fixes.
 - `/vps` — VPS operations: pull logs, deploy, check status, troubleshoot.
 

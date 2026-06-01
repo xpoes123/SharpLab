@@ -36,7 +36,7 @@ Also determine the **archetype**:
 
 1. Read `GAMES.md` (full checklist — registration, side pots, solo play, timeouts, ELO, data)
 2. Read **one** reference cog matching your mode (from the table above)
-3. Read `bot/cogs/casino.py` lines 1-70 (GAME_LABELS, CASINO_GAMES, GAME_CATEGORIES)
+3. Read `bot/cogs/casino.py` registries: `GAME_LABELS` (~line 38), `GAME_CATEGORIES` (~line 93), `CASINO_GAMES` (~line 2363). Also read `bot/cogs/game_menu.py` `GAME_DISPATCH` (~line 17) and `PARAMETERIZED_SHORTCUTS` (~line 68) — the `/play` launcher routes games through these.
 4. If the game has a curated data bank (trivia, guessing, etc.), read how `valorant.py` or `pokemon.py` structures its data
 
 ---
@@ -128,12 +128,16 @@ For trivia/guessing games, the data lives directly in the cog file as Python con
 
 ---
 
-## Step 5 — Register (4 places)
+## Step 5 — Register (5 places)
 
 1. `bot/main.py` — add `"bot.cogs.<game>"` to `COGS` list
-2. `bot/cogs/casino.py` — add tuple to `CASINO_GAMES` list: `("<command>", "<desc>", "<category>", "<mode>")`
-3. `bot/cogs/casino.py` — add entry to `GAME_LABELS` dict: `"<command>": "<Display Name>"`
-4. Bottom of cog file — `async def setup(bot): await bot.add_cog(GameCog(bot))`
+2. `bot/cogs/casino.py` — add tuple to `CASINO_GAMES` list (~line 2363): `("<command>", "<desc>", "<category>", "<mode>")`
+3. `bot/cogs/casino.py` — add entry to `GAME_LABELS` dict (~line 38): `"<command>": "<Display Name>"`
+4. **`bot/cogs/game_menu.py` — add an entry to `GAME_DISPATCH` (~line 17): `"<command>": ("<CogClassName>", "<callback_method_name>")`.** This is the `/play` launcher map — **if you skip this, `/play` won't list or launch the game** even though the cog loads. If the launch needs args (e.g. an opponent), add the key to `PARAMETERIZED_SHORTCUTS` (~line 68) and handle it there instead.
+5. Bottom of cog file — `async def setup(bot): await bot.add_cog(GameCog(bot))`
+
+> The category in `CASINO_GAMES` must be one of the `GAME_CATEGORIES` names (~line 93):
+> "Card Games", "Table & Arcade", "Party Games", "Brain Games", "Sports Sim".
 
 ---
 

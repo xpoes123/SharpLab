@@ -286,6 +286,10 @@ CREATE INDEX IF NOT EXISTS idx_error_logs_signature ON error_logs(error_signatur
 CREATE INDEX IF NOT EXISTS idx_error_logs_timestamp ON error_logs(timestamp);
 CREATE INDEX IF NOT EXISTS idx_error_logs_command ON error_logs(command);
 
+-- DEPRECATED / DEAD TABLE — do NOT read or write this. No longer maintained.
+-- Current holdings are computed from the stock_trades log (the authoritative source);
+-- see get_stock_positions_full / get_all_stock_holdings in db/queries.py. Kept only so
+-- the one-time backfill into stock_trades stays idempotent on old DBs.
 CREATE TABLE IF NOT EXISTS stock_holdings (
     discord_user TEXT NOT NULL,
     ticker       TEXT NOT NULL,
