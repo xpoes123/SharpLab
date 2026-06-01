@@ -69,7 +69,8 @@ function tradePanel() {
       <button data-i="stock" class="on">Stock</button><button data-i="crypto">Crypto</button><button data-i="option">Option</button>
     </div>
     <div class="tradeform">
-      <input id="tk" placeholder="Ticker" autocomplete="off" />
+      <input id="tk" placeholder="Ticker — sell? pick a holding" list="myStocks" autocomplete="off" />
+      <datalist id="myStocks">${MY_HOLDINGS.map((h) => `<option value="${h.ticker}">${h.ticker} · ${h.shares} sh</option>`).join("")}</datalist>
       <input id="qty" type="number" step="any" placeholder="Shares" />
       <input id="px" type="number" step="any" placeholder="Price" />
       <span id="optfields" style="display:none;gap:8px">
@@ -176,6 +177,7 @@ const SPIE_GREY = "#565f89";
 const SPIE_MODES = [["stock", "By stock"], ["trader", "By trader"], ["account", "Stocks / Options / Cash"]];
 let serverPieMode = "stock";
 let TRADERS = [];
+let MY_HOLDINGS = [];   // the logged-in user's holdings → ticker datalist for the trade form
 
 function serverSlices() {
   if (serverPieMode === "account") {
@@ -237,6 +239,8 @@ function render(traders) {
     return;
   }
   TRADERS = traders;
+  const myUid = me && me.user ? me.user.id : null;
+  MY_HOLDINGS = myUid ? ((traders.find((t) => t.user_id === myUid) || {}).holdings || []) : [];
   const sum = (f) => traders.reduce((s, t) => s + (f(t) || 0), 0);
   const totVal = sum((t) => t.account_value), totDay = sum((t) => t.day_change);
   const totReal = sum((t) => t.realized_pnl), totUnreal = sum((t) => t.unrealized_pnl);
