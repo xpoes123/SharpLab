@@ -1500,6 +1500,26 @@ async def get_todays_game_for_team(team: str) -> Game | None:
     return _row_to_game(row)
 
 
+async def find_upcoming_game_by_team(fragment: str) -> Game | None:
+    """Fuzzy-match an upcoming/in-progress game by a team-name fragment (e.g. 'lakers',
+    'knicks') across all sports — for NLP bet logging."""
+    if not fragment or len(fragment) < 3:
+        return None
+    now = datetime.now(timezone.utc)
+    floor = (now - timedelta(hours=6)).isoformat()
+    frag = f"%{fragment.strip().lower()}%"
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM games WHERE status != 'final' AND start_time >= ? "
+            "AND (lower(home_team) LIKE ? OR lower(away_team) LIKE ?) "
+            "ORDER BY start_time ASC LIMIT 1",
+            (floor, frag, frag),
+        )
+        row = await cursor.fetchone()
+    return _row_to_game(row) if row else None
+
+
 async def get_next_game_for_team(team: str, within_days: int = 5) -> Game | None:
     """Next unfinished game for a team within `within_days`. Unlike the today-only
     lookup, this handles playoff series where the next game is a day or two out."""
