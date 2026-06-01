@@ -72,9 +72,18 @@ ALL_ACHIEVEMENTS: list[Achievement] = [
     # ── Progression (level milestones) ──
     Achievement("level_10", "Seasoned", "Reach level 10", "Progression", "\U0001f396️", 150),
     Achievement("level_25", "Elite", "Reach level 25", "Progression", "\U0001f451", 500),
+    Achievement("level_50", "Legend", "Reach level 50", "Progression", "\U0001f3c5", 1000),
+    # ── Voice ──
+    Achievement("voice_1h", "Mic Check", "Spend 1 hour in voice", "Voice", "\U0001f399️", 40),
+    Achievement("voice_10h", "Voice Regular", "Spend 10 hours in voice", "Voice", "\U0001f3a7", 120),
+    Achievement("voice_50h", "Always On", "Spend 50 hours in voice", "Voice", "\U0001f4e1", 350),
+    # ── Chat ──
+    Achievement("chat_100", "Chatterbox", "Send 100 messages", "Chat", "\U0001f4ac", 25),
+    Achievement("chat_1k", "Loudmouth", "Send 1,000 messages", "Chat", "\U0001f5e3️", 100),
+    Achievement("chat_10k", "Yapper", "Send 10,000 messages", "Chat", "\U0001f4e3", 300),
 ]
 
 ACHIEVEMENTS_BY_ID: dict[str, Achievement] = {a.id: a for a in ALL_ACHIEVEMENTS}
 
 CATEGORIES = ["Progression", "Winning", "Diversity", "Social", "Daily",
-              "Wealth", "Betting", "Investing", "Web"]
+              "Wealth", "Betting", "Investing", "Web", "Voice", "Chat"]

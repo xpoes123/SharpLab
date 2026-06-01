@@ -709,3 +709,14 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        # Migration: cumulative engagement counters (voice minutes, chat messages)
+        # for Voice/Chat achievements.
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS user_engagement ("
+                "discord_user TEXT PRIMARY KEY, voice_minutes INTEGER NOT NULL DEFAULT 0, "
+                "messages INTEGER NOT NULL DEFAULT 0)"
+            )
+            await db.commit()
+        except Exception:
+            pass

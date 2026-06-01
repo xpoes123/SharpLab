@@ -1846,6 +1846,45 @@ async def unlock_achievement(discord_user: str, achievement_id: str) -> bool:
             return False
 
 
+async def add_voice_minutes(discord_user: str, minutes: int) -> int:
+    """Add to a user's cumulative voice minutes; return the new total."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO user_engagement (discord_user, voice_minutes) VALUES (?, ?) "
+            "ON CONFLICT(discord_user) DO UPDATE SET voice_minutes = voice_minutes + ?",
+            (discord_user, minutes, minutes),
+        )
+        cur = await db.execute("SELECT voice_minutes FROM user_engagement WHERE discord_user = ?", (discord_user,))
+        row = await cur.fetchone()
+        await db.commit()
+    return row[0] if row else minutes
+
+
+async def increment_message_count(discord_user: str) -> int:
+    """Increment a user's cumulative message count; return the new total."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO user_engagement (discord_user, messages) VALUES (?, 1) "
+            "ON CONFLICT(discord_user) DO UPDATE SET messages = messages + 1",
+            (discord_user,),
+        )
+        cur = await db.execute("SELECT messages FROM user_engagement WHERE discord_user = ?", (discord_user,))
+        row = await cur.fetchone()
+        await db.commit()
+    return row[0] if row else 1
+
+
+async def get_engagement(discord_user: str) -> dict:
+    """Return {voice_minutes, messages} for a user (zeros if none)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT voice_minutes, messages FROM user_engagement WHERE discord_user = ?",
+            (discord_user,),
+        )
+        row = await cur.fetchone()
+    return {"voice_minutes": row[0], "messages": row[1]} if row else {"voice_minutes": 0, "messages": 0}
+
+
 async def get_user_achievements(discord_user: str) -> list[dict]:
     """All achievements a user has unlocked."""
     async with aiosqlite.connect(DB_PATH) as db:
