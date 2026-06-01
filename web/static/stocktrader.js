@@ -14,6 +14,7 @@ let range = 7;
 let HOLD = [];                     // holdings (for the per-stock change table)
 let tblRange = "1D";               // selected period for the holdings change column
 const TBL_RANGES = ["1D", "1W", "1M", "YTD", "1Y"];
+const BENCH_COLOR = "#58a6ff";     // S&P line — distinct from grey reconstructed segment
 
 function holdingsTable() {
   if (!HOLD.length) return `<div class="muted" style="padding:18px">No open stock positions.</div>`;
@@ -75,7 +76,7 @@ function svgChart(series, bench, liveIdx, h = 220) {
   const marker = (liveIdx > 0 && liveIdx < n)
     ? `<line x1="${X(liveIdx).toFixed(1)}" y1="0" x2="${X(liveIdx).toFixed(1)}" y2="${h}" stroke="var(--accent)" stroke-width="1" stroke-dasharray="3 3" opacity="0.7"/>` : "";
   const benchLine = (bench && bench.length >= 2)
-    ? `<polyline points="${ptsOf(bench)}" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"/>` : "";
+    ? `<polyline points="${ptsOf(bench)}" fill="none" stroke="${BENCH_COLOR}" stroke-width="2" stroke-dasharray="5 4" opacity="0.9" vector-effect="non-scaling-stroke"/>` : "";
   return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:${h}px;display:block">
     <polygon points="0,${h} ${ptsOf(series)} ${w},${h}" fill="${fill}"/>
     ${benchLine}${backLine}${marker}${liveLine}</svg>`;
@@ -131,7 +132,7 @@ function render(d) {
       <div id="chart"></div>
       <div class="muted" style="font-size:12px;margin-top:8px;display:flex;gap:16px;flex-wrap:wrap">
         <span><span style="color:var(--green)">━</span> Portfolio</span>
-        <span><span style="color:var(--muted)">┄</span> S&P 500</span>
+        <span><span style="color:${BENCH_COLOR}">┄</span> S&P 500</span>
         ${d.live_since ? `<span><span style="color:var(--accent)">┊</span> Live since ${fmtDate(d.live_since)} — earlier is reconstructed</span>` : ""}
       </div></div>
 
