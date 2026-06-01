@@ -869,20 +869,20 @@ async def hq_stock_trade(body: StockTradeIn, request: Request):
         held = holding["shares"] if holding else 0.0
         if body.shares > held + 1e-9:
             return JSONResponse({"error": f"You only hold {held:g} sh of {ticker}."}, status_code=409)
-    # HQ trades are always "now" — reject prices far off the live quote (stale/fat-finger).
+    # HQ trades are always "now": warn (don't block) if the price is off the live quote.
     from bot.cogs.stock import live_price_check
     ok, live = await live_price_check(ticker, body.price)
-    if not ok:
-        return JSONResponse(
-            {"error": f"${body.price:,.2f} is {abs(body.price - live) / live * 100:.0f}% off the live "
-                      f"{ticker} price (${live:,.2f}). Use the current price."}, status_code=400)
+    warning = (None if ok or not live else
+               f"${body.price:,.2f} is {abs(body.price - live) / live * 100:.0f}% off the live "
+               f"{ticker} price (${live:,.2f}) — recorded anyway.")
     try:
         await queries.add_stock_trade(sess["id"], ticker, body.side, body.shares, body.price,
                                       datetime.now(timezone.utc).isoformat(), "via HQ")
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     _CACHE.invalidate("stocks", f"trader:{sess['id']}")   # reflect the trade immediately
-    return {"ok": True, "side": body.side, "ticker": ticker, "shares": body.shares, "price": body.price}
+    return {"ok": True, "side": body.side, "ticker": ticker, "shares": body.shares,
+            "price": body.price, "warning": warning}
 
 
 class OptionTradeIn(BaseModel):
@@ -911,11 +911,10 @@ async def hq_option_trade(body: OptionTradeIn, request: Request):
             or not (0 < body.strike <= 1_000_000) or not (0 < body.premium <= 1_000_000)
             or not (0 < abs(body.contracts) <= 100_000)):
         return JSONResponse({"error": "bad_input"}, status_code=400)
-    # HQ trades are always "now" — verify the contract exists in the live chain + fair premium.
+    # HQ trades are always "now": warn (don't block) if the premium looks off.
     from bot.cogs.stock import live_option_check
     ok, reason = await live_option_check(underlying, body.opt_type, body.strike, expiry, body.premium)
-    if not ok:
-        return JSONResponse({"error": reason}, status_code=400)
+    option_warning = None if ok else f"{reason} — recorded anyway."
     try:
         await queries.add_option_trade(sess["id"], underlying, body.opt_type,
                                        body.strike, body.expiry.strip(), body.side, body.contracts,
@@ -923,7 +922,7 @@ async def hq_option_trade(body: OptionTradeIn, request: Request):
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     _CACHE.invalidate("stocks", f"trader:{sess['id']}")   # reflect the trade immediately
-    return {"ok": True}
+    return {"ok": True, "warning": option_warning}
 
 
 class BetLogIn(BaseModel):

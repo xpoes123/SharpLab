@@ -491,6 +491,21 @@ def _option_label(pos: dict) -> str:
     return f"{pos['underlying']} ${strike_str}{tag} {_fmt_expiry(pos['expiry'])}"
 
 
+def _bs_price(opt_type: str, S: float, K: float, T: float, r: float, sigma: float) -> float:
+    """Black-Scholes price per share for a European call/put — used to ESTIMATE
+    contracts the data provider doesn't list (yfinance caps far-OTM strikes)."""
+    import math
+    from statistics import NormalDist
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return round(max(0.0, (S - K) if opt_type == "call" else (K - S)), 2)
+    N = NormalDist().cdf
+    d1 = (math.log(S / K) + (r + sigma * sigma / 2) * T) / (sigma * math.sqrt(T))
+    d2 = d1 - sigma * math.sqrt(T)
+    val = (S * N(d1) - K * math.exp(-r * T) * N(d2)) if opt_type == "call" \
+        else (K * math.exp(-r * T) * N(-d2) - S * N(-d1))
+    return round(max(0.0, val), 2)
+
+
 async def fetch_option_prices(
     specs: list[dict], spots: dict[str, float]
 ) -> dict[tuple, dict]:
@@ -557,6 +572,26 @@ async def fetch_option_prices(
                             premium = last
                         elif bid > 0 and ask > 0:
                             premium = (bid + ask) / 2
+                estimated = False
+                if premium is None and not expired:
+                    spot = spots.get(s["underlying"])
+                    if spot:
+                        # strike not listed by yfinance — estimate via Black-Scholes,
+                        # using the nearest listed strike's implied vol when we have it.
+                        iv = 0.5
+                        if chains is not None:
+                            cdf = chains[s["opt_type"]]
+                            if not cdf.empty:
+                                near = cdf.iloc[(cdf["strike"] - s["strike"]).abs().argsort()[:1]]
+                                ivv = float(near["impliedVolatility"].iloc[0]) if not near.empty else 0.0
+                                if 0.05 <= ivv <= 3.0:
+                                    iv = ivv
+                        try:
+                            T = max(0, (date.fromisoformat(s["expiry"]) - today).days) / 365.0
+                        except ValueError:
+                            T = 0.0
+                        premium = _bs_price(s["opt_type"], spot, s["strike"], T, 0.045, iv)
+                        estimated = True
                 if premium is None and expired:
                     spot = spots.get(s["underlying"])
                     if spot is not None:
@@ -565,7 +600,7 @@ async def fetch_option_prices(
                             if s["opt_type"] == "call"
                             else max(0.0, s["strike"] - spot)
                         )
-                out[key] = {"premium": premium, "expired": expired}
+                out[key] = {"premium": premium, "expired": expired, "estimated": estimated}
         return out
 
     fetched = await asyncio.get_running_loop().run_in_executor(None, _fetch)
@@ -581,15 +616,11 @@ async def _price_option_positions(open_options: list[dict]) -> dict[tuple, dict]
     for the ones that have expired (needed for intrinsic value)."""
     if not open_options:
         return {}
-    expired_underlyings = sorted({
-        p["underlying"]
-        for p in open_options
-        if _is_expired(p["expiry"])
-    })
-    spots: dict[str, float] = {}
-    if expired_underlyings:
-        quotes = await fetch_quotes(expired_underlyings)
-        spots = {sym: q["price"] for sym, q in quotes.items()}
+    # Spots for every underlying — needed for expired intrinsic value AND for the
+    # Black-Scholes estimate of contracts yfinance doesn't list.
+    underlyings = sorted({p["underlying"] for p in open_options})
+    quotes = await fetch_quotes(underlyings)
+    spots = {sym: q["price"] for sym, q in quotes.items()}
     return await fetch_option_prices(open_options, spots)
 
 
@@ -2705,14 +2736,12 @@ class StockCog(commands.Cog):
             await interaction.response.send_message(str(e), ephemeral=True)
             return
 
-        if date is None:   # a "now" buy must be near the live price (no stale/fat-finger fills)
+        warn = ""
+        if date is None:   # near the live price — warn (don't block; people may log old data)
             ok, live = await live_price_check(symbol, price)
-            if not ok:
-                await interaction.response.send_message(
-                    f"⚠️ `{price:,.2f}` is {abs(price - live) / live * 100:.0f}% off the live **{symbol}** "
-                    f"price (**{live:,.2f}**). Use the current price, or pass `date:` to log a past fill.",
-                    ephemeral=True)
-                return
+            if not ok and live:
+                warn = (f"\n⚠️ heads up: `{price:,.2f}` is {abs(price - live) / live * 100:.0f}% off the live "
+                        f"**{symbol}** ${live:,.2f} — recorded anyway (pass `date:` for a real past fill).")
 
         await queries.add_stock_trade(
             str(interaction.user.id), symbol, "buy", shares, price, executed_at, notes
@@ -2724,7 +2753,7 @@ class StockCog(commands.Cog):
             if holding else "Position closed."
         )
         await interaction.response.send_message(
-            f"Recorded **BUY** `{symbol}` — {shares:g} sh @ `{price:,.2f}`.\n{position_line}",
+            f"Recorded **BUY** `{symbol}` — {shares:g} sh @ `{price:,.2f}`.\n{position_line}{warn}",
             ephemeral=True,
         )
         await self._maybe_post_rohan_pick(interaction, "BOUGHT", f"**{shares:g}** {symbol} @ ${price:,.2f}")
@@ -2762,14 +2791,12 @@ class StockCog(commands.Cog):
             await interaction.response.send_message(str(e), ephemeral=True)
             return
 
-        if date is None:   # a "now" sale must be near the live price
+        sell_warn = ""
+        if date is None:   # near the live price — warn (don't block)
             ok, live = await live_price_check(symbol, price)
-            if not ok:
-                await interaction.response.send_message(
-                    f"⚠️ `{price:,.2f}` is {abs(price - live) / live * 100:.0f}% off the live **{symbol}** "
-                    f"price (**{live:,.2f}**). Use the current price, or pass `date:` to log a past fill.",
-                    ephemeral=True)
-                return
+            if not ok and live:
+                sell_warn = (f"\n⚠️ heads up: `{price:,.2f}` is {abs(price - live) / live * 100:.0f}% off the live "
+                             f"**{symbol}** ${live:,.2f} — recorded anyway (pass `date:` for a real past fill).")
 
         current = await queries.get_stock_holding(str(interaction.user.id), symbol)
         held = current["shares"] if current else 0.0
@@ -2797,7 +2824,7 @@ class StockCog(commands.Cog):
         )
         await interaction.response.send_message(
             f"Recorded **SELL** `{symbol}` — {shares:g} sh @ `{price:,.2f}` "
-            f"· realized P/L `{_fmt_pnl(realized)}`.\n{position_line}",
+            f"· realized P/L `{_fmt_pnl(realized)}`.\n{position_line}{sell_warn}",
             ephemeral=True,
         )
         await self._maybe_post_rohan_pick(interaction, "SOLD", f"**{shares:g}** {symbol} @ ${price:,.2f}")
@@ -2962,13 +2989,11 @@ class StockCog(commands.Cog):
             await interaction.response.send_message(str(e), ephemeral=True)
             return
 
-        if date is None:   # a "now" option trade must reference a real, fairly-priced contract
+        opt_warn = ""
+        if date is None:   # warn (don't block) if the premium looks off for a "now" trade
             ok, reason = await live_option_check(sym, otype, strike, expiry_iso, premium)
             if not ok:
-                await interaction.response.send_message(
-                    f"⚠️ Can't record that — {reason}. (Pass `date:` to log a real past fill.)",
-                    ephemeral=True)
-                return
+                opt_warn = f"\n⚠️ heads up: {reason} — recorded anyway (pass `date:` for a real past fill)."
 
         uid = str(interaction.user.id)
 
@@ -3009,7 +3034,7 @@ class StockCog(commands.Cog):
         })
         await interaction.response.send_message(
             f"Recorded **{side.upper()}** {contracts} × `{spec}` @ `{premium:,.2f}`"
-            f"{realized_line}.\n{position_line}",
+            f"{realized_line}.\n{position_line}{opt_warn}",
             ephemeral=True,
         )
         await self._maybe_post_rohan_pick(
