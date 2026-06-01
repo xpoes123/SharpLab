@@ -19,7 +19,7 @@ from starlette.websockets import WebSocketState
 from db import queries
 from bot.cogs._pool import compute_side_pot_payouts
 
-WEB_API_SECRET = os.environ.get("WEB_API_SECRET", "dev-secret")
+from web._apisec import check_api_key
 ROOM_TTL = 1800
 ROUND_DELAY = 8
 
@@ -176,7 +176,7 @@ router = APIRouter(prefix="/api/v1/tradingfloor", tags=["tradingfloor"])
 
 
 def _check_api_key(api_key: str) -> None:
-    if api_key != WEB_API_SECRET:
+    if not check_api_key(api_key):
         raise HTTPException(401, "Invalid API key")
 
 

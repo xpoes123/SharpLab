@@ -7,6 +7,7 @@ DISCORD_GUILD_ID get a session.
 
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 from urllib.parse import urlencode
@@ -14,6 +15,8 @@ from urllib.parse import urlencode
 import httpx
 from fastapi import Request
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+
+log = logging.getLogger(__name__)
 
 CLIENT_ID = os.environ.get("DISCORD_OAUTH_CLIENT_ID", "")
 CLIENT_SECRET = os.environ.get("DISCORD_OAUTH_CLIENT_SECRET", "")
@@ -23,6 +26,9 @@ REDIRECT_URI = os.environ.get(
 )
 # Reuse the bot↔web shared secret to sign cookies unless given a dedicated one.
 SESSION_SECRET = os.environ.get("SESSION_SECRET") or os.environ.get("WEB_API_SECRET", "dev-secret")
+if SESSION_SECRET == "dev-secret":
+    log.warning("session cookies are signed with the insecure default secret — set "
+                "SESSION_SECRET (or WEB_API_SECRET); sessions are forgeable until you do.")
 GUILD_IDS = {g for g in os.environ.get("DISCORD_GUILD_ID", "").split(",") if g}
 
 COOKIE_NAME = "sharplab_session"

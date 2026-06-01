@@ -839,7 +839,11 @@ async def hq_stock_trade(body: StockTradeIn, request: Request):
     if not sess:
         return JSONResponse({"error": "not_authenticated"}, status_code=401)
     ticker = body.ticker.strip().upper()
-    if body.side not in ("buy", "sell") or not ticker or body.shares <= 0 or body.price <= 0:
+    # Bounds block fabricated portfolio value (e.g. 1e12 shares or $0.01 fills) while
+    # passing any realistic trade: ≤1M shares, ≤$1M/share, ≤$100M notional.
+    if (body.side not in ("buy", "sell") or not (1 <= len(ticker) <= 12)
+            or not (0 < body.shares <= 1_000_000) or not (0 < body.price <= 1_000_000)
+            or body.shares * body.price > 100_000_000):
         return JSONResponse({"error": "bad_input"}, status_code=400)
     if body.side == "sell":
         holding = await queries.get_stock_holding(sess["id"], ticker)
@@ -870,10 +874,19 @@ async def hq_option_trade(body: OptionTradeIn, request: Request):
     sess = auth.read_session(request)
     if not sess:
         return JSONResponse({"error": "not_authenticated"}, status_code=401)
-    if body.opt_type not in ("call", "put") or body.side not in ("buy", "sell"):
+    underlying = body.underlying.strip().upper()
+    expiry = body.expiry.strip()
+    try:
+        datetime.strptime(expiry, "%Y-%m-%d")   # reject malformed/garbage expiries
+    except ValueError:
+        return JSONResponse({"error": "bad_input"}, status_code=400)
+    if (body.opt_type not in ("call", "put") or body.side not in ("buy", "sell")
+            or not (1 <= len(underlying) <= 12)
+            or not (0 < body.strike <= 1_000_000) or not (0 < body.premium <= 1_000_000)
+            or not (0 < abs(body.contracts) <= 100_000)):
         return JSONResponse({"error": "bad_input"}, status_code=400)
     try:
-        await queries.add_option_trade(sess["id"], body.underlying.strip().upper(), body.opt_type,
+        await queries.add_option_trade(sess["id"], underlying, body.opt_type,
                                        body.strike, body.expiry.strip(), body.side, body.contracts,
                                        body.premium, datetime.now(timezone.utc).isoformat(), "via HQ")
     except ValueError as e:
