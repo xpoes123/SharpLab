@@ -21,12 +21,11 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 from db import queries
+from shared.llm import haiku_json
 
 log = logging.getLogger(__name__)
 load_dotenv()
 
-HAIKU = "claude-haiku-4-5-20251001"
-ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 ESPN_NEWS = "https://site.api.espn.com/apis/site/v2/sports/{path}/news"
 
 NEWS_CHANNEL_ID = int(os.getenv("SPORTS_NEWS_CHANNEL_ID") or 1511062528116129932)
@@ -157,20 +156,10 @@ class SportsNewsCog(commands.Cog):
                   "type": a["type"], "headline": a["headline"],
                   "description": a["description"][:200]} for a in breaking]
         try:
-            async with httpx.AsyncClient() as client:
-                r = await client.post(
-                    ANTHROPIC_URL,
-                    headers={"x-api-key": self.api_key, "anthropic-version": "2023-06-01",
-                             "content-type": "application/json"},
-                    json={"model": HAIKU, "max_tokens": 500,
-                          "messages": [{"role": "user",
-                                        "content": _JUDGE_PROMPT % json.dumps(items, ensure_ascii=False)}]},
-                    timeout=30.0,
-                )
-            if r.status_code != 200:
-                raise RuntimeError(f"haiku {r.status_code}")
-            text = "".join(b.get("text", "") for b in r.json().get("content", []))
-            obj = json.loads(text[text.find("{"): text.rfind("}") + 1])
+            prompt = _JUDGE_PROMPT % json.dumps(items, ensure_ascii=False)
+            obj = await haiku_json(prompt, api_key=self.api_key, max_tokens=500)
+            if obj is None:
+                raise RuntimeError("haiku judge unavailable")
             return {str(x) for x in obj.get("major", [])}
         except Exception:
             log.warning("news Haiku judge failed; falling back to HeadlineNews", exc_info=True)
