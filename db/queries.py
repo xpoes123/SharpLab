@@ -465,6 +465,35 @@ async def set_bet_clv(bet_id: int, clv: float | None) -> None:
         await db.commit()
 
 
+async def upsert_player_props(records: list[dict]) -> None:
+    """Upsert the latest prop line per (game, source, player, market)."""
+    if not records:
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.executemany(
+            """INSERT INTO player_props (game_id, source, player, market, line, over_odds, under_odds, captured_at)
+               VALUES (:game_id, :source, :player, :market, :line, :over_odds, :under_odds, :captured_at)
+               ON CONFLICT(game_id, source, player, market) DO UPDATE SET
+                 line=excluded.line, over_odds=excluded.over_odds,
+                 under_odds=excluded.under_odds, captured_at=excluded.captured_at""",
+            records,
+        )
+        await db.commit()
+
+
+async def get_player_props_for_game(game_id: str) -> list[dict]:
+    """All current prop lines for a game (across books/players/markets)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT source, player, market, line, over_odds, under_odds, captured_at "
+            "FROM player_props WHERE game_id = ? ORDER BY player, market",
+            (game_id,),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
 async def get_open_bets_on_live_games(window_hours: int = 6) -> list[dict]:
     """Open bets whose game has started but isn't final yet (i.e. live), within
     the last `window_hours`. Joins game info. For live in-game swing alerts."""

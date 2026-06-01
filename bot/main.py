@@ -110,6 +110,7 @@ COGS = [
     "bot.cogs.signals",
     "bot.cogs.rohan_nlp",
     "bot.cogs.livebets",
+    "bot.cogs.props",
     "bot.cogs.tradingfloor",
     "bot.cogs.quizbowl",
     "bot.cogs.valorant",

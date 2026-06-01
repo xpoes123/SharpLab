@@ -681,3 +681,16 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        # Migration: NBA player props (latest line per game/book/player/market)
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS player_props ("
+                "game_id TEXT NOT NULL, source TEXT NOT NULL, player TEXT NOT NULL, "
+                "market TEXT NOT NULL, line REAL, over_odds INTEGER, under_odds INTEGER, "
+                "captured_at TEXT NOT NULL, "
+                "PRIMARY KEY (game_id, source, player, market))"
+            )
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_player_props_game ON player_props(game_id)")
+            await db.commit()
+        except Exception:
+            pass

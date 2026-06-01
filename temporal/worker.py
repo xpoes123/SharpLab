@@ -10,6 +10,7 @@ from .workflows import OddsPollingWorkflow, CloseCaptureWorkflow, InjuryPollingW
 from .activities import (
     fetch_games_for_today,
     fetch_odds_batch,
+    fetch_nba_player_props,
     fetch_injuries,
     record_injury_changes,
     upsert_odds_snapshot,
@@ -41,6 +42,7 @@ async def main() -> None:
         activities=[
             fetch_games_for_today,
             fetch_odds_batch,
+            fetch_nba_player_props,
             fetch_injuries,
             record_injury_changes,
             upsert_odds_snapshot,

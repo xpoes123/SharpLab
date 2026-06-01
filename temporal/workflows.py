@@ -8,6 +8,7 @@ with workflow.unsafe.imports_passed_through():
     from .activities import (
         fetch_games_for_today,
         fetch_odds_batch,
+        fetch_nba_player_props,
         fetch_injuries,
         record_injury_changes,
         upsert_odds_snapshot,
@@ -138,6 +139,15 @@ class OddsPollingWorkflow:
                     snapshot,
                     start_to_close_timeout=timedelta(seconds=10),
                     retry_policy=RetryPolicy(maximum_attempts=3),
+                )
+
+            # ── Step 9: NBA player props (one Odds API call per game) ─────────
+            if sport == "nba" and workflow.patched("nba-player-props"):
+                await workflow.execute_activity(
+                    fetch_nba_player_props,
+                    game_ids,
+                    start_to_close_timeout=timedelta(seconds=90),
+                    retry_policy=RetryPolicy(maximum_attempts=2),
                 )
 
             # Cadence ramps as the soonest tip approaches (tiered). Nested patches
