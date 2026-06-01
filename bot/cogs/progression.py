@@ -231,6 +231,8 @@ XP_GAME = 10     # per casino game played
 XP_BET = 40      # per bet logged (worth more — real-money tracking)
 XP_STOCK = 40    # per stock/option/crypto trade logged
 XP_MESSAGE = 1   # per chat message (rate-limited)
+VC_TICK_MIN = 5  # voice-XP loop cadence (minutes)
+XP_VC_TICK = 10  # XP per tick for active voice time (2 XP/min)
 _LEVELUP_CHANNEL_SETTING = "levelup_channel"
 DEFAULT_LEVELUP_CHANNEL_ID = 1510694785034354849  # #games — server fallback
 
@@ -307,10 +309,12 @@ class ProgressionCog(commands.Cog):
     async def cog_load(self) -> None:
         self.check_achievements.start()
         self.sync_discord_users.start()
+        self.voice_xp.start()
 
     async def cog_unload(self) -> None:
         self.check_achievements.cancel()
         self.sync_discord_users.cancel()
+        self.voice_xp.cancel()
 
     # ── /player ──────────────────────────────────────────────────────────────
 
@@ -543,6 +547,36 @@ class ProgressionCog(commands.Cog):
 
     @check_achievements.before_loop
     async def before_check(self) -> None:
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(minutes=VC_TICK_MIN)
+    async def voice_xp(self) -> None:
+        """Award XP to everyone actively hanging in a voice channel. Anti-farm:
+        only counts a member if ≥2 non-bot humans share the channel, it isn't the
+        AFK channel, and they aren't self-deafened (i.e. actually present). Silent
+        (no channel context), like the casino loop."""
+        try:
+            for guild in self.bot.guilds:
+                afk_id = guild.afk_channel.id if guild.afk_channel else None
+                for vc in guild.voice_channels:
+                    if vc.id == afk_id:
+                        continue
+                    humans = [m for m in vc.members if not m.bot]
+                    if len(humans) < 2:
+                        continue
+                    for m in humans:
+                        vs = m.voice
+                        if vs is None or vs.self_deaf or vs.deaf:
+                            continue
+                        try:
+                            await award_xp(self.bot, str(m.id), XP_VC_TICK, None)
+                        except Exception:
+                            log.debug("voice xp failed for %s", m.id, exc_info=True)
+        except Exception:
+            log.exception("Unhandled error in voice_xp loop")
+
+    @voice_xp.before_loop
+    async def before_voice_xp(self) -> None:
         await self.bot.wait_until_ready()
 
     async def _check_user_achievements(self, uid: str) -> None:
