@@ -9,6 +9,8 @@ with workflow.unsafe.imports_passed_through():
         fetch_games_for_today,
         fetch_odds_batch,
         fetch_nba_player_props,
+        fetch_nba_player_prop_alts,
+        games_with_open_prop_bets,
         fetch_injuries,
         record_injury_changes,
         upsert_odds_snapshot,
@@ -149,6 +151,24 @@ class OddsPollingWorkflow:
                     start_to_close_timeout=timedelta(seconds=90),
                     retry_policy=RetryPolicy(maximum_attempts=2),
                 )
+
+            # ── Step 9b: alt-line ladders, only for games with open prop bets ──
+            # (alts cost extra quota per market, so we target games people bet on
+            # rather than the whole board; gives exact alt-line CLV, no slope.)
+            if sport == "nba" and workflow.patched("nba-prop-alts"):
+                bet_games = await workflow.execute_activity(
+                    games_with_open_prop_bets,
+                    start_to_close_timeout=timedelta(seconds=20),
+                    retry_policy=RetryPolicy(maximum_attempts=2),
+                )
+                alt_targets = [g for g in game_ids if g in set(bet_games)]
+                if alt_targets:
+                    await workflow.execute_activity(
+                        fetch_nba_player_prop_alts,
+                        alt_targets,
+                        start_to_close_timeout=timedelta(seconds=90),
+                        retry_policy=RetryPolicy(maximum_attempts=2),
+                    )
 
             # Cadence ramps as the soonest tip approaches (tiered). Nested patches
             # keep in-flight runs that already recorded a sleep deterministic:

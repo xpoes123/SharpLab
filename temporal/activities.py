@@ -314,6 +314,49 @@ async def fetch_nba_player_props(game_ids: list[str]) -> int:
     return total
 
 
+NBA_PROP_ALT_MARKETS = "player_points_alternate,player_rebounds_alternate,player_assists_alternate,player_threes_alternate"
+
+
+@activity.defn
+async def games_with_open_prop_bets() -> list[str]:
+    """Game ids with at least one open player-prop bet — used to target which games'
+    alternate-line ladders we poll (so we don't pull alts for the whole board)."""
+    return await queries.get_games_with_open_prop_bets()
+
+
+@activity.defn
+async def fetch_nba_player_prop_alts(game_ids: list[str]) -> int:
+    """Fetch + upsert the full ALTERNATE-line prop ladders for the given games (one
+    Odds API call per game, billed per alt market). Stored under the base market key
+    (player_assists) with the line in the PK, so CLV can read the exact alt price."""
+    if not ODDS_API_KEY or not game_ids:
+        return 0
+    captured_at = datetime.now(timezone.utc).isoformat()
+    total = 0
+    async with httpx.AsyncClient() as client:
+        for gid in game_ids:
+            try:
+                resp = await client.get(
+                    f"{ODDS_API_BASE}/sports/basketball_nba/events/{gid}/odds",
+                    params={"apiKey": ODDS_API_KEY, "regions": "us",
+                            "markets": NBA_PROP_ALT_MARKETS, "oddsFormat": "american"},
+                    timeout=25.0,
+                )
+                if resp.status_code != 200:
+                    continue
+                records = _parse_player_props(gid, captured_at, resp.json())
+            except Exception:
+                activity.logger.warning(f"[fetch_nba_player_prop_alts] failed for {gid}", exc_info=True)
+                continue
+            for r in records:  # normalize "player_assists_alternate" → "player_assists"
+                r["market"] = r["market"].replace("_alternate", "")
+            if records:
+                await queries.upsert_player_prop_alts(records)
+                total += len(records)
+    activity.logger.info(f"[fetch_nba_player_prop_alts] stored {total} alt rows for {len(game_ids)} games")
+    return total
+
+
 # ── Kalshi helpers ──────────────────────────────────────────────────────────────
 
 def _kalshi_ml_from_markets(
