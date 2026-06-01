@@ -692,7 +692,9 @@ async def _build_trader(uid: str, who: dict):
     # lazy import (heavy deps)
     from datetime import timedelta
     from bot.cogs.stock import fetch_quotes, _ticker_history, _close_on_or_before
-    quotes = await fetch_quotes([p["ticker"] for p in open_pos]) if open_pos else {}
+    # extended=True for one trader's holdings → include pre/post-market prints (e.g. an
+    # earnings move after the close). Fine here (a handful of tickers); never on the leaderboard.
+    quotes = await fetch_quotes([p["ticker"] for p in open_pos], extended=True) if open_pos else {}
     # 1y daily-close series per holding (cached), so the browser can chart any ticker
     # instantly without a second round-trip.
     hist_list = await asyncio.gather(*[_ticker_history(p["ticker"]) for p in open_pos]) if open_pos else []
@@ -729,6 +731,7 @@ async def _build_trader(uid: str, who: dict):
             "ticker": p["ticker"], "shares": round(p.get("shares", 0), 4),
             "dca": round(p.get("dca_price", 0), 2), "cost_basis": round(p.get("cost_basis", 0), 2),
             "price": round(price, 2) if price is not None else None,
+            "extended": (q.get("extended") if q else None),   # {session, price, pct} pre/post-market
             "unrealized": unreal,
             "realized": round(p.get("realized_pnl", 0), 2),
             "period": period,        # {label: {pnl, pct}} — her ACTUAL P/L over each window
