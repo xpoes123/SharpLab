@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from db import queries
 from shared.achievements import ALL_ACHIEVEMENTS
+from shared.models import Bet
 from shared.pickem_scoring import compute_pickem_standings
 from web import auth
 
@@ -667,6 +668,55 @@ async def hq_option_trade(body: OptionTradeIn, request: Request):
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return {"ok": True}
+
+
+class BetLogIn(BaseModel):
+    game_id: str
+    market: str               # spread | moneyline | total
+    side: str                 # team name, "over", or "under"
+    odds: int
+    units: float = 1.0
+    line: float | None = None
+    book: str = "other"
+
+
+@router.post("/hq/bet/log")
+async def hq_bet_log(body: BetLogIn, request: Request):
+    """Log a bet to your record straight from the Lines page (mirrors /bet log)."""
+    sess = auth.read_session(request)
+    if not sess:
+        return JSONResponse({"error": "not_authenticated"}, status_code=401)
+    if (body.market not in ("spread", "moneyline", "total") or not body.side
+            or body.odds == 0 or not (0 < body.units <= 1000)):
+        return JSONResponse({"error": "bad_input"}, status_code=400)
+    game = await queries.get_game_by_id(body.game_id)
+    if game is None:
+        return JSONResponse({"error": "game_not_found"}, status_code=404)
+    bet = Bet(
+        game_id=body.game_id, placed_at=datetime.now(timezone.utc).isoformat(),
+        discord_user=sess["id"], book=(body.book or "other"), market=body.market,
+        side=body.side, odds=body.odds, units=body.units, line=body.line, notes="via HQ",
+    )
+    bet_id = await queries.insert_bet(bet)
+    return {"ok": True, "bet_id": bet_id}
+
+
+@router.get("/hq/bet/mine")
+async def hq_bet_mine(request: Request):
+    """The signed-in user's open + graded bets, for the Lines page 'My Bets' panel."""
+    sess = auth.read_session(request)
+    if not sess:
+        return JSONResponse({"authenticated": False}, status_code=401)
+    bets = await queries.get_open_bets_for_user(sess["id"])
+    out = []
+    for b in bets[:25]:
+        g = await queries.get_game_by_id(b.game_id)
+        label = f"{g.away_team.split()[-1]} @ {g.home_team.split()[-1]}" if g else b.game_id[:8]
+        out.append({
+            "bet_id": b.bet_id, "game": label, "market": b.market, "side": b.side,
+            "line": b.line, "odds": b.odds, "units": b.units, "status": b.status, "clv": b.clv,
+        })
+    return {"bets": out}
 
 
 @router.get("/hq/pickem/leaderboard")

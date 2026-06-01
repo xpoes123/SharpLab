@@ -5,6 +5,9 @@ const SPORT = { nba: "🏀", mlb: "⚾" };
 const BOOK_PREF = ["draftkings", "fanduel", "betmgm", "caesars", "fanatics"];
 const LM = {};            // game_id -> line-movement payload
 let sport = "all";
+let GAMES = {};           // game_id -> game object (for the bet modal)
+let ME = null;            // /hq/me (auth state)
+let betDraft = null;      // the bet currently being composed
 
 const am = (v) => (v == null ? "—" : (v > 0 ? "+" : "") + v);
 const mlPair = (o) => (o && o.ml_home != null ? `${am(o.ml_away)} / ${am(o.ml_home)}` : "—");
@@ -95,16 +98,20 @@ function dateTime(iso) {
 }
 
 async function load() {
-  let slate, results;
+  let slate, results, me;
   try {
-    [slate, results] = await Promise.all([
+    [slate, results, me] = await Promise.all([
       fetch(`/api/v1/dashboard/slate?sport=${sport}`).then((r) => r.json()),
       fetch(`/api/v1/dashboard/results?sport=${sport}&limit=25`).then((r) => r.json()),
+      fetch(`/api/v1/hq/me`, { credentials: "include" }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
   } catch {
     app.innerHTML = `<div class="hero"><p class="muted">Couldn't load lines.</p></div>`; return;
   }
-  render((slate.games || []).filter((g) => g.status !== "final"), results.results || []);
+  ME = me;
+  const up = (slate.games || []).filter((g) => g.status !== "final");
+  GAMES = {}; up.forEach((g) => { GAMES[g.game_id] = g; });
+  render(up, results.results || []);
 }
 
 function render(upcoming, results) {
@@ -115,6 +122,8 @@ function render(upcoming, results) {
       <option value="mlb"${sport === "mlb" ? " selected" : ""}>⚾ Baseball</option>
       <option value="nba"${sport === "nba" ? " selected" : ""}>🏀 Basketball</option>
     </select></div>`;
+
+  html += `<div id="myBets"></div>`;  // populated async if signed in
 
   // ── Upcoming, grouped by date ──
   html += `<h2>🎯 Upcoming</h2><div class="card" style="padding:0">`;
@@ -127,7 +136,8 @@ function render(upcoming, results) {
       const hdr = dk !== lastDate ? `<div class="date-hd">${dk}</div>` : ""; lastDate = dk;
       const em = SPORT[g.sport] || "🏟️";
       return `${hdr}<div class="gamecard">
-        <div class="matchup">${em} ${g.away_team} <span class="at">@</span> ${g.home_team}</div>
+        <div class="matchup">${em} ${g.away_team} <span class="at">@</span> ${g.home_team}
+          <button class="logbtn" data-bet="${g.game_id}">📝 Log a bet</button></div>
         <div class="gtime muted">${dateTime(g.start_time)}${liveFreshness(g)}</div>
         ${lineTable(g)}
         ${movementDetails(g.game_id, "📈 pre-match line movement")}</div>`;
@@ -167,6 +177,145 @@ function render(upcoming, results) {
   app.innerHTML = html;
   document.getElementById("sportSel").addEventListener("change", (e) => { sport = e.target.value; load(); });
   wireMovement();
+  wireBetButtons();
+  ensureModal();
+  loadMyBets();
+}
+
+// ── Bet logging ──────────────────────────────────────────────────────────────
+function wireBetButtons() {
+  app.querySelectorAll(".logbtn[data-bet]").forEach((b) =>
+    b.addEventListener("click", () => openBetModal(b.dataset.bet)));
+}
+
+async function loadMyBets() {
+  const box = document.getElementById("myBets");
+  if (!box || !ME || !ME.authenticated) return;
+  let data;
+  try { data = await fetch("/api/v1/hq/bet/mine", { credentials: "include" }).then((r) => r.json()); }
+  catch { return; }
+  const bets = (data.bets || []).filter((b) => b.status === "open" || b.status === "graded");
+  if (!bets.length) return;
+  const row = (b) => {
+    const ln = b.line == null ? "" : (b.market === "total" ? ` ${b.line}` : ` ${b.line > 0 ? "+" : ""}${b.line}`);
+    const clv = b.clv == null ? "—" : `<span class="${b.clv >= 0 ? "pos" : "neg"}">${b.clv >= 0 ? "+" : ""}${b.clv.toFixed(1)}pp</span>`;
+    return `<tr><td class="tm">${b.game}</td><td>${b.side}${ln}</td><td class="num">${am(b.odds)}</td><td class="num">${b.units}u</td><td class="num">${clv}</td></tr>`;
+  };
+  box.innerHTML = `<h2>🎟️ My Bets</h2><div class="card" style="padding:0"><table class="linetable">
+    <thead><tr><th>Game</th><th>Pick</th><th class="num">Odds</th><th class="num">Units</th><th class="num">CLV</th></tr></thead>
+    <tbody>${bets.map(row).join("")}</tbody></table></div>`;
+}
+
+function ensureModal() {
+  if (document.getElementById("betModal")) return;
+  const m = document.createElement("div");
+  m.id = "betModal"; m.className = "modal-overlay hidden";
+  m.innerHTML = `<div class="modal-card"><button class="modal-x" id="betClose">✕</button><div id="betBody"></div></div>`;
+  document.body.appendChild(m);
+  m.addEventListener("click", (e) => { if (e.target === m) closeBetModal(); });
+  document.getElementById("betClose").addEventListener("click", closeBetModal);
+}
+function closeBetModal() { document.getElementById("betModal").classList.add("hidden"); betDraft = null; }
+
+function openBetModal(gid) {
+  if (!ME || !ME.authenticated) { location.href = "/api/v1/auth/discord/login"; return; }
+  const g = GAMES[gid]; if (!g) return;
+  const [, src] = consensus(g.odds || {});
+  betDraft = {
+    gid, g, market: "spread", sideKey: null, sideValue: null,
+    hs: src && src.spread != null ? src.spread : null,
+    total: src && src.total != null ? src.total : null,
+    best: bestML(g.odds || {}), line: null, odds: -110, units: 1,
+  };
+  renderBetBody();
+  document.getElementById("betModal").classList.remove("hidden");
+}
+
+function sideOptions(d) {
+  const shrt = (t) => t.split(" ").pop();
+  if (d.market === "moneyline") {
+    return [
+      { key: "away", value: d.g.away_team, label: shrt(d.g.away_team), line: null, odds: d.best.away ? d.best.away.v : -110, tag: d.best.away ? am(d.best.away.v) : "" },
+      { key: "home", value: d.g.home_team, label: shrt(d.g.home_team), line: null, odds: d.best.home ? d.best.home.v : -110, tag: d.best.home ? am(d.best.home.v) : "" },
+    ];
+  }
+  if (d.market === "total") {
+    return [
+      { key: "over", value: "over", label: "Over", line: d.total, odds: -110, tag: d.total != null ? `${d.total}` : "" },
+      { key: "under", value: "under", label: "Under", line: d.total, odds: -110, tag: d.total != null ? `${d.total}` : "" },
+    ];
+  }
+  const hs = d.hs;
+  return [
+    { key: "away", value: d.g.away_team, label: shrt(d.g.away_team), line: hs != null ? -hs : null, odds: -110, tag: hs != null ? `${-hs > 0 ? "+" : ""}${-hs}` : "" },
+    { key: "home", value: d.g.home_team, label: shrt(d.g.home_team), line: hs, odds: -110, tag: hs != null ? `${hs > 0 ? "+" : ""}${hs}` : "" },
+  ];
+}
+
+function pickSide(key) {
+  const o = sideOptions(betDraft).find((x) => x.key === key);
+  if (!o) return;
+  betDraft.sideKey = key; betDraft.sideValue = o.value; betDraft.line = o.line; betDraft.odds = o.odds;
+}
+
+function renderBetBody() {
+  const d = betDraft, g = d.g, opts = sideOptions(d);
+  const seg = (k, l, on, attr) => `<button class="seg ${on ? "on" : ""}" ${attr}="${k}">${l}</button>`;
+  const showLine = d.market !== "moneyline";
+  document.getElementById("betBody").innerHTML = `
+    <div class="bet-head">${g.away_team} <span class="muted">@</span> ${g.home_team}</div>
+    <div class="seg-row">
+      ${seg("spread", "Spread", d.market === "spread", "data-mk")}
+      ${seg("moneyline", "Moneyline", d.market === "moneyline", "data-mk")}
+      ${seg("total", "Total", d.market === "total", "data-mk")}</div>
+    <div class="seg-label">Pick a side</div>
+    <div class="seg-row">${opts.map((o) =>
+      seg(o.key, `${o.label}${o.tag ? ` <span class="seg-tag">${o.tag}</span>` : ""}`, d.sideKey === o.key, "data-side")).join("")}</div>
+    <div class="bet-inputs">
+      ${showLine ? `<label>Line<input id="bLine" type="number" step="0.5" value="${d.line ?? ""}"></label>` : ""}
+      <label>Odds<input id="bOdds" type="number" value="${d.odds ?? -110}"></label>
+      <label>Units<input id="bUnits" type="number" step="0.5" min="0.5" value="${d.units}"></label>
+    </div>
+    <button class="btn primary wide" id="bSubmit" ${d.sideKey ? "" : "disabled"}>Log bet</button>
+    <div id="betMsg" class="bet-msg muted"></div>`;
+
+  document.querySelectorAll("#betBody [data-mk]").forEach((b) =>
+    b.addEventListener("click", () => { d.market = b.dataset.mk; d.sideKey = null; d.sideValue = null; renderBetBody(); }));
+  document.querySelectorAll("#betBody [data-side]").forEach((b) =>
+    b.addEventListener("click", () => { pickSide(b.dataset.side); renderBetBody(); }));
+  const sub = document.getElementById("bSubmit");
+  if (sub) sub.addEventListener("click", submitBet);
+}
+
+async function submitBet() {
+  const d = betDraft;
+  const lineEl = document.getElementById("bLine");
+  const body = {
+    game_id: d.gid, market: d.market, side: d.sideValue,
+    odds: Math.round(Number(document.getElementById("bOdds").value)),
+    units: Number(document.getElementById("bUnits").value),
+    line: lineEl && lineEl.value !== "" ? Number(lineEl.value) : null,
+    book: "other",
+  };
+  const msg = document.getElementById("betMsg");
+  if (!body.side || !body.odds || !(body.units > 0)) { msg.textContent = "Pick a side, odds, and units."; return; }
+  msg.textContent = "Logging…";
+  try {
+    const r = await fetch("/api/v1/hq/bet/log", {
+      method: "POST", credentials: "include",
+      headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (r.ok && j.ok) { closeBetModal(); toast(`✅ Bet #${j.bet_id} logged — tracked at close`); loadMyBets(); }
+    else { msg.textContent = j.error === "not_authenticated" ? "Please sign in first." : (j.error || "Couldn't log bet."); }
+  } catch { msg.textContent = "Network error — try again."; }
+}
+
+function toast(text) {
+  let t = document.getElementById("toast");
+  if (!t) { t = document.createElement("div"); t.id = "toast"; document.body.appendChild(t); }
+  t.textContent = text; t.className = "toast show";
+  clearTimeout(toast._t); toast._t = setTimeout(() => { t.className = "toast"; }, 2800);
 }
 
 function movementDetails(gid, label) {
