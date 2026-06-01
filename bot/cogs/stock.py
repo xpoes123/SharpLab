@@ -161,6 +161,7 @@ _QUOTE_TTL = 45.0          # seconds — single + batch quotes
 _OPTION_PRICE_TTL = 120.0  # seconds — option-chain premiums (slower to fetch)
 _quote_cache: dict[str, tuple[float, dict]] = {}
 _quote1_cache: dict[str, tuple[float, dict]] = {}
+_quote_ext_cache: dict[str, tuple[float, dict]] = {}  # batch quotes WITH extended-hours
 _option_price_cache: dict[tuple, tuple[float, dict]] = {}
 
 
@@ -258,15 +259,20 @@ async def fetch_quote(ticker: str) -> dict:
     return quote
 
 
-async def fetch_quotes(tickers: list[str]) -> dict[str, dict]:
+async def fetch_quotes(tickers: list[str], *, extended: bool = False) -> dict[str, dict]:
     """Fetch quotes for many tickers, skipping ones that fail. Per-ticker results
-    are cached for _QUOTE_TTL seconds, so only cache-misses hit yfinance."""
+    are cached for _QUOTE_TTL seconds, so only cache-misses hit yfinance.
+
+    extended=True also reads the pre/post-market print (an "extended" field with
+    {session, price, pct}) via the slower full .info call — only use it for a single
+    user's holdings, never the whole-server leaderboard. Cached separately."""
     import yfinance as yf
 
+    cache = _quote_ext_cache if extended else _quote_cache
     out: dict[str, dict] = {}
     misses: list[str] = []
     for sym in tickers:
-        hit = _cache_get(_quote_cache, sym, _QUOTE_TTL)
+        hit = _cache_get(cache, sym, _QUOTE_TTL)
         if hit is not None:
             out[sym] = hit
         else:
@@ -292,11 +298,26 @@ async def fetch_quotes(tickers: list[str]) -> dict[str, dict]:
                         continue
                     price = float(hist["Close"].iloc[-1])
                     prev = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else price
-                fetched[sym] = {
-                    "price": float(price),
-                    "prev_close": float(prev),
-                    "currency": currency,
-                }
+                q = {"price": float(price), "prev_close": float(prev), "currency": currency}
+                if extended:
+                    try:
+                        full = tk.info
+                        rmp = full.get("regularMarketPrice")
+                        if rmp is not None:
+                            q["price"] = float(rmp)   # keep "price" = regular session
+                        ms = full.get("marketState")
+                        pre, post = full.get("preMarketPrice"), full.get("postMarketPrice")
+                        ext_price, session = None, None
+                        if ms in ("PRE", "PREPRE") and pre is not None:
+                            ext_price, session = float(pre), "pre"
+                        elif ms not in (None, "REGULAR") and post is not None:
+                            ext_price, session = float(post), "post"
+                        if ext_price and q["price"]:
+                            q["extended"] = {"session": session, "price": ext_price,
+                                             "pct": (ext_price - q["price"]) / q["price"] * 100}
+                    except Exception:
+                        pass
+                fetched[sym] = q
             except Exception as e:
                 log.warning(f"fetch_quotes: {sym} failed: {e}")
         return fetched
@@ -304,7 +325,7 @@ async def fetch_quotes(tickers: list[str]) -> dict[str, dict]:
     fetched = await asyncio.get_running_loop().run_in_executor(None, _fetch)
     now = time.monotonic()
     for sym, q in fetched.items():
-        _quote_cache[sym] = (now, q)
+        cache[sym] = (now, q)
         out[sym] = q
     return out
 
