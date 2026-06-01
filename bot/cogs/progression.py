@@ -273,6 +273,8 @@ async def announce_achievements(bot, uid: str, newly: list[str], channel=None) -
     """Send a celebratory unlock message. Posts in `channel` (pinging the user)
     when given — e.g. the channel where the bet/trade happened — otherwise DMs
     the user. Best-effort: never raises into the caller."""
+    if channel is None:
+        return  # never DM — announce only in the channel that triggered the unlock
     achs = [ACHIEVEMENTS_BY_ID[a] for a in newly if a in ACHIEVEMENTS_BY_ID]
     if not achs:
         return
@@ -287,14 +289,7 @@ async def announce_achievements(bot, uid: str, newly: list[str], channel=None) -
         )
     embed = discord.Embed(title=title, description=desc, colour=0xF1C40F)
     try:
-        if channel is not None:
-            await channel.send(content=f"<@{uid}>", embed=embed)
-        else:
-            user = bot.get_user(int(uid)) if uid.isdigit() else None
-            if user is None and uid.isdigit():
-                user = await bot.fetch_user(int(uid))
-            if user is not None:
-                await user.send(embed=embed)
+        await channel.send(content=f"<@{uid}>", embed=embed)
     except Exception:
         log.debug("could not announce achievements to %s", uid, exc_info=True)
 
@@ -323,21 +318,21 @@ async def activity_channel(bot):
 
 
 async def award_xp(bot, uid: str, amount: int, channel=None) -> None:
-    """Add XP for an action. Only shout out level-ups at 5-level MILESTONES (5,
-    10, 15, …) so routine leveling — especially from chat XP — doesn't spam the
-    channel. Best-effort: never raises into the caller."""
+    """Add XP for an action. Announce a level-up ONLY in the channel that triggered
+    it (never DM, never a fixed channel) and ONLY at 5-level MILESTONES (5, 10, 15,
+    …), so routine leveling — especially chat XP — doesn't spam. A channel-less
+    caller (the casino batch loop) awards XP silently. Never raises into the caller."""
     try:
         res = await queries.add_xp(uid, amount)
-        if res.get("leveled_up") and (res["level"] // 5) > (res["old_level"] // 5):
+        if channel is not None and res.get("leveled_up") and (res["level"] // 5) > (res["old_level"] // 5):
             await _announce_levelup(bot, uid, res["level"], channel)
     except Exception:
         log.debug("award_xp failed for %s", uid, exc_info=True)
 
 
-async def _announce_levelup(bot, uid: str, level: int, channel=None) -> None:
-    target = channel or await activity_channel(bot)
-    if target is None:
-        return
+async def _announce_levelup(bot, uid: str, level: int, channel) -> None:
+    if channel is None:
+        return  # never DM / never fall back to a fixed channel
     next_xp = queries.xp_for_level(level + 1)
     embed = discord.Embed(
         title="\U0001f389 Level Up!",
@@ -345,7 +340,7 @@ async def _announce_levelup(bot, uid: str, level: int, channel=None) -> None:
         colour=_level_color(level),
     )
     try:
-        await target.send(content=f"<@{uid}>", embed=embed)
+        await channel.send(content=f"<@{uid}>", embed=embed)
     except Exception:
         log.debug("levelup announce failed for %s", uid, exc_info=True)
 
@@ -599,13 +594,13 @@ class ProgressionCog(commands.Cog):
             self._last_check_id = new_entries[-1]["id"]
             from collections import Counter
             plays = Counter(e["discord_user"] for e in new_entries)
-            ch = await activity_channel(self.bot)  # server channel for milestone level-ups
+            # Casino plays carry no channel in casino_history, so this batch loop
+            # awards XP + unlocks achievements SILENTLY (no DM, no fixed channel).
+            # In-channel actions (bets/stocks/web/chat) announce at their call site.
             for uid, n in plays.items():
                 try:
-                    await award_xp(self.bot, uid, n * XP_GAME, ch)  # XP for playing (milestone-gated)
-                    newly = await evaluate_user_achievements(uid)
-                    if newly:
-                        await announce_achievements(self.bot, uid, newly)  # DM, not channel
+                    await award_xp(self.bot, uid, n * XP_GAME, None)  # silent XP
+                    await evaluate_user_achievements(uid)             # silent unlock
                 except Exception:
                     log.warning("Failed to check achievements for user %s", uid, exc_info=True)
         except Exception:
