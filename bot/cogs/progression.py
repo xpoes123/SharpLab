@@ -255,27 +255,12 @@ VOICE_MILESTONES = {60, 600, 3000}    # voice-minute thresholds with achievement
 CHAT_MILESTONES = {100, 1000, 10000}  # message thresholds with achievements
 _LEVELUP_CHANNEL_SETTING = "levelup_channel"
 DEFAULT_LEVELUP_CHANNEL_ID = 1510694785034354849  # #games — server fallback
-_BIGWINS_CHANNEL_SETTING = "bigwins_channel"  # set via /profile bigwins; else #games
-BIG_WIN_COINS = 5000  # single-game casino profit that earns a #big-wins shoutout
 
 
 async def activity_channel(bot):
     """The server channel for level-ups / game achievements: the configured one,
     else the #games default. Never DMs."""
     raw = await queries.get_bot_setting(_LEVELUP_CHANNEL_SETTING)
-    cid = int(raw) if (raw and raw.isdigit()) else DEFAULT_LEVELUP_CHANNEL_ID
-    ch = bot.get_channel(cid)
-    if ch is None:
-        try:
-            ch = await bot.fetch_channel(cid)
-        except Exception:
-            ch = None
-    return ch
-
-
-async def big_wins_channel(bot):
-    """Channel for the #big-wins feed: the configured one, else the #games default."""
-    raw = await queries.get_bot_setting(_BIGWINS_CHANNEL_SETTING)
     cid = int(raw) if (raw and raw.isdigit()) else DEFAULT_LEVELUP_CHANNEL_ID
     ch = bot.get_channel(cid)
     if ch is None:
@@ -566,15 +551,6 @@ class ProgressionCog(commands.Cog):
         await queries.set_bot_setting(_LEVELUP_CHANNEL_SETTING, str(channel.id))
         await interaction.response.send_message(f"✅ Level-ups will post in {channel.mention}.", ephemeral=True)
 
-    @profile_group.command(name="bigwins", description="Admin: set the channel for the big-wins feed")
-    @app_commands.describe(channel="Where big-win shoutouts post")
-    async def set_bigwins(self, interaction: discord.Interaction, channel: discord.TextChannel) -> None:
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("You need **Manage Server**.", ephemeral=True)
-            return
-        await queries.set_bot_setting(_BIGWINS_CHANNEL_SETTING, str(channel.id))
-        await interaction.response.send_message(f"✅ Big wins will post in {channel.mention}.", ephemeral=True)
-
     @profile_group.command(name="odds", description="Choose how odds are shown to you (american / decimal / probability)")
     @app_commands.describe(format="Your preferred odds format")
     @app_commands.choices(format=[
@@ -594,25 +570,6 @@ class ProgressionCog(commands.Cog):
             if not new_entries:
                 return
             self._last_check_id = new_entries[-1]["id"]
-
-            # Big-win feed: spotlight notable single-game profits.
-            big = [e for e in new_entries if (e.get("payout") or 0) - (e.get("wagered") or 0) >= BIG_WIN_COINS]
-            if big:
-                ch = await big_wins_channel(self.bot)
-                if ch is not None:
-                    for e in big:
-                        profit = (e["payout"] or 0) - (e["wagered"] or 0)
-                        label = GAME_LABELS.get(e["game"], e["game"].replace("-", " ").title())
-                        embed = discord.Embed(
-                            title="🎰 Big Win!",
-                            description=f"<@{e['discord_user']}> just won **{profit:,}** coins on **{label}**! 💰",
-                            colour=0xF1C40F,
-                        )
-                        try:
-                            await ch.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
-                        except Exception:
-                            log.debug("big-win post failed", exc_info=True)
-
             from collections import Counter
             plays = Counter(e["discord_user"] for e in new_entries)
             # Casino plays carry no channel in casino_history, so this batch loop
