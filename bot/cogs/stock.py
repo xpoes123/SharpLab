@@ -2389,20 +2389,17 @@ class StockCog(commands.Cog):
             band = int(abs(pct) // 10)  # 1 = 10–19%, 2 = 20–29%, … (0 = below threshold)
             if band < 1:
                 continue
-            # Alert each holder once per 10% BAND per day — so 10→12% doesn't re-fire,
-            # but 10→20% does. State is persisted, so a restart can't re-alert.
-            to_ping = []
-            for uid in uids:
-                st = self._swing_alerted.get(f"{uid}:{ticker}")
-                last_band = st["band"] if (st and st.get("date") == today) else 0
-                if band > last_band:
-                    to_ping.append(uid)
-                    self._swing_alerted[f"{uid}:{ticker}"] = {"date": today, "band": band}
-                    changed = True
-            if not to_ping or channel is None:
+            # One alert per TICKER per 10% band per day — so 10→12% doesn't re-fire
+            # (but 10→20% does), and it pings EVERYONE holding it in a single message
+            # (a late buyer doesn't trigger a duplicate). Persisted across restarts.
+            st = self._swing_alerted.get(ticker)
+            last_band = st["band"] if (st and st.get("date") == today) else 0
+            if band <= last_band or channel is None:
                 continue
+            self._swing_alerted[ticker] = {"date": today, "band": band}
+            changed = True
             sign = "🟢 +" if pct >= 0 else "🔴 "
-            mentions = " ".join(f"<@{uid}>" for uid in to_ping)
+            mentions = " ".join(f"<@{uid}>" for uid in uids)
             prev = q.get("prev_close") or q["price"]
             try:
                 await channel.send(
