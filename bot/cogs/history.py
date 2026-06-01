@@ -118,6 +118,8 @@ async def _paginate(interaction: discord.Interaction, page: int, sport: str = "n
 # ── Cog ──────────────────────────────────────────────────────────────────────
 
 class HistoryCog(commands.Cog):
+    db_group = app_commands.Group(name="db", description="Browse past game history — spreads, outcomes, IDs")
+
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
@@ -130,11 +132,11 @@ class HistoryCog(commands.Cog):
         view = HistoryView(1, total_pages, sport=sport)
         await interaction.followup.send(embed=embed, view=view)
 
-    @app_commands.command(name="db", description="Browse NBA game history — spreads, outcomes, IDs for /line-move")
+    @db_group.command(name="nba", description="Browse NBA game history — spreads, outcomes, IDs for /odds nba move")
     async def db(self, interaction: discord.Interaction) -> None:
         await self._db_impl(interaction, "nba")
 
-    @app_commands.command(name="mlb-db", description="Browse MLB game history — spreads, outcomes, IDs for /mlb-line-move")
+    @db_group.command(name="mlb", description="Browse MLB game history — spreads, outcomes, IDs for /odds mlb move")
     async def mlb_db(self, interaction: discord.Interaction) -> None:
         await self._db_impl(interaction, "mlb")
 
