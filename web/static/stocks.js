@@ -275,6 +275,7 @@ function render(traders) {
       ${popular ? hstat("Most held", `<b>${popular[0]}</b> <span class="muted" style="font-weight:500">×${popular[1]}</span>`) : ""}
     </div>
   </div>
+  <div style="margin:2px 0 8px"><a href="/hq/earnings" class="btn ghost">📅 Earnings calendar →</a></div>
   <h2 style="margin:18px 0 10px">Server allocation</h2>
   <div class="card" id="spieBox">${serverPieBody()}</div>
   <div class="lblist">${traders.map(tradeCard).join("")}</div>`;

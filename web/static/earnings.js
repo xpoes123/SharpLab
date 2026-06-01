@@ -17,18 +17,20 @@ async function main() {
 }
 
 function companyRow(c) {
-  return `<div style="display:flex;align-items:center;gap:10px;padding:4px 0;font-size:14px">
-    <strong style="min-width:64px">${c.symbol}</strong>
-    <span class="muted" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.name}</span>
-    <span class="muted" style="min-width:52px;text-align:right">${fmtMc(c.mc)}</span>
-    <span style="width:16px;text-align:center">${c.held ? `<span title="Held in the server">📍</span>` : ""}</span>
+  const hl = c.held ? "background:rgba(122,162,247,.10)" : "";
+  return `<div style="display:flex;align-items:center;gap:12px;padding:8px 12px;border-radius:8px;${hl}">
+    <strong style="min-width:72px;font-size:15px">${c.symbol}</strong>
+    <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.name}</span>
+    ${c.held ? `<span style="font-size:11px;font-weight:700;color:var(--accent);background:rgba(122,162,247,.16);padding:2px 8px;border-radius:999px;white-space:nowrap">📍 held</span>` : ""}
+    <span class="muted" style="min-width:54px;text-align:right;font-variant-numeric:tabular-nums">${fmtMc(c.mc)}</span>
   </div>`;
 }
 
-function section(emoji, label, list) {
+function section(emoji, label, color, list) {
   if (!list.length) return "";
-  return `<div style="margin-top:10px">
-    <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:2px">${emoji} ${label}</div>
+  return `<div style="margin-top:14px">
+    <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:${color};padding:0 12px 4px">
+      ${emoji} ${label} <span class="muted" style="font-weight:500">(${list.length})</span></div>
     ${list.map(companyRow).join("")}</div>`;
 }
 
@@ -37,17 +39,19 @@ function render(days) {
     app.innerHTML = `<h2>📅 Earnings calendar</h2><div class="card"><p class="muted">No notable earnings in the next week.</p></div>`;
     return;
   }
-  let html = `<h2>📅 Earnings calendar</h2>
-    <p class="muted" style="margin:-6px 0 14px">Large-caps (≥$2B) reporting over the next week · 📍 = held in the server.</p>
-    <div style="display:flex;flex-direction:column;gap:12px">`;
+  let html = `<div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <h2 style="margin:0">📅 Earnings calendar</h2>
+      <a href="/hq/stocks" class="muted" style="font-size:13px">← back to stocks</a></div>
+    <p class="muted" style="margin:6px 0 16px;font-size:13px">Large-caps (≥$2B) over the next week · <span style="color:var(--accent)">📍 held</span> in the server.</p>
+    <div style="display:flex;flex-direction:column;gap:14px">`;
   for (const d of days) {
     const n = d.bmo.length + d.amc.length + d.other.length;
-    html += `<div class="card">
-      <div style="font-weight:800;font-size:16px">${d.label}
-        <span class="muted" style="font-size:13px;font-weight:400">${d.date} · ${n} report${n === 1 ? "" : "s"}</span></div>
-      ${section("🌅", "Before open", d.bmo)}
-      ${section("🌙", "After close", d.amc)}
-      ${section("🕐", "Time TBD", d.other)}
+    html += `<div class="card" style="padding:16px 8px">
+      <div style="font-weight:800;font-size:19px;padding:0 12px">${d.label}
+        <span class="muted" style="font-size:13px;font-weight:500">· ${d.date} · ${n} report${n === 1 ? "" : "s"}</span></div>
+      ${section("🌅", "Before open", "var(--green)", d.bmo)}
+      ${section("🌙", "After close", "var(--accent2)", d.amc)}
+      ${section("🕐", "Time TBD", "var(--muted)", d.other)}
     </div>`;
   }
   html += `</div>`;
