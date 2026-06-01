@@ -29,6 +29,7 @@ import time
 from collections import deque
 from datetime import date, datetime, timedelta, timezone
 
+import httpx
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -528,21 +529,43 @@ def _bs_price(opt_type: str, S: float, K: float, T: float, r: float, sigma: floa
     return round(max(0.0, val), 2)
 
 
-def _next_earnings_blocking(symbol: str):
-    """Next upcoming earnings datetime (ET-aware) for a ticker, or None. Blocking
-    (yfinance scrape) — run in an executor. Returns None for ETFs/crypto/no-data."""
-    import yfinance as yf
+def _fmt_market_cap(mc: float) -> str:
+    if mc >= 1e12:
+        return f"${mc / 1e12:.1f}T"
+    if mc >= 1e9:
+        return f"${mc / 1e9:.0f}B"
+    if mc >= 1e6:
+        return f"${mc / 1e6:.0f}M"
+    return ""
+
+
+async def fetch_earnings_calendar(date_iso: str) -> list[dict]:
+    """Every company reporting on `date_iso` (YYYY-MM-DD), from Nasdaq's public
+    calendar. Returns [{symbol, name, time, mc}] — `time` is 'time-after-hours'
+    (AMC), 'time-pre-market' (BMO), or 'time-not-supplied'. [] on failure."""
+    url = f"https://api.nasdaq.com/api/calendar/earnings?date={date_iso}"
     try:
-        df = yf.Ticker(symbol).get_earnings_dates(limit=8)
-        if df is None or df.empty:
-            return None
-        now = datetime.now(df.index.tz or timezone.utc)
-        fut = df[df.index >= now]
-        if fut.empty:
-            return None
-        return fut.index.min().tz_convert("America/New_York")
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.get(url, headers={"User-Agent": "Mozilla/5.0",
+                                               "Accept": "application/json"})
+        if r.status_code != 200:
+            return []
+        rows = ((r.json().get("data") or {}).get("rows")) or []
     except Exception:
-        return None
+        log.debug("nasdaq earnings fetch failed for %s", date_iso, exc_info=True)
+        return []
+    out = []
+    for row in rows:
+        sym = (row.get("symbol") or "").strip().upper()
+        if not sym:
+            continue
+        try:
+            mc = float((row.get("marketCap") or "0").replace("$", "").replace(",", ""))
+        except (ValueError, AttributeError):
+            mc = 0.0
+        out.append({"symbol": sym, "name": (row.get("name") or "").strip(),
+                    "time": row.get("time") or "", "mc": mc})
+    return out
 
 
 async def fetch_option_prices(
@@ -2323,59 +2346,57 @@ class StockCog(commands.Cog):
 
     @tasks.loop(hours=1)
     async def earnings_digest(self) -> None:
-        """Each morning, list held companies reporting tonight (after close) or
-        tomorrow before the open, in the stocks channel."""
+        """Each morning, post the notable companies reporting tonight (after close)
+        or tomorrow before the open — market-wide, sorted by market cap. Tickers the
+        server holds are flagged 📍."""
         try:
             from zoneinfo import ZoneInfo
             et = datetime.now(ZoneInfo("America/New_York"))
             if not (7 <= et.hour < 12):   # morning window only
                 return
-            today = et.date().isoformat()
-            if await queries.get_bot_setting(_EARNINGS_SETTING) == today:
+            today_iso = et.date().isoformat()
+            if await queries.get_bot_setting(_EARNINGS_SETTING) == today_iso:
                 return
 
-            held = await queries.get_all_stock_holdings()
-            by_ticker: dict[str, set] = {}
-            for h in held:
-                if "-" in h["ticker"]:   # skip crypto (BTC-USD, …)
-                    continue
-                by_ticker.setdefault(h["ticker"], set()).add(h["discord_user"])
-            if not by_ticker:
-                await queries.set_bot_setting(_EARNINGS_SETTING, today)
-                return
-
-            loop = asyncio.get_running_loop()
-            dates = await loop.run_in_executor(
-                None, lambda: {t: _next_earnings_blocking(t) for t in by_ticker})
-            td = et.date()
-            tomorrow = td + timedelta(days=1)
-            on_deck = []   # (ticker, label, holders)
-            for t, dt in dates.items():
-                if dt is None:
-                    continue
-                amc = dt.hour >= 12
-                if dt.date() == td and amc:
-                    on_deck.append((t, "tonight · after close", by_ticker[t]))
-                elif dt.date() == tomorrow and not amc:
-                    on_deck.append((t, "tomorrow · before open", by_ticker[t]))
-
+            tomorrow_iso = (et.date() + timedelta(days=1)).isoformat()
+            tonight = [e for e in await fetch_earnings_calendar(today_iso)
+                       if e["time"] == "time-after-hours"]
+            morning = [e for e in await fetch_earnings_calendar(tomorrow_iso)
+                       if e["time"] == "time-pre-market"]
             channel = self.bot.get_channel(await self._alerts_channel_id())
-            if not on_deck or channel is None:
-                await queries.set_bot_setting(_EARNINGS_SETTING, today)
+            if (not tonight and not morning) or channel is None:
+                await queries.set_bot_setting(_EARNINGS_SETTING, today_iso)
                 return
-            on_deck.sort(key=lambda x: ("tomorrow" in x[1], x[0]))   # tonight first
-            names = await self._resolve_names(list({u for _, _, hs in on_deck for u in hs}))
-            lines = [
-                f"📈 **{t}** — {label} · held by " +
-                ", ".join(sorted(names.get(u, f"Player {u[:6]}") for u in hs))
-                for t, label, hs in on_deck
-            ]
-            embed = discord.Embed(
-                title="📅 Earnings on deck",
-                description="\n".join(lines), colour=0xE0AF68)
-            embed.set_footer(text=f"{et.strftime('%b %d')} · stocks you hold reporting tonight or tomorrow AM")
+
+            held = {h["ticker"] for h in await queries.get_all_stock_holdings()}
+            MC_FLOOR, CAP = 2e9, 18   # notable large-caps only; keep it readable
+
+            def group_lines(items: list[dict]) -> list[str]:
+                notable = sorted((e for e in items if e["mc"] >= MC_FLOOR),
+                                 key=lambda e: e["mc"], reverse=True)
+                lines = []
+                for e in notable[:CAP]:
+                    flag = " 📍" if e["symbol"] in held else ""
+                    mc = f" · {_fmt_market_cap(e['mc'])}" if e["mc"] else ""
+                    lines.append(f"**{e['symbol']}** {e['name'][:34]}{mc}{flag}")
+                if len(notable) > CAP:
+                    lines.append(f"…and {len(notable) - CAP} more")
+                return lines
+
+            sections = []
+            tl, ml = group_lines(tonight), group_lines(morning)
+            if tl:
+                sections.append("🌙 **Tonight · after close**\n" + "\n".join(tl))
+            if ml:
+                sections.append("🌅 **Tomorrow · before open**\n" + "\n".join(ml))
+            if not sections:
+                await queries.set_bot_setting(_EARNINGS_SETTING, today_iso)
+                return
+            embed = discord.Embed(title="📅 Earnings on deck",
+                                  description="\n\n".join(sections), colour=0xE0AF68)
+            embed.set_footer(text="📍 = held in the server · large-caps only · via Nasdaq")
             await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
-            await queries.set_bot_setting(_EARNINGS_SETTING, today)
+            await queries.set_bot_setting(_EARNINGS_SETTING, today_iso)
         except Exception:
             log.exception("earnings digest failed")
 
