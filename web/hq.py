@@ -500,12 +500,22 @@ async def hq_stock_trader(handle: str):
 
     sp = await queries.get_stock_positions_full(uid)
     stock_realized = sum(p.get("realized_pnl", 0) for p in sp)
-    stock_holdings = sorted(
-        ({"ticker": p["ticker"], "shares": round(p.get("shares", 0), 4),
-          "dca": round(p.get("dca_price", 0), 2), "cost_basis": round(p.get("cost_basis", 0), 2)}
-         for p in sp if p.get("shares", 0) > 0),
-        key=lambda h: h["cost_basis"], reverse=True,
-    )
+    open_pos = [p for p in sp if p.get("shares", 0) > 0]
+    from bot.cogs.stock import fetch_quotes  # lazy import (heavy deps)
+    quotes = await fetch_quotes([p["ticker"] for p in open_pos]) if open_pos else {}
+    stock_holdings = []
+    for p in open_pos:
+        q = quotes.get(p["ticker"])
+        price = q["price"] if q else None
+        unreal = round(p["shares"] * (price - p["dca_price"]), 2) if price is not None else None
+        stock_holdings.append({
+            "ticker": p["ticker"], "shares": round(p.get("shares", 0), 4),
+            "dca": round(p.get("dca_price", 0), 2), "cost_basis": round(p.get("cost_basis", 0), 2),
+            "price": round(price, 2) if price is not None else None,
+            "unrealized": unreal,
+            "realized": round(p.get("realized_pnl", 0), 2),
+        })
+    stock_holdings.sort(key=lambda h: h["cost_basis"], reverse=True)
 
     op = await queries.get_option_positions_full(uid)
     opt_realized = sum(o.get("realized_pnl", 0) for o in op)
@@ -536,10 +546,10 @@ async def hq_stock_trader(handle: str):
             "options_value": latest.get("options_value"),
             "cash": latest.get("cash"),
             "realized_pnl": round(stock_realized + opt_realized, 2),
-            # Open P&L on stocks = current market value − cost basis (snapshot-fresh).
+            # Open P&L on stocks = Σ per-position (live price − cost basis).
             "unrealized_pnl": (
-                round(latest["stock_value"] - sum(h["cost_basis"] for h in stock_holdings), 2)
-                if latest.get("stock_value") is not None and stock_holdings else None
+                round(sum(h["unrealized"] for h in stock_holdings if h["unrealized"] is not None), 2)
+                if any(h["unrealized"] is not None for h in stock_holdings) else None
             ),
         },
         "equity": equity,
