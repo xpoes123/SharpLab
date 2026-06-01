@@ -110,3 +110,16 @@ tbody tr:hover { background: rgba(122,162,247,.06); }
   padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); cursor: pointer; transition: background .12s, border-color .12s; }
 .bookchip .dot { width: 8px; height: 8px; }
 .bookchip:hover { border-color: var(--accent); }
+
+/* ── Levels & achievements (profile + HQ home) ── */
+.lvlpill { display: inline-block; margin-left: 12px; padding: 3px 12px; border-radius: 999px;
+  font-size: 13px; font-weight: 700; color: var(--bg); background: var(--accent); vertical-align: middle; }
+.lvlbar { height: 6px; border-radius: 999px; background: var(--line); margin: 6px 0 4px; overflow: hidden; }
+.lvlbar span { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--gold)); }
+.achgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.achbadge { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--panel2); }
+.achbadge .ae { font-size: 20px; flex: 0 0 auto; }
+.achbadge .an { font-size: 13px; font-weight: 600; }
+.lblrow { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.lblrow .r { color: var(--muted); font-size: 12px; }

@@ -1859,6 +1859,32 @@ async def get_user_achievements(discord_user: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def get_xp_leaderboard(limit: int = 15) -> list[dict]:
+    """Top users by total XP (with level + name/avatar) for the HQ levels board."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT x.discord_user, x.total_xp, x.level, u.username, u.avatar_url "
+            "FROM user_xp x LEFT JOIN discord_users u ON u.discord_user = x.discord_user "
+            "WHERE x.total_xp > 0 ORDER BY x.total_xp DESC LIMIT ?",
+            (limit,),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_achievement_leaderboard(limit: int = 15) -> list[dict]:
+    """Top users by number of achievements unlocked, for the HQ achievements board."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT a.discord_user, COUNT(*) AS unlocked, u.username, u.avatar_url "
+            "FROM user_achievements a LEFT JOIN discord_users u ON u.discord_user = a.discord_user "
+            "GROUP BY a.discord_user ORDER BY unlocked DESC, MAX(a.unlocked_at) ASC LIMIT ?",
+            (limit,),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
 async def has_achievement(discord_user: str, achievement_id: str) -> bool:
     """Check if user has a specific achievement."""
     async with aiosqlite.connect(DB_PATH) as db:

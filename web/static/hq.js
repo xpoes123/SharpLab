@@ -156,7 +156,12 @@ function renderHome(server, me, notMember, open) {
 
   if (me) {
     const p = me.pickem || {};
+    const prog = me.progression || {};
+    const pa = prog.achievements || {};
     html += `<h2>Your dashboard</h2><div class="grid">
+      <div class="card stat"><div class="label">Level</div>
+        <div class="value">${prog.level || 1}</div>
+        <div class="muted" style="font-size:12px">${num(prog.total_xp || 0)} XP · ${pa.unlocked_count || 0}/${pa.total || 0} 🏆</div></div>
       <div class="card stat"><div class="label">Pick'em Units</div>
         <div class="value ${cls(p.units || 0)}">${sign((p.units || 0).toFixed(1))}u</div></div>
       <div class="card stat"><div class="label">Pick'em Record</div>
@@ -215,6 +220,8 @@ const ELO_LABELS = {
 };
 
 const BOARD_DEFS = [
+  { key: "levels", label: "🎉 Levels — Top XP" },
+  { key: "achievements", label: "🏆 Achievements — Unlocked" },
   { key: "pickem", label: "🎯 Pick'em — Market P&L" },
   { key: "stocks", label: "📈 Stocks — Portfolio Value" },
   { key: "casino", label: "🪙 Casino — Balances" },
@@ -246,6 +253,12 @@ function boardTable(server, key, myName) {
     return table([{ t: "Player" }, { t: "Rating", num: true }, { t: "Record", num: true }],
       (server.chess || []).map((r) => [{ t: r.handle }, { t: r.rating },
         { t: `${r.wins}-${r.losses}${r.draws ? "-" + r.draws : ""}`, cls: "muted" }]));
+  if (key === "levels")
+    return table([{ t: "Player" }, { t: "Level", num: true }, { t: "XP", num: true }],
+      (server.levels || []).map((r) => [{ t: plink(r.username) }, { t: "Lv " + r.level }, { t: num(r.xp) }]));
+  if (key === "achievements")
+    return table([{ t: "Player" }, { t: "Unlocked", num: true }],
+      (server.achievements || []).map((r) => [{ t: plink(r.username) }, { t: `${r.unlocked}/${r.total}` }]));
   return "";
 }
 
