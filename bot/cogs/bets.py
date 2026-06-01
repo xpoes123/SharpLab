@@ -13,6 +13,7 @@ from discord.ext import commands
 from db import queries
 from shared.models import Bet, Game, OddsSnapshot
 from shared.odds_utils import american_to_decimal, compute_clv, fmt_prob, parse_odds_input, side_is_home
+from shared.prop_clv import parse_prop_note, consensus_main_line, prop_clv_at_line
 from .odds import (game_autocomplete, mlb_game_autocomplete, log_game_autocomplete,
                    mlb_log_game_autocomplete, props_player_autocomplete)
 import logging
@@ -492,10 +493,16 @@ class BetsCog(commands.Cog):
         # Pre-fetch games and latest snapshots per game (for live CLV)
         game_cache: dict[str, Game | None] = {}
         snap_cache: dict[str, list[OddsSnapshot]] = {}
+        prop_cache: dict[str, dict] = {}  # game_id -> {"main": [...], "all": main+alt rows}
         for bet in bets:
             if bet.game_id not in game_cache:
                 game_cache[bet.game_id] = await queries.get_game_by_id(bet.game_id)
-            if bet.game_id not in snap_cache:
+            if bet.market == "prop":
+                if bet.game_id not in prop_cache:
+                    main = await queries.get_player_props_for_game(bet.game_id)
+                    alts = await queries.get_player_prop_alts_for_game(bet.game_id)
+                    prop_cache[bet.game_id] = {"main": main, "all": main + alts}
+            elif bet.game_id not in snap_cache:
                 snap_cache[bet.game_id] = await queries.get_latest_snapshots_for_game(bet.game_id)
 
         lines = []
@@ -508,11 +515,17 @@ class BetsCog(commands.Cog):
             else:
                 game_str = bet.game_id[:8]
 
+            prop_player, prop_market = (parse_prop_note(bet.notes) if bet.market == "prop" else (None, None))
+
             if bet.market == "spread" and bet.line is not None:
                 market_str = f"spread {bet.line:+.1f}"
             elif bet.market == "total" and bet.line is not None:
                 direction = "O" if bet.side.lower() == "over" else "U"
                 market_str = f"total {direction}{bet.line:.1f}"
+            elif bet.market == "prop" and prop_market:
+                stat = prop_market.replace("player_points_rebounds_assists", "PRA").replace("player_", "")
+                who = prop_player.split()[-1] if prop_player else "prop"
+                market_str = f"{who} {stat} {bet.line:g}"
             else:
                 market_str = bet.market
 
@@ -521,7 +534,18 @@ class BetsCog(commands.Cog):
             # CLV: graded bets use stored CLV, open bets get live CLV from latest snapshot
             clv_str = ""
             now_str = ""
-            if bet.status == "graded" and bet.clv is not None:
+            if bet.market == "prop" and prop_market:
+                cache = prop_cache.get(bet.game_id, {"main": [], "all": []})
+                rows = [r for r in cache["all"] if r["player"] == prop_player and r["market"] == prop_market]
+                res = prop_clv_at_line(bet.side, bet.line, bet.odds, rows)
+                main_rows = [r for r in cache["main"] if r["player"] == prop_player and r["market"] == prop_market]
+                main_line = consensus_main_line(main_rows)
+                is_alt = main_line is not None and abs(bet.line - main_line) > 0.01
+                if res is not None:
+                    clv_str = f"  {res['clv']:+.1f}pp{'*' if is_alt else ''}"
+                else:
+                    clv_str = "  —"  # no real price captured at this line yet
+            elif bet.status == "graded" and bet.clv is not None:
                 clv_str = f"  {bet.clv:+.1f}pp"
             elif bet.status == "open" and game is not None:
                 snaps = snap_cache.get(bet.game_id, [])
@@ -559,6 +583,8 @@ class BetsCog(commands.Cog):
 
         description = "```\n" + "\n".join(kept) + "\n```"
         footer_text = f"{len(bets)} bet{'s' if len(bets) != 1 else ''} pending · CLV = placed vs current"
+        if any(b.market == "prop" for b in bets):
+            footer_text += " · prop *=alt line, —=no close yet"
         if truncated:
             footer_text += f" · showing {len(kept)}/{len(bets)} bets (list truncated)"
 

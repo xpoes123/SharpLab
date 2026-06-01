@@ -494,6 +494,46 @@ async def get_player_props_for_game(game_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def upsert_player_prop_alts(records: list[dict]) -> None:
+    """Upsert alternate-line prop ladder rows (one per game/source/player/market/line)."""
+    if not records:
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.executemany(
+            """INSERT INTO player_prop_alts (game_id, source, player, market, line, over_odds, under_odds, captured_at)
+               VALUES (:game_id, :source, :player, :market, :line, :over_odds, :under_odds, :captured_at)
+               ON CONFLICT(game_id, source, player, market, line) DO UPDATE SET
+                 over_odds=excluded.over_odds, under_odds=excluded.under_odds,
+                 captured_at=excluded.captured_at""",
+            records,
+        )
+        await db.commit()
+
+
+async def get_player_prop_alts_for_game(game_id: str) -> list[dict]:
+    """All alternate-line prop rows for a game (full ladders across books/players)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT source, player, market, line, over_odds, under_odds, captured_at "
+            "FROM player_prop_alts WHERE game_id = ? ORDER BY player, market, line",
+            (game_id,),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_games_with_open_prop_bets() -> list[str]:
+    """Distinct game_ids that have at least one open player-prop bet (for targeting
+    which games' alternate ladders we bother polling)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT DISTINCT game_id FROM bets WHERE market = 'prop' AND status = 'open'"
+        )
+        rows = await cursor.fetchall()
+    return [r[0] for r in rows]
+
+
 async def get_open_bets_on_live_games(window_hours: int = 6) -> list[dict]:
     """Open bets whose game has started but isn't final yet (i.e. live), within
     the last `window_hours`. Joins game info. For live in-game swing alerts."""

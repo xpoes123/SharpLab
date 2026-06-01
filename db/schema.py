@@ -694,3 +694,18 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        # Migration: NBA player-prop ALTERNATE ladders (many lines per player/market).
+        # market is the base key (player_assists), line is part of the PK so the full
+        # ladder is retained. Used for exact alt-line CLV.
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS player_prop_alts ("
+                "game_id TEXT NOT NULL, source TEXT NOT NULL, player TEXT NOT NULL, "
+                "market TEXT NOT NULL, line REAL NOT NULL, over_odds INTEGER, under_odds INTEGER, "
+                "captured_at TEXT NOT NULL, "
+                "PRIMARY KEY (game_id, source, player, market, line))"
+            )
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_player_prop_alts_game ON player_prop_alts(game_id)")
+            await db.commit()
+        except Exception:
+            pass
