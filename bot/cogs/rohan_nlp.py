@@ -44,9 +44,14 @@ message is a COMMITTED trade — one he has made or is firmly executing right no
 "shorting", "trimmed"). It counts as committed even if some specifics are missing — \
 extract whatever is given and use null for anything absent (we'll ask him for the rest).
 
-Set is_trade=false for hypothetical/uncommitted messages: "I want to buy", "I think \
-I'll buy", "should I buy?", "thinking about", "might", "considering", "watching", \
-"eyeing", price targets, and questions.
+Count ONLY trades ROHAN HIMSELF executed (first person: "bought", "I sold", \
+"grabbed", "adding"). Set is_trade=false for:
+- second/third-person or rhetorical mentions: "you bought", "did you buy", "he sold", \
+"you should buy", "u buying?"
+- hypothetical/uncommitted: "I want to buy", "I think I'll buy", "should I buy?", \
+"thinking about", "might", "considering", "watching", "eyeing", price targets, questions
+- slang/banter where the "ticker" isn't a real stock/crypto symbol (e.g. "ts", "fr", \
+"idk", "ngl", "this") — these are NOT tickers.
 
 kind is "option" if it mentions calls/puts/strikes/expiry, "crypto" for coins \
 (BTC, ETH, SOL, …), else "stock". For options resolve the expiry to YYYY-MM-DD using \
@@ -129,6 +134,14 @@ class RohanNLP(commands.Cog):
         if c.startswith(("/", "!", "?")) or len(c) < 5 or len(c) > 300:
             return
         if not any(h in c.lower() for h in _HINTS):
+            return
+        # Real trade reports carry a number (size/price/strike). Skips banter like
+        # "you bought ts" while keeping "bought 10 AAPL".
+        if not any(ch.isdigit() for ch in c):
+            return
+        # Second-person / questions aren't Rohan reporting his own trade.
+        low = c.lower()
+        if low.startswith(("you ", "u ", "did you", "should ", "would you", "does ")) or "?" in c:
             return
         try:
             trade = await self._classify(c)
