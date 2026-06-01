@@ -22,9 +22,17 @@ from db import queries
 log = logging.getLogger(__name__)
 
 POKEAPI = "https://pokeapi.co/api/v2"
-MAX_GUESSES = 8
 INACTIVITY_SECS = 120
-REWARD_BASE = 200  # coins for solving; scaled down by guesses used
+NATIONAL_DEX_MAX = 1025  # highest national-dex id to roll for Hard
+
+# Difficulty tiers: secret-pool breadth, guess budget, and base reward (scaled
+# down by guesses used). Easy = famous mons + extra guesses; Hard = any Pokémon
+# in the dex + fewer guesses.
+DIFFICULTIES: dict[str, dict] = {
+    "easy":   {"label": "Easy",   "guesses": 10, "reward": 150},
+    "medium": {"label": "Medium", "guesses": 8,  "reward": 200},
+    "hard":   {"label": "Hard",   "guesses": 6,  "reward": 300},
+}
 
 # Recognizable secret pool (guesses can be ANY valid Pokémon — validated live).
 POOL = [
@@ -53,6 +61,16 @@ POOL = [
     "cinderace", "rillaboom", "inteleon", "meowscarada", "skeledirge", "quaquaval",
     "gholdengo", "kingambit", "annihilape", "garganacl", "tinkaton", "baxcalibur",
     "koraidon", "miraidon", "flutter-mane", "iron-valiant", "ogerpon",
+]
+
+# Easy tier: only instantly-recognizable Pokémon (mostly Gen 1 icons).
+EASY_POOL = [
+    "bulbasaur", "charmander", "squirtle", "venusaur", "charizard", "blastoise",
+    "pikachu", "raichu", "jigglypuff", "meowth", "psyduck", "machamp", "gengar",
+    "onix", "gyarados", "lapras", "eevee", "vaporeon", "jolteon", "flareon",
+    "snorlax", "dragonite", "mewtwo", "mew", "magikarp", "ditto", "arcanine",
+    "alakazam", "golem", "slowbro", "kangaskhan", "scyther", "pinsir", "tauros",
+    "articuno", "zapdos", "moltres", "pidgeot", "nidoking", "clefairy",
 ]
 
 _ROMAN = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6, "vii": 7, "viii": 8, "ix": 9}
@@ -126,16 +144,20 @@ class PokedleCog(commands.Cog):
         self._active: set[int] = set()  # channel ids with a live game
 
     @app_commands.command(name="pokedle", description="Pokédle — deduce the mystery Pokémon from clues")
-    async def pokedle(self, interaction: discord.Interaction) -> None:
+    @app_commands.describe(difficulty="Easy: famous mons, 10 guesses · Medium: default · Hard: any Pokémon, 6 guesses")
+    @app_commands.choices(difficulty=[
+        app_commands.Choice(name="Easy", value="easy"),
+        app_commands.Choice(name="Medium", value="medium"),
+        app_commands.Choice(name="Hard", value="hard"),
+    ])
+    async def pokedle(self, interaction: discord.Interaction,
+                      difficulty: app_commands.Choice[str] | None = None) -> None:
         if interaction.channel_id in self._active:
             await interaction.response.send_message("A Pokédle game is already running here!", ephemeral=True)
             return
+        cfg = DIFFICULTIES[difficulty.value if difficulty else "medium"]
         await interaction.response.defer()
-        secret = None
-        for name in random.sample(POOL, k=min(8, len(POOL))):  # tolerate a few bad slugs
-            secret = await _fetch_mon(name)
-            if secret:
-                break
+        secret = await self._pick_secret(cfg)
         if not secret:
             await interaction.followup.send("Couldn't reach PokéAPI right now — try again shortly.")
             return
@@ -143,11 +165,12 @@ class PokedleCog(commands.Cog):
         # Play in a dedicated thread so guesses don't clutter the channel.
         anchor = await interaction.followup.send(embed=discord.Embed(
             title="🔍 Pokédle",
-            description=f"**{interaction.user.display_name}** started a game — play in the thread below 👇",
+            description=(f"**{interaction.user.display_name}** started a **{cfg['label']}** game "
+                         "— play in the thread below 👇"),
             colour=0xF1C40F,
         ))
         try:
-            thread = await anchor.create_thread(name=f"Pokédle — {interaction.user.display_name}")
+            thread = await anchor.create_thread(name=f"Pokédle ({cfg['label']}) — {interaction.user.display_name}")
         except discord.HTTPException:
             await interaction.followup.send(
                 "Couldn't create a thread — the bot needs **Create Public Threads** permission here.")
@@ -155,7 +178,7 @@ class PokedleCog(commands.Cog):
 
         self._active.add(interaction.channel_id)
         try:
-            await self._run(thread, secret)
+            await self._run(thread, secret, cfg)
         finally:
             self._active.discard(interaction.channel_id)
             try:
@@ -163,11 +186,28 @@ class PokedleCog(commands.Cog):
             except discord.HTTPException:
                 pass
 
-    async def _run(self, thread: discord.Thread, secret: dict) -> None:
+    async def _pick_secret(self, cfg: dict) -> dict | None:
+        """Choose a mystery Pokémon for the tier. Hard rolls the whole National
+        Dex by id; easy/medium sample a curated pool. Tolerates a few bad slugs."""
+        if cfg["label"] == "Hard":
+            for _ in range(8):
+                mon = await _fetch_mon(str(random.randint(1, NATIONAL_DEX_MAX)))
+                if mon:
+                    return mon
+            return None
+        pool = EASY_POOL if cfg["label"] == "Easy" else POOL
+        for name in random.sample(pool, k=min(8, len(pool))):
+            mon = await _fetch_mon(name)
+            if mon:
+                return mon
+        return None
+
+    async def _run(self, thread: discord.Thread, secret: dict, cfg: dict) -> None:
+        max_guesses = cfg["guesses"]
         await thread.send(embed=discord.Embed(
-            title="🔍 Pokédle — guess the mystery Pokémon!",
+            title=f"🔍 Pokédle ({cfg['label']}) — guess the mystery Pokémon!",
             description=(
-                f"Type any Pokémon name to guess. You have **{MAX_GUESSES}** guesses.\n"
+                f"Type any Pokémon name to guess. You have **{max_guesses}** guesses.\n"
                 "Feedback per guess:\n"
                 "• **Gen / Height / Weight**: ✅ exact · ⬆️ secret is higher · ⬇️ lower\n"
                 "• **Types**: 🟩 right type & slot · 🟨 right type, wrong slot · ⬛ not a type\n\n"
@@ -178,7 +218,7 @@ class PokedleCog(commands.Cog):
 
         guessed = 0
         history: list[str] = []
-        while guessed < MAX_GUESSES:
+        while guessed < max_guesses:
             try:
                 msg = await self.bot.wait_for(
                     "message",
@@ -195,7 +235,7 @@ class PokedleCog(commands.Cog):
 
             guessed += 1
             if _norm(guess["name"]) == _norm(secret["name"]):
-                reward = max(REWARD_BASE - (guessed - 1) * 20, 40)
+                reward = max(cfg["reward"] - (guessed - 1) * 20, 40)
                 try:
                     await queries.give_casino_coins(str(msg.author.id), reward)
                     await queries.log_casino_result(str(msg.author.id), "pokedle", 0, reward)
@@ -210,7 +250,7 @@ class PokedleCog(commands.Cog):
                 return
 
             history.append(_feedback_row(guess, secret))
-            left = MAX_GUESSES - guessed
+            left = max_guesses - guessed
             await thread.send(embed=discord.Embed(
                 description="\n".join(history) + (f"\n\n*{left} guess(es) left*" if left else ""),
                 colour=0xF1C40F if left else 0xED4245,
