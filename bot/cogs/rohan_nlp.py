@@ -183,15 +183,20 @@ class RohanNLP(commands.Cog):
         missing = _missing(t)
         blocking: list[str] = []
         warnings: list[str] = []
+        sell_pnl = None
         tk = (t.get("ticker") or "").upper()
         q = _num(t.get("quantity"))
         px = _num(t.get("price"))
+        is_stock_sell = t.get("side") == "sell" and t.get("kind") != "option" and bool(tk)
 
-        if t.get("side") == "sell" and t.get("kind") != "option" and tk and q:
+        if is_stock_sell and q:
             holding = await queries.get_stock_holding(str(ROHAN_USER_ID), tk)
             held = holding["shares"] if holding else 0.0
             if q > held + 1e-9:
                 blocking.append(f"You only hold **{held:g}** {tk} — can't sell {q:g}.")
+            elif holding and px and holding.get("dca_price"):
+                # Preview realized P/L so a wrong sell price stands out.
+                sell_pnl = {"realized": q * (px - holding["dca_price"]), "dca": holding["dca_price"]}
 
         if t.get("kind") != "option" and tk and px:
             try:
@@ -202,15 +207,31 @@ class RohanNLP(commands.Cog):
                 warnings.append(f"You entered **${px:,.2f}** but {tk} is trading ~**${live:,.2f}** — double-check.")
 
         return {"missing": missing, "blocking": blocking, "warnings": warnings,
+                "sell_pnl": sell_pnl, "is_sell": t.get("side") == "sell",
                 "ok": not missing and not blocking}
 
     def _card(self, t: dict, review: dict) -> discord.Embed:
         ok = review["ok"]
+        is_sell = review.get("is_sell")
         color = 0x9ece6a if ok else 0xf7768e if review["blocking"] else 0xe0af68
-        title = "🤖 Trade detected — confirm?" if ok else "🤖 Trade detected — needs a detail"
+        if not ok:
+            title = "🤖 Trade detected — needs a detail"
+        elif is_sell:
+            title = "🤖 Sale detected — confirm the price?"
+        else:
+            title = "🤖 Trade detected — confirm?"
         e = discord.Embed(title=title, description=_describe(t), color=color)
         if review["missing"]:
             e.add_field(name="📝 Missing", value="Add it with **Edit**: " + ", ".join(review["missing"]), inline=False)
+        # Sells: surface the price + realized P/L so a wrong price is obvious.
+        px = _num(t.get("price"))
+        if is_sell and px:
+            val = f"**${px:,.2f}** — is that the fill? Tap **Edit** to change it."
+            sp = review.get("sell_pnl")
+            if sp:
+                s = "+" if sp["realized"] >= 0 else "−"
+                val += f"\nRealizes **{s}${abs(sp['realized']):,.2f}** vs your avg cost ${sp['dca']:,.2f}."
+            e.add_field(name="💵 Confirm your sell price", value=val, inline=False)
         for b in review["blocking"]:
             e.add_field(name="🚫 Can't record", value=b, inline=False)
         for w in review["warnings"]:
