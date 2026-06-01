@@ -6,7 +6,8 @@ const money = (n) => (n == null ? "—" : "$" + Number(n).toLocaleString(undefin
 const money2 = (n) => (n == null ? "—" : "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 const pnl = (n) => (n >= 0 ? "+" : "−") + "$" + Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
 
-const RANGES = [["1D", 1], ["1W", 7], ["1M", 30], ["3M", 90], ["1Y", 365], ["ALL", 1e9]];
+const RANGES = [["1D", 1], ["1W", 7], ["1M", 30], ["3M", 90], ["YTD", "ytd"], ["1Y", 365], ["ALL", 1e9]];
+const rangeCutoff = (r) => (r === "ytd" ? Date.UTC(new Date().getFullYear(), 0, 1) : Date.now() - r * 86400000);
 let EQUITY = [];
 let BENCH = [];
 let range = 7;
@@ -59,7 +60,7 @@ function pctChange(arr) {
 }
 
 function drawChart() {
-  const cutoff = Date.now() - range * 86400000;
+  const cutoff = rangeCutoff(range);
   let series = EQUITY.filter((p) => new Date(p.t).getTime() >= cutoff);
   let bench = BENCH.filter((p) => new Date(p.t).getTime() >= cutoff);
   if (series.length < 2) { series = EQUITY; bench = BENCH; }
@@ -145,7 +146,7 @@ function render(d) {
   app.addEventListener("click", (e) => {
     const b = e.target.closest(".rangebtn");
     if (!b) return;
-    range = Number(b.dataset.days);
+    range = b.dataset.days === "ytd" ? "ytd" : Number(b.dataset.days);
     document.querySelectorAll(".rangebtn").forEach((x) => x.classList.toggle("on", x === b));
     drawChart();
   });
