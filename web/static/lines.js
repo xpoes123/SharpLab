@@ -227,6 +227,7 @@ function openBetModal(gid) {
     total: src && src.total != null ? src.total : null,
     best: bestML(g.odds || {}), line: null, odds: -110, units: 1,
   };
+  pickSide("home");  // sensible default so the form opens complete
   renderBetBody();
   document.getElementById("betModal").classList.remove("hidden");
 }
@@ -280,7 +281,7 @@ function renderBetBody() {
     <div id="betMsg" class="bet-msg muted"></div>`;
 
   document.querySelectorAll("#betBody [data-mk]").forEach((b) =>
-    b.addEventListener("click", () => { d.market = b.dataset.mk; d.sideKey = null; d.sideValue = null; renderBetBody(); }));
+    b.addEventListener("click", () => { d.market = b.dataset.mk; pickSide(d.market === "total" ? "over" : "home"); renderBetBody(); }));
   document.querySelectorAll("#betBody [data-side]").forEach((b) =>
     b.addEventListener("click", () => { pickSide(b.dataset.side); renderBetBody(); }));
   const sub = document.getElementById("bSubmit");
