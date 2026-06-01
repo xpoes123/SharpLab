@@ -60,6 +60,13 @@ _PROGRESS_TARGETS: dict[str, tuple[str, int]] = {
     "web_regular": ("web_visits", 25),
     "level_10": ("level", 10),
     "level_25": ("level", 25),
+    "level_50": ("level", 50),
+    "voice_1h": ("voice_minutes", 60),
+    "voice_10h": ("voice_minutes", 600),
+    "voice_50h": ("voice_minutes", 3000),
+    "chat_100": ("messages", 100),
+    "chat_1k": ("messages", 1000),
+    "chat_10k": ("messages", 10000),
 }
 
 # Level color thresholds
@@ -102,6 +109,7 @@ async def gather_achievement_stats(uid: str) -> dict:
     option_trades = await queries.get_option_trades(uid)
     web = await queries.get_web_activity(uid)
     xp = await queries.get_or_create_xp(uid)
+    eng = await queries.get_engagement(uid)
 
     return {
         "rounds": stats["rounds"],
@@ -128,6 +136,9 @@ async def gather_achievement_stats(uid: str) -> dict:
         "web_logins": web["logins"],
         "web_visits": web["visits"],
         "level": xp["level"],
+        # Voice / Chat
+        "voice_minutes": eng["voice_minutes"],
+        "messages": eng["messages"],
     }
 
 
@@ -180,6 +191,13 @@ def _achievement_checks(s: dict) -> list[tuple[str, bool]]:
         ("web_regular", s["web_visits"] >= 25),
         ("level_10", s["level"] >= 10),
         ("level_25", s["level"] >= 25),
+        ("level_50", s["level"] >= 50),
+        ("voice_1h", s["voice_minutes"] >= 60),
+        ("voice_10h", s["voice_minutes"] >= 600),
+        ("voice_50h", s["voice_minutes"] >= 3000),
+        ("chat_100", s["messages"] >= 100),
+        ("chat_1k", s["messages"] >= 1000),
+        ("chat_10k", s["messages"] >= 10000),
     ]
 
 
@@ -233,6 +251,8 @@ XP_STOCK = 40    # per stock/option/crypto trade logged
 XP_MESSAGE = 1   # per chat message (rate-limited)
 VC_TICK_MIN = 5  # voice-XP loop cadence (minutes)
 XP_VC_TICK = 10  # XP per tick for active voice time (2 XP/min)
+VOICE_MILESTONES = {60, 600, 3000}    # voice-minute thresholds with achievements
+CHAT_MILESTONES = {100, 1000, 10000}  # message thresholds with achievements
 _LEVELUP_CHANNEL_SETTING = "levelup_channel"
 DEFAULT_LEVELUP_CHANNEL_ID = 1510694785034354849  # #games — server fallback
 
@@ -304,7 +324,14 @@ class ProgressionCog(commands.Cog):
         if now - self._msg_cd.get(message.author.id, 0) < 5:  # only blocks burst-spam
             return
         self._msg_cd[message.author.id] = now
-        await award_xp(self.bot, str(message.author.id), XP_MESSAGE, message.channel)
+        uid = str(message.author.id)
+        await award_xp(self.bot, uid, XP_MESSAGE, message.channel)
+        # Count toward Chat achievements; only re-evaluate (heavy) at a milestone.
+        count = await queries.increment_message_count(uid)
+        if count in CHAT_MILESTONES:
+            newly = await evaluate_user_achievements(uid)
+            if newly:
+                await announce_achievements(self.bot, uid, newly, message.channel)
 
     async def cog_load(self) -> None:
         self.check_achievements.start()
@@ -570,6 +597,9 @@ class ProgressionCog(commands.Cog):
                             continue
                         try:
                             await award_xp(self.bot, str(m.id), XP_VC_TICK, None)
+                            total = await queries.add_voice_minutes(str(m.id), VC_TICK_MIN)
+                            if total in VOICE_MILESTONES:  # re-evaluate only at a milestone
+                                await evaluate_user_achievements(str(m.id))  # silent (no text channel)
                         except Exception:
                             log.debug("voice xp failed for %s", m.id, exc_info=True)
         except Exception:
