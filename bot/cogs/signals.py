@@ -26,12 +26,17 @@ LOOKAHEAD_HOURS = 18      # only games tipping within this window
 BASELINE_MINUTES = 30     # steam/divergence compare-against window
 ALERT_TTL_SEC = 6 * 3600  # re-alert the same signal at most once per this period
 STALE_MINUTES = 45        # ignore games whose latest odds are older than this
-ARB_MIN_ROI = 1.0         # ignore arbs below this % (snapshots aren't simultaneous)
+ARB_MIN_ROI = 1.5         # ignore arbs below this % (snapshots aren't simultaneous + residual spread)
 MIDDLE_MIN_EV = 0.0       # only fire middles the base-rate model scores as +EV
 
 
 def _am(v: int) -> str:
     return f"+{v}" if v > 0 else str(v)
+
+
+def _cents(odds: int) -> float:
+    """American odds → cost in cents per $1 payout (implied probability ×100)."""
+    return american_to_prob(odds) * 100
 
 
 def _by_source(snaps) -> dict:
@@ -166,16 +171,18 @@ class Signals(commands.Cog):
 
     # ── embeds ───────────────────────────────────────────────────────────────
     def _arb_embed(self, emoji, label, g, a) -> discord.Embed:
+        hc, ac = _cents(a["home_odds"]), _cents(a["away_odds"])
         e = discord.Embed(
             title=f"🚨 Arbitrage — {label}",
-            description=f"{emoji} Lock a guaranteed **{a['roi_pct']:.2f}%** by betting both sides.",
+            description=(f"{emoji} Buy both sides for **{hc + ac:.1f}¢** → lock **{a['roi_pct']:.2f}%**.\n"
+                        f"*(arb exists only while the two prices sum under 100¢)*"),
             color=0x9ece6a,
         )
         e.add_field(name=f"{g.home_team} (home)",
-                    value=f"**{_am(a['home_odds'])}** on `{a['home_book']}`\nstake {a['home_stake_pct']:.0f}%", inline=True)
+                    value=f"**{hc:.1f}¢** ({_am(a['home_odds'])}) on `{a['home_book']}`\nstake {a['home_stake_pct']:.0f}%", inline=True)
         e.add_field(name=f"{g.away_team} (away)",
-                    value=f"**{_am(a['away_odds'])}** on `{a['away_book']}`\nstake {a['away_stake_pct']:.0f}%", inline=True)
-        e.set_footer(text="Moneyline arb across books — verify prices are still live before betting.")
+                    value=f"**{ac:.1f}¢** ({_am(a['away_odds'])}) on `{a['away_book']}`\nstake {a['away_stake_pct']:.0f}%", inline=True)
+        e.set_footer(text="¢ = what you pay per $1 payout · prediction-market prices use the executable ask · verify before betting.")
         return e
 
     @staticmethod
