@@ -279,10 +279,10 @@ def test_games_listing_shows_correct_invocation() -> None:
         if name in _DIRECT_SLASH_GAMES:
             assert inv == f"/{name}", f"{name}: expected direct slash, got {inv}"
         else:
-            assert inv == f"/game {name}", f"{name}: expected /game launcher, got {inv}"
+            assert inv == f"/play {name}", f"{name}: expected /play launcher, got {inv}"
 
-    assert _game_invocation("cluemaster") == "/game cluemaster"
-    assert _game_invocation("imposter") == "/game imposter"
+    assert _game_invocation("cluemaster") == "/play cluemaster"
+    assert _game_invocation("imposter") == "/play imposter"
     assert _game_invocation("penalties") == "/penalties"
 
 

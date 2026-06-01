@@ -8,13 +8,15 @@ from temporal.activities import (
     _extract_payload,
     _fetch_espn_scores,
     _kalshi_ml_from_markets,
-    _kalshi_mid,
     _parse_espn_detail,
     _parse_espn_injuries_response,
     _resolve_bet,
 )
 from shared.models import Bet, TEAM_ABBR_NBA, TEAM_ABBR_MLB, get_team_abbr
-from shared.odds_utils import prob_to_american, american_to_prob, american_to_decimal
+from shared.odds_utils import (
+    prob_to_american, american_to_prob, american_to_decimal,
+    kalshi_exec_price, KALSHI_TAKER_FEE,
+)
 
 
 # ── _extract_payload ───────────────────────────────────────────────────────────
@@ -73,26 +75,29 @@ def test_extract_payload_empty_bookmaker():
     assert payload == {}
 
 
-# ── _kalshi_mid ────────────────────────────────────────────────────────────────
+# ── kalshi_exec_price (executable ask + taker fee — guards against phantom arbs) ──
 
-def test_kalshi_mid_from_bid_ask():
-    m = {"yes_bid_dollars": 0.60, "yes_ask_dollars": 0.64}
-    assert _kalshi_mid(m) == pytest.approx(0.62)
-
-
-def test_kalshi_mid_falls_back_to_last_price():
-    m = {"yes_bid_dollars": 0, "yes_ask_dollars": 0, "last_price_dollars": 0.55}
-    assert _kalshi_mid(m) == pytest.approx(0.55)
+def test_kalshi_exec_uses_ask_plus_fee():
+    p = kalshi_exec_price({"yes_ask_dollars": 0.60})
+    assert p == pytest.approx(0.60 + KALSHI_TAKER_FEE * 0.60 * 0.40)
+    assert p > 0.60   # you pay MORE than the ask (the fee) — never the cheap fair-value mid
 
 
-def test_kalshi_mid_returns_none_when_zero():
-    m = {"yes_bid_dollars": 0, "yes_ask_dollars": 0}
-    assert _kalshi_mid(m) is None
+def test_kalshi_exec_falls_back_to_last_then_mid():
+    assert kalshi_exec_price({"yes_ask_dollars": 0, "last_price_dollars": 0.55}) == \
+        pytest.approx(0.55 + KALSHI_TAKER_FEE * 0.55 * 0.45)
+    # no ask, no last → bid/ask mid
+    assert kalshi_exec_price({"yes_bid_dollars": 0.60, "yes_ask_dollars": 0}) == \
+        pytest.approx(0.30 + KALSHI_TAKER_FEE * 0.30 * 0.70)
 
 
-def test_kalshi_mid_rejects_out_of_range():
-    assert _kalshi_mid({"yes_bid_dollars": 1.0, "yes_ask_dollars": 1.0}) is None
-    assert _kalshi_mid({"yes_bid_dollars": 0.0, "yes_ask_dollars": 0.0}) is None
+def test_kalshi_exec_none_when_no_usable_price():
+    assert kalshi_exec_price({}) is None
+    assert kalshi_exec_price({"yes_ask_dollars": 0, "last_price_dollars": 0}) is None
+
+
+def test_kalshi_exec_capped_at_099():
+    assert kalshi_exec_price({"yes_ask_dollars": 0.99}) <= 0.99
 
 
 # ── _kalshi_ml_from_markets ────────────────────────────────────────────────────

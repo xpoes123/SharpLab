@@ -59,7 +59,9 @@ def _base_stats(**over):
         "duel_wins": 0, "tourney_wins": 0, "balance": 0,
         "num_bets": 0, "bet_wins": 0, "pos_clv": 0,
         "num_trades": 0, "distinct_holdings": 0, "realized_pnl": 0,
-        "traded_crypto": False, "has_options": False,
+        "traded_crypto": False, "has_options": False, "num_option_trades": 0,
+        "level": 0, "messages": 0, "voice_minutes": 0,
+        "web_logins": 0, "web_traded": 0, "web_visits": 0,
     }
     s.update(over)
     return s
@@ -113,19 +115,22 @@ class TestEvaluateAndBackfill:
 
 
 class TestAnnounce:
-    def test_channel_post_pings_user(self):
+    def test_channel_post_renders_mention_without_pinging(self):
         from unittest.mock import AsyncMock, MagicMock
         ch = MagicMock(); ch.send = AsyncMock()
         _run(_prog.announce_achievements(MagicMock(), "123", ["crypto_first"], channel=ch))
-        assert ch.send.call_args.kwargs["content"] == "<@123>"
-        assert "Unlocked" in ch.send.call_args.kwargs["embed"].title
+        assert ch.send.called
+        kw = ch.send.call_args.kwargs
+        assert "<@123>" in kw["embed"].description     # mention rendered in the embed
+        assert kw["allowed_mentions"].users is False    # but NOT pinged
+        assert "Unlocked" in kw["embed"].title
 
-    def test_dm_fallback_without_channel(self):
+    def test_no_dm_without_channel(self):
         from unittest.mock import AsyncMock, MagicMock
         user = MagicMock(); user.send = AsyncMock()
         bot = MagicMock(); bot.get_user.return_value = user
         _run(_prog.announce_achievements(bot, "123", ["stock_first"], channel=None))
-        assert user.send.called
+        assert not user.send.called    # never DMs — announces only in the triggering channel
 
     def test_empty_does_nothing(self):
         from unittest.mock import AsyncMock, MagicMock
