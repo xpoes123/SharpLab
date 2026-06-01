@@ -13,7 +13,7 @@ from discord.ext import commands
 from db import queries
 from shared.models import Bet, Game, OddsSnapshot
 from shared.odds_utils import american_to_decimal, compute_clv, fmt_prob, parse_odds_input, side_is_home
-from .odds import game_autocomplete, mlb_game_autocomplete
+from .odds import game_autocomplete, mlb_game_autocomplete, log_game_autocomplete, mlb_log_game_autocomplete
 import logging
 
 log = logging.getLogger(__name__)
@@ -413,15 +413,15 @@ class BetsCog(commands.Cog):
     bet_group = app_commands.Group(name="bet", description="Bet tracking — log, view, void, record, CLV")
     log_group = app_commands.Group(name="log", description="Log a bet to your record", parent=bet_group)
 
-    @log_group.command(name="nba", description="Log an NBA bet to your record")
-    @app_commands.autocomplete(game=game_autocomplete, pick=pick_autocomplete)
+    @log_group.command(name="nba", description="Log an NBA bet (incl. live in-game) to your record")
+    @app_commands.autocomplete(game=log_game_autocomplete, pick=pick_autocomplete)
     @app_commands.describe(**_LOG_DESCRIBE)
     @app_commands.choices(book=BOOK_CHOICES, market=MARKET_CHOICES)
     async def bet_log_nba(self, interaction: discord.Interaction, game: str, book: str, market: str, pick: str, odds: str, units: float, line: float | None = None, notes: str | None = None) -> None:
         await self._log_impl(interaction, game, book, market, pick, odds, units, line, notes)
 
-    @log_group.command(name="mlb", description="Log an MLB bet to your record")
-    @app_commands.autocomplete(game=mlb_game_autocomplete, pick=pick_autocomplete)
+    @log_group.command(name="mlb", description="Log an MLB bet (incl. live in-game) to your record")
+    @app_commands.autocomplete(game=mlb_log_game_autocomplete, pick=pick_autocomplete)
     @app_commands.describe(**_LOG_DESCRIBE)
     @app_commands.choices(book=BOOK_CHOICES, market=MARKET_CHOICES)
     async def bet_log_mlb(self, interaction: discord.Interaction, game: str, book: str, market: str, pick: str, odds: str, units: float, line: float | None = None, notes: str | None = None) -> None:

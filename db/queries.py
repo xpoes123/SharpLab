@@ -192,6 +192,29 @@ async def get_games_started_before(cutoff_utc_iso: str) -> list[Game]:
     return [_row_to_game(row) for row in rows]
 
 
+async def get_loggable_games(filter_str: str = "", sport: str = "nba") -> list[Game]:
+    """Games you can still log a bet on: upcoming OR live (started, not yet final),
+    within the last 6h. Ordered soonest-first. For /bet log incl. in-game bets."""
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+    pattern = f"%{filter_str}%"
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM games
+            WHERE sport = ? AND status != 'final'
+              AND start_time >= ?
+              AND (home_team LIKE ? OR away_team LIKE ?)
+            ORDER BY start_time ASC
+            LIMIT 25
+            """,
+            (sport, cutoff, pattern, pattern),
+        )
+        rows = await cursor.fetchall()
+    return [_row_to_game(row) for row in rows]
+
+
 async def get_upcoming_games(filter_str: str = "", sport: str = "nba") -> list[Game]:
     """Return upcoming games (start_time >= now), optionally filtered by team name."""
     now = datetime.now(timezone.utc).isoformat()
