@@ -663,6 +663,39 @@ def _period_pnl(trades, series, shares_now, price_now, cuts, close_on_or_before)
     return out
 
 
+@router.get("/hq/earnings")
+async def hq_earnings():
+    """Upcoming earnings calendar (next several days), large-caps, server holdings flagged."""
+    return await _CACHE.get("earnings", 1800.0, _build_earnings, swr=600.0)
+
+
+async def _build_earnings():
+    from datetime import timedelta as _td
+    from bot.cogs.stock import fetch_earnings_calendar
+    held = {h["ticker"] for h in await queries.get_all_stock_holdings()}
+    et_today = datetime.now(ZoneInfo("America/New_York")).date()
+
+    def pack(items):
+        return [{"symbol": e["symbol"], "name": e["name"], "mc": e["mc"],
+                 "held": e["symbol"] in held} for e in items]
+
+    days = []
+    for i in range(7):
+        d = et_today + _td(days=i)
+        notable = sorted((e for e in await fetch_earnings_calendar(d.isoformat()) if e["mc"] >= 2e9),
+                         key=lambda e: -e["mc"])
+        if not notable:
+            continue
+        days.append({
+            "date": d.isoformat(),
+            "label": "Today" if i == 0 else "Tomorrow" if i == 1 else d.strftime("%a %b %d"),
+            "bmo": pack([e for e in notable if e["time"] == "time-pre-market"]),
+            "amc": pack([e for e in notable if e["time"] == "time-after-hours"]),
+            "other": pack([e for e in notable if e["time"] not in ("time-pre-market", "time-after-hours")]),
+        })
+    return {"days": days}
+
+
 @router.get("/hq/stocks/{handle}")
 async def hq_stock_trader(handle: str):
     """One trader's full portfolio: equity curve, stock + option positions, txns."""
