@@ -18,7 +18,13 @@ let BENCH = [];
 let HOLD = [];                     // holdings (each carries a `history` daily-close series)
 let range = "1W";                  // shared selected range label
 let view = "portfolio";            // "portfolio" | <ticker> — what the main chart shows
+let CHART = null;                  // { series, lo, hi } of the drawn line, for hover lookups
 const BENCH_COLOR = "#58a6ff";     // S&P line — distinct from grey reconstructed segment
+
+const priceFmt = (v) => (Math.abs(v) >= 1000 ? money(v) : money2(v));        // hover tooltip
+const axisFmt = (v) => (Math.abs(v) >= 1000                                  // compact Y-axis
+  ? "$" + (v / 1000).toFixed(Math.abs(v) >= 10000 ? 0 : 1) + "k"
+  : "$" + v.toFixed(v < 100 ? 1 : 0));
 
 function holdingsTable() {
   if (!HOLD.length) return `<div class="muted" style="padding:18px">No open stock positions.</div>`;
@@ -58,7 +64,7 @@ async function main() {
 }
 
 function svgChart(series, bench, liveIdx, h = 220) {
-  if (series.length < 2) return `<div class="muted" style="padding:28px;text-align:center">Not enough history yet — snapshots build hourly.</div>`;
+  if (series.length < 2) { CHART = null; return `<div class="muted" style="padding:28px;text-align:center">Not enough history yet — snapshots build hourly.</div>`; }
   const w = 760;
   const n = series.length;
   const allVals = series.map((p) => p.v).concat((bench || []).map((p) => p.v));
@@ -84,9 +90,51 @@ function svgChart(series, bench, liveIdx, h = 220) {
     ? `<line x1="${X(liveIdx).toFixed(1)}" y1="0" x2="${X(liveIdx).toFixed(1)}" y2="${h}" stroke="var(--accent)" stroke-width="1" stroke-dasharray="3 3" opacity="0.7"/>` : "";
   const benchLine = (bench && bench.length >= 2)
     ? `<polyline points="${ptsOf(bench)}" fill="none" stroke="${BENCH_COLOR}" stroke-width="2" stroke-dasharray="5 4" opacity="0.9" vector-effect="non-scaling-stroke"/>` : "";
-  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:${h}px;display:block">
-    <polygon points="0,${h} ${ptsOf(series)} ${w},${h}" fill="${fill}"/>
-    ${benchLine}${backLine}${marker}${liveLine}</svg>`;
+
+  // Horizontal price gridlines + HTML Y-axis labels (HTML, since the SVG is stretched
+  // non-uniformly and SVG <text> would distort). Hover crosshair + tooltip read CHART.
+  const TICKS = 4;
+  let grid = "", labels = "";
+  for (let i = 0; i <= TICKS; i++) {
+    const v = lo + ((hi - lo) * i) / TICKS;
+    grid += `<line x1="0" y1="${Y(v).toFixed(1)}" x2="${w}" y2="${Y(v).toFixed(1)}" stroke="var(--muted)" stroke-width="1" opacity="0.12" vector-effect="non-scaling-stroke"/>`;
+    labels += `<div style="position:absolute;right:3px;top:calc(${((1 - i / TICKS) * 100).toFixed(2)}% - 7px);font-size:10px;color:var(--muted);background:var(--card,#11131a);padding:0 3px;border-radius:2px;pointer-events:none">${axisFmt(v)}</div>`;
+  }
+  CHART = { series, lo, hi };
+  return `<div style="position:relative">
+    <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:${h}px;display:block">
+      ${grid}<polygon points="0,${h} ${ptsOf(series)} ${w},${h}" fill="${fill}"/>
+      ${benchLine}${backLine}${marker}${liveLine}</svg>
+    ${labels}
+    <div id="crosshair" style="position:absolute;top:0;bottom:0;width:1px;background:var(--accent);opacity:0;pointer-events:none"></div>
+    <div id="tooltip" style="position:absolute;opacity:0;pointer-events:none;background:#1a1d29;border:1px solid var(--muted);border-radius:4px;padding:3px 7px;font-size:11px;white-space:nowrap;transform:translate(-50%,-135%);z-index:5"></div>
+  </div>`;
+}
+
+// Crosshair + price tooltip following the cursor over the chart. Attached once to the
+// persistent #chart container; reads CHART (set by svgChart) so it works after redraws.
+function attachHover() {
+  const chart = document.getElementById("chart");
+  const hide = () => {
+    const c = document.getElementById("crosshair"), t = document.getElementById("tooltip");
+    if (c) c.style.opacity = "0";
+    if (t) t.style.opacity = "0";
+  };
+  chart.addEventListener("mousemove", (e) => {
+    const wrap = chart.firstElementChild;
+    const cross = document.getElementById("crosshair"), tip = document.getElementById("tooltip");
+    if (!CHART || !wrap || !cross || !tip) return;
+    const rect = wrap.getBoundingClientRect();
+    const i = Math.round(((e.clientX - rect.left) / rect.width) * (CHART.series.length - 1));
+    if (i < 0 || i >= CHART.series.length) return;
+    const p = CHART.series[i];
+    const x = (i / (CHART.series.length - 1)) * rect.width;
+    const y = (1 - (p.v - CHART.lo) / (CHART.hi - CHART.lo)) * rect.height;
+    cross.style.left = x + "px"; cross.style.opacity = "0.5";
+    tip.style.left = x + "px"; tip.style.top = y + "px"; tip.style.opacity = "1";
+    tip.innerHTML = `<strong>${priceFmt(p.v)}</strong> · <span style="color:var(--muted)">${fmtDate(p.t)}</span>`;
+  });
+  chart.addEventListener("mouseleave", hide);
 }
 
 function pctChange(arr) {
@@ -243,6 +291,7 @@ function render(d) {
 
   app.innerHTML = html;
   updateChart();
+  attachHover();
   app.addEventListener("click", (e) => {
     const back = e.target.closest("[data-back]");
     if (back) { setView("portfolio"); return; }
