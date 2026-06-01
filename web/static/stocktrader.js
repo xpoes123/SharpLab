@@ -379,7 +379,8 @@ function render(d) {
 
     <div class="grid" style="margin-top:16px">
       <div class="card stat"><div class="label">Stocks</div><div class="value" style="font-size:20px">${money(s.stock_value)}</div></div>
-      <div class="card stat"><div class="label">Options</div><div class="value" style="font-size:20px">${money(s.options_value)}</div></div>
+      <div class="card stat"><div class="label">Options</div><div class="value" style="font-size:20px">${money(s.options_value)}</div>
+        ${s.options_unrealized_pnl == null ? "" : `<div class="${cls(s.options_unrealized_pnl)}" style="font-size:12px;margin-top:2px">${pnl(s.options_unrealized_pnl)} open</div>`}</div>
       <div class="card stat"><div class="label">Cash</div><div class="value" style="font-size:20px">${money(s.cash)}</div></div>
       <div class="card stat"><div class="label">Unrealized P&L</div>
         <div class="value ${cls(s.unrealized_pnl || 0)}" style="font-size:20px">${s.unrealized_pnl == null ? "—" : pnl(s.unrealized_pnl)}</div></div>
@@ -395,11 +396,21 @@ function render(d) {
     <div class="card" style="padding:0" id="holdBox">${holdingsTable()}</div>`;
 
   const op = d.option_positions || [];
+  const signed = (n) => (n == null ? "—" : (n >= 0 ? "+" : "−") + "$" + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
   html += `<h2>Options</h2><div class="card" style="padding:0">
-    ${op.length ? `<table><thead><tr><th>Contract</th><th class="num">Qty</th><th class="num">Avg premium</th></tr></thead>
-      <tbody>${op.map((o) => `<tr><td><strong>${o.underlying}</strong> $${o.strike}${o.opt_type[0].toUpperCase()}
-        <span class="muted">${o.expiry}</span></td><td class="num ${cls(o.contracts)}">${o.contracts > 0 ? "+" : ""}${o.contracts}</td>
-        <td class="num muted">${money2(o.avg_premium)}</td></tr>`).join("")}</tbody></table>`
+    ${op.length ? `<table><thead><tr><th>Contract</th><th class="num">Qty</th><th class="num">Avg cost</th><th class="num">Now</th><th class="num">P/L</th></tr></thead>
+      <tbody>${op.map((o) => {
+        const tag = o.expired ? `<span class="muted" style="font-size:11px"> · expired</span>`
+          : o.estimated ? `<span class="muted" style="font-size:11px" title="strike not listed by the data source — priced via Black-Scholes"> · est</span>` : "";
+        const plCell = o.unrealized == null ? `<span class="muted">—</span>`
+          : `<span class="${cls(o.unrealized)}">${signed(o.unrealized)}${o.unrealized_pct != null ? ` <span style="font-size:11px;opacity:.8">(${o.unrealized_pct >= 0 ? "+" : ""}${o.unrealized_pct}%)</span>` : ""}</span>`;
+        return `<tr><td><strong>${o.underlying}</strong> $${o.strike}${o.opt_type[0].toUpperCase()}
+          <span class="muted">${o.expiry}</span>${tag}</td>
+          <td class="num ${cls(o.contracts)}">${o.contracts > 0 ? "+" : ""}${o.contracts}</td>
+          <td class="num muted">${money2(o.avg_premium)}</td>
+          <td class="num">${o.price == null ? `<span class="muted">—</span>` : money2(o.price)}</td>
+          <td class="num">${plCell}</td></tr>`;
+      }).join("")}</tbody></table>`
       : `<div class="muted" style="padding:18px">No open option positions.</div>`}</div>`;
 
   const tx = d.transactions || [];
