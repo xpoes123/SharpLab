@@ -22,7 +22,7 @@ from temporalio import activity
 
 from db import queries, schema
 from shared.models import Bet, Game, GameResult, InjuryAlert, OddsBatch, OddsSnapshot, get_team_abbr, get_kalshi_code
-from shared.odds_utils import prob_to_american, kalshi_exec_price
+from shared.odds_utils import prob_to_american, kalshi_exec_price, extract_book_payload
 
 load_dotenv()
 
@@ -59,36 +59,7 @@ class FetchCloseSnapshotInput:
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def _extract_payload(bookmaker: dict, home_team: str) -> dict[str, Any]:
-    """Normalize one bookmaker's markets into our standard payload shape."""
-    payload: dict[str, Any] = {}
-    for market in bookmaker.get("markets", []):
-        key = market["key"]
-        outcomes = {o["name"]: o for o in market["outcomes"]}
-
-        if key == "spreads":
-            home = outcomes.get(home_team, {})
-            away = [o for n, o in outcomes.items() if n != home_team]
-            payload["spread"] = home.get("point")
-            payload["spread_odds"] = home.get("price")
-            if away:
-                payload["spread_away"] = away[0].get("point")
-                payload["spread_away_odds"] = away[0].get("price")
-
-        elif key == "h2h":
-            home = outcomes.get(home_team, {})
-            away = [o for n, o in outcomes.items() if n != home_team]
-            payload["ml_home"] = home.get("price")
-            payload["ml_away"] = away[0].get("price") if away else None
-
-        elif key == "totals":
-            over = outcomes.get("Over", {})
-            under = outcomes.get("Under", {})
-            payload["total"] = over.get("point")
-            payload["total_over_odds"] = over.get("price")
-            payload["total_under_odds"] = under.get("price")
-
-    return payload
+_extract_payload = extract_book_payload  # canonical impl lives in shared.odds_utils
 
 
 # ── Activities ─────────────────────────────────────────────────────────────────

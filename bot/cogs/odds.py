@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -16,7 +17,7 @@ from dotenv import load_dotenv
 
 from db import queries
 from shared.models import OddsSnapshot, get_team_abbr, get_kalshi_code
-from shared.odds_utils import american_to_prob, fetch_polymarket_ml, prob_to_american, kalshi_exec_price
+from shared.odds_utils import american_to_prob, extract_book_payload, fetch_polymarket_ml, prob_to_american, kalshi_exec_price
 import logging
 
 log = logging.getLogger(__name__)
@@ -28,6 +29,61 @@ BALLDONTLIE_API_KEY = os.getenv("BALLDONTLIE_API_KEY", "")
 BALLDONTLIE_BASE = "https://api.balldontlie.io/v1"
 
 LIVE_SOURCES = {"polymarket"}
+
+# ── On-demand live sportsbook fetch (The Odds API) ───────────────────────────
+ODDS_API_BASE = "https://api.the-odds-api.com/v4"
+ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")
+_ODDS_SPORT_KEY = {"nba": "basketball_nba", "mlb": "baseball_mlb"}
+_LIVE_BOOK_TTL = 90.0  # cache per game so repeated queries don't burn quota
+_live_book_cache: dict[str, tuple[float, list]] = {}
+
+
+async def _fetch_live_book_odds(game_id: str, home_team: str, sport: str) -> list[OddsSnapshot]:
+    """Fresh sportsbook lines for one game from The Odds API. Cached 90s per game
+    (quota protection), ephemeral (not persisted). Falls back to [] on any failure."""
+    if not ODDS_API_KEY:
+        return []
+    hit = _live_book_cache.get(game_id)
+    if hit and (time.monotonic() - hit[0]) < _LIVE_BOOK_TTL:
+        return hit[1]
+    sport_key = _ODDS_SPORT_KEY.get(sport, "basketball_nba")
+    captured = datetime.now(timezone.utc).isoformat()
+    snaps: list[OddsSnapshot] = []
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{ODDS_API_BASE}/sports/{sport_key}/odds",
+                params={"apiKey": ODDS_API_KEY, "regions": "us", "markets": "spreads,totals,h2h",
+                        "oddsFormat": "american", "eventIds": game_id},
+                timeout=12.0,
+            )
+        if resp.status_code != 200:
+            return hit[1] if hit else []
+        for event in resp.json():
+            if event.get("id") != game_id:
+                continue
+            ht = event.get("home_team", home_team)
+            for bm in event.get("bookmakers", []):
+                payload = extract_book_payload(bm, ht)
+                if payload:
+                    snaps.append(OddsSnapshot(
+                        snapshot_id=f"live:{game_id}:{bm['key']}", game_id=game_id, kind="poll",
+                        source=bm["key"], captured_at_utc_iso=captured, payload=payload))
+    except Exception:
+        log.debug("live book fetch failed for %s", game_id, exc_info=True)
+        return hit[1] if hit else []
+    _live_book_cache[game_id] = (time.monotonic(), snaps)
+    return snaps
+
+
+async def _book_snapshots(game_id: str, target, sport: str) -> list[OddsSnapshot]:
+    """Latest sportsbook snapshots — live from the API if reachable (fresh on query),
+    otherwise the most recent DB poll snapshots."""
+    live = [s for s in await _fetch_live_book_odds(game_id, target.home_team, sport) if s.source in TRACKED_BOOKS]
+    if live:
+        return live
+    return [s for s in await queries.get_latest_snapshots_for_game(game_id) if s.source in TRACKED_BOOKS]
+
 
 # ── Sport config ─────────────────────────────────────────────────────────────
 
@@ -362,7 +418,7 @@ class OddsCog(commands.Cog):
         if target is None:
             await interaction.followup.send("Game not found. The Temporal pipeline polls every 30 min — DB may not be populated yet.")
             return
-        snapshots = [s for s in await queries.get_latest_snapshots_for_game(game) if s.source in TRACKED_BOOKS]
+        snapshots = await _book_snapshots(game, target, sport)  # live on query, DB fallback
         if not snapshots:
             await interaction.followup.send(f"Found **{target.away_team} @ {target.home_team}** but no odds in DB yet. Temporal polls every 30 min — try again shortly.")
             return
@@ -393,7 +449,7 @@ class OddsCog(commands.Cog):
         if target is None:
             await interaction.followup.send("Game not found.")
             return
-        snapshots = [s for s in await queries.get_latest_snapshots_for_game(game) if s.source in TRACKED_BOOKS]
+        snapshots = await _book_snapshots(game, target, sport)  # live on query, DB fallback
         if not snapshots:
             await interaction.followup.send(f"Found **{target.away_team} @ {target.home_team}** but no odds in DB yet. Temporal polls every 30 min — try again shortly.")
             return

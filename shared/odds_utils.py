@@ -93,6 +93,35 @@ def fmt_prob(odds: int) -> str:
     return f"{american_to_prob(odds) * 100:.1f}%"
 
 
+def extract_book_payload(bookmaker: dict, home_team: str) -> dict:
+    """Normalize one bookmaker's markets (The Odds API shape) into our standard
+    payload: spread/spread_odds (home), ml_home/ml_away, total/over/under odds."""
+    payload: dict = {}
+    for market in bookmaker.get("markets", []):
+        key = market["key"]
+        outcomes = {o["name"]: o for o in market["outcomes"]}
+        if key == "spreads":
+            home = outcomes.get(home_team, {})
+            away = [o for n, o in outcomes.items() if n != home_team]
+            payload["spread"] = home.get("point")
+            payload["spread_odds"] = home.get("price")
+            if away:
+                payload["spread_away"] = away[0].get("point")
+                payload["spread_away_odds"] = away[0].get("price")
+        elif key == "h2h":
+            home = outcomes.get(home_team, {})
+            away = [o for n, o in outcomes.items() if n != home_team]
+            payload["ml_home"] = home.get("price")
+            payload["ml_away"] = away[0].get("price") if away else None
+        elif key == "totals":
+            over = outcomes.get("Over", {})
+            under = outcomes.get("Under", {})
+            payload["total"] = over.get("point")
+            payload["total_over_odds"] = over.get("price")
+            payload["total_under_odds"] = under.get("price")
+    return payload
+
+
 ODDS_FORMATS = ("american", "decimal", "probability")
 
 
