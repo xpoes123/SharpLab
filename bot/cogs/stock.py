@@ -514,6 +514,25 @@ def _option_label(pos: dict) -> str:
     return f"{pos['underlying']} ${strike_str}{tag} {_fmt_expiry(pos['expiry'])}"
 
 
+async def _holdings_autocomplete(interaction: "discord.Interaction", current: str):
+    """Suggest the user's own open stock positions — turns /stock sell's ticker into
+    a dropdown of what you actually hold (with share counts)."""
+    try:
+        positions = await queries.get_stock_positions_full(str(interaction.user.id))
+    except Exception:
+        return []
+    cur = (current or "").upper().strip()
+    out = []
+    for p in positions:
+        if p.get("closed") or (p.get("shares") or 0) <= 0:
+            continue
+        t = p["ticker"]
+        if cur and cur not in t:
+            continue
+        out.append(app_commands.Choice(name=f"{t} — {p['shares']:g} sh", value=t))
+    return out[:25]
+
+
 def _bs_price(opt_type: str, S: float, K: float, T: float, r: float, sigma: float) -> float:
     """Black-Scholes price per share for a European call/put — used to ESTIMATE
     contracts the data provider doesn't list (yfinance caps far-OTM strikes)."""
@@ -2887,12 +2906,13 @@ class StockCog(commands.Cog):
 
     @stock.command(name="sell", description="Record a stock sale (realized P/L is computed)")
     @app_commands.describe(
-        ticker="Ticker — stock/ETF (AAPL) or crypto (BTC, ETH)",
+        ticker="Pick one of your holdings (or type a ticker)",
         shares="Number of shares sold (fractional ok)",
         price="Execution price per share",
         date="Optional trade date (YYYY-MM-DD or YYYY-MM-DD HH:MM, UTC). Defaults to now.",
         notes="Optional note",
     )
+    @app_commands.autocomplete(ticker=_holdings_autocomplete)
     async def sell(
         self,
         interaction: discord.Interaction,
