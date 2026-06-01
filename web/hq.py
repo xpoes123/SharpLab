@@ -869,6 +869,13 @@ async def hq_stock_trade(body: StockTradeIn, request: Request):
         held = holding["shares"] if holding else 0.0
         if body.shares > held + 1e-9:
             return JSONResponse({"error": f"You only hold {held:g} sh of {ticker}."}, status_code=409)
+    # HQ trades are always "now" — reject prices far off the live quote (stale/fat-finger).
+    from bot.cogs.stock import live_price_check
+    ok, live = await live_price_check(ticker, body.price)
+    if not ok:
+        return JSONResponse(
+            {"error": f"${body.price:,.2f} is {abs(body.price - live) / live * 100:.0f}% off the live "
+                      f"{ticker} price (${live:,.2f}). Use the current price."}, status_code=400)
     try:
         await queries.add_stock_trade(sess["id"], ticker, body.side, body.shares, body.price,
                                       datetime.now(timezone.utc).isoformat(), "via HQ")

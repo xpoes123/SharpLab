@@ -309,6 +309,25 @@ async def fetch_quotes(tickers: list[str]) -> dict[str, dict]:
     return out
 
 
+PRICE_TOLERANCE = 0.15   # a "now" trade's price must be within 15% of the live quote
+
+
+def price_within_tolerance(price: float, live: float, tol: float = PRICE_TOLERANCE) -> bool:
+    """True if `price` is within `tol` of `live` (pure — easy to test)."""
+    return live > 0 and abs(price - live) / live <= tol
+
+
+async def live_price_check(symbol: str, price: float, *, tol: float = PRICE_TOLERANCE) -> tuple[bool, float | None]:
+    """Confirm a 'now' trade's entered price is near the live market price — catches
+    stale/fat-fingered prices that would inflate gains (e.g. logging a buy at a months-old
+    price). Returns (ok, live_price); ok=True when no quote is available (can't validate)."""
+    q = (await fetch_quotes([symbol])).get(symbol)
+    live = q.get("price") if q else None
+    if not live:
+        return True, None
+    return price_within_tolerance(price, live, tol), live
+
+
 # ── Per-ticker period changes (1D / 1W / 1M / YTD / 1Y) ───────────────────────
 _HIST_TTL = 900.0  # 15 min — daily closes move slowly
 _hist_cache: dict[str, tuple[float, list]] = {}
@@ -2660,6 +2679,15 @@ class StockCog(commands.Cog):
             await interaction.response.send_message(str(e), ephemeral=True)
             return
 
+        if date is None:   # a "now" buy must be near the live price (no stale/fat-finger fills)
+            ok, live = await live_price_check(symbol, price)
+            if not ok:
+                await interaction.response.send_message(
+                    f"⚠️ `{price:,.2f}` is {abs(price - live) / live * 100:.0f}% off the live **{symbol}** "
+                    f"price (**{live:,.2f}**). Use the current price, or pass `date:` to log a past fill.",
+                    ephemeral=True)
+                return
+
         await queries.add_stock_trade(
             str(interaction.user.id), symbol, "buy", shares, price, executed_at, notes
         )
@@ -2707,6 +2735,15 @@ class StockCog(commands.Cog):
         except ValueError as e:
             await interaction.response.send_message(str(e), ephemeral=True)
             return
+
+        if date is None:   # a "now" sale must be near the live price
+            ok, live = await live_price_check(symbol, price)
+            if not ok:
+                await interaction.response.send_message(
+                    f"⚠️ `{price:,.2f}` is {abs(price - live) / live * 100:.0f}% off the live **{symbol}** "
+                    f"price (**{live:,.2f}**). Use the current price, or pass `date:` to log a past fill.",
+                    ephemeral=True)
+                return
 
         current = await queries.get_stock_holding(str(interaction.user.id), symbol)
         held = current["shares"] if current else 0.0

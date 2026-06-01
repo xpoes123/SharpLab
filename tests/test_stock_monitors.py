@@ -8,7 +8,17 @@ import pytest
 
 import db.schema as _schema
 import db.queries as _queries
-from bot.cogs.stock import _manual_triggered, _swing_pct, _display_ticker
+from bot.cogs.stock import _manual_triggered, _swing_pct, _display_ticker, price_within_tolerance
+
+
+def test_price_within_tolerance():
+    assert price_within_tolerance(971, 971)          # exact
+    assert price_within_tolerance(970, 971)          # ~0.1% off
+    assert price_within_tolerance(900, 971)          # ~7% off (within 15%)
+    assert not price_within_tolerance(728, 971)      # 25% off — inarush's stale MU buy
+    assert not price_within_tolerance(246.82, 320)   # 23% off — stale IBM buy
+    assert not price_within_tolerance(100, 971, tol=0.05)  # custom tighter tolerance
+    assert not price_within_tolerance(50, 0)         # no live price → can't validate as ok
 
 
 def _run(coro):
