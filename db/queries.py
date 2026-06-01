@@ -1963,6 +1963,26 @@ async def set_user_odds_format(discord_user: str, fmt: str) -> None:
         await db.commit()
 
 
+async def get_user_books(discord_user: str) -> list[str]:
+    """Sportsbook source-keys a user holds (for personalized best-line)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT books FROM user_settings WHERE discord_user = ?", (discord_user,))
+        row = await cur.fetchone()
+    return [b for b in (row[0].split(",") if row and row[0] else []) if b]
+
+
+async def set_user_books(discord_user: str, books: list[str]) -> None:
+    """Set the sportsbooks a user holds."""
+    val = ",".join(books)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO user_settings (discord_user, books) VALUES (?, ?) "
+            "ON CONFLICT(discord_user) DO UPDATE SET books = excluded.books",
+            (discord_user, val),
+        )
+        await db.commit()
+
+
 async def get_user_achievements(discord_user: str) -> list[dict]:
     """All achievements a user has unlocked."""
     async with aiosqlite.connect(DB_PATH) as db:
