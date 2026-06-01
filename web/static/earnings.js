@@ -18,12 +18,14 @@ async function main() {
 
 function companyRow(c) {
   const hl = c.held ? "background:rgba(122,162,247,.10)" : "";
-  return `<div style="display:flex;align-items:center;gap:12px;padding:8px 12px;border-radius:8px;${hl}">
+  return `<a class="earnrow" href="https://finance.yahoo.com/quote/${encodeURIComponent(c.symbol)}" target="_blank" rel="noopener"
+    style="display:flex;align-items:center;gap:12px;padding:8px 12px;border-radius:8px;text-decoration:none;color:var(--fg);${hl}">
     <strong style="min-width:72px;font-size:15px">${c.symbol}</strong>
     <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.name}</span>
     ${c.held ? `<span style="font-size:11px;font-weight:700;color:var(--accent);background:rgba(122,162,247,.16);padding:2px 8px;border-radius:999px;white-space:nowrap">📍 held</span>` : ""}
     <span class="muted" style="min-width:54px;text-align:right;font-variant-numeric:tabular-nums">${fmtMc(c.mc)}</span>
-  </div>`;
+    <span class="muted" style="font-size:11px">↗</span>
+  </a>`;
 }
 
 function section(emoji, label, color, list) {
@@ -39,7 +41,8 @@ function render(days) {
     app.innerHTML = `<h2>📅 Earnings calendar</h2><div class="card"><p class="muted">No notable earnings in the next week.</p></div>`;
     return;
   }
-  let html = `<div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px">
+  let html = `<style>.earnrow:hover{background:var(--panel2) !important}.earnrow:hover strong{color:var(--accent)}</style>
+    <div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px">
       <h2 style="margin:0">📅 Earnings calendar</h2>
       <a href="/hq/stocks" class="muted" style="font-size:13px">← back to stocks</a></div>
     <p class="muted" style="margin:6px 0 16px;font-size:13px">Large-caps (≥$2B) over the next week · <span style="color:var(--accent)">📍 held</span> in the server.</p>
