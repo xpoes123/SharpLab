@@ -22,7 +22,7 @@ from shared.figgie_logic import (
     setup_deck, deal_cards, try_match, clean_stale_orders, score_player,
 )
 
-WEB_API_SECRET = os.environ.get("WEB_API_SECRET", "dev-secret")
+from web._apisec import check_api_key
 ROOM_TTL = 1800
 ROUND_DELAY = 3
 
@@ -84,7 +84,7 @@ router = APIRouter(prefix="/api/v1/figgie", tags=["figgie"])
 
 
 def _check_api_key(api_key: str) -> None:
-    if api_key != WEB_API_SECRET:
+    if not check_api_key(api_key):
         raise HTTPException(401, "Invalid API key")
 
 

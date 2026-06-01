@@ -21,7 +21,7 @@ from shared.solitairechess_logic import (
     PIECE_NAME, PIECE_EMOJI,
 )
 
-WEB_API_SECRET = os.environ.get("WEB_API_SECRET", "dev-secret")
+from web._apisec import check_api_key
 ROOM_TTL = 1800  # 30 minutes
 
 # Game constants
@@ -104,7 +104,7 @@ router = APIRouter(prefix="/api/v1/solitairechess", tags=["solitairechess"])
 
 
 def _check_api_key(api_key: str) -> None:
-    if api_key != WEB_API_SECRET:
+    if not check_api_key(api_key):
         raise HTTPException(401, "Invalid API key")
 
 
