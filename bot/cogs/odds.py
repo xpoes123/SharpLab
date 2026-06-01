@@ -576,6 +576,23 @@ class OddsCog(commands.Cog):
     async def odds_nba_move(self, interaction: discord.Interaction, game: str) -> None:
         await self._line_move_impl(interaction, game)
 
+    @nba_group.command(name="props", description="NBA player props for a game (best line across books)")
+    @app_commands.describe(game="Select an NBA game", player="Filter to one player (optional)")
+    @app_commands.autocomplete(game=game_autocomplete)
+    async def nba_props(self, interaction: discord.Interaction, game: str, player: str | None = None) -> None:
+        await interaction.response.defer()
+        from .props import build_props_embed
+        g = await queries.get_game_by_id(game)
+        rows = await queries.get_player_props_for_game(game)
+        if player:
+            rows = [r for r in rows if player.lower() in r["player"].lower()]
+        if not rows:
+            await interaction.followup.send(
+                "No props yet for that game." + (" Try a different name." if player else
+                " The pipeline polls NBA props each cycle — check back shortly."))
+            return
+        await interaction.followup.send(embed=build_props_embed(g, rows, player))
+
     @nba_group.command(name="scores", description="Live NBA scores")
     async def odds_nba_scores(self, interaction: discord.Interaction) -> None:
         await self._scores_impl(interaction, "nba")
