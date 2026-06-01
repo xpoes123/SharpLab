@@ -501,8 +501,11 @@ async def hq_stock_trader(handle: str):
     sp = await queries.get_stock_positions_full(uid)
     stock_realized = sum(p.get("realized_pnl", 0) for p in sp)
     open_pos = [p for p in sp if p.get("shares", 0) > 0]
-    from bot.cogs.stock import fetch_quotes  # lazy import (heavy deps)
+    from bot.cogs.stock import fetch_quotes, fetch_period_changes  # lazy import (heavy deps)
     quotes = await fetch_quotes([p["ticker"] for p in open_pos]) if open_pos else {}
+    now_prices = {p["ticker"]: quotes[p["ticker"]]["price"]
+                  for p in open_pos if quotes.get(p["ticker"]) and quotes[p["ticker"]].get("price")}
+    changes = await fetch_period_changes(list(now_prices), now_prices) if now_prices else {}
     stock_holdings = []
     for p in open_pos:
         q = quotes.get(p["ticker"])
@@ -514,6 +517,7 @@ async def hq_stock_trader(handle: str):
             "price": round(price, 2) if price is not None else None,
             "unrealized": unreal,
             "realized": round(p.get("realized_pnl", 0), 2),
+            "changes": changes.get(p["ticker"], {}),  # {1D,1W,1M,YTD,1Y} % change
         })
     stock_holdings.sort(key=lambda h: h["cost_basis"], reverse=True)
 

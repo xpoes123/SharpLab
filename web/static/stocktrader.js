@@ -11,6 +11,32 @@ const rangeCutoff = (r) => (r === "ytd" ? Date.UTC(new Date().getFullYear(), 0, 
 let EQUITY = [];
 let BENCH = [];
 let range = 7;
+let HOLD = [];                     // holdings (for the per-stock change table)
+let tblRange = "1D";               // selected period for the holdings change column
+const TBL_RANGES = ["1D", "1W", "1M", "YTD", "1Y"];
+
+function holdingsTable() {
+  if (!HOLD.length) return `<div class="muted" style="padding:18px">No open stock positions.</div>`;
+  const chgCell = (h) => {
+    const v = (h.changes || {})[tblRange];
+    return v == null ? `<span class="muted">—</span>` : `<span class="${cls(v)}">${v >= 0 ? "+" : ""}${v.toFixed(2)}%</span>`;
+  };
+  const hRow = (h) => {
+    const u = h.unrealized;
+    const upct = (u != null && h.cost_basis) ? ` <span class="muted" style="font-size:11px">${u >= 0 ? "+" : ""}${(u / h.cost_basis * 100).toFixed(1)}%</span>` : "";
+    const ucell = u == null ? `<span class="muted">—</span>` : `<span class="${cls(u)}">${pnl(u)}</span>${upct}`;
+    const rcell = h.realized ? `<span class="${cls(h.realized)}">${pnl(h.realized)}</span>` : `<span class="muted">—</span>`;
+    return `<tr><td><strong>${h.ticker}</strong></td><td class="num">${h.shares}</td>
+      <td class="num muted">${money2(h.dca)}</td><td class="num">${money(h.cost_basis)}</td>
+      <td class="num">${chgCell(h)}</td><td class="num">${ucell}</td><td class="num">${rcell}</td></tr>`;
+  };
+  return `<div class="stakebtns" style="padding:10px 12px 2px">
+      ${TBL_RANGES.map((r) => `<button data-hrange="${r}" class="rangebtn${r === tblRange ? " on" : ""}">${r}</button>`).join("")}
+    </div>
+    <table><thead><tr><th>Ticker</th><th class="num">Shares</th><th class="num">Avg</th><th class="num">Cost basis</th>
+      <th class="num">Change</th><th class="num">Unrealized</th><th class="num">Realized</th></tr></thead>
+    <tbody>${HOLD.map(hRow).join("")}</tbody></table>`;
+}
 
 async function main() {
   const parts = location.pathname.split("/").filter(Boolean); // ["hq","stocks","xpoes"]
@@ -119,20 +145,8 @@ function render(d) {
         <div class="value ${cls(s.realized_pnl || 0)}" style="font-size:20px">${pnl(s.realized_pnl || 0)}</div></div>
     </div>`;
 
-  const sh = d.stock_holdings || [];
-  const hRow = (h) => {
-    const u = h.unrealized;
-    const upct = (u != null && h.cost_basis) ? ` <span class="muted" style="font-size:11px">${u >= 0 ? "+" : ""}${(u / h.cost_basis * 100).toFixed(1)}%</span>` : "";
-    const ucell = u == null ? `<span class="muted">—</span>` : `<span class="${cls(u)}">${pnl(u)}</span>${upct}`;
-    const rcell = h.realized ? `<span class="${cls(h.realized)}">${pnl(h.realized)}</span>` : `<span class="muted">—</span>`;
-    return `<tr><td><strong>${h.ticker}</strong></td><td class="num">${h.shares}</td>
-      <td class="num muted">${money2(h.dca)}</td><td class="num">${money(h.cost_basis)}</td>
-      <td class="num">${ucell}</td><td class="num">${rcell}</td></tr>`;
-  };
-  html += `<h2>Stock Holdings</h2><div class="card" style="padding:0">
-    ${sh.length ? `<table><thead><tr><th>Ticker</th><th class="num">Shares</th><th class="num">Avg</th><th class="num">Cost basis</th><th class="num">Unrealized</th><th class="num">Realized</th></tr></thead>
-      <tbody>${sh.map(hRow).join("")}</tbody></table>`
-      : `<div class="muted" style="padding:18px">No open stock positions.</div>`}</div>`;
+  HOLD = d.stock_holdings || [];
+  html += `<h2>Stock Holdings</h2><div class="card" style="padding:0" id="holdBox">${holdingsTable()}</div>`;
 
   const op = d.option_positions || [];
   html += `<h2>Options</h2><div class="card" style="padding:0">
@@ -154,8 +168,13 @@ function render(d) {
   app.addEventListener("click", (e) => {
     const b = e.target.closest(".rangebtn");
     if (!b) return;
+    if (b.dataset.hrange) {  // holdings-table period toggle
+      tblRange = b.dataset.hrange;
+      document.getElementById("holdBox").innerHTML = holdingsTable();
+      return;
+    }
     range = b.dataset.days === "ytd" ? "ytd" : Number(b.dataset.days);
-    document.querySelectorAll(".rangebtn").forEach((x) => x.classList.toggle("on", x === b));
+    document.querySelectorAll(".rangebtn[data-days]").forEach((x) => x.classList.toggle("on", x === b));
     drawChart();
   });
 }

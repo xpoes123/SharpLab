@@ -309,6 +309,62 @@ async def fetch_quotes(tickers: list[str]) -> dict[str, dict]:
     return out
 
 
+# ── Per-ticker period changes (1D / 1W / 1M / YTD / 1Y) ───────────────────────
+_HIST_TTL = 900.0  # 15 min — daily closes move slowly
+_hist_cache: dict[str, tuple[float, list]] = {}
+
+
+def _fetch_history_blocking(sym: str) -> list:
+    """1y of daily closes as [(date_iso, close)] ascending. Blocking — run in executor."""
+    import yfinance as yf
+    try:
+        h = yf.Ticker(sym).history(period="1y", interval="1d")
+        return [(idx.date().isoformat(), float(c)) for idx, c in h["Close"].items() if c == c]
+    except Exception:
+        return []
+
+
+async def _ticker_history(sym: str) -> list:
+    hit = _hist_cache.get(sym)
+    if hit is not None and (time.monotonic() - hit[0]) < _HIST_TTL:
+        return hit[1]
+    series = await asyncio.get_event_loop().run_in_executor(None, _fetch_history_blocking, sym)
+    _hist_cache[sym] = (time.monotonic(), series)
+    return series
+
+
+def _close_on_or_before(series: list, cutoff_iso: str) -> float | None:
+    prev = None
+    for d, c in series:
+        if d <= cutoff_iso:
+            prev = c
+        else:
+            break
+    return prev
+
+
+async def fetch_period_changes(tickers: list[str], now_prices: dict[str, float]) -> dict[str, dict]:
+    """{ticker: {'1D':pct,'1W':pct,'1M':pct,'YTD':pct,'1Y':pct}} — the ticker's price
+    change over each window, using live `now_prices` and cached daily history."""
+    from datetime import date, timedelta as _td
+    today = date.today()
+    cuts = {"1D": today - _td(days=1), "1W": today - _td(days=7),
+            "1M": today - _td(days=30), "1Y": today - _td(days=365)}
+    series_list = await asyncio.gather(*[_ticker_history(s) for s in tickers])
+    out: dict[str, dict] = {}
+    for sym, series in zip(tickers, series_list):
+        now = now_prices.get(sym)
+        ch: dict[str, float | None] = {}
+        if series and now:
+            for label, cut in cuts.items():
+                then = _close_on_or_before(series, cut.isoformat())
+                ch[label] = round((now - then) / then * 100, 2) if then else None
+            year_start = next((c for d, c in series if d >= f"{today.year}-01-01"), None)
+            ch["YTD"] = round((now - year_start) / year_start * 100, 2) if year_start else None
+        out[sym] = ch
+    return out
+
+
 # ── Ticker metadata (sector / quote type / beta), cached ─────────────────────
 
 _TICKER_META_TTL = timedelta(days=14)
