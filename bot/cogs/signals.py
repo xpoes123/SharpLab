@@ -175,7 +175,10 @@ class Signals(commands.Cog):
                     if not live:
                         continue
                     arb = sig.find_ml_arb(live, min_roi=ARB_MIN_ROI)
-                    if arb and self._fresh(f"arb:{g.game_id}:{arb['home_book']}:{arb['away_book']}:{round(arb['roi_pct'])}"):
+                    # Skip suspect arbs — the edge comes from one book far off the field
+                    # (a stale line), not a real lock. (See the Royals/Reds mybookieag case.)
+                    if arb and not arb.get("suspect") and self._fresh(
+                            f"arb:{g.game_id}:{arb['home_book']}:{arb['away_book']}:{round(arb['roi_pct'])}"):
                         await self._post(self._arb_embed(emoji, label, g, arb)); posted += 1
 
                     tot = sig.find_total_middle(live)
