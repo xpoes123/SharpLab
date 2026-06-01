@@ -2,8 +2,9 @@
 
 A mystery Pokémon is chosen. Players guess any Pokémon and get Wordle-style
 feedback — generation ⬆️/⬇️/✓, each type 🟩/🟨/⬛, height & weight ⬆️/⬇️/✓ — and
-deduce the answer within a handful of guesses. Runs in-channel (no thread) for
-robustness; first to solve wins coins (logged for XP/achievements)."""
+deduce the answer within a handful of guesses. Runs in a dedicated thread so
+guesses don't clutter the channel; first to solve wins coins (logged for
+XP/achievements)."""
 from __future__ import annotations
 
 import asyncio
@@ -139,14 +140,31 @@ class PokedleCog(commands.Cog):
             await interaction.followup.send("Couldn't reach PokéAPI right now — try again shortly.")
             return
 
+        # Play in a dedicated thread so guesses don't clutter the channel.
+        anchor = await interaction.followup.send(embed=discord.Embed(
+            title="🔍 Pokédle",
+            description=f"**{interaction.user.display_name}** started a game — play in the thread below 👇",
+            colour=0xF1C40F,
+        ))
+        try:
+            thread = await anchor.create_thread(name=f"Pokédle — {interaction.user.display_name}")
+        except discord.HTTPException:
+            await interaction.followup.send(
+                "Couldn't create a thread — the bot needs **Create Public Threads** permission here.")
+            return
+
         self._active.add(interaction.channel_id)
         try:
-            await self._run(interaction, secret)
+            await self._run(thread, secret)
         finally:
             self._active.discard(interaction.channel_id)
+            try:
+                await thread.edit(archived=True)
+            except discord.HTTPException:
+                pass
 
-    async def _run(self, interaction: discord.Interaction, secret: dict) -> None:
-        embed = discord.Embed(
+    async def _run(self, thread: discord.Thread, secret: dict) -> None:
+        await thread.send(embed=discord.Embed(
             title="🔍 Pokédle — guess the mystery Pokémon!",
             description=(
                 f"Type any Pokémon name to guess. You have **{MAX_GUESSES}** guesses.\n"
@@ -156,8 +174,7 @@ class PokedleCog(commands.Cog):
                 "*First to solve wins coins. Go!*"
             ),
             colour=0xF1C40F,
-        )
-        await interaction.followup.send(embed=embed)
+        ))
 
         guessed = 0
         history: list[str] = []
@@ -166,10 +183,10 @@ class PokedleCog(commands.Cog):
                 msg = await self.bot.wait_for(
                     "message",
                     timeout=INACTIVITY_SECS,
-                    check=lambda m: m.channel.id == interaction.channel_id and not m.author.bot and len(m.content) <= 25,
+                    check=lambda m: m.channel.id == thread.id and not m.author.bot and len(m.content) <= 25,
                 )
             except asyncio.TimeoutError:
-                await interaction.channel.send(f"⏰ Pokédle ended — it was **{secret['name'].title()}**. (no guesses)")
+                await thread.send(f"⏰ Pokédle ended — it was **{secret['name'].title()}**. (no guesses)")
                 return
 
             guess = await _fetch_mon(msg.content)
@@ -185,7 +202,7 @@ class PokedleCog(commands.Cog):
                 except Exception:
                     log.debug("pokedle reward failed", exc_info=True)
                 history.append(f"✅ **{msg.author.display_name}** got it!")
-                await interaction.channel.send(embed=discord.Embed(
+                await thread.send(embed=discord.Embed(
                     title=f"🎉 {msg.author.display_name} solved it — {secret['name'].title()}!",
                     description="\n".join(history) + f"\n\nSolved in **{guessed}** guess(es) · **+{reward}** coins 🪙",
                     colour=0x57F287,
@@ -194,12 +211,12 @@ class PokedleCog(commands.Cog):
 
             history.append(_feedback_row(guess, secret))
             left = MAX_GUESSES - guessed
-            await interaction.channel.send(embed=discord.Embed(
+            await thread.send(embed=discord.Embed(
                 description="\n".join(history) + (f"\n\n*{left} guess(es) left*" if left else ""),
                 colour=0xF1C40F if left else 0xED4245,
             ))
 
-        await interaction.channel.send(f"❌ Out of guesses — it was **{secret['name'].title()}**!")
+        await thread.send(f"❌ Out of guesses — it was **{secret['name'].title()}**!")
 
 
 async def setup(bot: commands.Bot) -> None:
