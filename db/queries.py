@@ -1699,6 +1699,23 @@ async def add_xp(discord_user: str, amount: int) -> dict:
     }
 
 
+async def get_web_activity(discord_user: str) -> dict:
+    """Count a member's HQ logins + page-load visits (for web achievements)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        try:
+            cur = await db.execute(
+                "SELECT SUM(type='login') AS logins, SUM(type='member_visit') AS visits "
+                "FROM web_events WHERE sid = ? AND type IN ('login','member_visit')",
+                (discord_user,),
+            )
+            row = await cur.fetchone()
+        except Exception:
+            return {"logins": 0, "visits": 0}
+    return {"logins": (row["logins"] or 0) if row else 0,
+            "visits": (row["visits"] or 0) if row else 0}
+
+
 # ── Achievements ─────────────────────────────────────────────────────────────
 
 
