@@ -573,6 +573,60 @@ async def hq_pickem_bet(body: BetIn, request: Request):
     return {"ok": True, "team": body.team, "stake": body.stake}
 
 
+class StockTradeIn(BaseModel):
+    ticker: str
+    side: str       # buy | sell
+    shares: float
+    price: float
+
+
+@router.post("/hq/stocks/trade")
+async def hq_stock_trade(body: StockTradeIn, request: Request):
+    sess = auth.read_session(request)
+    if not sess:
+        return JSONResponse({"error": "not_authenticated"}, status_code=401)
+    ticker = body.ticker.strip().upper()
+    if body.side not in ("buy", "sell") or not ticker or body.shares <= 0 or body.price <= 0:
+        return JSONResponse({"error": "bad_input"}, status_code=400)
+    if body.side == "sell":
+        holding = await queries.get_stock_holding(sess["id"], ticker)
+        held = holding["shares"] if holding else 0.0
+        if body.shares > held + 1e-9:
+            return JSONResponse({"error": f"You only hold {held:g} sh of {ticker}."}, status_code=409)
+    try:
+        await queries.add_stock_trade(sess["id"], ticker, body.side, body.shares, body.price,
+                                      datetime.now(timezone.utc).isoformat(), "via HQ")
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, "side": body.side, "ticker": ticker, "shares": body.shares, "price": body.price}
+
+
+class OptionTradeIn(BaseModel):
+    underlying: str
+    opt_type: str   # call | put
+    strike: float
+    expiry: str     # YYYY-MM-DD
+    side: str        # buy | sell
+    contracts: int
+    premium: float
+
+
+@router.post("/hq/options/trade")
+async def hq_option_trade(body: OptionTradeIn, request: Request):
+    sess = auth.read_session(request)
+    if not sess:
+        return JSONResponse({"error": "not_authenticated"}, status_code=401)
+    if body.opt_type not in ("call", "put") or body.side not in ("buy", "sell"):
+        return JSONResponse({"error": "bad_input"}, status_code=400)
+    try:
+        await queries.add_option_trade(sess["id"], body.underlying.strip().upper(), body.opt_type,
+                                       body.strike, body.expiry.strip(), body.side, body.contracts,
+                                       body.premium, datetime.now(timezone.utc).isoformat(), "via HQ")
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True}
+
+
 @router.get("/hq/pickem/leaderboard")
 async def hq_pickem_leaderboard():
     rows = await queries.get_pickem_resolved_picks()

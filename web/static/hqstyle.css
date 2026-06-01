@@ -73,6 +73,17 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .linetable tr.favrow td.tm { color: var(--accent); }
 .totalrow { font-size: 13px; margin-top: 8px; color: var(--muted); }
 .totalrow strong { color: var(--fg); }
+/* trade panel */
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { background: transparent; color: var(--muted); border: 0; padding: 6px 14px; cursor: pointer; font-family: inherit; font-size: 13px; }
+.seg button.on { background: var(--accent); color: #11121a; font-weight: 600; }
+.tradeform { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+.tradeform input, .tradeform select { background: var(--panel2); border: 1px solid var(--line); color: var(--fg);
+  border-radius: 8px; padding: 7px 10px; font-size: 13px; font-family: inherit; width: 130px; }
+.tradeform #strike { width: 90px; }
+.btn.buy { background: var(--green); color: #11121a; border: 0; border-radius: 8px; padding: 8px 22px; font-weight: 700; cursor: pointer; font-family: inherit; }
+.btn.sell { background: var(--red); color: #11121a; border: 0; border-radius: 8px; padding: 8px 22px; font-weight: 700; cursor: pointer; font-family: inherit; }
+.btn.buy:hover, .btn.sell:hover { filter: brightness(1.1); }
 .profhead { display: flex; align-items: center; gap: 16px; margin-bottom: 8px; }
 .profhead h1 { margin: 0; font-size: 26px; }
 .lbselect { background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
