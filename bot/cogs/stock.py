@@ -45,6 +45,7 @@ MONITOR_POLL_MINUTES = 5
 SWING_THRESHOLD_PCT = 10.0  # auto-alert when a held ticker moves this % on the day
 _ALERTS_CHANNEL_SETTING = "stock_alerts_channel"
 _DIGEST_SETTING = "last_stock_digest"  # ET date of the last daily portfolio report
+_EARNINGS_SETTING = "last_earnings_digest"  # ET date of the last earnings-on-deck digest
 _SWING_STATE_SETTING = "swing_alert_state"  # persisted {uid:ticker -> {date, band}} so restarts don't re-alert
 
 # Rohan's picks: ping the "rohan stock picks" role whenever he trades.
@@ -525,6 +526,23 @@ def _bs_price(opt_type: str, S: float, K: float, T: float, r: float, sigma: floa
     val = (S * N(d1) - K * math.exp(-r * T) * N(d2)) if opt_type == "call" \
         else (K * math.exp(-r * T) * N(-d2) - S * N(-d1))
     return round(max(0.0, val), 2)
+
+
+def _next_earnings_blocking(symbol: str):
+    """Next upcoming earnings datetime (ET-aware) for a ticker, or None. Blocking
+    (yfinance scrape) — run in an executor. Returns None for ETFs/crypto/no-data."""
+    import yfinance as yf
+    try:
+        df = yf.Ticker(symbol).get_earnings_dates(limit=8)
+        if df is None or df.empty:
+            return None
+        now = datetime.now(df.index.tz or timezone.utc)
+        fut = df[df.index >= now]
+        if fut.empty:
+            return None
+        return fut.index.min().tz_convert("America/New_York")
+    except Exception:
+        return None
 
 
 async def fetch_option_prices(
@@ -2246,6 +2264,7 @@ class StockCog(commands.Cog):
         self.snapshot_loop.start()
         self.monitor_loop.start()
         self.daily_digest.start()
+        self.earnings_digest.start()
 
     async def cog_load(self) -> None:
         raw = await queries.get_bot_setting(_SWING_STATE_SETTING)
@@ -2259,6 +2278,7 @@ class StockCog(commands.Cog):
         self.snapshot_loop.cancel()
         self.monitor_loop.cancel()
         self.daily_digest.cancel()
+        self.earnings_digest.cancel()
 
     @tasks.loop(hours=1)
     async def daily_digest(self) -> None:
@@ -2299,6 +2319,68 @@ class StockCog(commands.Cog):
 
     @daily_digest.before_loop
     async def _before_daily_digest(self) -> None:
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(hours=1)
+    async def earnings_digest(self) -> None:
+        """Each morning, list held companies reporting tonight (after close) or
+        tomorrow before the open, in the stocks channel."""
+        try:
+            from zoneinfo import ZoneInfo
+            et = datetime.now(ZoneInfo("America/New_York"))
+            if not (7 <= et.hour < 12):   # morning window only
+                return
+            today = et.date().isoformat()
+            if await queries.get_bot_setting(_EARNINGS_SETTING) == today:
+                return
+
+            held = await queries.get_all_stock_holdings()
+            by_ticker: dict[str, set] = {}
+            for h in held:
+                if "-" in h["ticker"]:   # skip crypto (BTC-USD, …)
+                    continue
+                by_ticker.setdefault(h["ticker"], set()).add(h["discord_user"])
+            if not by_ticker:
+                await queries.set_bot_setting(_EARNINGS_SETTING, today)
+                return
+
+            loop = asyncio.get_running_loop()
+            dates = await loop.run_in_executor(
+                None, lambda: {t: _next_earnings_blocking(t) for t in by_ticker})
+            td = et.date()
+            tomorrow = td + timedelta(days=1)
+            on_deck = []   # (ticker, label, holders)
+            for t, dt in dates.items():
+                if dt is None:
+                    continue
+                amc = dt.hour >= 12
+                if dt.date() == td and amc:
+                    on_deck.append((t, "tonight · after close", by_ticker[t]))
+                elif dt.date() == tomorrow and not amc:
+                    on_deck.append((t, "tomorrow · before open", by_ticker[t]))
+
+            channel = self.bot.get_channel(await self._alerts_channel_id())
+            if not on_deck or channel is None:
+                await queries.set_bot_setting(_EARNINGS_SETTING, today)
+                return
+            on_deck.sort(key=lambda x: ("tomorrow" in x[1], x[0]))   # tonight first
+            names = await self._resolve_names(list({u for _, _, hs in on_deck for u in hs}))
+            lines = [
+                f"📈 **{t}** — {label} · held by " +
+                ", ".join(sorted(names.get(u, f"Player {u[:6]}") for u in hs))
+                for t, label, hs in on_deck
+            ]
+            embed = discord.Embed(
+                title="📅 Earnings on deck",
+                description="\n".join(lines), colour=0xE0AF68)
+            embed.set_footer(text=f"{et.strftime('%b %d')} · stocks you hold reporting tonight or tomorrow AM")
+            await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+            await queries.set_bot_setting(_EARNINGS_SETTING, today)
+        except Exception:
+            log.exception("earnings digest failed")
+
+    @earnings_digest.before_loop
+    async def _before_earnings_digest(self) -> None:
         await self.bot.wait_until_ready()
 
     stock = app_commands.Group(name="stock", description="Stock quotes, portfolio, and market data")
