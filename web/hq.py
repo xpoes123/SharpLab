@@ -441,19 +441,59 @@ async def hq_stocks():
         prior = {r["discord_user"]: r["account_value"] for r in await cur2.fetchall()}
     names = await _names(users)
 
+    # Prefetch positions/options for everyone, then one batched live-quote call so we can
+    # show each trader's open (unrealized) P&L and per-holding market value.
+    user_positions = {uid: await queries.get_stock_positions_full(uid) for uid in users}
+    user_options = {uid: await queries.get_option_positions_full(uid) for uid in users}
+    all_tickers = sorted({p["ticker"] for ps in user_positions.values()
+                          for p in ps if p.get("shares", 0) > 0})
+    from bot.cogs.stock import fetch_quotes  # lazy import (heavy deps)
+    quotes = await fetch_quotes(all_tickers) if all_tickers else {}
+    qprice = {t: (quotes[t]["price"] if quotes.get(t) and quotes[t].get("price") else None)
+              for t in all_tickers}
+
+    # Recent equity (last 30d) per trader → downsampled sparkline in each card.
+    from datetime import timedelta
+    since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur3 = await db.execute(
+            "SELECT discord_user, account_value FROM portfolio_snapshots "
+            "WHERE captured_at >= ? ORDER BY discord_user, captured_at", (since,))
+        spark_rows = await cur3.fetchall()
+    spark_raw: dict[str, list] = {}
+    for du, av in spark_rows:
+        spark_raw.setdefault(du, []).append(av)
+
+    def _downsample(vals, n=28):
+        if len(vals) <= n:
+            return [round(v) for v in vals]
+        step = (len(vals) - 1) / (n - 1)
+        return [round(vals[round(i * step)]) for i in range(n)]
+
     traders = []
     for uid in users:
-        positions = await queries.get_stock_positions_full(uid)
-        opos = await queries.get_option_positions_full(uid)
+        positions = user_positions[uid]
+        opos = user_options[uid]
         realized = round(
             sum(p.get("realized_pnl", 0) for p in positions)
             + sum(o.get("realized_pnl", 0) for o in opos), 2,
         )
-        holdings = [
-            {"ticker": p["ticker"], "shares": round(p.get("shares", 0), 4),
-             "dca": round(p.get("dca_price", 0), 2), "cost_basis": round(p.get("cost_basis", 0), 2)}
-            for p in positions if p.get("shares", 0) > 0
-        ]
+        holdings, unreal, have_unreal = [], 0.0, False
+        for p in positions:
+            if p.get("shares", 0) <= 0:
+                continue
+            price = qprice.get(p["ticker"])
+            value = round(p["shares"] * price, 2) if price is not None else None
+            u = round(p["shares"] * (price - p["dca_price"]), 2) if price is not None else None
+            if u is not None:
+                unreal += u
+                have_unreal = True
+            holdings.append({
+                "ticker": p["ticker"], "shares": round(p.get("shares", 0), 4),
+                "dca": round(p.get("dca_price", 0), 2), "cost_basis": round(p.get("cost_basis", 0), 2),
+                "price": round(price, 2) if price is not None else None,
+                "value": value, "unrealized": u,
+            })
         open_opts = sum(1 for o in opos if o.get("net_contracts", 0))
         snap = snaps.get(uid, {})
         av = snap.get("account_value")
@@ -463,15 +503,18 @@ async def hq_stocks():
         traders.append({
             "user_id": uid,
             "username": (names.get(uid) or {}).get("username") or f"Player {uid[:6]}",
+            "avatar_url": (names.get(uid) or {}).get("avatar_url"),
             "account_value": av,
             "stock_value": snap.get("stock_value"),
             "options_value": snap.get("options_value"),
             "cash": snap.get("cash"),
             "realized_pnl": realized,
+            "unrealized_pnl": round(unreal, 2) if have_unreal else None,
             "day_change": day_change,
             "day_pct": day_pct,
             "positions": len(holdings) + open_opts,
-            "holdings": sorted(holdings, key=lambda h: h["cost_basis"], reverse=True),
+            "spark": _downsample(spark_raw.get(uid, [])),
+            "holdings": sorted(holdings, key=lambda h: (h["value"] or h["cost_basis"] or 0), reverse=True),
         })
     traders.sort(key=lambda t: (t["account_value"] is not None, t["account_value"] or 0), reverse=True)
     data = {"traders": traders}
