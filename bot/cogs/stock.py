@@ -330,48 +330,27 @@ async def live_price_check(symbol: str, price: float, *, tol: float = PRICE_TOLE
 
 async def live_option_check(underlying: str, opt_type: str, strike: float, expiry: str,
                             premium: float, *, tol: float = PRICE_TOLERANCE) -> tuple[bool, str | None]:
-    """Validate an option contract actually exists in the live chain (right expiry +
-    strike) and that the premium is near market. Returns (ok, reason). Rejects the
-    HPE-$65-call-that-doesn't-exist / malformed-expiry / fat-finger-premium cases.
-    Returns (True, None) when the chain can't be fetched (don't block on a yfinance hiccup)."""
-    import yfinance as yf
+    """Sanity-check a 'now' option trade. yfinance's strike list is INCOMPLETE (it caps
+    far-OTM strikes — e.g. it lacks HPE's real $65 call), so we do NOT reject a strike
+    just because yfinance is missing it. Instead enforce a model-free arbitrage bound on
+    the premium: a call can never cost more than the stock, a put more than the strike —
+    which catches fat-fingers like a $100 premium on a $65 call. Plus a valid, future,
+    ISO expiry. Returns (ok, reason); (True, None) when we can't fetch a spot."""
     from datetime import date as _date
     try:
-        _date.fromisoformat(expiry)
+        exp = _date.fromisoformat(expiry)
     except ValueError:
         return False, f"expiry `{expiry}` must be YYYY-MM-DD"
-
-    def _blocking():
-        try:
-            tk = yf.Ticker(underlying)
-            opts = list(tk.options)
-            if expiry not in opts:
-                return ("no_expiry", opts[:5])
-            df = (tk.option_chain(expiry).calls if opt_type == "call"
-                  else tk.option_chain(expiry).puts)
-            sel = df[(df["strike"] - strike).abs() < 1e-6]
-            if sel.empty:
-                ss = sorted(df["strike"].tolist())
-                return ("no_strike", (ss[0], ss[-1]) if ss else None)
-            last = float(sel["lastPrice"].iloc[0])
-            bid, ask = float(sel["bid"].iloc[0]), float(sel["ask"].iloc[0])
-            live = last if last > 0 else ((bid + ask) / 2 if bid > 0 and ask > 0 else None)
-            return ("ok", live)
-        except Exception:
-            return ("error", None)
-
-    kind, info = await asyncio.get_running_loop().run_in_executor(None, _blocking)
-    if kind == "error":
+    if exp < datetime.now(timezone.utc).date():
+        return False, f"expiry {expiry} is in the past"
+    q = (await fetch_quotes([underlying])).get(underlying)
+    spot = q.get("price") if q else None
+    if not spot:
         return True, None
-    if kind == "no_expiry":
-        ex = ", ".join(info) if info else "none listed"
-        return False, f"**{underlying}** has no `{expiry}` expiration (try: {ex})"
-    if kind == "no_strike":
-        rng = f" — listed strikes ${info[0]:g}–${info[1]:g}" if info else ""
-        return False, f"**{underlying}** has no ${strike:g} {opt_type} for {expiry}{rng}"
-    live = info
-    if live and not price_within_tolerance(premium, live, tol):
-        return False, f"premium ${premium:g} is far off the live **${live:.2f}**"
+    cap = spot if opt_type == "call" else strike
+    if premium > cap * 1.10:
+        what = "the stock price" if opt_type == "call" else "the strike"
+        return False, f"premium ${premium:g} can't exceed {what} (~${cap:,.2f}) — check the premium"
     return True, None
 
 
