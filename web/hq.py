@@ -431,14 +431,23 @@ async def hq_stocks():
         )
         snaps = {r["discord_user"]: dict(r) for r in await cur.fetchall()}
         cur2 = await db.execute(
-            """SELECT p.discord_user, p.account_value
+            """SELECT p.discord_user, p.account_value, p.options_value
                FROM portfolio_snapshots p
                JOIN (SELECT discord_user, MAX(captured_at) mc FROM portfolio_snapshots
                      WHERE captured_at < ? GROUP BY discord_user) m
                  ON p.discord_user = m.discord_user AND p.captured_at = m.mc""",
             (et_midnight,),
         )
-        prior = {r["discord_user"]: r["account_value"] for r in await cur2.fetchall()}
+        prior = {r["discord_user"]: dict(r) for r in await cur2.fetchall()}
+        # Today's stock trades — netted out of day-change so that logging a position
+        # never shows up as a market gain (buys don't touch cash, so they'd otherwise
+        # inflate account value and read as a phantom daily P&L).
+        tr_rows = await (await db.execute(
+            "SELECT discord_user, ticker, side, shares, price FROM stock_trades "
+            "WHERE executed_at >= ?", (et_midnight,))).fetchall()
+    today_trades: dict[tuple, list] = {}
+    for r in tr_rows:
+        today_trades.setdefault((r["discord_user"], r["ticker"]), []).append(dict(r))
     names = await _names(users)
 
     # Prefetch positions/options for everyone, then one batched live-quote call so we can
@@ -451,6 +460,7 @@ async def hq_stocks():
     quotes = await fetch_quotes(all_tickers) if all_tickers else {}
     qprice = {t: (quotes[t]["price"] if quotes.get(t) and quotes[t].get("price") else None)
               for t in all_tickers}
+    qprev = {t: (quotes[t].get("prev_close") if quotes.get(t) else None) for t in all_tickers}
 
     # Recent equity (last 30d) per trader → downsampled sparkline in each card.
     from datetime import timedelta
@@ -479,15 +489,28 @@ async def hq_stocks():
             + sum(o.get("realized_pnl", 0) for o in opos), 2,
         )
         holdings, unreal, have_unreal = [], 0.0, False
+        stock_day, have_day = 0.0, False
         for p in positions:
             if p.get("shares", 0) <= 0:
                 continue
             price = qprice.get(p["ticker"])
+            prev = qprev.get(p["ticker"])
             value = round(p["shares"] * price, 2) if price is not None else None
             u = round(p["shares"] * (price - p["dca_price"]), 2) if price is not None else None
             if u is not None:
                 unreal += u
                 have_unreal = True
+            # Trade-aware day P/L = market move on shares held at the open, net of any
+            # shares bought/sold today (price_now·shares_now − price_prev_close·shares_open
+            # − net cash put in today). Held-overnight shares → pure market move.
+            if price is not None and prev is not None:
+                tt = today_trades.get((uid, p["ticker"]), [])
+                buy_val = sum(t["shares"] * t["price"] for t in tt if t["side"] == "buy")
+                sell_val = sum(t["shares"] * t["price"] for t in tt if t["side"] == "sell")
+                net_sh = sum((t["shares"] if t["side"] == "buy" else -t["shares"]) for t in tt)
+                shares_open = p["shares"] - net_sh
+                stock_day += p["shares"] * price - shares_open * prev - (buy_val - sell_val)
+                have_day = True
             holdings.append({
                 "ticker": p["ticker"], "shares": round(p.get("shares", 0), 4),
                 "dca": round(p.get("dca_price", 0), 2), "cost_basis": round(p.get("cost_basis", 0), 2),
@@ -498,8 +521,17 @@ async def hq_stocks():
         snap = snaps.get(uid, {})
         av = snap.get("account_value")
         base = prior.get(uid)
-        day_change = round(av - base, 2) if av is not None and base else None
-        day_pct = round((day_change / base) * 100, 2) if day_change is not None and base else None
+        base_acct = base.get("account_value") if base else None
+        # Options also don't touch cash; take their day move from the snapshot delta.
+        opt_now, opt_prior = snap.get("options_value"), (base or {}).get("options_value")
+        opt_day = (opt_now - opt_prior) if (opt_now is not None and opt_prior is not None) else 0.0
+        if have_day or opt_day:
+            day_change = round(stock_day + opt_day, 2)
+        elif av is not None and base_acct:        # no live quotes — fall back to snapshot delta
+            day_change = round(av - base_acct, 2)
+        else:
+            day_change = None
+        day_pct = round((day_change / base_acct) * 100, 2) if (day_change is not None and base_acct) else None
         traders.append({
             "user_id": uid,
             "username": (names.get(uid) or {}).get("username") or f"Player {uid[:6]}",
