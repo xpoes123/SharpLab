@@ -303,7 +303,23 @@ async def announce_achievements(bot, uid: str, newly: list[str], channel=None) -
 XP_GAME = 10     # per casino game played
 XP_BET = 40      # per bet logged (worth more — real-money tracking)
 XP_STOCK = 40    # per stock/option/crypto trade logged
+XP_MESSAGE = 1   # per chat message (rate-limited)
 _LEVELUP_CHANNEL_SETTING = "levelup_channel"
+DEFAULT_LEVELUP_CHANNEL_ID = 1510694785034354849  # #games — server fallback
+
+
+async def activity_channel(bot):
+    """The server channel for level-ups / game achievements: the configured one,
+    else the #games default. Never DMs."""
+    raw = await queries.get_bot_setting(_LEVELUP_CHANNEL_SETTING)
+    cid = int(raw) if (raw and raw.isdigit()) else DEFAULT_LEVELUP_CHANNEL_ID
+    ch = bot.get_channel(cid)
+    if ch is None:
+        try:
+            ch = await bot.fetch_channel(cid)
+        except Exception:
+            ch = None
+    return ch
 
 
 async def award_xp(bot, uid: str, amount: int, channel=None) -> None:
@@ -318,16 +334,7 @@ async def award_xp(bot, uid: str, amount: int, channel=None) -> None:
 
 
 async def _announce_levelup(bot, uid: str, level: int, channel=None) -> None:
-    target = channel
-    if target is None:
-        raw = await queries.get_bot_setting(_LEVELUP_CHANNEL_SETTING)
-        if raw and raw.isdigit():
-            target = bot.get_channel(int(raw))
-            if target is None:
-                try:
-                    target = await bot.fetch_channel(int(raw))
-                except Exception:
-                    target = None
+    target = channel or await activity_channel(bot)
     if target is None:
         return
     next_xp = queries.xp_for_level(level + 1)
@@ -349,6 +356,22 @@ class ProgressionCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self._last_check_id = 0
+        self._msg_cd: dict[int, float] = {}  # uid → last message-XP monotonic ts
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        """1 XP per chat message (≤ once / 12s per user, to curb spam-farming).
+        Level-ups post in the channel the message was sent in."""
+        if message.author.bot or not message.guild or not message.content.strip():
+            return
+        if message.content.startswith(("/", "!", "?")):
+            return
+        import time
+        now = time.monotonic()
+        if now - self._msg_cd.get(message.author.id, 0) < 5:  # only blocks burst-spam
+            return
+        self._msg_cd[message.author.id] = now
+        await award_xp(self.bot, str(message.author.id), XP_MESSAGE, message.channel)
 
     async def cog_load(self) -> None:
         self.check_achievements.start()
@@ -575,12 +598,13 @@ class ProgressionCog(commands.Cog):
             self._last_check_id = new_entries[-1]["id"]
             from collections import Counter
             plays = Counter(e["discord_user"] for e in new_entries)
+            ch = await activity_channel(self.bot)  # server channel, not DM
             for uid, n in plays.items():
                 try:
-                    await award_xp(self.bot, uid, n * XP_GAME)  # XP for playing
+                    await award_xp(self.bot, uid, n * XP_GAME, ch)  # XP for playing
                     newly = await evaluate_user_achievements(uid)
                     if newly:
-                        await announce_achievements(self.bot, uid, newly)
+                        await announce_achievements(self.bot, uid, newly, ch)
                 except Exception:
                     log.warning("Failed to check achievements for user %s", uid, exc_info=True)
         except Exception:
