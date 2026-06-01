@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 from db import queries
 from shared.models import Game, InjuryAlert, OddsSnapshot
-from shared.odds_utils import fmt_prob
+from shared.odds_utils import american_to_prob, fmt_prob
 import logging
 
 log = logging.getLogger(__name__)
@@ -22,6 +22,14 @@ load_dotenv()
 INJURY_CHANNEL_ID = int(os.getenv("INJURY_CHANNEL_ID") or 0)
 
 _TRACKED_BOOKS = {"draftkings", "fanduel", "betmgm", "caesars", "kalshi"}
+
+# Noise control: alerts older than this are backfill — mark-notified silently, don't post.
+_FRESH_HOURS = 6
+# Low-signal statuses nobody acts on — skip (esp. "questionable").
+_DROP_STATUSES = {"questionable", "probable", "available", "game time decision"}
+# If books disagree on the ML by more than this (implied prob), the matched game /
+# snapshot is suspect — omit the ML block rather than print garbage.
+_ML_DISAGREE_MAX = 0.30
 
 
 # ── Formatting ────────────────────────────────────────────────────────────────
@@ -77,6 +85,7 @@ def _build_injury_embed(
 
         # ML lines (refreshed post-injury) — filter to tracked books with ML data
         ml_lines = []
+        home_probs = []  # to sanity-check cross-book agreement
         for snap in snapshots:
             if snap.source not in _TRACKED_BOOKS:
                 continue
@@ -90,6 +99,15 @@ def _build_injury_embed(
             home_str = _fmt_odds(ml_home) if ml_home is not None else "n/a"
             source_label = snap.source.replace("_", " ").title()
             ml_lines.append(f"**{source_label}**: {away_short} {away_str} / {home_short} {home_str}")
+            if ml_home is not None:
+                try:
+                    home_probs.append(american_to_prob(ml_home))
+                except Exception:
+                    pass
+
+        # If books wildly disagree, the snapshot is stale / wrong game — drop the ML block.
+        if home_probs and (max(home_probs) - min(home_probs)) > _ML_DISAGREE_MAX:
+            ml_lines = []
 
         if ml_lines:
             embed.add_field(
@@ -126,18 +144,27 @@ class InjuryCog(commands.Cog):
             if channel is None:
                 return
 
+            now = datetime.now(timezone.utc)
             alerts = await queries.get_unnotified_injuries()
             for alert in alerts:
-                game = await queries.get_todays_game_for_team(alert.team)
-                snapshots = (
-                    await queries.get_latest_snapshots_for_game(game.game_id)
-                    if game else []
-                )
-                embed = _build_injury_embed(alert, game, snapshots)
-                # Mark notified before sending so a crash between these two lines
-                # results in a missed post (recoverable) rather than a duplicate
-                # notification on the next loop tick (annoying, not recoverable).
+                # Always mark notified first (crash between mark+send → a missed post,
+                # which is recoverable; a duplicate is not).
                 await queries.mark_injury_notified(alert.record_id)
+
+                # Noise filters — these consume the alert silently (no post):
+                upd = datetime.fromisoformat(alert.updated_at_utc_iso)
+                if upd.tzinfo is None:
+                    upd = upd.replace(tzinfo=timezone.utc)
+                if (now - upd) > timedelta(hours=_FRESH_HOURS):
+                    continue  # backfill / stale — don't dump it
+                if alert.status.lower() in _DROP_STATUSES:
+                    continue  # nobody acts on questionable/probable
+                game = await queries.get_next_game_for_team(alert.team)
+                if game is None:
+                    continue  # team isn't playing soon — irrelevant
+
+                snapshots = await queries.get_latest_snapshots_for_game(game.game_id)
+                embed = _build_injury_embed(alert, game, snapshots)
                 await channel.send(embed=embed)
         except Exception:
             log.exception("Unhandled error in injury_check loop")

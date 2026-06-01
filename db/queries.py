@@ -1484,6 +1484,29 @@ async def get_todays_game_for_team(team: str) -> Game | None:
     return _row_to_game(row)
 
 
+async def get_next_game_for_team(team: str, within_days: int = 5) -> Game | None:
+    """Next unfinished game for a team within `within_days`. Unlike the today-only
+    lookup, this handles playoff series where the next game is a day or two out."""
+    now = datetime.now(timezone.utc)
+    floor = (now - timedelta(hours=6)).isoformat()      # include a game already in progress
+    horizon = (now + timedelta(days=within_days)).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM games
+            WHERE (home_team = ? OR away_team = ?)
+              AND status != 'final'
+              AND start_time >= ? AND start_time <= ?
+            ORDER BY start_time ASC
+            LIMIT 1
+            """,
+            (team, team, floor, horizon),
+        )
+        row = await cursor.fetchone()
+    return _row_to_game(row) if row else None
+
+
 # ── Game scores ───────────────────────────────────────────────────────────────
 
 
