@@ -692,16 +692,28 @@ async def fetch_option_prices(
     return out
 
 
+def effective_price(q: dict) -> float:
+    """The price to value a position at: the pre/post-market print when one is
+    live (e.g. an earnings move after the close), else the regular-session price.
+    yfinance's regular `lastPrice` lags the extended session — valuing an option
+    off the stale spot makes a contract look dead even when the underlying ripped."""
+    ext = q.get("extended")
+    if ext and ext.get("price"):
+        return ext["price"]
+    return q["price"]
+
+
 async def _price_option_positions(open_options: list[dict]) -> dict[tuple, dict]:
     """Price a list of open option positions, fetching underlying spots only
     for the ones that have expired (needed for intrinsic value)."""
     if not open_options:
         return {}
     # Spots for every underlying — needed for expired intrinsic value AND for the
-    # Black-Scholes estimate of contracts yfinance doesn't list.
+    # Black-Scholes estimate of contracts yfinance doesn't list. extended=True so a
+    # post-earnings move feeds the BS spot (a deep-OTM strike is very spot-sensitive).
     underlyings = sorted({p["underlying"] for p in open_options})
-    quotes = await fetch_quotes(underlyings)
-    spots = {sym: q["price"] for sym, q in quotes.items()}
+    quotes = await fetch_quotes(underlyings, extended=True)
+    spots = {sym: effective_price(q) for sym, q in quotes.items()}
     return await fetch_option_prices(open_options, spots)
 
 

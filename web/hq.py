@@ -724,7 +724,7 @@ async def _build_trader(uid: str, who: dict):
     open_pos = [p for p in sp if p.get("shares", 0) > 0]
     # lazy import (heavy deps)
     from datetime import timedelta
-    from bot.cogs.stock import fetch_quotes, _ticker_history, _close_on_or_before
+    from bot.cogs.stock import fetch_quotes, _ticker_history, _close_on_or_before, effective_price
     # extended=True for one trader's holdings → include pre/post-market prints (e.g. an
     # earnings move after the close). Fine here (a handful of tickers); never on the leaderboard.
     quotes = await fetch_quotes([p["ticker"] for p in open_pos], extended=True) if open_pos else {}
@@ -750,7 +750,8 @@ async def _build_trader(uid: str, who: dict):
     stock_holdings = []
     for p in open_pos:
         q = quotes.get(p["ticker"])
-        price = q["price"] if q else None
+        # Value at the extended-session price when one is live (earnings move), else regular.
+        price = effective_price(q) if q else None
         unreal = round(p["shares"] * (price - p["dca_price"]), 2) if price is not None else None
         series = hist_map.get(p["ticker"]) or []
         # Daily closes + a live "today" point so the line ends at the current price.
@@ -774,12 +775,36 @@ async def _build_trader(uid: str, who: dict):
 
     op = await queries.get_option_positions_full(uid)
     opt_realized = sum(o.get("realized_pnl", 0) for o in op)
-    option_positions = [
-        {"underlying": o["underlying"], "opt_type": o["opt_type"], "strike": o["strike"],
-         "expiry": o["expiry"], "contracts": o.get("net_contracts", 0),
-         "avg_premium": round(o.get("avg_premium", 0), 2)}
-        for o in op if o.get("net_contracts", 0)
-    ]
+    # Live-price the open contracts (yfinance chains + Black-Scholes fallback), exactly
+    # like the bot's /stock profile — otherwise options show no current price or P/L and
+    # the summary leans on a stale snapshot that predates recently-added contracts.
+    from bot.cogs.stock import _price_option_positions, _option_position_pnl
+    open_op = [o for o in op if o.get("net_contracts", 0)]
+    opt_prices = await _price_option_positions(open_op) if open_op else {}
+    options_value_live = 0.0
+    options_unreal = 0.0
+    options_priced_any = False
+    option_positions = []
+    for o in open_op:
+        key = (o["underlying"], o["opt_type"], o["strike"], o["expiry"])
+        prem = opt_prices.get(key, {}).get("premium")
+        pl = _option_position_pnl(o, prem)
+        if pl["priced"]:
+            options_value_live += pl["value"]
+            options_unreal += pl["unrealized"]
+            options_priced_any = True
+        cost = pl["cost"]
+        option_positions.append({
+            "underlying": o["underlying"], "opt_type": o["opt_type"], "strike": o["strike"],
+            "expiry": o["expiry"], "contracts": o.get("net_contracts", 0),
+            "avg_premium": round(o.get("avg_premium", 0), 2),
+            "price": round(prem, 2) if prem is not None else None,
+            "value": round(pl["value"], 2) if pl["priced"] else None,
+            "unrealized": round(pl["unrealized"], 2) if pl["priced"] else None,
+            "unrealized_pct": round(pl["unrealized"] / cost * 100, 2) if (pl["priced"] and cost) else None,
+            "expired": opt_prices.get(key, {}).get("expired", False),
+            "estimated": opt_prices.get(key, {}).get("estimated", False),
+        })
 
     txns = []
     for t in all_trades:
@@ -796,9 +821,16 @@ async def _build_trader(uid: str, who: dict):
         "user": {"id": uid, "username": who.get("username") or f"Player {uid[:6]}",
                  "avatar_url": who.get("avatar_url")},
         "summary": {
-            "account_value": latest.get("account_value"),
+            # Live options value replaces the snapshot's (which can be stale/zero right
+            # after a contract is added); shift account_value by the same delta so it stays
+            # coherent with the itemized positions below.
+            "account_value": (
+                round(latest.get("account_value", 0) - (latest.get("options_value") or 0) + options_value_live, 2)
+                if options_priced_any and latest.get("account_value") is not None
+                else latest.get("account_value")
+            ),
             "stock_value": latest.get("stock_value"),
-            "options_value": latest.get("options_value"),
+            "options_value": round(options_value_live, 2) if options_priced_any else latest.get("options_value"),
             "cash": latest.get("cash"),
             "realized_pnl": round(stock_realized + opt_realized, 2),
             # Open P&L on stocks = Σ per-position (live price − cost basis).
@@ -806,6 +838,8 @@ async def _build_trader(uid: str, who: dict):
                 round(sum(h["unrealized"] for h in stock_holdings if h["unrealized"] is not None), 2)
                 if any(h["unrealized"] is not None for h in stock_holdings) else None
             ),
+            # Open P&L on options = Σ net·(cur−avg)·100 over priced contracts.
+            "options_unrealized_pnl": round(options_unreal, 2) if options_priced_any else None,
         },
         "equity": equity,
         "live_since": live_since,
