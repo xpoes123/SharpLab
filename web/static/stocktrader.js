@@ -125,13 +125,33 @@ function drawChart() {
     : "";
 }
 
+// Cutoff DATE for a range, matching the server's period-change baselines so the
+// chart's start point lines up with the table's % (avoids the chart and the
+// Change column disagreeing across a volatile boundary day).
+function cutoffDate(label) {
+  if (label === "ALL") return null;                       // from the earliest close
+  if (label === "YTD") return `${new Date().getFullYear()}-01-01`;
+  return new Date(Date.now() - RANGE_DAYS[label] * 86400000).toISOString().slice(0, 10);
+}
+
 // Individual ticker's price history (daily closes + a live point), sliced to the range.
 function drawTicker(sym) {
   const h = HOLD.find((x) => x.ticker === sym);
   const all = ((h && h.history) || []).map(([t, v]) => ({ t, v, k: "live" }));
-  const cutoff = rangeCutoff(range);
-  let series = all.filter((p) => new Date(p.t).getTime() >= cutoff);
-  if (series.length < 2) series = all.slice(-7);   // daily closes can't render a 1D intraday line
+  const cd = cutoffDate(range);
+  let series;
+  if (cd == null) {
+    series = all.slice();                                 // ALL → full history
+  } else if (range === "YTD") {
+    const i = all.findIndex((p) => p.t >= cd);
+    series = i >= 0 ? all.slice(i) : all.slice();
+  } else {
+    // baseline = last close on/before the cutoff date (same as the server), then everything after
+    let base = -1;
+    for (let i = 0; i < all.length && all[i].t <= cd; i++) base = i;
+    series = base >= 0 ? all.slice(base) : all.filter((p) => p.t > cd);
+  }
+  if (series.length < 2) series = all.slice(-7);          // very short window — show recent closes
   if (series.length < 2) series = all;
   document.getElementById("chart").innerHTML = svgChart(series, [], 0);  // all live, no benchmark
 
