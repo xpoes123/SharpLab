@@ -60,6 +60,11 @@ opinion/debate, podcasts & media segments, betting-odds explainers, fantasy advi
 and anything that summarizes or analyzes MULTIPLE events at once rather than reporting \
 one new one.
 
+ALSO DROP routine roster churn that isn't a real trade/signing: minor-league \
+call-ups and recalls, contract purchases/selections, option/DFA moves, a debut for a \
+non-star, and other day-to-day transactions. A whole fanbase should not be pinged for \
+a fringe roster move.
+
 If a headline summarizes/analyzes several moves instead of reporting one fresh event, \
 DROP it. When unsure, DROP it.
 
