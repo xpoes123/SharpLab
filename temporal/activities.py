@@ -661,9 +661,13 @@ def _poly_et_date(iso: str) -> str:
 
 
 def _poly_ml_from_event(event: dict, home_team: str, away_team: str) -> tuple[int, int] | None:
-    """Extract (ml_home, ml_away) from a Polymarket game event. The moneyline
-    market is the one whose question equals the event title; its two outcomes are
-    the full team names with normalized (no-vig) prices."""
+    """Extract (ml_home, ml_away) from a Polymarket game event using EXECUTABLE
+    prices — the cost to actually BUY each side, not the no-vig midpoint.
+
+    The market is binary: outcomes[0] is bought at the best ask, and outcomes[1]
+    (the complementary token) at 1 − best bid. Both reflect the bid/ask spread, so
+    their implied probs sum to >1 — which is correct and stops the mid from
+    manufacturing phantom arbs. Falls back to outcomePrices (mid) if no book."""
     title = (event.get("title") or "").strip()
     hl, al = home_team.split()[-1].lower(), away_team.split()[-1].lower()
     ml = next((m for m in event.get("markets", []) if (m.get("question") or "").strip() == title), None)
@@ -671,22 +675,32 @@ def _poly_ml_from_event(event: dict, home_team: str, away_team: str) -> tuple[in
         return None
     try:
         outs = json.loads(ml.get("outcomes") or "[]")
-        prices = [float(p) for p in json.loads(ml.get("outcomePrices") or "[]")]
     except (ValueError, TypeError):
         return None
-    if len(outs) != 2 or len(prices) != 2:
+    if len(outs) != 2:
         return None
-    home_prob = away_prob = None
-    for name, price in zip(outs, prices):
+    # Executable: [ask for outcome[0], ask for outcome[1] = 1 - bid of outcome[0]].
+    try:
+        best_ask, best_bid = float(ml["bestAsk"]), float(ml["bestBid"])
+        costs = [best_ask, 1.0 - best_bid]
+    except (KeyError, TypeError, ValueError):
+        try:  # fall back to the no-vig mid if the book isn't published
+            costs = [float(p) for p in json.loads(ml.get("outcomePrices") or "[]")]
+        except (ValueError, TypeError):
+            return None
+        if len(costs) != 2:
+            return None
+    home_cost = away_cost = None
+    for name, cost in zip(outs, costs):
         nl = name.lower()
         if hl in nl:
-            home_prob = price
+            home_cost = cost
         elif al in nl:
-            away_prob = price
-    if home_prob is None or away_prob is None or not (0 < home_prob < 1 and 0 < away_prob < 1):
+            away_cost = cost
+    if home_cost is None or away_cost is None or not (0 < home_cost < 1 and 0 < away_cost < 1):
         return None
     try:
-        return prob_to_american(home_prob), prob_to_american(away_prob)
+        return prob_to_american(home_cost), prob_to_american(away_cost)
     except (ValueError, ZeroDivisionError):
         return None
 
