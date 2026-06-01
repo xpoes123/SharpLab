@@ -22,18 +22,14 @@ const BENCH_COLOR = "#58a6ff";     // S&P line — distinct from grey reconstruc
 
 function holdingsTable() {
   if (!HOLD.length) return `<div class="muted" style="padding:18px">No open stock positions.</div>`;
+  // Her ACTUAL P/L over the selected period (holding-aware) — a stock bought mid-period
+  // only counts gains since the buy, so this won't show a phantom move she didn't capture.
   const chgCell = (h) => {
-    const v = (h.changes || {})[range];
-    if (v == null) return `<span class="muted">—</span>`;
-    // Dollar move for the period = current shares × per-share price move.
-    // price_then = price_now / (1 + pct/100); $Δ = shares × (price_now − price_then).
-    const pct = `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
-    let dol = "";
-    if (h.price && h.shares) {
-      const then = h.price / (1 + v / 100);
-      dol = ` <span class="muted" style="font-size:11px">${pnl(h.shares * (h.price - then))}</span>`;
-    }
-    return `<span class="${cls(v)}">${pct}</span>${dol}`;
+    const p = (h.period || {})[range];
+    if (!p || p.pnl == null) return `<span class="muted">—</span>`;
+    const dol = `<span class="muted" style="font-size:11px">${pnl(p.pnl)}</span>`;
+    if (p.pct == null) return `<span class="${cls(p.pnl)}">${pnl(p.pnl)}</span>`;
+    return `<span class="${cls(p.pct)}">${p.pct >= 0 ? "+" : ""}${p.pct.toFixed(2)}%</span> ${dol}`;
   };
   const hRow = (h) => {
     const u = h.unrealized;
@@ -173,9 +169,13 @@ function updateChart() {
   } else {
     const h = HOLD.find((x) => x.ticker === view);
     const px = h && h.price != null ? money2(h.price) : "";
+    const p = h && (h.period || {})[range];
+    const mine = p && p.pnl != null
+      ? ` <span class="${cls(p.pnl)}" style="font-size:13px">your ${range}: ${pnl(p.pnl)}${p.pct != null ? ` (${p.pct >= 0 ? "+" : ""}${p.pct.toFixed(1)}%)` : ""}</span>`
+      : "";
     head.style.display = "flex";
     head.innerHTML = `<button data-back class="rangebtn">← Portfolio</button>
-      <strong style="font-size:16px">${view}</strong> <span class="muted">${px}</span>`;
+      <strong style="font-size:16px">${view}</strong> <span class="muted">${px}</span>${mine}`;
     legend.style.display = "none";
   }
   drawChart();
