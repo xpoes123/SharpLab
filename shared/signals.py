@@ -14,9 +14,18 @@ from shared.odds_utils import american_to_prob
 # Defaults — tuned to keep alerts rare and meaningful.
 SPREAD_MIDDLE_MIN = 1.0   # points of gap to flag a spread middle
 TOTAL_MIDDLE_MIN = 1.5    # points of gap to flag a total middle
-STEAM_MIN_BOOKS = 3       # books that must move together to call it steam
+STEAM_MIN_BOOKS = 3       # INDEPENDENT books that must move together to call it steam
 STEAM_ML_CENTS = 12       # min |American| move per book to count
 DIVERGENCE_MIN_PER_SIDE = 2  # books moving each way to call it divergence
+
+# BetOnline / Lowvig / BetUS / MyBookie are one offshore operator sharing a single
+# line feed — they move in lockstep, so they count as ONE confirmation, not four.
+# (This is what made the Mets "4-book steam" a false positive.)
+_SHARED_FEED = {"betonlineag", "lowvig", "betus", "mybookieag"}
+
+
+def _book_group(src: str) -> str:
+    return "offshore" if src in _SHARED_FEED else src
 
 
 def _best(odds: dict, key: str, *, highest: bool) -> tuple[str, float] | None:
@@ -175,9 +184,14 @@ def detect_ml_moves(baseline: dict, current: dict,
     # ml_home more negative (d<0) = home steamed; more positive (d>0) = away steamed.
     home_side = [s for s, d in moves.items() if d < 0]
     away_side = [s for s, d in moves.items() if d > 0]
-    if len(home_side) >= DIVERGENCE_MIN_PER_SIDE and len(away_side) >= DIVERGENCE_MIN_PER_SIDE:
+    # Count INDEPENDENT confirmations: books on a shared feed move together, so they
+    # count once. Stops a single offshore feed from looking like a multi-book steam.
+    home_groups = {_book_group(s) for s in home_side}
+    away_groups = {_book_group(s) for s in away_side}
+    if len(home_groups) >= DIVERGENCE_MIN_PER_SIDE and len(away_groups) >= DIVERGENCE_MIN_PER_SIDE:
         return {"kind": "divergence", "home_books": home_side, "away_books": away_side, "lagging": lagging}
-    if len(moves) >= min_books and (not away_side or not home_side):
+    moved_groups = home_groups if home_side else away_groups
+    if len(moved_groups) >= min_books and (not away_side or not home_side):
         return {"kind": "steam", "toward": "home" if home_side else "away",
                 "books": list(moves.keys()), "lagging": lagging,
                 "avg_cents": round(sum(abs(d) for d in moves.values()) / len(moves))}
