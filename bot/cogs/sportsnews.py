@@ -45,22 +45,26 @@ _SEEN_KEY = "sports_news_seen"   # bot_settings JSON list of recently-seen artic
 _SEEN_CAP = 800                  # keep the newest N ids; older ones age out
 _FRESH_HOURS = 12                # never post an article older than this (bounds cold-start/backfill)
 
-_JUDGE_PROMPT = """You are a sports news editor for a sports-betting & fan Discord. \
-From the JSON list of headlines below, pick the ones that would actually spark \
-conversation among casual-to-serious fans.
+_JUDGE_PROMPT = """You are a breaking-sports-news editor for a fan Discord. Every post \
+PINGS a whole league's role, so the bar is HIGH: keep ONLY headlines that report a \
+single, concrete, just-happened event fans would react to in the moment.
 
-INCLUDE: blockbuster trades, major signings/extensions, significant injuries \
-(out for season, surgery, IL), playoff/elimination results & series swings, big \
-upsets, records & milestones, suspensions, coach/GM firings or hirings, \
-retirements, breaking off-field news with on-field impact.
+KEEP (one specific event that just occurred): a completed or imminent trade; a \
+signing/extension; a player ruled out, placed on IL, or having surgery; a suspension; \
+a single coach/GM hiring or firing; a retirement; a playoff/elimination GAME RESULT; \
+a stunning upset; a record being broken.
 
-EXCLUDE: routine game recaps, opinion/debate columns, podcasts & media segments, \
-listicles, betting-odds explainers, power rankings, minor roster moves, fantasy advice.
+DROP — never post these, even if they mention trades/firings/injuries: roundups, \
+trackers, "carousel", "what's next", "everything to know", primers, previews, season \
+recaps, power rankings, mailbags, grades, "every team's…", listicles, rankings, \
+opinion/debate, podcasts & media segments, betting-odds explainers, fantasy advice, \
+and anything that summarizes or analyzes MULTIPLE events at once rather than reporting \
+one new one.
 
-Lean inclusive for broadly-followed events; be stricter for niche items with \
-narrow appeal.
+If a headline summarizes/analyzes several moves instead of reporting one fresh event, \
+DROP it. When unsure, DROP it.
 
-Return ONLY JSON: {"major": ["<id>", ...]} listing the ids worth posting.
+Return ONLY JSON: {"major": ["<id>", ...]}.
 
 Headlines:
 %s"""
@@ -139,14 +143,19 @@ class SportsNewsCog(commands.Cog):
         self.news_check.cancel()
 
     async def _judge(self, articles: list[dict]) -> set[str]:
-        """Return the subset of article ids worth posting. Falls back to ESPN's
-        HeadlineNews tag if Haiku is unavailable or errors."""
-        fallback = {a["id"] for a in articles if a["type"] == "HeadlineNews"}
+        """Return the subset of article ids worth posting. Only ESPN-tagged breaking
+        news (type 'HeadlineNews') is ever eligible — features/roundups (type 'Story'
+        or 'Media') are dropped outright. Haiku then refines that shortlist; if it's
+        unavailable the full HeadlineNews set is used."""
+        breaking = [a for a in articles if a["type"] == "HeadlineNews"]
+        if not breaking:
+            return set()
+        fallback = {a["id"] for a in breaking}
         if not self.api_key:
             return fallback
         items = [{"id": a["id"], "league": LEAGUES[_primary(a["leagues"])]["label"],
                   "type": a["type"], "headline": a["headline"],
-                  "description": a["description"][:200]} for a in articles]
+                  "description": a["description"][:200]} for a in breaking]
         try:
             async with httpx.AsyncClient() as client:
                 r = await client.post(
