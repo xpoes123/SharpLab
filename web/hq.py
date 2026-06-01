@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import bisect
+import logging
 import os
 import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
+
+log = logging.getLogger(__name__)
 
 import aiosqlite
 import httpx
@@ -49,9 +52,65 @@ DB_PATH = os.environ.get("SHARPLAB_DB_PATH", "data/sharplab.db")
 WEB_BASE_URL = os.environ.get("WEB_BASE_URL", "https://sharplab.djiang.xyz")
 CHESS_API = os.environ.get("CHESS_API_BASE", "https://games.djiang.xyz/chess/api")
 
-_SERVER_CACHE: dict[str, tuple[float, dict]] = {}
-_SERVER_TTL = 30.0
+_SERVER_TTL = 30.0    # server overview + stocks list
+_TRADER_TTL = 20.0    # one trader's portfolio (fresher — it's personal)
+_SWR = 45.0           # stale-while-revalidate window past the TTL
 _SPY_CACHE: dict[str, object] = {"t": 0.0, "data": []}  # [(date_iso, close)] sorted
+
+
+class AsyncTTLCache:
+    """In-process async response cache with single-flight (no cache stampede) and
+    stale-while-revalidate. The web app runs a single uvicorn worker, so a plain
+    dict is sufficient — no Redis needed.
+
+    - get(): fresh hit returns immediately; a stale hit within the SWR window is
+      returned instantly while a background task refreshes it; a hard miss is
+      computed under a per-key lock so concurrent callers share one computation
+      instead of each hammering yfinance/SQLite.
+    - invalidate(): drop keys so the next request recomputes (used after a trade).
+    """
+
+    def __init__(self) -> None:
+        self._entries: dict[str, tuple[float, object]] = {}   # key -> (stored_at, value)
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def _lock(self, key: str) -> asyncio.Lock:
+        lk = self._locks.get(key)
+        if lk is None:
+            lk = self._locks[key] = asyncio.Lock()
+        return lk
+
+    def invalidate(self, *keys: str) -> None:
+        for k in keys:
+            self._entries.pop(k, None)
+
+    async def get(self, key: str, ttl: float, compute, *, swr: float = 0.0):
+        hit = self._entries.get(key)
+        if hit is not None:
+            age = time.monotonic() - hit[0]
+            if age < ttl:
+                return hit[1]                                 # fresh
+            if swr and age < ttl + swr:                       # stale → serve + refresh
+                if not self._lock(key).locked():
+                    asyncio.create_task(self._refresh(key, compute))
+                return hit[1]
+        async with self._lock(key):                           # miss → single-flight
+            hit = self._entries.get(key)
+            if hit is not None and (time.monotonic() - hit[0]) < ttl:
+                return hit[1]
+            value = await compute()
+            self._entries[key] = (time.monotonic(), value)
+            return value
+
+    async def _refresh(self, key: str, compute) -> None:
+        async with self._lock(key):
+            try:
+                self._entries[key] = (time.monotonic(), await compute())
+            except Exception:
+                log.exception("HQ cache refresh failed: %s", key)
+
+
+_CACHE = AsyncTTLCache()
 
 
 async def _spy_history() -> list[tuple[str, float]]:
@@ -281,10 +340,10 @@ async def _stock_leaders() -> list[dict]:
 @router.get("/hq/server")
 async def hq_server():
     """Server-wide stats home: leaderboards across every system, cached briefly."""
-    cached = _SERVER_CACHE.get("server")
-    if cached and (time.monotonic() - cached[0]) < _SERVER_TTL:
-        return cached[1]
+    return await _CACHE.get("server", _SERVER_TTL, _build_server, swr=_SWR)
 
+
+async def _build_server():
     # Casino top
     casino = await queries.get_casino_leaderboard(limit=10)
     cnames = await _names([c["discord_user"] for c in casino])
@@ -335,7 +394,6 @@ async def hq_server():
         "stocks": await _stock_leaders(),
         "chess": await _chess_leaderboard(),
     }
-    _SERVER_CACHE["server"] = (time.monotonic(), data)
     return data
 
 
@@ -412,10 +470,10 @@ async def hq_profile(handle: str):
 async def hq_stocks():
     """Every trader's portfolio — value (latest hourly snapshot), realized P&L,
     and open holdings. Public, cached briefly."""
-    cached = _SERVER_CACHE.get("stocks")
-    if cached and (time.monotonic() - cached[0]) < _SERVER_TTL:
-        return cached[1]
+    return await _CACHE.get("stocks", _SERVER_TTL, _build_stocks, swr=_SWR)
 
+
+async def _build_stocks():
     users = await queries.get_all_portfolio_users()
     # "Yesterday's close" baseline = last snapshot before ET midnight today.
     et_midnight = datetime.now(ZoneInfo("America/New_York")).replace(
@@ -550,7 +608,6 @@ async def hq_stocks():
         })
     traders.sort(key=lambda t: (t["account_value"] is not None, t["account_value"] or 0), reverse=True)
     data = {"traders": traders}
-    _SERVER_CACHE["stocks"] = (time.monotonic(), data)
     return data
 
 
@@ -594,7 +651,11 @@ async def hq_stock_trader(handle: str):
     if not who:
         return JSONResponse({"error": "not_found"}, status_code=404)
     uid = who["discord_user"]
+    return await _CACHE.get(f"trader:{uid}", _TRADER_TTL,
+                            lambda: _build_trader(uid, who), swr=_SWR)
 
+
+async def _build_trader(uid: str, who: dict):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
@@ -790,6 +851,7 @@ async def hq_stock_trade(body: StockTradeIn, request: Request):
                                       datetime.now(timezone.utc).isoformat(), "via HQ")
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
+    _CACHE.invalidate("stocks", f"trader:{sess['id']}")   # reflect the trade immediately
     return {"ok": True, "side": body.side, "ticker": ticker, "shares": body.shares, "price": body.price}
 
 
@@ -816,6 +878,7 @@ async def hq_option_trade(body: OptionTradeIn, request: Request):
                                        body.premium, datetime.now(timezone.utc).isoformat(), "via HQ")
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
+    _CACHE.invalidate("stocks", f"trader:{sess['id']}")   # reflect the trade immediately
     return {"ok": True}
 
 
