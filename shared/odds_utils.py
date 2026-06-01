@@ -174,7 +174,7 @@ def parse_odds_input(raw: str) -> tuple[int, str]:
     Supported formats:
     - American:  -110, +150, 150  (negative, explicit +, or integer >= 100)
     - Decimal:   1.91, 2.50       (float with decimal point, value >= 1.01)
-    - Cents:     52, 65           (integer 1–99, Kalshi/Polymarket style)
+    - Cents:     52, 65, 52c, 52¢ (integer 1–99, Kalshi/Polymarket style)
     - Prob:      0.52             (float with decimal point, value < 1.0)
     - Percent:   52%              (explicit % suffix)
     """
@@ -183,6 +183,15 @@ def parse_odds_input(raw: str) -> tuple[int, str]:
     if raw.endswith("%"):
         prob = float(raw[:-1]) / 100
         return prob_to_american(prob), "percent"
+
+    # Cents with an explicit suffix: '52c', '52¢', '52 cents'
+    low = raw.lower()
+    for suf in ("cents", "¢", "c"):
+        if low.endswith(suf):
+            num = low[: -len(suf)].strip()
+            if num and num.replace(".", "", 1).isdigit() and 0 < float(num) < 100:
+                return prob_to_american(float(num) / 100), "cents"
+            break
 
     if "." in raw:
         val = float(raw)
@@ -198,6 +207,32 @@ def parse_odds_input(raw: str) -> tuple[int, str]:
         return prob_to_american(val / 100), "cents"
 
     return val, "american"
+
+
+def odds_breakdown(raw: str) -> dict:
+    """Parse any odds input into {fmt, prob, decimal, american}, deriving prob and
+    decimal from the input's NATIVE precision so a decimal/prob/cents input doesn't
+    pick up rounding artifacts from round-tripping through (rounded) American odds.
+    Only `american` is necessarily rounded (it's integer-valued)."""
+    american, fmt = parse_odds_input(raw)
+    r = raw.strip().lower()
+    if fmt == "decimal":
+        decimal = float(r)
+        prob = 1.0 / decimal
+    elif fmt == "prob":
+        prob = float(r)
+        decimal = 1.0 / prob
+    elif fmt == "percent":
+        prob = float(r.rstrip("%")) / 100
+        decimal = 1.0 / prob
+    elif fmt == "cents":
+        digits = r.replace("cents", "").replace("¢", "").rstrip("c").strip()
+        prob = float(digits) / 100
+        decimal = 1.0 / prob
+    else:  # american — already integer, derive the rest from it
+        prob = american_to_prob(american)
+        decimal = american_to_decimal(american)
+    return {"fmt": fmt, "prob": prob, "decimal": decimal, "american": american}
 
 
 # ── Polymarket Gamma API ─────────────────────────────────────────────────────

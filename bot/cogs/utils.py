@@ -7,18 +7,19 @@ from shared.odds_utils import (
     american_to_decimal,
     american_to_prob,
     decimal_to_american,
+    odds_breakdown,
     parse_odds_input,
+    prob_to_american,
 )
 import logging
 log = logging.getLogger(__name__)
 
 
 def _parse_odds(raw: str) -> tuple[str, float, int, float]:
-    """Wrapper around shared parse_odds_input that also returns decimal and prob."""
-    american, fmt = parse_odds_input(raw)
-    decimal = american_to_decimal(american)
-    prob = american_to_prob(american)
-    return (fmt, decimal, american, prob)
+    """Wrapper around shared odds_breakdown — derives decimal/prob from the input's
+    native precision (no decimal→american→decimal round-trip artifacts)."""
+    b = odds_breakdown(raw)
+    return (b["fmt"], b["decimal"], b["american"], b["prob"])
 
 
 class UtilsCog(commands.Cog):
@@ -155,6 +156,48 @@ class UtilsCog(commands.Cog):
         embed.add_field(name="Implied %", value=f"`{implied_prob * 100:.2f}%`", inline=True)
         await interaction.response.send_message(embed=embed)
 
+    # ── /calc vig ────────────────────────────────────────────────────────────
+
+    @calc.command(name="vig", description="Market hold/vig + de-vigged fair odds (2-way or multi-way)")
+    @app_commands.describe(
+        odds="Space-separated odds for EVERY outcome (e.g. -110 -110, or 3-way -150 +130 +400). "
+             "Each may be American, decimal, cents, or %."
+    )
+    async def vig(self, interaction: discord.Interaction, odds: str) -> None:
+        try:
+            legs = [odds_breakdown(x) for x in odds.split()]
+        except Exception:
+            await interaction.response.send_message(
+                "Couldn't parse those odds. Space-separate every outcome, e.g. `-110 -110` or `-150 +130 +400`.",
+                ephemeral=True,
+            )
+            return
+        if len(legs) < 2:
+            await interaction.response.send_message(
+                "Give the odds for **all** outcomes of the market (at least 2).", ephemeral=True
+            )
+            return
+
+        overround = sum(l["prob"] for l in legs)          # total implied prob (>1 means vig)
+        hold = (overround - 1) / overround if overround > 0 else 0.0  # book's theoretical hold
+
+        rows = []
+        for l in legs:
+            fair = l["prob"] / overround                  # de-vigged fair prob
+            try:
+                fair_am = prob_to_american(fair)
+                fair_s = f"{'+' if fair_am > 0 else ''}{fair_am}"
+            except ValueError:
+                fair_s = "—"
+            a = l["american"]
+            rows.append(f"`{'+' if a > 0 else ''}{a}`  {l['prob']*100:5.1f}%  →  fair `{fair_s}` ({fair*100:.1f}%)")
+
+        color = 0x57F287 if hold < 0.04 else 0xFAA61A if hold < 0.06 else 0xED4245
+        embed = discord.Embed(title=f"{len(legs)}-Way Market — Vig / Hold", color=color)
+        embed.add_field(name="Outcomes (odds · implied → fair)", value="\n".join(rows), inline=False)
+        embed.add_field(name="Total implied", value=f"`{overround*100:.2f}%`", inline=True)
+        embed.add_field(name="Hold / vig", value=f"`{hold*100:.2f}%`", inline=True)
+        await interaction.response.send_message(embed=embed)
 
     # ── /help ──────────────────────────────────────────────────────────────────
 
