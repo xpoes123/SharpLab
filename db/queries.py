@@ -2873,6 +2873,25 @@ async def delete_stock_trade(discord_user: str, trade_id: int) -> bool:
         return cur.rowcount > 0
 
 
+async def update_stock_trade(discord_user: str, trade_id: int, shares: float, price: float,
+                             executed_at: str | None = None) -> bool:
+    """Correct a trade's shares/price (and optionally date). Scoped to the owner."""
+    if shares <= 0 or price <= 0:
+        raise ValueError("shares and price must be > 0")
+    sets, params = ["shares = ?", "price = ?"], [shares, price]
+    if executed_at is not None:
+        sets.append("executed_at = ?")
+        params.append(executed_at)
+    params += [discord_user, trade_id]
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            f"UPDATE stock_trades SET {', '.join(sets)} WHERE discord_user = ? AND trade_id = ?",
+            params,
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
 async def delete_stock_trades_for_ticker(discord_user: str, ticker: str) -> int:
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
