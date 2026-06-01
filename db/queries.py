@@ -442,6 +442,25 @@ async def set_bet_clv(bet_id: int, clv: float | None) -> None:
         await db.commit()
 
 
+async def get_open_bets_on_live_games(window_hours: int = 6) -> list[dict]:
+    """Open bets whose game has started but isn't final yet (i.e. live), within
+    the last `window_hours`. Joins game info. For live in-game swing alerts."""
+    now = datetime.now(timezone.utc)
+    lo = (now - timedelta(hours=window_hours)).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT b.bet_id, b.discord_user, b.game_id, b.market, b.side, b.line, b.odds,
+                      g.home_team, g.away_team, g.sport, g.start_time, g.status
+               FROM bets b JOIN games g ON g.game_id = b.game_id
+               WHERE b.status = 'open' AND g.status != 'final'
+                 AND g.start_time <= ? AND g.start_time >= ?""",
+            (now.isoformat(), lo),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
 async def get_open_bets_for_game(game_id: str) -> list[Bet]:
     """Return all open bets for a game (used by CLV auto-post)."""
     async with aiosqlite.connect(DB_PATH) as db:
