@@ -60,6 +60,7 @@ COGS = [
     "bot.cogs.markets",
     "bot.cogs.clv",
     "bot.cogs.injuries",
+    "bot.cogs.sportsnews",
     "bot.cogs.bot_logs",
     "bot.cogs.error_handler",
     "bot.cogs.history",
