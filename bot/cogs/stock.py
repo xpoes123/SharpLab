@@ -23,6 +23,7 @@ falling back to intrinsic value once expired.
 """
 import asyncio
 import io
+import json
 import logging
 import time
 from collections import deque
@@ -44,6 +45,7 @@ MONITOR_POLL_MINUTES = 5
 SWING_THRESHOLD_PCT = 10.0  # auto-alert when a held ticker moves this % on the day
 _ALERTS_CHANNEL_SETTING = "stock_alerts_channel"
 _DIGEST_SETTING = "last_stock_digest"  # ET date of the last daily portfolio report
+_SWING_STATE_SETTING = "swing_alert_state"  # persisted {uid:ticker -> {date, band}} so restarts don't re-alert
 
 # Rohan's picks: ping the "rohan stock picks" role whenever he trades.
 ROHAN_USER_ID = "688444350325456939"
@@ -2099,11 +2101,20 @@ class _TradeEditView(discord.ui.View):
 class StockCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-        # (uid, ticker) -> UTC date string of the last auto-swing alert (once/day)
-        self._swing_alerted: dict[tuple[str, str], str] = {}
+        # "uid:ticker" -> {"date": iso, "band": int} — highest 10% band alerted today.
+        # Persisted to a bot setting so a restart can't re-fire the same alert.
+        self._swing_alerted: dict[str, dict] = {}
         self.snapshot_loop.start()
         self.monitor_loop.start()
         self.daily_digest.start()
+
+    async def cog_load(self) -> None:
+        raw = await queries.get_bot_setting(_SWING_STATE_SETTING)
+        if raw:
+            try:
+                self._swing_alerted = json.loads(raw)
+            except Exception:
+                self._swing_alerted = {}
 
     def cog_unload(self) -> None:
         self.snapshot_loop.cancel()
@@ -2369,23 +2380,26 @@ class StockCog(commands.Cog):
         for h in holdings:
             holders.setdefault(h["ticker"], []).append(h["discord_user"])
         channel = self.bot.get_channel(await self._alerts_channel_id())
+        changed = False
         for ticker, uids in holders.items():
             q = quotes.get(ticker)
             if not q:
                 continue
             pct = _swing_pct(q["price"], q.get("prev_close"))
-            if abs(pct) < SWING_THRESHOLD_PCT:
+            band = int(abs(pct) // 10)  # 1 = 10–19%, 2 = 20–29%, … (0 = below threshold)
+            if band < 1:
                 continue
-            # Once per (user, ticker) per UTC day
-            to_ping = [
-                uid for uid in uids
-                if self._swing_alerted.get((uid, ticker)) != today
-            ]
-            if not to_ping:
-                continue
-            for uid in to_ping:
-                self._swing_alerted[(uid, ticker)] = today
-            if channel is None:
+            # Alert each holder once per 10% BAND per day — so 10→12% doesn't re-fire,
+            # but 10→20% does. State is persisted, so a restart can't re-alert.
+            to_ping = []
+            for uid in uids:
+                st = self._swing_alerted.get(f"{uid}:{ticker}")
+                last_band = st["band"] if (st and st.get("date") == today) else 0
+                if band > last_band:
+                    to_ping.append(uid)
+                    self._swing_alerted[f"{uid}:{ticker}"] = {"date": today, "band": band}
+                    changed = True
+            if not to_ping or channel is None:
                 continue
             sign = "🟢 +" if pct >= 0 else "🔴 "
             mentions = " ".join(f"<@{uid}>" for uid in to_ping)
@@ -2397,6 +2411,9 @@ class StockCog(commands.Cog):
                 )
             except discord.HTTPException:
                 log.exception("monitor_loop: failed to post swing alert")
+        if changed:  # persist (today only) so restarts don't re-alert
+            self._swing_alerted = {k: v for k, v in self._swing_alerted.items() if v.get("date") == today}
+            await queries.set_bot_setting(_SWING_STATE_SETTING, json.dumps(self._swing_alerted))
 
     @monitor_loop.before_loop
     async def _before_monitor_loop(self) -> None:
