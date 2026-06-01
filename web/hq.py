@@ -70,15 +70,27 @@ class AsyncTTLCache:
     - invalidate(): drop keys so the next request recomputes (used after a trade).
     """
 
+    _MAX_KEYS = 256   # bound memory: every distinct trader:<uid> would otherwise leak forever
+
     def __init__(self) -> None:
         self._entries: dict[str, tuple[float, object]] = {}   # key -> (stored_at, value)
         self._locks: dict[str, asyncio.Lock] = {}
+        self._refreshing: set[str] = set()                    # keys with an in-flight SWR refresh
 
     def _lock(self, key: str) -> asyncio.Lock:
         lk = self._locks.get(key)
         if lk is None:
             lk = self._locks[key] = asyncio.Lock()
         return lk
+
+    def _store(self, key: str, value) -> None:
+        self._entries[key] = (time.monotonic(), value)
+        if len(self._entries) > self._MAX_KEYS:               # evict the oldest entry + its lock
+            old = min(self._entries, key=lambda k: self._entries[k][0])
+            self._entries.pop(old, None)
+            lk = self._locks.get(old)
+            if lk is not None and not lk.locked():
+                self._locks.pop(old, None)
 
     def invalidate(self, *keys: str) -> None:
         for k in keys:
@@ -90,8 +102,9 @@ class AsyncTTLCache:
             age = time.monotonic() - hit[0]
             if age < ttl:
                 return hit[1]                                 # fresh
-            if swr and age < ttl + swr:                       # stale → serve + refresh
-                if not self._lock(key).locked():
+            if swr and age < ttl + swr:                       # stale → serve + refresh once
+                if key not in self._refreshing:               # synchronous guard: no double-spawn
+                    self._refreshing.add(key)
                     asyncio.create_task(self._refresh(key, compute))
                 return hit[1]
         async with self._lock(key):                           # miss → single-flight
@@ -99,15 +112,17 @@ class AsyncTTLCache:
             if hit is not None and (time.monotonic() - hit[0]) < ttl:
                 return hit[1]
             value = await compute()
-            self._entries[key] = (time.monotonic(), value)
+            self._store(key, value)
             return value
 
     async def _refresh(self, key: str, compute) -> None:
-        async with self._lock(key):
-            try:
-                self._entries[key] = (time.monotonic(), await compute())
-            except Exception:
-                log.exception("HQ cache refresh failed: %s", key)
+        try:
+            async with self._lock(key):
+                self._store(key, await compute())
+        except Exception:
+            log.exception("HQ cache refresh failed: %s", key)
+        finally:
+            self._refreshing.discard(key)
 
 
 _CACHE = AsyncTTLCache()
@@ -508,10 +523,13 @@ async def _build_stocks():
         today_trades.setdefault((r["discord_user"], r["ticker"]), []).append(dict(r))
     names = await _names(users)
 
-    # Prefetch positions/options for everyone, then one batched live-quote call so we can
-    # show each trader's open (unrealized) P&L and per-holding market value.
-    user_positions = {uid: await queries.get_stock_positions_full(uid) for uid in users}
-    user_options = {uid: await queries.get_option_positions_full(uid) for uid in users}
+    # Prefetch positions/options for everyone (concurrently — these are independent
+    # per-user reads), then one batched live-quote call so we can show each trader's
+    # open (unrealized) P&L and per-holding market value.
+    pos_list = await asyncio.gather(*[queries.get_stock_positions_full(u) for u in users])
+    opt_list = await asyncio.gather(*[queries.get_option_positions_full(u) for u in users])
+    user_positions = dict(zip(users, pos_list))
+    user_options = dict(zip(users, opt_list))
     all_tickers = sorted({p["ticker"] for ps in user_positions.values()
                           for p in ps if p.get("shares", 0) > 0})
     from bot.cogs.stock import fetch_quotes  # lazy import (heavy deps)
