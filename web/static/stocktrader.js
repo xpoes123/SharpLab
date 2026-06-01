@@ -19,15 +19,51 @@ let HOLD = [];                     // holdings (each carries a `history` daily-c
 let range = "1W";                  // shared selected range label
 let view = "portfolio";            // "portfolio" | <ticker> — what the main chart shows
 let CHART = null;                  // { series, lo, hi } of the drawn line, for hover lookups
+let sortCol = null;                // holdings sort column key (null = original order)
+let sortDir = -1;                  // 1 = asc, -1 = desc
+let pieMode = "alloc";             // allocation donut mode: "alloc" | "stocks" | "all"
+let SUMMARY = {};                  // last render()'s d.summary, for the donut
 const BENCH_COLOR = "#58a6ff";     // S&P line — distinct from grey reconstructed segment
+const PIE_COLORS = ["#7aa2f7", "#bb9af7", "#9ece6a", "#e0af68", "#f7768e", "#7dcfff", "#ff9e64", "#2ac3de", "#c0caf5", "#9d7cd8", "#41a6b5", "#73daca"];
+const PIE_GREY = "#565f89";        // Cash / Other slices
 
 const priceFmt = (v) => (Math.abs(v) >= 1000 ? money(v) : money2(v));        // hover tooltip
 const axisFmt = (v) => (Math.abs(v) >= 1000                                  // compact Y-axis
   ? "$" + (v / 1000).toFixed(Math.abs(v) >= 10000 ? 0 : 1) + "k"
   : "$" + v.toFixed(v < 100 ? 1 : 0));
 
+// Value for a given sort key on a holding. Change reads the selected-range pnl;
+// missing change/unrealized sink to the bottom, missing realized treated as 0.
+function sortVal(h, key) {
+  switch (key) {
+    case "ticker": return h.ticker;
+    case "shares": return h.shares;
+    case "dca": return h.dca;
+    case "cost_basis": return h.cost_basis;
+    case "change": { const p = h.period?.[range]?.pnl; return p == null ? -Infinity : p; }
+    case "unrealized": return h.unrealized == null ? -Infinity : h.unrealized;
+    case "realized": return h.realized || 0;
+    default: return 0;
+  }
+}
+
+// HOLD sorted per sortCol/sortDir; original order when no column is active.
+function sortedHoldings() {
+  if (!sortCol) return HOLD;
+  const rows = HOLD.slice();
+  rows.sort((a, b) => {
+    const va = sortVal(a, sortCol), vb = sortVal(b, sortCol);
+    const c = sortCol === "ticker" ? String(va).localeCompare(String(vb)) : (va - vb);
+    return c * sortDir;
+  });
+  return rows;
+}
+
 function holdingsTable() {
   if (!HOLD.length) return `<div class="muted" style="padding:18px">No open stock positions.</div>`;
+  // Sortable header: clicking a th sorts by its key; arrow marks the active column.
+  const arrow = (key) => sortCol === key ? (sortDir === 1 ? " ▲" : " ▼") : "";
+  const th = (key, label, num) => `<th${num ? ' class="num"' : ""} data-sort="${key}" style="cursor:pointer;user-select:none">${label}${arrow(key)}</th>`;
   // Her ACTUAL P/L over the selected period (holding-aware) — a stock bought mid-period
   // only counts gains since the buy, so this won't show a phantom move she didn't capture.
   const chgCell = (h) => {
@@ -47,9 +83,9 @@ function holdingsTable() {
       <td class="num muted">${money2(h.dca)}</td><td class="num">${money(h.cost_basis)}</td>
       <td class="num">${chgCell(h)}</td><td class="num">${ucell}</td><td class="num">${rcell}</td></tr>`;
   };
-  return `<table><thead><tr><th>Ticker</th><th class="num">Shares</th><th class="num">Avg</th><th class="num">Cost basis</th>
-      <th class="num">Change</th><th class="num">Unrealized</th><th class="num">Realized</th></tr></thead>
-    <tbody>${HOLD.map(hRow).join("")}</tbody></table>`;
+  return `<table><thead><tr>${th("ticker", "Ticker", false)}${th("shares", "Shares", true)}${th("dca", "Avg", true)}${th("cost_basis", "Cost basis", true)}
+      ${th("change", "Change", true)}${th("unrealized", "Unrealized", true)}${th("realized", "Realized", true)}</tr></thead>
+    <tbody>${sortedHoldings().map(hRow).join("")}</tbody></table>`;
 }
 
 async function main() {
@@ -235,10 +271,88 @@ function setView(v) {
   updateChart();
 }
 
+// Donut: arcs drawn as <circle> strokes via dasharray, accumulating a negative
+// dashoffset so each slice begins where the previous ended; rotated -90° to start
+// at top. Center hole shows the total. slices = [{label, value, color}].
+function donutSVG(slices, total) {
+  const size = 180, sw = 30, r = (size - sw) / 2, c = 2 * Math.PI * r, cx = size / 2;
+  let off = 0;
+  const arcs = slices.map((s) => {
+    const frac = total > 0 ? s.value / total : 0;
+    const arc = `<circle cx="${cx}" cy="${cx}" r="${r}" fill="none" stroke="${s.color}" stroke-width="${sw}"
+      stroke-dasharray="${(frac * c).toFixed(2)} ${c.toFixed(2)}" stroke-dashoffset="${(-off).toFixed(2)}"/>`;
+    off += frac * c;
+    return arc;
+  }).join("");
+  return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" style="flex:0 0 auto">
+    <g transform="rotate(-90 ${cx} ${cx})">${arcs}</g>
+    <text x="${cx}" y="${cx - 6}" text-anchor="middle" font-size="11" fill="var(--muted)">Total</text>
+    <text x="${cx}" y="${cx + 13}" text-anchor="middle" font-size="16" font-weight="800" fill="var(--fg)">${money(total)}</text>
+  </svg>`;
+}
+
+// Build the slice list for the active pieMode, color it, and roll a long tail into
+// a single grey "Other" so the donut never gets unreadable.
+function pieSlices() {
+  const s = SUMMARY;
+  let raw;
+  if (pieMode === "alloc") {
+    raw = [
+      { label: "Stocks", value: s.stock_value || 0, grey: false },
+      { label: "Options", value: s.options_value || 0, grey: false },
+      { label: "Cash", value: s.cash || 0, grey: true },
+    ].filter((x) => x.value > 0);
+  } else {
+    const stocks = HOLD
+      .map((h) => ({ label: h.ticker, value: (h.price != null && h.price > 0) ? h.shares * h.price : 0, grey: false }))
+      .filter((x) => x.value > 0)
+      .sort((a, b) => b.value - a.value);
+    if (pieMode === "stocks") {
+      raw = stocks;
+    } else { // "all": stocks + options + cash
+      raw = stocks.slice();
+      if ((s.options_value || 0) > 0) raw.push({ label: "Options", value: s.options_value, grey: false });
+      if ((s.cash || 0) > 0) raw.push({ label: "Cash", value: s.cash, grey: true });
+      raw.sort((a, b) => b.value - a.value);
+    }
+  }
+  if (raw.length > 11) {
+    const keep = raw.slice(0, 11);
+    const other = raw.slice(11).reduce((sum, x) => sum + x.value, 0);
+    keep.push({ label: "Other", value: other, grey: true });
+    raw = keep;
+  }
+  // Assign palette colors; grey slices (Cash/Other) get the fixed grey.
+  let ci = 0;
+  return raw.map((x) => ({ label: x.label, value: x.value, color: x.grey ? PIE_GREY : PIE_COLORS[ci++ % PIE_COLORS.length] }));
+}
+
+const PIE_MODES = [["alloc", "Account"], ["stocks", "Stocks"], ["all", "All"]];
+
+function pieBody() {
+  const buttons = `<div class="stakebtns" style="margin-bottom:12px">
+    ${PIE_MODES.map(([m, lbl]) => `<button data-pie="${m}" class="rangebtn${m === pieMode ? " on" : ""}">${lbl}</button>`).join("")}</div>`;
+  const slices = pieSlices();
+  const total = slices.reduce((sum, x) => sum + x.value, 0);
+  if (total <= 0) return `${buttons}<div class="muted" style="padding:18px">No allocation data.</div>`;
+  const legend = slices.map((x) => {
+    const pct = (x.value / total * 100).toFixed(1);
+    return `<div style="display:flex;align-items:center;gap:8px;min-width:180px;flex:1 1 200px">
+      <span style="width:11px;height:11px;border-radius:3px;background:${x.color};flex:0 0 auto"></span>
+      <span style="flex:1">${x.label}</span>
+      <span class="muted" style="white-space:nowrap">${money(x.value)} · ${pct}%</span></div>`;
+  }).join("");
+  return `${buttons}<div style="display:flex;gap:24px;align-items:center;flex-wrap:wrap">
+    ${donutSVG(slices, total)}
+    <div style="display:flex;flex-wrap:wrap;gap:10px 18px;flex:1 1 280px">${legend}</div>
+  </div>`;
+}
+
 function render(d) {
   const u = d.user, s = d.summary || {};
   EQUITY = d.equity || [];
   BENCH = d.benchmark || [];
+  SUMMARY = d.summary || {};
   const av = u.avatar_url;
 
   let html = `<div class="profhead">
@@ -271,6 +385,9 @@ function render(d) {
     </div>`;
 
   HOLD = d.stock_holdings || [];
+  html += `<h2>Allocation</h2>
+    <div class="card" id="pieBox">${pieBody()}</div>`;
+
   html += `<h2>Stock Holdings <span class="muted" style="font-size:13px;font-weight:400">— click a row to chart it</span></h2>
     <div class="card" style="padding:0" id="holdBox">${holdingsTable()}</div>`;
 
@@ -302,6 +419,23 @@ function render(d) {
       document.querySelectorAll(".rangebtn[data-range]").forEach((x) => x.classList.toggle("on", x === rb));
       document.getElementById("holdBox").innerHTML = holdingsTable();
       updateChart();
+      return;
+    }
+
+    const pie = e.target.closest("[data-pie]");
+    if (pie) {  // allocation donut mode toggle
+      pieMode = pie.dataset.pie;
+      document.querySelectorAll("[data-pie]").forEach((x) => x.classList.toggle("on", x === pie));
+      document.getElementById("pieBox").innerHTML = pieBody();
+      return;
+    }
+
+    const th = e.target.closest("th[data-sort]");
+    if (th) {  // sort holdings — flip dir on the active column, else set a sensible default dir
+      const key = th.dataset.sort;
+      if (sortCol === key) sortDir = -sortDir;
+      else { sortCol = key; sortDir = key === "ticker" ? 1 : -1; }
+      document.getElementById("holdBox").innerHTML = holdingsTable();
       return;
     }
 
