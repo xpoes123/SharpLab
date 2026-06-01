@@ -34,14 +34,22 @@ async function main() {
 function render(d) {
   const u = d.user;
   const p = d.pickem || {};
+  const pr = d.progression || {};
+  const lvl = pr.level || 1;
+  const pct = pr.xp_for_next ? Math.min(100, Math.round((100 * (pr.xp_into_level || 0)) / pr.xp_for_next)) : 0;
   const elo = (d.elo || []).slice().sort((a, b) => b.rating - a.rating);
   const av = u.avatar_url;
 
   let html = `<div class="profhead">
     ${av ? `<img class="avatar lg" src="${av}" alt="">` : `<div class="avatar lg"></div>`}
-    <h1>${u.username}</h1></div>
+    <h1>${u.username}</h1>
+    <span class="lvlpill">Lv ${lvl}</span></div>
 
     <div class="grid">
+      <div class="card stat"><div class="label">Level</div>
+        <div class="value">${lvl}</div>
+        <div class="lvlbar"><span style="width:${pct}%"></span></div>
+        <div class="muted" style="font-size:12px">${num(pr.xp_into_level || 0)}/${num(pr.xp_for_next || 0)} XP · ${num(pr.total_xp || 0)} total</div></div>
       <div class="card stat"><div class="label">Pick'em Units</div>
         <div class="value ${cls(p.units || 0)}">${sign((p.units || 0).toFixed(1))}u</div></div>
       <div class="card stat"><div class="label">Pick'em Record</div>
@@ -54,6 +62,17 @@ function render(d) {
           ${sign(num((d.stocks && d.stocks.realized_pnl) || 0))}</div>
         <div class="muted" style="font-size:12px">${(d.stocks && d.stocks.open_positions) || 0} open</div></div>
     </div>`;
+
+  const ach = pr.achievements || {};
+  const unlocked = ach.unlocked || [];
+  html += `<h2>🏆 Achievements <span class="muted" style="font-size:14px">${ach.unlocked_count || 0}/${ach.total || 0}</span></h2>
+    <div class="card">${
+      unlocked.length
+        ? `<div class="achgrid">` + unlocked.map((a) =>
+            `<div class="achbadge" title="${a.name} — ${a.description} (+${a.xp} XP)">
+               <span class="ae">${a.emoji}</span><span class="an">${a.name}</span></div>`).join("") + `</div>`
+        : `<span class="muted">No achievements yet.</span>`
+    }</div>`;
 
   if (d.chess) {
     const c = d.chess;

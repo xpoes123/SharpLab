@@ -16,8 +16,31 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from db import queries
+from shared.achievements import ALL_ACHIEVEMENTS
 from shared.pickem_scoring import compute_pickem_standings
 from web import auth
+
+
+async def _progression_payload(uid: str) -> dict:
+    """Level/XP + unlocked achievements for a user (HQ profile cards)."""
+    xp = await queries.get_or_create_xp(uid)
+    total_xp, level = xp["total_xp"], xp["level"]
+    floor = queries.xp_for_level(level)
+    nxt = queries.xp_for_level(level + 1)
+    unlocked_ids = {r["achievement_id"] for r in await queries.get_user_achievements(uid)}
+    unlocked = [
+        {"id": a.id, "name": a.name, "emoji": a.emoji, "description": a.description,
+         "category": a.category, "xp": a.xp_reward}
+        for a in ALL_ACHIEVEMENTS if a.id in unlocked_ids
+    ]
+    return {
+        "level": level,
+        "total_xp": total_xp,
+        "xp_into_level": total_xp - floor,
+        "xp_for_next": max(1, nxt - floor),
+        "achievements": {"unlocked": unlocked, "unlocked_count": len(unlocked),
+                         "total": len(ALL_ACHIEVEMENTS)},
+    }
 
 router = APIRouter(prefix="/api/v1")
 
@@ -170,6 +193,7 @@ async def hq_me(request: Request):
         "is_owner": bool(os.environ.get("OWNER_DISCORD_ID")) and uid == os.environ.get("OWNER_DISCORD_ID"),
         "user": {"id": uid, "username": sess.get("username"), "avatar": sess.get("avatar")},
         "balance": balance,
+        "progression": await _progression_payload(uid),
         "pickem": me,
         "elo": [
             {"game": r["game"], "rating": r["rating"], "games_played": r["games_played"],
@@ -285,10 +309,27 @@ async def hq_server():
         "pickem_players": len(standings),
     }
 
+    # Levels + achievements leaderboards
+    xp_lb = await queries.get_xp_leaderboard(limit=10)
+    levels_top = [
+        {"username": r["username"] or f"Player {r['discord_user'][:6]}",
+         "level": r["level"], "xp": r["total_xp"]}
+        for r in xp_lb
+    ]
+    ach_lb = await queries.get_achievement_leaderboard(limit=10)
+    ach_total = len(ALL_ACHIEVEMENTS)
+    ach_top = [
+        {"username": r["username"] or f"Player {r['discord_user'][:6]}",
+         "unlocked": r["unlocked"], "total": ach_total}
+        for r in ach_lb
+    ]
+
     data = {
         "totals": totals,
         "casino": casino_top,
         "pickem": pickem_top,
+        "levels": levels_top,
+        "achievements": ach_top,
         "elo_games": await _elo_games(),
         "stocks": await _stock_leaders(),
         "chess": await _chess_leaderboard(),
@@ -361,6 +402,7 @@ async def hq_profile(handle: str):
                  "losses": r["losses"], "games_played": r["games_played"]} for r in elo],
         "casino": {"balance": balance},
         "stocks": {"realized_pnl": realized, "open_positions": open_positions},
+        "progression": await _progression_payload(uid),
         "chess": await _chess_for_handle(who.get("username") or ""),
     }
 
