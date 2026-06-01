@@ -323,11 +323,12 @@ async def activity_channel(bot):
 
 
 async def award_xp(bot, uid: str, amount: int, channel=None) -> None:
-    """Add XP for an action and post a server level-up message if it bumped a level.
-    Best-effort: never raises into the caller."""
+    """Add XP for an action. Only shout out level-ups at 5-level MILESTONES (5,
+    10, 15, …) so routine leveling — especially from chat XP — doesn't spam the
+    channel. Best-effort: never raises into the caller."""
     try:
         res = await queries.add_xp(uid, amount)
-        if res.get("leveled_up"):
+        if res.get("leveled_up") and (res["level"] // 5) > (res["old_level"] // 5):
             await _announce_levelup(bot, uid, res["level"], channel)
     except Exception:
         log.debug("award_xp failed for %s", uid, exc_info=True)
@@ -598,13 +599,13 @@ class ProgressionCog(commands.Cog):
             self._last_check_id = new_entries[-1]["id"]
             from collections import Counter
             plays = Counter(e["discord_user"] for e in new_entries)
-            ch = await activity_channel(self.bot)  # server channel, not DM
+            ch = await activity_channel(self.bot)  # server channel for milestone level-ups
             for uid, n in plays.items():
                 try:
-                    await award_xp(self.bot, uid, n * XP_GAME, ch)  # XP for playing
+                    await award_xp(self.bot, uid, n * XP_GAME, ch)  # XP for playing (milestone-gated)
                     newly = await evaluate_user_achievements(uid)
                     if newly:
-                        await announce_achievements(self.bot, uid, newly, ch)
+                        await announce_achievements(self.bot, uid, newly)  # DM, not channel
                 except Exception:
                     log.warning("Failed to check achievements for user %s", uid, exc_info=True)
         except Exception:
