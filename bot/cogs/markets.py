@@ -16,7 +16,8 @@ from dotenv import load_dotenv
 from db import queries
 from shared.models import get_team_abbr, get_kalshi_code
 from shared.odds_utils import prob_to_american, kalshi_exec_price, KALSHI_TAKER_FEE
-from .odds import KALSHI_SERIES, game_autocomplete, mlb_game_autocomplete
+from .odds import (KALSHI_SERIES, game_autocomplete, mlb_game_autocomplete,
+                   log_game_autocomplete, mlb_log_game_autocomplete)
 import logging
 
 log = logging.getLogger(__name__)
@@ -302,14 +303,14 @@ class MarketsCog(commands.Cog):
         await self._kalshi_impl(interaction, game, "mlb")
 
     @kalshi_group.command(name="nba-book", description="Full Kalshi orderbook + spread/total markets for an NBA game")
-    @app_commands.describe(game="Select a game")
-    @app_commands.autocomplete(game=game_autocomplete)
+    @app_commands.describe(game="Select a game (includes 🔴 LIVE in-progress games)")
+    @app_commands.autocomplete(game=log_game_autocomplete)
     async def kalshi_orderbook(self, interaction: discord.Interaction, game: str) -> None:
         await self._orderbook_impl(interaction, game, "nba")
 
     @kalshi_group.command(name="mlb-book", description="Full Kalshi orderbook + run line/total markets for an MLB game")
-    @app_commands.describe(game="Select a game")
-    @app_commands.autocomplete(game=mlb_game_autocomplete)
+    @app_commands.describe(game="Select a game (includes 🔴 LIVE in-progress games)")
+    @app_commands.autocomplete(game=mlb_log_game_autocomplete)
     async def mlb_kalshi_orderbook(self, interaction: discord.Interaction, game: str) -> None:
         await self._orderbook_impl(interaction, game, "mlb")
 
