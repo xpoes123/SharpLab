@@ -8,7 +8,36 @@ import pytest
 
 import db.schema as _schema
 import db.queries as _queries
-from bot.cogs.stock import _manual_triggered, _swing_pct, _display_ticker, price_within_tolerance
+from bot.cogs.stock import (
+    _manual_triggered, _swing_pct, _display_ticker, price_within_tolerance,
+    _fmt_price, SWING_MIN_PRICE,
+)
+
+
+def test_fmt_price_adaptive_precision():
+    # >= $1: two decimals, with thousands separators
+    assert _fmt_price(510.69) == "510.69"
+    assert _fmt_price(1234.5) == "1,234.50"
+    assert _fmt_price(1.0) == "1.00"
+    assert _fmt_price(0.0) == "0.00"
+    # sub-dollar down to a cent: four decimals (ERBB's DCA was $0.0115)
+    assert _fmt_price(0.0115) == "0.0115"
+    assert _fmt_price(0.5) == "0.5000"
+    # sub-cent: enough decimals to actually show the value, no $0.00 collapse
+    assert _fmt_price(0.0003) == "0.0003"   # the ERBB price that read "$0.00 → $0.00"
+    assert _fmt_price(0.0002) == "0.0002"
+    # currency suffix is optional and omitted by default
+    assert _fmt_price(12.5, "USD") == "12.50 USD"
+    assert _fmt_price(0.0003, "USD") == "0.0003 USD"
+    # negative prices keep their sign
+    assert _fmt_price(-0.0003) == "-0.0003"
+
+
+def test_swing_min_price_floor_excludes_penny_stocks():
+    # ERBB ticked $0.0002 -> $0.0003: a real +50% but pure penny-stock noise.
+    assert _swing_pct(0.0003, 0.0002) == pytest.approx(50.0)
+    assert 0.0003 < SWING_MIN_PRICE        # so the swing loop skips it
+    assert not (5.0 < SWING_MIN_PRICE)     # a normal $5 stock still alerts
 
 
 def test_price_within_tolerance():
