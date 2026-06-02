@@ -1601,6 +1601,7 @@ async def _compute_server_portfolio() -> dict | None:
     option_prices = await _price_option_positions(open_option_specs)
 
     per_ticker: dict[str, dict] = {}
+    per_option: dict[tuple, dict] = {}
     stock_value = stock_cost = day_change = 0.0
     realized_total = 0.0
     options_value = options_unrealized = options_cost = 0.0
@@ -1642,6 +1643,15 @@ async def _compute_server_portfolio() -> dict | None:
             options_value += pl["value"]
             options_unrealized += pl["unrealized"]
             options_cost += pl["cost"]
+            o = per_option.setdefault(key, {
+                "underlying": p["underlying"], "opt_type": p["opt_type"],
+                "strike": p["strike"], "expiry": p["expiry"],
+                "net_contracts": 0.0, "value": 0.0, "unrealized": 0.0, "holders": 0,
+            })
+            o["net_contracts"] += p["net_contracts"]
+            o["value"] += pl["value"]
+            o["unrealized"] += pl["unrealized"]
+            o["holders"] += 1
         if held:
             holders.add(uid)
 
@@ -1651,6 +1661,7 @@ async def _compute_server_portfolio() -> dict | None:
     base = stock_value - day_change
     return {
         "per_ticker": per_ticker,
+        "per_option": per_option,
         "num_traders": len(users),
         "num_holders": len(holders),
         "stock_value": stock_value,
@@ -1700,9 +1711,25 @@ def _build_server_overview_embed(name: str, d: dict) -> discord.Embed:
     embed.add_field(name="Total P/L", value=f"`{_fmt_pnl(d['total_pnl'])}`", inline=True)
     embed.add_field(name="Today (stocks)",
                     value=f"`{_fmt_change(d['day_change'], d['day_pct'])}`", inline=True)
-    embed.set_footer(
-        text=f"{d['num_holders']} active holder(s) · {len(d['per_ticker'])} ticker(s)"
-    )
+
+    # Open option positions across the server (most valuable first).
+    per_option = d.get("per_option") or {}
+    if per_option:
+        olines: list[str] = []
+        for _key, o in sorted(per_option.items(), key=lambda kv: abs(kv[1]["value"]), reverse=True)[:8]:
+            emoji = "🟢" if o["unrealized"] >= 0 else "🔴"
+            n = o["net_contracts"]
+            qty = f"{abs(n):g}x {'long' if n >= 0 else 'short'}"
+            olines.append(
+                f"{emoji} `{_option_label(o)}` · {qty} · **{_fmt_money(o['value'])}** "
+                f"· {o['holders']} holder{'s' if o['holders'] != 1 else ''}"
+            )
+        embed.add_field(name="📄 Open Options", value="\n".join(olines), inline=False)
+
+    foot = f"{d['num_holders']} active holder(s) · {len(d['per_ticker'])} ticker(s)"
+    if per_option:
+        foot += f" · {len(per_option)} option position(s)"
+    embed.set_footer(text=foot)
     return embed
 
 
