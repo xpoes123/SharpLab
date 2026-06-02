@@ -192,6 +192,27 @@ async def get_games_started_before(cutoff_utc_iso: str) -> list[Game]:
     return [_row_to_game(row) for row in rows]
 
 
+async def get_live_games(sport: str | None = None, window_hours: int = 6) -> list[Game]:
+    """In-progress games: started but not yet final, within the last `window_hours`.
+    Used by the live in-play Kalshi swing watcher. (Game has no status field, so
+    the `!= 'final'` gate is applied in SQL.)"""
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    lo = (now - timedelta(hours=window_hours)).isoformat()
+    hi = now.isoformat()
+    q = "SELECT * FROM games WHERE start_time <= ? AND start_time >= ? AND status != 'final'"
+    params: list = [hi, lo]
+    if sport:
+        q += " AND sport = ?"
+        params.append(sport)
+    q += " ORDER BY start_time ASC"
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(q, params)
+        rows = await cursor.fetchall()
+    return [_row_to_game(row) for row in rows]
+
+
 async def get_loggable_games(filter_str: str = "", sport: str = "nba") -> list[Game]:
     """Games you can still log a bet on: upcoming OR live (started, not yet final),
     within the last 6h. Ordered soonest-first. For /bet log incl. in-game bets."""

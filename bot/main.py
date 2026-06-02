@@ -114,6 +114,7 @@ COGS = [
     "bot.cogs.rohan_nlp",
     "bot.cogs.bet_nlp",
     "bot.cogs.livebets",
+    "bot.cogs.livekalshi",
     "bot.cogs.tradingfloor",
     "bot.cogs.quizbowl",
     "bot.cogs.valorant",
