@@ -107,14 +107,30 @@ class LiveBets(commands.Cog):
         await queries.set_bot_setting(_CHANNEL_SETTING, str(channel.id))
         await interaction.response.send_message(f"✅ Live-bet swing alerts will post in {channel.mention}.", ephemeral=True)
 
+    @app_commands.command(name="livebet-alerts", description="Opt in/out of live in-game swing pings on your bets")
+    @app_commands.describe(enabled="On to get pinged when your live bets swing; off to stop (default: off)")
+    @app_commands.choices(enabled=[
+        app_commands.Choice(name="on", value="on"),
+        app_commands.Choice(name="off", value="off"),
+    ])
+    async def set_alerts(self, interaction: discord.Interaction, enabled: app_commands.Choice[str]) -> None:
+        on = enabled.value == "on"
+        await queries.set_livebet_alerts_enabled(str(interaction.user.id), on)
+        msg = ("✅ You'll get pinged when your live in-game bets swing hard."
+               if on else "✅ Live-bet swing pings are off for you.")
+        await interaction.response.send_message(msg, ephemeral=True)
+
     @tasks.loop(minutes=POLL_MINUTES)
     async def watch_loop(self) -> None:
         try:
             bets = await queries.get_open_bets_on_live_games()
+            opted_in = await queries.get_livebet_optin_users()
         except Exception:
             log.exception("livebets: failed to load live bets")
             return
-        bets = [b for b in bets if b["market"] in _RESOLVERS and b["sport"] in KALSHI_DERIV]
+        # Opt-in only: never ping a bettor who hasn't enabled live swing alerts.
+        bets = [b for b in bets if b["market"] in _RESOLVERS and b["sport"] in KALSHI_DERIV
+                and b["discord_user"] in opted_in]
         if not bets:
             return
         by_sport: dict[str, list[dict]] = defaultdict(list)

@@ -182,7 +182,8 @@ CREATE INDEX IF NOT EXISTS idx_paper_bets_user_status ON paper_bets(discord_user
 CREATE TABLE IF NOT EXISTS user_settings (
     discord_user          TEXT PRIMARY KEY,
     craps_default_bet     INTEGER,
-    crapless_default_bet  INTEGER
+    crapless_default_bet  INTEGER,
+    livebet_alerts        INTEGER NOT NULL DEFAULT 0  -- opt-in to live in-game bet swing pings
 );
 
 CREATE TABLE IF NOT EXISTS discord_users (
@@ -736,6 +737,11 @@ async def init_db() -> None:
             pass
         try:  # add `books` to an already-existing user_settings table
             await db.execute("ALTER TABLE user_settings ADD COLUMN books TEXT NOT NULL DEFAULT ''")
+            await db.commit()
+        except Exception:
+            pass
+        try:  # add `livebet_alerts` opt-in flag to an already-existing user_settings table
+            await db.execute("ALTER TABLE user_settings ADD COLUMN livebet_alerts INTEGER NOT NULL DEFAULT 0")
             await db.commit()
         except Exception:
             pass
