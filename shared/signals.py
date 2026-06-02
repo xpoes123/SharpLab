@@ -215,3 +215,18 @@ def detect_ml_moves(baseline: dict, current: dict,
                 "books": list(moves.keys()), "lagging": lagging,
                 "avg_cents": round(sum(abs(d) for d in moves.values()) / len(moves))}
     return None
+
+
+def detect_live_swing(readings: list[tuple[float, float]], now: float,
+                      window_seconds: float, threshold_cents: float) -> tuple[float, float, float] | None:
+    """In-play single-market velocity check (unlike steam, which needs multi-book
+    consensus). `readings` is an ascending list of (timestamp, cents) for one
+    side's implied win probability. Returns (old, new, delta) when the newest
+    reading and the oldest reading still inside the window differ by at least
+    `threshold_cents`, else None. delta > 0 means that side firmed."""
+    within = [(t, c) for t, c in readings if t >= now - window_seconds]
+    if len(within) < 2:
+        return None
+    old, new = within[0][1], within[-1][1]
+    delta = new - old
+    return (old, new, delta) if abs(delta) >= threshold_cents else None

@@ -3,8 +3,37 @@ from __future__ import annotations
 
 from shared.signals import (
     find_ml_arb, find_total_middle, find_spread_middle, detect_ml_moves,
-    middle_profit, estimate_middle_hit,
+    middle_profit, estimate_middle_hit, detect_live_swing,
 )
+
+
+def test_live_swing_fires_on_big_move_within_window():
+    # 50¢ → 68¢ over 60s: an 18¢ swing inside the 90s window, threshold 15.
+    readings = [(1000.0, 50.0), (1030.0, 58.0), (1060.0, 68.0)]
+    res = detect_live_swing(readings, now=1060.0, window_seconds=90, threshold_cents=15)
+    assert res == (50.0, 68.0, 18.0)  # delta>0 → home firmed
+
+
+def test_live_swing_delta_sign_when_side_fades():
+    readings = [(1000.0, 60.0), (1060.0, 42.0)]
+    res = detect_live_swing(readings, now=1060.0, window_seconds=90, threshold_cents=15)
+    assert res is not None and res[2] == -18.0  # negative → away firmed
+
+
+def test_live_swing_ignores_old_readings_outside_window():
+    # The 50→70 jump is 200s apart; only the 70→72 pair sits inside a 90s window.
+    readings = [(1000.0, 50.0), (1200.0, 70.0), (1240.0, 72.0)]
+    assert detect_live_swing(readings, now=1240.0, window_seconds=90, threshold_cents=15) is None
+
+
+def test_live_swing_below_threshold_is_none():
+    readings = [(1000.0, 50.0), (1060.0, 60.0)]  # 10¢ < 15¢ threshold
+    assert detect_live_swing(readings, now=1060.0, window_seconds=90, threshold_cents=15) is None
+
+
+def test_live_swing_needs_two_readings():
+    assert detect_live_swing([(1000.0, 50.0)], now=1000.0, window_seconds=90, threshold_cents=15) is None
+    assert detect_live_swing([], now=1000.0, window_seconds=90, threshold_cents=15) is None
 
 
 def test_ml_arb_detected():
