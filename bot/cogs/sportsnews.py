@@ -65,6 +65,12 @@ call-ups and recalls, contract purchases/selections, option/DFA moves, a debut f
 non-star, and other day-to-day transactions. A whole fanbase should not be pinged for \
 a fringe roster move.
 
+ALSO DROP regular-season game recaps and box-score stories: a final score, a \
+"Team A tops/beats/outlasts Team B" headline, a strong individual stat line, or a \
+personal counting-stat milestone (Nth career win/hit/HR/strikeout/point). Only a \
+PLAYOFF, elimination, or championship-clinching result clears the bar — routine \
+in-season game results never do, even with a milestone in the headline.
+
 If a headline summarizes/analyzes several moves instead of reporting one fresh event, \
 DROP it. When unsure, DROP it.
 
