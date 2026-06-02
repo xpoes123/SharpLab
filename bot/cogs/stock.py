@@ -44,6 +44,7 @@ log = logging.getLogger(__name__)
 DEFAULT_STOCK_ALERTS_CHANNEL_ID = 1510100250411536495  # auto-swing alerts land here
 MONITOR_POLL_MINUTES = 5
 SWING_THRESHOLD_PCT = 10.0  # auto-alert when a held ticker moves this % on the day
+SWING_MIN_PRICE = 1.0  # skip swing alerts for sub-$1 tickers — penny stocks trip the % on meaningless ticks
 _ALERTS_CHANNEL_SETTING = "stock_alerts_channel"
 _DIGEST_SETTING = "last_stock_digest"  # ET date of the last daily portfolio report
 _EARNINGS_SETTING = "last_earnings_digest"  # ET date of the last earnings-on-deck digest
@@ -123,6 +124,21 @@ def _normalize_symbol(raw: str) -> str:
 
 def _fmt_money(amount: float, currency: str = "USD") -> str:
     return f"{amount:,.2f} {currency}"
+
+
+def _fmt_price(price: float, currency: str = "") -> str:
+    """Per-share price with adaptive precision so sub-dollar prices don't
+    collapse to 0.00. >=$1 (or zero): 2dp; >=$0.01: 4dp; otherwise enough
+    decimals to show the value (trailing zeros trimmed). e.g. 510.69, 0.0115,
+    0.0003. Optional currency suffix."""
+    a = abs(price)
+    if a >= 1 or a == 0:
+        s = f"{price:,.2f}"
+    elif a >= 0.01:
+        s = f"{price:.4f}"
+    else:
+        s = f"{price:.8f}".rstrip("0").rstrip(".")
+    return f"{s} {currency}".rstrip()
 
 
 def _fmt_change(change: float, pct: float) -> str:
@@ -853,13 +869,13 @@ def _build_overview_embed(target: discord.abc.User, d: dict) -> discord.Embed:
     for h in d["stocks"]:
         sym = h["sym"]
         if not h["available"]:
-            lines.append(f"`{sym}` — {h['shares']:g} sh @ {h['dca']:,.2f} DCA · *price unavailable*")
+            lines.append(f"`{sym}` — {h['shares']:g} sh @ {_fmt_price(h['dca'])} DCA · *price unavailable*")
             continue
         sign = "+" if h["pl"] >= 0 else ""
         emoji = "🟢" if h["pl"] >= 0 else "🔴"
         lines.append(
-            f"{emoji} [`{sym}`]({_yahoo_url(sym)}) · {h['shares']:g} sh @ {h['dca']:,.2f} → "
-            f"**{h['price']:,.2f}** · P/L `{sign}{h['pl']:,.2f} ({sign}{h['pl_pct']:.2f}%)`"
+            f"{emoji} [`{sym}`]({_yahoo_url(sym)}) · {h['shares']:g} sh @ {_fmt_price(h['dca'])} → "
+            f"**{_fmt_price(h['price'])}** · P/L `{sign}{h['pl']:,.2f} ({sign}{h['pl_pct']:.2f}%)`"
         )
 
     option_lines: list[str] = []
@@ -919,7 +935,7 @@ def _build_today_embed(target: discord.abc.User, d: dict) -> discord.Embed:
         psign = "+" if h["day_pct"] >= 0 else ""
         emoji = "🟢" if h["day_change"] >= 0 else ("🔴" if h["day_change"] < 0 else "⚪")
         lines.append(
-            f"{emoji} [`{h['sym']}`]({_yahoo_url(h['sym'])}) · {h['prev']:,.2f} → **{h['price']:,.2f}** "
+            f"{emoji} [`{h['sym']}`]({_yahoo_url(h['sym'])}) · {_fmt_price(h['prev'])} → **{_fmt_price(h['price'])}** "
             f"`{psign}{h['day_pct']:.2f}%` · {sign}{_fmt_money(h['day_change'])}"
         )
     unpriced = [h for h in d["stocks"] if not h.get("available")]
@@ -2685,6 +2701,8 @@ class StockCog(commands.Cog):
             q = quotes.get(ticker)
             if not q:
                 continue
+            if q["price"] < SWING_MIN_PRICE:
+                continue  # penny stocks swing wildly on noise; don't ping
             pct = _swing_pct(q["price"], q.get("prev_close"))
             band = int(abs(pct) // 10)  # 1 = 10–19%, 2 = 20–29%, … (0 = below threshold)
             if band < 1:
@@ -2704,7 +2722,7 @@ class StockCog(commands.Cog):
             try:
                 await channel.send(
                     f"⚠️ **{_display_ticker(ticker)}** {sign}{pct:.1f}% today "
-                    f"(${prev:,.2f} → ${q['price']:,.2f}) — {mentions}"
+                    f"(${_fmt_price(prev)} → ${_fmt_price(q['price'])}) — {mentions}"
                 )
             except discord.HTTPException:
                 log.exception("monitor_loop: failed to post swing alert")
@@ -2741,7 +2759,7 @@ class StockCog(commands.Cog):
         url = _yahoo_url(symbol)
 
         embed = discord.Embed(title=f"{quote['name']} ({symbol})", url=url, color=color)
-        embed.add_field(name="Price", value=f"`{_fmt_money(price, quote['currency'])}`", inline=True)
+        embed.add_field(name="Price", value=f"`{_fmt_price(price, quote['currency'])}`", inline=True)
         embed.add_field(name="Today", value=f"`{_fmt_change(change, pct)}`", inline=True)
 
         ext = quote.get("extended")
@@ -2750,7 +2768,7 @@ class StockCog(commands.Cog):
             embed.add_field(
                 name=label,
                 value=(
-                    f"`{_fmt_money(ext['price'], quote['currency'])}` · "
+                    f"`{_fmt_price(ext['price'], quote['currency'])}` · "
                     f"`{_fmt_change(ext['change'], ext['pct'])}`"
                 ),
                 inline=True,
