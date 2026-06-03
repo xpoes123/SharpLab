@@ -69,6 +69,14 @@ def _swing_pct(price: float, prev_close: float | None) -> float:
     return (price - prev_close) / prev_close * 100.0
 
 
+def _market_today() -> str:
+    """Today's date in US/Eastern (the market's calendar day). Used for the daily
+    swing-alert dedup so the reset lands at ET midnight — NOT at UTC midnight, which
+    is 8pm ET and would re-fire every already-alerted swing right after the close."""
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+
+
 def _display_ticker(symbol: str) -> str:
     """Strip Yahoo's -USD suffix for crypto display (BTC-USD -> BTC)."""
     return symbol[:-4] if symbol.endswith("-USD") else symbol
@@ -2703,7 +2711,9 @@ class StockCog(commands.Cog):
     async def _fire_swing_alerts(
         self, holdings: list[dict], quotes: dict[str, dict],
     ) -> None:
-        today = datetime.now(timezone.utc).date().isoformat()
+        # Dedup per ET market day, not UTC — UTC midnight is 8pm ET, which would
+        # reset the bands mid-evening and re-fire every swing already alerted today.
+        today = _market_today()
         # Opt-in only: never ping a holder who hasn't enabled portfolio swing alerts.
         try:
             opted_in = await queries.get_stock_alert_optin_users()
