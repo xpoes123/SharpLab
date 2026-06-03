@@ -6,7 +6,7 @@ const BOOK_PREF = ["draftkings", "fanduel", "betmgm", "caesars", "fanatics"];
 const LM = {};            // game_id -> line-movement payload
 let sport = "all";
 let GAMES = {};           // game_id -> game object (for the bet modal)
-let ME = null;            // /hq/me (auth state)
+let ME = null;            // auth state
 let betDraft = null;      // the bet currently being composed
 
 // Odds display format — applies to every American-odds value rendered via am().

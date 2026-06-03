@@ -5,7 +5,7 @@ const sign = (n) => (n >= 0 ? "+" : "") + n;
 const cls = (n) => (n >= 0 ? "pos" : "neg");
 const money = (n) => (n == null ? "—" : "$" + Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 }));
 const pnl = (n) => (n >= 0 ? "+" : "−") + "$" + Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
-const plink = (name) => `<a href="/hq/${encodeURIComponent(name)}">${name}</a>`;
+const plink = (name) => `<a href="/u/${encodeURIComponent(name)}">${name}</a>`;
 const pct = (n) => (n == null ? "—" : (n >= 0 ? "+" : "") + n.toFixed(2) + "%");
 
 const STYLE = `<style>
@@ -139,7 +139,7 @@ function spark(vals) {
 }
 
 function tradeCard(t, i) {
-  const link = `/hq/stocks/${encodeURIComponent(t.username)}`;
+  const link = `/stocks/${encodeURIComponent(t.username)}`;
   const rank = i < 3 ? `<div class="rankbadge r${i + 1}">${i + 1}</div>` : `<div class="rankbadge">${i + 1}</div>`;
   const avatar = t.avatar_url ? `<img class="avatar" src="${t.avatar_url}" alt="">` : `<div class="avatar"></div>`;
   const day = t.day_change == null ? ""
@@ -275,7 +275,7 @@ function render(traders) {
       ${popular ? hstat("Most held", `<b>${popular[0]}</b> <span class="muted" style="font-weight:500">×${popular[1]}</span>`) : ""}
     </div>
   </div>
-  <div style="margin:2px 0 8px"><a href="/hq/earnings" class="btn ghost">📅 Earnings calendar →</a></div>
+  <div style="margin:2px 0 8px"><a href="/earnings" class="btn ghost">📅 Earnings calendar →</a></div>
   <h2 style="margin:18px 0 10px">Server allocation</h2>
   <div class="card" id="spieBox">${serverPieBody()}</div>
   <div class="lblist">${traders.map(tradeCard).join("")}</div>`;
@@ -291,7 +291,7 @@ function render(traders) {
 }
 
 function plink2(t) {
-  return `<a href="/hq/stocks/${encodeURIComponent(t.username)}" style="color:var(--fg);font-weight:700">${t.username}</a>`;
+  return `<a href="/stocks/${encodeURIComponent(t.username)}" style="color:var(--fg);font-weight:700">${t.username}</a>`;
 }
 
 main();

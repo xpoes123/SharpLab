@@ -35,14 +35,14 @@
   window.addEventListener("pagehide", flush);
 
   // Owner-only: inject the Analytics nav link if the signed-in user is the owner.
-  fetch("/hq/me", { credentials: "include" })
+  fetch("/api/v1/hq/me", { credentials: "include" })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (d) {
       if (!d || !d.is_owner) return;
       var nav = document.querySelector("nav.nav");
-      if (nav && !nav.querySelector('a[href="/hq/analytics"]')) {
+      if (nav && !nav.querySelector('a[href="/analytics"]')) {
         var a = document.createElement("a");
-        a.href = "/hq/analytics"; a.textContent = "Analytics";
+        a.href = "/analytics"; a.textContent = "Analytics";
         nav.appendChild(a);
       }
     })

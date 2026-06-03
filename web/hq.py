@@ -208,7 +208,7 @@ async def _log_member(request: Request, uid: str, username: str | None, etype: s
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
                 "INSERT INTO web_events (ts, sid, type, page, ref, ua, ip_hash, data) VALUES (?,?,?,?,?,?,?,?)",
-                (int(_time.time() * 1000), uid, etype, "/hq", "", ua, ip_hash,
+                (int(_time.time() * 1000), uid, etype, "/", "", ua, ip_hash,
                  _json.dumps({"id": uid, "username": username or uid})),
             )
             await db.commit()
@@ -219,15 +219,15 @@ async def _log_member(request: Request, uid: str, username: str | None, etype: s
 @router.get("/auth/discord/callback")
 async def discord_callback(request: Request, code: str = "", state: str = ""):
     if not code or not auth.check_state(state):
-        return RedirectResponse(f"{WEB_BASE_URL}/hq?error=bad_request")
+        return RedirectResponse(f"{WEB_BASE_URL}/?error=bad_request")
     try:
         info = await auth.exchange_code(code)
     except Exception:
-        return RedirectResponse(f"{WEB_BASE_URL}/hq?error=oauth_failed")
+        return RedirectResponse(f"{WEB_BASE_URL}/?error=oauth_failed")
     if not auth.is_member(info["guilds"]):
-        return RedirectResponse(f"{WEB_BASE_URL}/hq?error=not_member")
+        return RedirectResponse(f"{WEB_BASE_URL}/?error=not_member")
     await _log_member(request, str(info["user"].get("id")), info["user"].get("username"), "login")
-    resp = RedirectResponse(f"{WEB_BASE_URL}/hq")
+    resp = RedirectResponse(f"{WEB_BASE_URL}/")
     resp.set_cookie(
         auth.COOKIE_NAME, auth.make_session_cookie(info["user"]),
         max_age=auth.SESSION_TTL, httponly=True, secure=True, samesite="lax",
@@ -237,7 +237,7 @@ async def discord_callback(request: Request, code: str = "", state: str = ""):
 
 @router.get("/auth/logout")
 async def logout():
-    resp = RedirectResponse(f"{WEB_BASE_URL}/hq")
+    resp = RedirectResponse(f"{WEB_BASE_URL}/")
     resp.delete_cookie(auth.COOKIE_NAME)
     return resp
 

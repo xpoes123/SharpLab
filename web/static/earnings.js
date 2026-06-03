@@ -44,7 +44,7 @@ function render(days) {
   let html = `<style>.earnrow:hover{background:var(--panel2) !important}.earnrow:hover strong{color:var(--accent)}</style>
     <div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px">
       <h2 style="margin:0">📅 Earnings calendar</h2>
-      <a href="/hq/stocks" class="muted" style="font-size:13px">← back to stocks</a></div>
+      <a href="/stocks" class="muted" style="font-size:13px">← back to stocks</a></div>
     <p class="muted" style="margin:6px 0 16px;font-size:13px">Large-caps (≥$2B) over the next week · <span style="color:var(--accent)">📍 held</span> in the server.</p>
     <div style="display:flex;flex-direction:column;gap:14px">`;
   for (const d of days) {

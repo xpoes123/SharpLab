@@ -92,11 +92,11 @@ function holdingsTable() {
 }
 
 async function main() {
-  const parts = location.pathname.split("/").filter(Boolean); // ["hq","stocks","xpoes"]
-  const handle = decodeURIComponent(parts[2] || "");
+  const parts = location.pathname.split("/").filter(Boolean); // ["stocks","xpoes"]
+  const handle = decodeURIComponent(parts[parts.length - 1] || "");
   const r = await fetch(`/api/v1/hq/stocks/${encodeURIComponent(handle)}`);
   if (r.status === 404) {
-    app.innerHTML = `<div class="hero"><h1>Not found</h1><a class="btn" href="/hq/stocks">All portfolios</a></div>`;
+    app.innerHTML = `<div class="hero"><h1>Not found</h1><a class="btn" href="/stocks">All portfolios</a></div>`;
     return;
   }
   render(await r.json());
