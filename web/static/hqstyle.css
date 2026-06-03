@@ -131,6 +131,16 @@ tbody tr:hover { background: rgba(122,162,247,.06); }
 .logbtn:hover { background: var(--accent); border-color: var(--accent); color: var(--bg); }
 .matchup { display: flex; align-items: center; gap: 8px; }
 
+/* Odds-format toggle (Lines page "My Bets" header) */
+.myb-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.oddsfmt { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.ofbtn { font-family: inherit; font-size: 11px; font-weight: 600; cursor: pointer;
+  color: var(--muted); background: transparent; border: 0; padding: 4px 11px;
+  transition: background .12s, color .12s; }
+.ofbtn + .ofbtn { border-left: 1px solid var(--line); }
+.ofbtn:hover { color: var(--fg); }
+.ofbtn.on { background: var(--accent); color: var(--bg); }
+
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.62); display: flex;
   align-items: center; justify-content: center; z-index: 100; padding: 16px; backdrop-filter: blur(2px); }
 .modal-overlay.hidden { display: none; }
