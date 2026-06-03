@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "aiosqlite>=0.22.1",
-    "discord-py[voice]>=2.7.1",  # [voice] pulls PyNaCl for voice-channel audio (earnings stream)
+    "discord-py>=2.7.1",
     "fastapi>=0.136.1",
     "httpx>=0.28.1",
     "itsdangerous>=2.2.0",
