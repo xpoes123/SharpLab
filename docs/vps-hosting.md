@@ -67,6 +67,19 @@ ssh root@87.99.136.82 "cd /opt/sharplab && source venv/bin/activate && python sc
 
 Judge announce-worthiness per PR via an `Announce: yes|no` trailer in the commit body.
 
+**Quiet hours:** `announce_deploy.py --post` run between **10pm and 8am ET** does NOT
+post — it holds the announcement (leaves the marker unadvanced) so the server isn't
+pinged overnight. A cron flushes it in the morning by re-running `--post`, which
+sweeps up everything accumulated overnight. Pass `--force` to post immediately
+regardless of the hour.
+
+```cron
+# /etc/cron.d/sharplab-announce — post held overnight announcements in the morning.
+# Two entries cover EST/EDT; the script's ET quiet-hours guard posts only once 8am ET passes.
+0 12 * * * root cd /opt/sharplab && venv/bin/python scripts/announce_deploy.py --post >> /var/log/sharplab-announce.log 2>&1
+0 13 * * * root cd /opt/sharplab && venv/bin/python scripts/announce_deploy.py --post >> /var/log/sharplab-announce.log 2>&1
+```
+
 ## Logs
 
 ```bash
