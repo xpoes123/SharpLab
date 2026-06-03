@@ -320,6 +320,19 @@ CREATE TABLE IF NOT EXISTS stock_cash (
     updated_at   TEXT NOT NULL
 );
 
+-- Manually-injected realized gains (e.g. seeding pre-existing or real-brokerage
+-- P/L). Added to the computed realized total at display time; the cash credit is
+-- applied separately to stock_cash when the entry is created.
+CREATE TABLE IF NOT EXISTS realized_adjustments (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    discord_user TEXT NOT NULL,
+    amount       REAL NOT NULL,
+    note         TEXT,
+    created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_realized_adjustments_user
+    ON realized_adjustments(discord_user);
+
 CREATE TABLE IF NOT EXISTS option_trades (
     trade_id     INTEGER PRIMARY KEY AUTOINCREMENT,
     discord_user TEXT NOT NULL,

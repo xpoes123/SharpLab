@@ -849,6 +849,7 @@ async def _compute_portfolio(uid: str) -> dict | None:
         })
 
     realized_total += option_realized
+    realized_total += await queries.get_realized_adjustment_total(uid)
     unrealized = (total_value - total_cost) + options_unrealized
     combined_cost = total_cost + options_cost
     total_pnl = unrealized + realized_total
@@ -1426,6 +1427,7 @@ async def _leaderboard_rows(users: list[str]) -> list[dict]:
 
     quotes = await fetch_quotes(sorted(ticker_set), extended=True) if ticker_set else {}
     option_prices = await _price_option_positions(open_option_specs)
+    adjustments = await queries.get_all_realized_adjustments()
 
     now = datetime.now(timezone.utc)
     week_cut = (now - timedelta(days=7)).isoformat()
@@ -1435,7 +1437,7 @@ async def _leaderboard_rows(users: list[str]) -> list[dict]:
     for uid in users:
         positions = all_positions[uid]
         unrealized = 0.0
-        realized = sum(p["realized_pnl"] for p in positions)
+        realized = sum(p["realized_pnl"] for p in positions) + adjustments.get(uid, 0.0)
         invested = sum(p["invested"] for p in positions)
         stock_value = 0.0
         stock_value_prev = 0.0
@@ -1626,11 +1628,12 @@ async def _compute_server_portfolio() -> dict | None:
 
     quotes = await fetch_quotes(sorted(ticker_set), extended=True) if ticker_set else {}
     option_prices = await _price_option_positions(open_option_specs)
+    adjustments = await queries.get_all_realized_adjustments()
 
     per_ticker: dict[str, dict] = {}
     per_option: dict[tuple, dict] = {}
     stock_value = stock_cost = day_change = 0.0
-    realized_total = 0.0
+    realized_total = sum(adjustments.get(uid, 0.0) for uid in users)
     options_value = options_unrealized = options_cost = 0.0
     holders: set[str] = set()
 
@@ -2937,6 +2940,33 @@ class StockCog(commands.Cog):
             ephemeral=True,
         )
 
+    # ── /stock gains ─────────────────────────────────────────────────────────
+
+    @stock.command(name="gains", description="Manually add realized gains (credits cash + logs to realized P/L)")
+    @app_commands.describe(
+        amount="Realized gain to add (use a negative number for a realized loss)",
+        note="Optional note (e.g. 'pre-2026 Robinhood gains')",
+    )
+    async def gains(
+        self,
+        interaction: discord.Interaction,
+        amount: float,
+        note: str | None = None,
+    ) -> None:
+        if amount == 0:
+            await interaction.response.send_message("Amount can't be 0.", ephemeral=True)
+            return
+        uid = str(interaction.user.id)
+        await queries.add_realized_adjustment(uid, amount, note)
+        new_cash = await queries.adjust_stock_cash(uid, amount, allow_negative=True)
+        cash_line = f"\nCash: **${new_cash:,.2f}**" + (
+            " ⚠️ you're in the red" if new_cash < 0 else "")
+        await interaction.response.send_message(
+            f"Logged realized {'gain' if amount > 0 else 'loss'} of "
+            f"`{_fmt_pnl(amount)}` to your P/L and cash.{cash_line}",
+            ephemeral=True,
+        )
+
     # ── /stock buy ───────────────────────────────────────────────────────────
 
     @stock.command(name="buy", description="Record a stock purchase")
@@ -2979,14 +3009,19 @@ class StockCog(commands.Cog):
         await queries.add_stock_trade(
             str(interaction.user.id), symbol, "buy", shares, price, executed_at, notes
         )
+        new_cash = await queries.adjust_stock_cash(
+            str(interaction.user.id), -(shares * price), allow_negative=True)
         await _check_achievements(interaction)
         holding = await queries.get_stock_holding(str(interaction.user.id), symbol)
         position_line = (
             f"Position: **{holding['shares']:g}** sh @ DCA **{holding['dca_price']:,.2f}**"
             if holding else "Position closed."
         )
+        cash_line = f"\nCash: **${new_cash:,.2f}**" + (
+            " ⚠️ you're in the red" if new_cash < 0 else "")
         await interaction.response.send_message(
-            f"Recorded **BUY** `{symbol}` — {shares:g} sh @ `{price:,.2f}`.\n{position_line}{warn}",
+            f"Recorded **BUY** `{symbol}` — {shares:g} sh @ `{price:,.2f}` "
+            f"(−${shares * price:,.2f}).\n{position_line}{cash_line}{warn}",
             ephemeral=True,
         )
         await self._maybe_post_rohan_pick(interaction, "BOUGHT", f"**{shares:g}** {symbol} @ ${price:,.2f}")
@@ -3050,15 +3085,20 @@ class StockCog(commands.Cog):
         await queries.add_stock_trade(
             str(interaction.user.id), symbol, "sell", shares, price, executed_at, notes
         )
+        new_cash = await queries.adjust_stock_cash(
+            str(interaction.user.id), shares * price, allow_negative=True)
         await _check_achievements(interaction)
         holding = await queries.get_stock_holding(str(interaction.user.id), symbol)
         position_line = (
             f"Position: **{holding['shares']:g}** sh @ DCA **{holding['dca_price']:,.2f}**"
             if holding else "Position closed."
         )
+        cash_line = f"\nCash: **${new_cash:,.2f}**" + (
+            " ⚠️ you're in the red" if new_cash < 0 else "")
         await interaction.response.send_message(
             f"Recorded **SELL** `{symbol}` — {shares:g} sh @ `{price:,.2f}` "
-            f"· realized P/L `{_fmt_pnl(realized)}`.\n{position_line}{sell_warn}",
+            f"(+${shares * price:,.2f}) · realized P/L `{_fmt_pnl(realized)}`."
+            f"\n{position_line}{cash_line}{sell_warn}",
             ephemeral=True,
         )
         await self._maybe_post_rohan_pick(interaction, "SOLD", f"**{shares:g}** {symbol} @ ${price:,.2f}")
@@ -3247,6 +3287,9 @@ class StockCog(commands.Cog):
             uid, sym, otype, strike, expiry_iso, side, contracts, premium,
             executed_at, notes,
         )
+        # Premium flows through cash: buying debits, selling/writing credits.
+        cash_flow = (-1 if side == "buy" else 1) * contracts * premium * OPTION_MULTIPLIER
+        new_cash = await queries.adjust_stock_cash(uid, cash_flow, allow_negative=True)
 
         after = await queries.get_option_trades(uid, sym)
         agg = queries._aggregate_option_trades([t for t in after if _match(t)])
@@ -3266,9 +3309,12 @@ class StockCog(commands.Cog):
         spec = _option_label({
             "underlying": sym, "opt_type": otype, "strike": strike, "expiry": expiry_iso,
         })
+        cash_line = f"\nCash: **${new_cash:,.2f}**" + (
+            " ⚠️ you're in the red" if new_cash < 0 else "")
         await interaction.response.send_message(
-            f"Recorded **{side.upper()}** {contracts} × `{spec}` @ `{premium:,.2f}`"
-            f"{realized_line}.\n{position_line}{opt_warn}",
+            f"Recorded **{side.upper()}** {contracts} × `{spec}` @ `{premium:,.2f}` "
+            f"({'−' if cash_flow < 0 else '+'}${abs(cash_flow):,.2f})"
+            f"{realized_line}.\n{position_line}{cash_line}{opt_warn}",
             ephemeral=True,
         )
         await self._maybe_post_rohan_pick(

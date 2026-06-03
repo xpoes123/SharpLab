@@ -3406,9 +3406,11 @@ async def get_reaction_roles_for_message(message_id: str) -> list[dict]:
 
 
 # ── Stock cash positions ────────────────────────────────────────────────────
-# A simple per-user cash balance, decoupled from the trade log. Buys/sells do
-# NOT touch it automatically — it's a hand-managed figure so the portfolio can
-# show uninvested cash and a total account value. Floored at 0.
+# A per-user cash balance. Buys debit it and sells credit it (see the /stock
+# buy|sell and /option handlers, which call adjust_stock_cash with
+# allow_negative=True so a buy bigger than the balance goes into the red).
+# /stock cash still lets users set/deposit/withdraw manually. An account's value
+# = positions (stocks + options) + cash.
 
 
 async def get_stock_cash(discord_user: str) -> float:
@@ -3446,16 +3448,22 @@ async def set_stock_cash(discord_user: str, amount: float) -> float:
     return amount
 
 
-async def adjust_stock_cash(discord_user: str, delta: float) -> float:
-    """Add delta (may be negative) to the cash balance, floored at 0.
-    Returns the new balance."""
+async def adjust_stock_cash(discord_user: str, delta: float,
+                            allow_negative: bool = False) -> float:
+    """Add delta (may be negative) to the cash balance. Floored at 0 by default;
+    pass allow_negative=True for trade-driven moves where the balance may go into
+    the red (a buy bigger than available cash). Returns the new balance."""
     ts = datetime.now(timezone.utc).isoformat()
+    if allow_negative:
+        insert_val, update_expr = "?", "balance + ?"
+    else:
+        insert_val, update_expr = "MAX(?, 0)", "MAX(balance + ?, 0)"
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT INTO stock_cash (discord_user, balance, updated_at) "
-            "VALUES (?, MAX(?, 0), ?) "
-            "ON CONFLICT(discord_user) DO UPDATE SET "
-            "balance = MAX(balance + ?, 0), updated_at = ?",
+            f"INSERT INTO stock_cash (discord_user, balance, updated_at) "
+            f"VALUES (?, {insert_val}, ?) "
+            f"ON CONFLICT(discord_user) DO UPDATE SET "
+            f"balance = {update_expr}, updated_at = ?",
             (discord_user, delta, ts, delta, ts),
         )
         await db.commit()
@@ -3464,6 +3472,46 @@ async def adjust_stock_cash(discord_user: str, delta: float) -> float:
         )
         row = await cur.fetchone()
         return float(row[0]) if row else 0.0
+
+
+# ── Manual realized-gain adjustments ─────────────────────────────────────────
+
+
+async def add_realized_adjustment(discord_user: str, amount: float,
+                                  note: str | None = None) -> None:
+    """Record a manually-injected realized gain/loss (added to the realized total
+    at display time). The matching cash credit is applied by the caller."""
+    ts = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO realized_adjustments (discord_user, amount, note, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (discord_user, amount, note, ts),
+        )
+        await db.commit()
+
+
+async def get_realized_adjustment_total(discord_user: str) -> float:
+    """Sum of a user's manual realized-gain adjustments (0.0 if none)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT COALESCE(SUM(amount), 0) FROM realized_adjustments WHERE discord_user = ?",
+            (discord_user,),
+        )
+        row = await cur.fetchone()
+        return float(row[0]) if row else 0.0
+
+
+async def get_all_realized_adjustments() -> dict[str, float]:
+    """Per-user manual realized-gain totals, in one query. Users with none are
+    absent — default to 0.0 at the call site."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT discord_user, COALESCE(SUM(amount), 0) FROM realized_adjustments "
+            "GROUP BY discord_user"
+        )
+        rows = await cur.fetchall()
+        return {r[0]: float(r[1]) for r in rows}
 
 
 # ── Portfolio snapshots (equity curve for /stock graph) ──────────────────────
