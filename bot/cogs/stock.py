@@ -2611,6 +2611,19 @@ class StockCog(commands.Cog):
         except ValueError:
             return DEFAULT_STOCK_ALERTS_CHANNEL_ID
 
+    @stock.command(name="alerts", description="Opt in/out of portfolio swing alerts on your holdings")
+    @app_commands.describe(enabled="On to get pinged when a holding swings ≥10% on the day; off to stop (default: off)")
+    @app_commands.choices(enabled=[
+        app_commands.Choice(name="on", value="on"),
+        app_commands.Choice(name="off", value="off"),
+    ])
+    async def stock_alerts(self, interaction: discord.Interaction, enabled: app_commands.Choice[str]) -> None:
+        on = enabled.value == "on"
+        await queries.set_stock_alerts_enabled(str(interaction.user.id), on)
+        msg = ("✅ You'll get pinged when one of your holdings swings ≥10% on the day."
+               if on else "✅ Portfolio swing alerts are off for you.")
+        await interaction.response.send_message(msg, ephemeral=True)
+
     # ── Rohan's picks ─────────────────────────────────────────────────────────
     @stock.command(name="picks-channel", description="Set the channel for Rohan's stock-pick alerts")
     @app_commands.describe(channel="Where to ping the 'rohan stock picks' role on each of his trades")
@@ -2691,10 +2704,17 @@ class StockCog(commands.Cog):
         self, holdings: list[dict], quotes: dict[str, dict],
     ) -> None:
         today = datetime.now(timezone.utc).date().isoformat()
-        # Group holders by ticker
+        # Opt-in only: never ping a holder who hasn't enabled portfolio swing alerts.
+        try:
+            opted_in = await queries.get_stock_alert_optin_users()
+        except Exception:
+            log.exception("monitor_loop: failed to load stock-alert opt-ins")
+            return
+        # Group holders by ticker (opted-in users only)
         holders: dict[str, list[str]] = {}
         for h in holdings:
-            holders.setdefault(h["ticker"], []).append(h["discord_user"])
+            if h["discord_user"] in opted_in:
+                holders.setdefault(h["ticker"], []).append(h["discord_user"])
         channel = self.bot.get_channel(await self._alerts_channel_id())
         changed = False
         for ticker, uids in holders.items():
