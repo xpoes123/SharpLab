@@ -169,9 +169,15 @@ class PokedleCog(commands.Cog):
                          "— play in the thread below 👇"),
             colour=0xF1C40F,
         ))
+        # Create the thread off the channel (not the WebhookMessage): a followup
+        # message has no guild attached, so anchor.create_thread() raises a bare
+        # ValueError that the HTTPException handler below would miss.
         try:
-            thread = await anchor.create_thread(name=f"Pokédle ({cfg['label']}) — {interaction.user.display_name}")
-        except discord.HTTPException:
+            thread = await interaction.channel.create_thread(
+                name=f"Pokédle ({cfg['label']}) — {interaction.user.display_name}",
+                message=anchor,
+            )
+        except (discord.HTTPException, ValueError):
             await interaction.followup.send(
                 "Couldn't create a thread — the bot needs **Create Public Threads** permission here.")
             return
