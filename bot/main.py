@@ -129,7 +129,6 @@ COGS = [
     "bot.cogs.cluemaster",
     "bot.cogs.imposter",
     "bot.cogs.stream",
-    "bot.cogs.earnings_voice",
     "bot.cogs.game_menu",
 ]
 
