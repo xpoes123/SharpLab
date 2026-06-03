@@ -2031,6 +2031,33 @@ async def get_livebet_optin_users() -> set[str]:
     return {r[0] for r in rows}
 
 
+async def get_stock_alerts_enabled(discord_user: str) -> bool:
+    """Whether a user has opted in to portfolio swing alerts (default off)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT stock_alerts FROM user_settings WHERE discord_user = ?", (discord_user,))
+        row = await cur.fetchone()
+    return bool(row[0]) if row else False
+
+
+async def set_stock_alerts_enabled(discord_user: str, enabled: bool) -> None:
+    """Opt a user in/out of portfolio swing alerts (≥10% daily moves on a held ticker)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO user_settings (discord_user, stock_alerts) VALUES (?, ?) "
+            "ON CONFLICT(discord_user) DO UPDATE SET stock_alerts = excluded.stock_alerts",
+            (discord_user, 1 if enabled else 0),
+        )
+        await db.commit()
+
+
+async def get_stock_alert_optin_users() -> set[str]:
+    """All users who've opted in to portfolio swing alerts."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT discord_user FROM user_settings WHERE stock_alerts = 1")
+        rows = await cur.fetchall()
+    return {r[0] for r in rows}
+
+
 async def get_user_achievements(discord_user: str) -> list[dict]:
     """All achievements a user has unlocked."""
     async with aiosqlite.connect(DB_PATH) as db:
