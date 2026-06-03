@@ -1,4 +1,4 @@
-// SharpLab HQ — player profile at /hq/{username}.
+// SharpLab HQ — player profile at /u/{username}.
 
 const ELO_LABELS = {
   cluemaster: "Clue Master", imposter: "Imposter", wordle: "Wordle", pokemon: "Pokemon",
@@ -17,7 +17,7 @@ const num = (n) => (n == null ? "—" : Number(n).toLocaleString());
 const app = document.getElementById("app");
 
 async function main() {
-  const parts = location.pathname.split("/").filter(Boolean); // ["hq","xpoes"]
+  const parts = location.pathname.split("/").filter(Boolean); // ["u","xpoes"]
   const handle = decodeURIComponent(parts[1] || "");
   if (!handle) { app.innerHTML = `<div class="hero"><p class="muted">No player.</p></div>`; return; }
 
@@ -25,7 +25,7 @@ async function main() {
   if (r.status === 404) {
     app.innerHTML = `<div class="hero"><h1>Not found</h1>
       <p class="muted">No player matching “${handle}”.</p>
-      <a class="btn" href="/hq">Back to server</a></div>`;
+      <a class="btn" href="/">Back to server</a></div>`;
     return;
   }
   render(await r.json());

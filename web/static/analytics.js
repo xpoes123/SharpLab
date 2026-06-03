@@ -1,8 +1,8 @@
 // SharpLab HQ — site analytics dashboard.
 const app = document.getElementById("app");
 
-const PRETTY = { "/hq": "Server home", "/hq/stocks": "Stocks", "/hq/lines": "Lines", "/hq/analytics": "Analytics" };
-const prettyPage = (p) => PRETTY[p] || (p.startsWith("/hq/") ? p.replace("/hq/", "") : p);
+const PRETTY = { "/": "Server home", "/stocks": "Stocks", "/lines": "Lines", "/analytics": "Analytics" };
+const prettyPage = (p) => PRETTY[p] || p.replace(/^\//, "") || p;
 const fmt = (n) => (n >= 1000 ? (n / 1000).toFixed(1) + "k" : "" + n);
 const dur = (s) => (s == null ? "—" : s >= 60 ? `${Math.floor(s / 60)}m ${Math.round(s % 60)}s` : `${Math.round(s)}s`);
 
@@ -23,7 +23,7 @@ async function load() {
   try {
     const r = await fetch("/api/v1/analytics/stats", { credentials: "include" });
     if (r.status === 403) {
-      app.innerHTML = `<div class="hero"><h2>🔒 Private</h2><p class="muted">This page is owner-only. <a href="/hq">Sign in</a> as the owner to view it.</p></div>`;
+      app.innerHTML = `<div class="hero"><h2>🔒 Private</h2><p class="muted">This page is owner-only. <a href="/">Sign in</a> as the owner to view it.</p></div>`;
       return;
     }
     s = await r.json();

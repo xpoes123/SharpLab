@@ -3,7 +3,7 @@
 const sign = (n) => (n >= 0 ? "+" : "") + n;
 const cls = (n) => (n >= 0 ? "pos" : "neg");
 const num = (n) => (n == null ? "—" : Number(n).toLocaleString());
-const plink = (name) => `<a href="/hq/${encodeURIComponent(name)}">${name}</a>`;
+const plink = (name) => `<a href="/u/${encodeURIComponent(name)}">${name}</a>`;
 
 const app = document.getElementById("app");
 const navRight = document.getElementById("navRight");
