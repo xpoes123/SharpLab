@@ -152,7 +152,7 @@ def _feedback_row(guess: dict, secret: dict) -> str:
 class PokedleCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-        self._active: set[int] = set()  # channel ids with a live game
+        self._active: set[int] = set()  # user ids with a live game (one per person)
 
     @app_commands.command(name="pokedle", description="Pokédle — deduce the mystery Pokémon from clues")
     @app_commands.describe(difficulty="Easy: famous mons, 10 guesses · Medium: default · Hard: any Pokémon, 6 guesses")
@@ -163,45 +163,52 @@ class PokedleCog(commands.Cog):
     ])
     async def pokedle(self, interaction: discord.Interaction,
                       difficulty: app_commands.Choice[str] | None = None) -> None:
-        if interaction.channel_id in self._active:
-            await interaction.response.send_message("A Pokédle game is already running here!", ephemeral=True)
+        # One game per person (each runs in its own thread), so a live game no
+        # longer blocks the whole channel — others can start their own.
+        if interaction.user.id in self._active:
+            await interaction.response.send_message(
+                "You already have a Pokédle game running — finish it first!", ephemeral=True)
             return
-        cfg = DIFFICULTIES[difficulty.value if difficulty else "medium"]
-        await interaction.response.defer()
-        secret = await self._pick_secret(cfg)
-        if not secret:
-            await interaction.followup.send("Couldn't reach PokéAPI right now — try again shortly.")
-            return
-
-        # Play in a dedicated thread so guesses don't clutter the channel.
-        anchor = await interaction.followup.send(embed=discord.Embed(
-            title="🔍 Pokédle",
-            description=(f"**{interaction.user.display_name}** started a **{cfg['label']}** game "
-                         "— play in the thread below 👇"),
-            colour=0xF1C40F,
-        ))
-        # Create the thread off the channel (not the WebhookMessage): a followup
-        # message has no guild attached, so anchor.create_thread() raises a bare
-        # ValueError that the HTTPException handler below would miss.
+        # Claim the per-user slot immediately so a fast double-invoke can't open two
+        # games. Held across the whole flow and always released in the finally.
+        self._active.add(interaction.user.id)
+        thread: discord.Thread | None = None
         try:
-            thread = await interaction.channel.create_thread(
-                name=f"Pokédle ({cfg['label']}) — {interaction.user.display_name}",
-                message=anchor,
-            )
-        except (discord.HTTPException, ValueError):
-            await interaction.followup.send(
-                "Couldn't create a thread — the bot needs **Create Public Threads** permission here.")
-            return
+            cfg = DIFFICULTIES[difficulty.value if difficulty else "medium"]
+            await interaction.response.defer()
+            secret = await self._pick_secret(cfg)
+            if not secret:
+                await interaction.followup.send("Couldn't reach PokéAPI right now — try again shortly.")
+                return
 
-        self._active.add(interaction.channel_id)
-        try:
+            # Play in a dedicated thread so guesses don't clutter the channel.
+            anchor = await interaction.followup.send(embed=discord.Embed(
+                title="🔍 Pokédle",
+                description=(f"**{interaction.user.display_name}** started a **{cfg['label']}** game "
+                             "— play in the thread below 👇"),
+                colour=0xF1C40F,
+            ))
+            # Create the thread off the channel (not the WebhookMessage): a followup
+            # message has no guild attached, so anchor.create_thread() raises a bare
+            # ValueError that the HTTPException handler below would miss.
+            try:
+                thread = await interaction.channel.create_thread(
+                    name=f"Pokédle ({cfg['label']}) — {interaction.user.display_name}",
+                    message=anchor,
+                )
+            except (discord.HTTPException, ValueError):
+                await interaction.followup.send(
+                    "Couldn't create a thread — the bot needs **Create Public Threads** permission here.")
+                return
+
             await self._run(thread, secret, cfg)
         finally:
-            self._active.discard(interaction.channel_id)
-            try:
-                await thread.edit(archived=True)
-            except discord.HTTPException:
-                pass
+            self._active.discard(interaction.user.id)
+            if thread is not None:
+                try:
+                    await thread.edit(archived=True)
+                except discord.HTTPException:
+                    pass
 
     async def _pick_secret(self, cfg: dict) -> dict | None:
         """Choose a mystery Pokémon for the tier. Hard rolls the whole National
