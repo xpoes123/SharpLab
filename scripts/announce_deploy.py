@@ -30,6 +30,21 @@ REPO = Path(__file__).resolve().parent.parent
 MARKER = REPO / ".last_announced_sha"
 CHANNEL_DEFAULT = "1497129140153876570"
 
+# Quiet hours (US/Eastern): announcements run during the night are held until the
+# morning so we don't ping the server at 2am. A deploy at night just leaves its
+# commits unannounced (the marker isn't advanced); a morning cron re-runs --post
+# and posts everything accumulated overnight. See docs/vps-hosting.md.
+QUIET_START_HOUR = 22  # 10pm ET — hold from here…
+MORNING_HOUR = 8       # …until 8am ET
+
+
+def _in_quiet_hours() -> bool:
+    """True during overnight quiet hours in US/Eastern."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    h = datetime.now(ZoneInfo("America/New_York")).hour
+    return h >= QUIET_START_HOUR or h < MORNING_HOUR
+
 HAIKU = "claude-haiku-4-5-20251001"
 SONNET = "claude-sonnet-4-6"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
@@ -143,6 +158,8 @@ def main() -> int:
     ap.add_argument("--since", default=None, help="start commit (default: marker file, else HEAD~1)")
     ap.add_argument("--note", default="", help="extra guidance for the drafted message")
     ap.add_argument("--image", action="append", default=[], help="screenshot to attach (repeatable, max 10)")
+    ap.add_argument("--force", action="store_true",
+                    help="post even during overnight quiet hours (skip the morning hold)")
     args = ap.parse_args()
 
     load_dotenv(REPO / ".env")
@@ -152,6 +169,16 @@ def main() -> int:
     if not api_key or not token:
         print("Missing ANTHROPIC_API_KEY or DISCORD_BOT_TOKEN in .env", file=sys.stderr)
         return 1
+
+    # Hold night-time announcements for the morning. The marker is left untouched
+    # so the morning cron re-runs --post and sweeps up everything from overnight.
+    if args.post and not args.force and _in_quiet_hours():
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now_et = datetime.now(ZoneInfo("America/New_York"))
+        print(f"Quiet hours ({now_et:%-I:%M %p ET}) — holding announcement until "
+              f"{MORNING_HOUR}:00 AM ET. The morning cron will post it (or --force to post now).")
+        return 0
 
     since = args.since or (MARKER.read_text().strip() if MARKER.exists() else "HEAD~1")
     head = subprocess.run(["git", "-C", str(REPO), "rev-parse", "HEAD"],
