@@ -782,7 +782,9 @@ async def _compute_portfolio(uid: str) -> dict | None:
     open_positions = [p for p in positions if not p["closed"]]
     realized_total = sum(p["realized_pnl"] for p in positions)
 
-    quotes = await fetch_quotes([p["ticker"] for p in open_positions]) if open_positions else {}
+    # extended=True so after-hours / pre-market prints value the portfolio when the
+    # regular session is closed (e.g. a stock that ripped on post-close earnings).
+    quotes = await fetch_quotes([p["ticker"] for p in open_positions], extended=True) if open_positions else {}
 
     total_value = 0.0
     total_cost = 0.0
@@ -800,7 +802,7 @@ async def _compute_portfolio(uid: str) -> dict | None:
             stocks.append({"sym": sym, "shares": shares, "dca": dca, "cost": cost,
                            "available": False})
             continue
-        price = q["price"]
+        price = effective_price(q)
         prev = q["prev_close"]
         value = shares * price
         pl = value - cost
@@ -1422,7 +1424,7 @@ async def _leaderboard_rows(users: list[str]) -> list[dict]:
             if not p["closed"]:
                 open_option_specs.append(p)
 
-    quotes = await fetch_quotes(sorted(ticker_set)) if ticker_set else {}
+    quotes = await fetch_quotes(sorted(ticker_set), extended=True) if ticker_set else {}
     option_prices = await _price_option_positions(open_option_specs)
 
     now = datetime.now(timezone.utc)
@@ -1444,10 +1446,11 @@ async def _leaderboard_rows(users: list[str]) -> list[dict]:
             q = quotes.get(p["ticker"])
             if not q:
                 continue
-            unrealized += p["shares"] * (q["price"] - p["dca_price"])
-            stock_value += p["shares"] * q["price"]
+            price = effective_price(q)
+            unrealized += p["shares"] * (price - p["dca_price"])
+            stock_value += p["shares"] * price
             stock_value_prev += p["shares"] * q["prev_close"]
-            day_gain += p["shares"] * (q["price"] - q["prev_close"])
+            day_gain += p["shares"] * (price - q["prev_close"])
 
         options_value = 0.0
         for p in all_options[uid]:
@@ -1621,7 +1624,7 @@ async def _compute_server_portfolio() -> dict | None:
             if not p["closed"]:
                 open_option_specs.append(p)
 
-    quotes = await fetch_quotes(sorted(ticker_set)) if ticker_set else {}
+    quotes = await fetch_quotes(sorted(ticker_set), extended=True) if ticker_set else {}
     option_prices = await _price_option_positions(open_option_specs)
 
     per_ticker: dict[str, dict] = {}
@@ -1641,7 +1644,7 @@ async def _compute_server_portfolio() -> dict | None:
             if not q:
                 continue
             held = True
-            sh, price, prev, dca = p["shares"], q["price"], q["prev_close"], p["dca_price"]
+            sh, price, prev, dca = p["shares"], effective_price(q), q["prev_close"], p["dca_price"]
             val, cost, dch = sh * price, sh * dca, sh * (price - prev)
             stock_value += val
             stock_cost += cost
