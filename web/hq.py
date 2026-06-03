@@ -463,7 +463,8 @@ async def hq_profile(handle: str):
         positions = await queries.get_stock_positions_full(uid)
     except Exception:
         positions = []
-    realized = round(sum(p.get("realized_pnl", 0) for p in positions), 2)
+    realized = round(sum(p.get("realized_pnl", 0) for p in positions)
+                     + await queries.get_realized_adjustment_total(uid), 2)
     open_positions = sum(1 for p in positions if p.get("shares", 0) > 0)
 
     return {
@@ -529,6 +530,7 @@ async def _build_stocks():
     # per-holding market value.
     all_positions = await queries.get_all_stock_positions()
     all_options = await queries.get_all_option_positions()
+    all_adj = await queries.get_all_realized_adjustments()
     user_positions = {u: all_positions.get(u, []) for u in users}
     user_options = {u: all_options.get(u, []) for u in users}
     all_tickers = sorted({p["ticker"] for ps in user_positions.values()
@@ -564,7 +566,8 @@ async def _build_stocks():
         opos = user_options[uid]
         realized = round(
             sum(p.get("realized_pnl", 0) for p in positions)
-            + sum(o.get("realized_pnl", 0) for o in opos), 2,
+            + sum(o.get("realized_pnl", 0) for o in opos)
+            + all_adj.get(uid, 0.0), 2,
         )
         holdings, unreal, have_unreal = [], 0.0, False
         stock_day, have_day = 0.0, False
@@ -776,6 +779,7 @@ async def _build_trader(uid: str, who: dict):
 
     op = await queries.get_option_positions_full(uid)
     opt_realized = sum(o.get("realized_pnl", 0) for o in op)
+    adj_realized = await queries.get_realized_adjustment_total(uid)
     # Live-price the open contracts (yfinance chains + Black-Scholes fallback), exactly
     # like the bot's /stock profile — otherwise options show no current price or P/L and
     # the summary leans on a stale snapshot that predates recently-added contracts.
@@ -833,7 +837,7 @@ async def _build_trader(uid: str, who: dict):
             "stock_value": latest.get("stock_value"),
             "options_value": round(options_value_live, 2) if options_priced_any else latest.get("options_value"),
             "cash": latest.get("cash"),
-            "realized_pnl": round(stock_realized + opt_realized, 2),
+            "realized_pnl": round(stock_realized + opt_realized + adj_realized, 2),
             # Open P&L on stocks = Σ per-position (live price − cost basis).
             "unrealized_pnl": (
                 round(sum(h["unrealized"] for h in stock_holdings if h["unrealized"] is not None), 2)

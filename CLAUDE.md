@@ -180,7 +180,7 @@ Commands are organized into nested subcommand groups to stay under Discord's 100
 
 ### Gotchas an AI should know
 - **`stock_holdings` table is DEAD.** Do NOT read it. Current holdings are computed from `stock_trades` (the authoritative log) via `get_stock_positions_full` / `get_all_stock_holdings` in `db/queries.py`.
-- **Buys/sells don't touch `stock_cash`.** Cash is set manually with `/stock cash`. An account's value = positions (stocks + options) **+** cash; the two are tracked independently.
+- **Buys/sells move `stock_cash`.** A buy debits cash, a sell credits it, and option trades move premium×100 (`adjust_stock_cash(..., allow_negative=True)` — overdraft is allowed, warn-but-allow). `/stock cash` still sets/deposits/withdraws manually. An account's value = positions (stocks + options) **+** cash. `/stock gains <amount>` injects a manual realized gain: it credits cash **and** logs to `realized_adjustments`, which is added to the realized total at display time.
 - **`_period_pnl`** (holding-aware, trade-adjusted P/L per time window) lives in `web/hq.py` — not in `db/queries.py`. It accounts for trades made *inside* a period so a mid-period buy only counts gains since the buy.
 - **HQ pages are cached** via `AsyncTTLCache` in `web/hq.py` (short TTL) — expect slightly stale numbers right after a trade.
 
