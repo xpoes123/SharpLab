@@ -533,9 +533,10 @@ async def _build_stocks():
     user_options = {u: all_options.get(u, []) for u in users}
     all_tickers = sorted({p["ticker"] for ps in user_positions.values()
                           for p in ps if p.get("shares", 0) > 0})
-    from bot.cogs.stock import fetch_quotes  # lazy import (heavy deps)
-    quotes = await fetch_quotes(all_tickers) if all_tickers else {}
-    qprice = {t: (quotes[t]["price"] if quotes.get(t) and quotes[t].get("price") else None)
+    from bot.cogs.stock import fetch_quotes, effective_price  # lazy import (heavy deps)
+    # extended=True → value holdings off the pre/post-market print after the close.
+    quotes = await fetch_quotes(all_tickers, extended=True) if all_tickers else {}
+    qprice = {t: (effective_price(quotes[t]) if quotes.get(t) and quotes[t].get("price") else None)
               for t in all_tickers}
     qprev = {t: (quotes[t].get("prev_close") if quotes.get(t) else None) for t in all_tickers}
 
