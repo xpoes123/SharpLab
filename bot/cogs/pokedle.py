@@ -22,7 +22,18 @@ from db import queries
 log = logging.getLogger(__name__)
 
 POKEAPI = "https://pokeapi.co/api/v2"
-INACTIVITY_SECS = 120
+# Per-guess inactivity window grows each guess — later guesses are harder and the
+# player is more invested, so they earn more thinking time. Capped so a stalled
+# game can't hold the channel's single-game lock for hours.
+INACTIVITY_BASE_SECS = 120
+INACTIVITY_GROWTH = 1.5
+INACTIVITY_MAX_SECS = 1200
+
+
+def _inactivity_secs(guessed: int) -> float:
+    """Timeout for the next guess: base * growth^guessed, capped. guessed is the
+    count already made, so the first guess (guessed=0) gets the base window."""
+    return min(INACTIVITY_MAX_SECS, INACTIVITY_BASE_SECS * INACTIVITY_GROWTH ** guessed)
 NATIONAL_DEX_MAX = 1025  # highest national-dex id to roll for Hard
 
 # Difficulty tiers: secret-pool breadth, guess budget, and base reward (scaled
@@ -228,7 +239,7 @@ class PokedleCog(commands.Cog):
             try:
                 msg = await self.bot.wait_for(
                     "message",
-                    timeout=INACTIVITY_SECS,
+                    timeout=_inactivity_secs(guessed),
                     check=lambda m: m.channel.id == thread.id and not m.author.bot and len(m.content) <= 25,
                 )
             except asyncio.TimeoutError:
