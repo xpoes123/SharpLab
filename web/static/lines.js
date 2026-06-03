@@ -9,7 +9,18 @@ let GAMES = {};           // game_id -> game object (for the bet modal)
 let ME = null;            // /hq/me (auth state)
 let betDraft = null;      // the bet currently being composed
 
-const am = (v) => (v == null ? "—" : (v > 0 ? "+" : "") + v);
+// Odds display format — applies to every American-odds value rendered via am().
+// Persisted so a viewer's preference sticks across visits.
+let oddsFmt = localStorage.getItem("oddsFmt") || "american";
+const ODDS_FMTS = [["american", "American"], ["decimal", "Decimal"], ["implied", "Implied %"]];
+const toDecimal = (a) => (a > 0 ? a / 100 + 1 : 100 / -a + 1);
+const toImplied = (a) => (a > 0 ? 100 / (a + 100) : -a / (-a + 100));
+const am = (v) => {
+  if (v == null) return "—";
+  if (oddsFmt === "decimal") return toDecimal(v).toFixed(2);
+  if (oddsFmt === "implied") return (toImplied(v) * 100).toFixed(1) + "%";
+  return (v > 0 ? "+" : "") + v;
+};
 const mlPair = (o) => (o && o.ml_home != null ? `${am(o.ml_away)} / ${am(o.ml_home)}` : "—");
 const fmtML = (src) => (src.ml_home == null ? "—" : `${am(src.ml_away)} / ${am(src.ml_home)}`);
 const BOOK_SHORT = { draftkings: "DK", fanduel: "FD", betmgm: "MGM", caesars: "CZR", williamhill_us: "CZR", fanatics: "FAN", betrivers: "BR", bovada: "BOV", betonlineag: "BOL", lowvig: "LV", mybookieag: "MB", betus: "BUS", kalshi: "KAL", polymarket: "POLY" };
@@ -201,9 +212,19 @@ async function loadMyBets() {
     const clv = b.clv == null ? "—" : `<span class="${b.clv >= 0 ? "pos" : "neg"}">${b.clv >= 0 ? "+" : ""}${b.clv.toFixed(1)}pp</span>`;
     return `<tr><td class="tm">${b.game}</td><td>${b.side}${ln}</td><td class="num">${am(b.odds)}</td><td class="num">${b.units}u</td><td class="num">${clv}</td></tr>`;
   };
-  box.innerHTML = `<h2>🎟️ My Bets</h2><div class="card" style="padding:0"><table class="linetable">
+  const fmtToggle = `<div class="oddsfmt" id="oddsFmtToggle">${ODDS_FMTS.map(
+    ([f, label]) => `<button class="ofbtn${oddsFmt === f ? " on" : ""}" data-fmt="${f}">${label}</button>`,
+  ).join("")}</div>`;
+  box.innerHTML = `<div class="myb-head"><h2>🎟️ My Bets</h2>${fmtToggle}</div>
+    <div class="card" style="padding:0"><table class="linetable">
     <thead><tr><th>Game</th><th>Pick</th><th class="num">Odds</th><th class="num">Units</th><th class="num">CLV</th></tr></thead>
     <tbody>${bets.map(row).join("")}</tbody></table></div>`;
+  box.querySelectorAll(".ofbtn").forEach((b) => b.addEventListener("click", () => {
+    if (b.dataset.fmt === oddsFmt) return;
+    oddsFmt = b.dataset.fmt;
+    localStorage.setItem("oddsFmt", oddsFmt);
+    load();  // re-render the whole page so every odds value reflects the new format
+  }));
 }
 
 function ensureModal() {
