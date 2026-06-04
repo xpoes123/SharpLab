@@ -62,6 +62,7 @@ COGS = [
     "bot.cogs.injuries",
     "bot.cogs.sportsnews",
     "bot.cogs.chessnews",
+    "bot.cogs.chessblunder",
     "bot.cogs.bot_logs",
     "bot.cogs.error_handler",
     "bot.cogs.history",
