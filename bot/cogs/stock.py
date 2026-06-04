@@ -874,6 +874,24 @@ async def _compute_portfolio(uid: str) -> dict | None:
     }
 
 
+def _join_capped(lines: list[str], limit: int, noun: str = "position") -> str:
+    """Join lines into an embed description, dropping any that would overflow
+    `limit` chars and appending a '…and N more' marker. Discord rejects embeds
+    whose description exceeds 4096 chars, which is what breaks /stock profile for
+    users holding a lot of positions."""
+    kept: list[str] = []
+    used = 0
+    for idx, ln in enumerate(lines):
+        cost = len(ln) + (1 if kept else 0)
+        if used + cost > limit:
+            dropped = len(lines) - idx
+            kept.append(f"_…and {dropped} more {noun}{'' if dropped == 1 else 's'}_")
+            break
+        kept.append(ln)
+        used += cost
+    return "\n".join(kept)
+
+
 def _build_overview_embed(target: discord.abc.User, d: dict) -> discord.Embed:
     """The default portfolio view: holdings list + headline totals."""
     lines: list[str] = []
@@ -906,11 +924,17 @@ def _build_overview_embed(target: discord.abc.User, d: dict) -> discord.Embed:
             f"**{o['premium']:,.2f}** · P/L `{sign}{u:,.2f} ({sign}{o['upct']:.2f}%)`"
         )
 
+    # Discord caps embed descriptions at 4096 chars; cap each section so a big
+    # book (many stocks/options) can't overflow and break the whole embed.
     sections: list[str] = []
-    if lines:
-        sections.append("\n".join(lines))
+    opt_text = ""
     if option_lines:
-        sections.append("**Options**\n" + "\n".join(option_lines))
+        opt_text = "**Options**\n" + _join_capped(option_lines, limit=1000, noun="option")
+    if lines:
+        stock_budget = 4000 - (len(opt_text) + 2 if opt_text else 0)
+        sections.append(_join_capped(lines, limit=stock_budget, noun="position"))
+    if opt_text:
+        sections.append(opt_text)
     description = "\n\n".join(sections) if sections else "_No open positions._"
 
     color = 0x57F287 if d["total_pnl"] >= 0 else 0xED4245
@@ -953,7 +977,8 @@ def _build_today_embed(target: discord.abc.User, d: dict) -> discord.Embed:
     for h in unpriced:
         lines.append(f"`{h['sym']}` · *price unavailable*")
 
-    description = "\n".join(lines) if lines else "_No priced stock positions today._"
+    description = _join_capped(lines, limit=4000, noun="position") if lines \
+        else "_No priced stock positions today._"
     color = 0x57F287 if d["day_change"] >= 0 else 0xED4245
     embed = discord.Embed(
         title=f"{target.display_name}'s Portfolio — Today",
