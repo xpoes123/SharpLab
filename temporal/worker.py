@@ -6,6 +6,7 @@ from temporalio.worker import Worker
 
 from db.schema import init_db
 from shared.log_config import setup_logging
+from .bootstrap import ensure_workflows
 from .workflows import OddsPollingWorkflow, CloseCaptureWorkflow, InjuryPollingWorkflow, BetResolutionWorkflow
 from .activities import (
     fetch_games_for_today,
@@ -59,6 +60,11 @@ async def main() -> None:
             resolve_bets_for_game,
         ],
     )
+
+    # Ensure the singleton long-running workflows exist. Idempotent: already-running
+    # ones are left alone. Runs on every worker start, so a deploy (which restarts
+    # temporal) or a terminated workflow self-heals without manual re-kicking.
+    await ensure_workflows(client, TASK_QUEUE)
 
     log.info(f"Worker started on task queue: {TASK_QUEUE}")
     await worker.run()
