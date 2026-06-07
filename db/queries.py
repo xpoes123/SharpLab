@@ -4170,6 +4170,22 @@ async def get_pickem_picks_for_message(message_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def get_pickem_picks_for_date(posted_date: str) -> list[dict]:
+    """Every pick (all users) for a given pick'em day, joined with its game's
+    probs / resolution. Drives the `/pickem today` card and its mini-board."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT p.message_id, p.discord_user, p.pick, p.stake, p.correct,
+                      g.home_prob, g.away_prob, g.resolved, g.winner
+               FROM pickem_picks p JOIN pickem_games g ON p.message_id = g.message_id
+               WHERE g.posted_date = ?""",
+            (posted_date,),
+        )
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
 async def get_pickem_resolved_picks() -> list[dict]:
     """Every scored pick joined with its game's start_time, ordered for streak calc."""
     async with aiosqlite.connect(DB_PATH) as db:
