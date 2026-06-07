@@ -19,8 +19,15 @@ from discord import app_commands, ui
 from discord.ext import commands, tasks
 
 from db import queries
+from shared.models import get_team_abbr
 from shared.odds_utils import devig_two_way
-from shared.pickem_scoring import STREAK_CAP, compute_pickem_standings  # noqa: F401 (re-exported)
+from shared.pickem_scoring import (  # noqa: F401 (compute_pickem_standings re-exported)
+    STREAK_CAP,
+    compute_pickem_standings,
+    pick_prob,
+    pick_units,
+    potential_units,
+)
 
 log = logging.getLogger(__name__)
 
@@ -122,6 +129,145 @@ def _result_line(game: dict, counts: dict[str, int]) -> str:
     winner_team = game["home_team"] if game["winner"] == "home" else game["away_team"]
     tally = f"{AWAY_EMOJI} {counts.get('away', 0)} · {HOME_EMOJI} {counts.get('home', 0)}"
     return f"✅ **{winner_team}** won — votes: {tally}"
+
+
+# ── Daily card: scores, picks, payouts ───────────────────────────────────────
+
+
+def _last(name: str) -> str:
+    return name.split()[-1].lower()
+
+
+def _pair_key(home_team: str, away_team: str) -> frozenset:
+    """Unordered key by team last-names — matches a scoreboard game to a pick'em
+    game without depending on exact name formatting across data sources."""
+    return frozenset((_last(home_team), _last(away_team)))
+
+
+def _team_short(name: str, sport: str) -> str:
+    return get_team_abbr(name, sport) or name.split()[-1]
+
+
+def _build_score_map(fetched: list[dict]) -> dict[frozenset, dict]:
+    """Index scoreboard rows (the shape returned by odds.py's fetchers) by
+    team-pair key → {as_, hs, state, detail}. state ∈ final|live|pre."""
+    out: dict[frozenset, dict] = {}
+    for g in fetched:
+        try:
+            home, away = g["home_team"]["full_name"], g["visitor_team"]["full_name"]
+        except (KeyError, TypeError):
+            continue
+        status, period = str(g.get("status", "")), g.get("period", 0) or 0
+        state = "final" if status.startswith("Final") else ("live" if period > 0 else "pre")
+        out[_pair_key(home, away)] = {
+            "hs": g.get("home_team_score") or 0,
+            "as_": g.get("visitor_team_score") or 0,
+            "state": state,
+            "detail": status.strip(),
+        }
+    return out
+
+
+def _format_game(game: dict, mine: dict | None, score: dict | None, now_iso: str) -> dict:
+    """Build one card row + its accounting. Returns {line, settled_delta,
+    live_risk, live_pot} — settled_delta is None unless the game is resolved."""
+    sport = game["sport"]
+    emoji = SPORT_EMOJI.get(sport, "🏟️")
+    away_s = _team_short(game["away_team"], sport)
+    home_s = _team_short(game["home_team"], sport)
+    resolved = bool(game["resolved"])
+    have_scores = score is not None and (score.get("state") != "pre")
+
+    if have_scores:
+        matchup = f"**{away_s}** {score['as_']}–{score['hs']} **{home_s}**"
+    else:
+        matchup = f"**{away_s}** @ **{home_s}**"
+
+    # Ledger truth: a game is "settled" only once pick'em has resolved it.
+    if resolved:
+        state = "final"
+    elif (score and score["state"] in ("live", "final")) or game["start_time"] <= now_iso:
+        state = "live"
+    else:
+        state = "pre"
+
+    out = {"settled_delta": None, "live_risk": 0.0, "live_pot": 0.0}
+
+    if mine:
+        pick = mine["pick"]
+        stake = mine["stake"]
+        prob = pick_prob(pick, game["home_prob"], game["away_prob"])
+        pick_s = away_s if pick == "away" else home_s
+        if state == "final":
+            won = (pick == game["winner"]) if game.get("winner") else bool(mine.get("correct"))
+            delta = pick_units(stake, prob, won)
+            out["settled_delta"] = delta
+            tail = f"{'✅' if won else '❌'} {pick_s} {stake}u **{delta:+.1f}u**"
+        elif state == "live":
+            out["live_risk"], out["live_pot"] = float(stake), potential_units(stake, prob)
+            lean = ""
+            if have_scores:
+                mine_sc = score["as_"] if pick == "away" else score["hs"]
+                opp_sc = score["hs"] if pick == "away" else score["as_"]
+                lean = " 🟢" if mine_sc > opp_sc else (" 🔴" if mine_sc < opp_sc else " 🟡")
+            tail = f"🔵 {pick_s} {stake}u{lean}"
+        else:
+            out["live_risk"], out["live_pot"] = float(stake), potential_units(stake, prob)
+            tail = f"🕒 {_fmt_et_time(game['start_time'])} · {pick_s} {stake}u"
+    else:
+        if state == "final":
+            win_s = home_s if game.get("winner") == "home" else away_s
+            tail = f"{win_s} won" if game.get("winner") else "Final"
+        elif state == "live":
+            tail = f"🔴 {score['detail']}" if (score and score.get("detail")) else "🔴 underway"
+        else:
+            tail = f"🕒 {_fmt_et_time(game['start_time'])}"
+
+    out["line"] = f"{emoji} {matchup} · {tail}"
+    return out
+
+
+def _today_board(all_picks: list[dict]) -> dict[str, dict]:
+    """Per-user settled record + net units for one day's picks (resolved only)."""
+    board: dict[str, dict] = {}
+    for r in all_picks:
+        if not r["resolved"] or r["correct"] is None:
+            continue
+        b = board.setdefault(r["discord_user"], {"net": 0.0, "w": 0, "l": 0})
+        won = bool(r["correct"])
+        prob = pick_prob(r["pick"], r["home_prob"], r["away_prob"])
+        b["net"] += pick_units(r["stake"], prob, won)
+        b["w"] += int(won)
+        b["l"] += int(not won)
+    return board
+
+
+async def _live_score_map(games: list[dict]) -> dict[frozenset, dict]:
+    """Live + final scores for the slate, matched by team-pair. Best-effort —
+    returns {} on any failure so the card still renders from DB state."""
+    from bot.cogs.odds import _fetch_scores_espn, _fetch_scores_nba  # local: avoid import cycle
+
+    by_sport: dict[str, set[str]] = {}
+    for g in games:
+        try:
+            d = datetime.fromisoformat(
+                g["start_time"].replace("Z", "+00:00")
+            ).astimezone(ET).date().isoformat()
+        except (ValueError, AttributeError, KeyError):
+            continue
+        by_sport.setdefault(g["sport"], set()).add(d)
+
+    score_map: dict[frozenset, dict] = {}
+    for sport, dates in by_sport.items():
+        try:
+            fetched = (
+                await _fetch_scores_nba(sorted(dates)) if sport == "nba"
+                else await _fetch_scores_espn(sorted(dates), sport)
+            )
+            score_map.update(_build_score_map(fetched))
+        except Exception:
+            log.warning("pickem card: score fetch failed for %s", sport, exc_info=True)
+    return score_map
 
 
 # ── Leaderboard view ─────────────────────────────────────────────────────────
@@ -226,8 +372,7 @@ STAKE_OPTIONS = (1, 2, 3, 4, 5)
 
 
 def _potential(stake: int, prob: float | None) -> str:
-    p = prob or 0.5
-    return f"win **+{stake * ((1.0 / p) - 1.0):.1f}u** / lose **-{stake}u**"
+    return f"win **+{potential_units(stake, prob):.1f}u** / lose **-{stake}u**"
 
 
 async def _game_open(message_id: str) -> dict | None:
@@ -546,9 +691,9 @@ class PickemCog(commands.Cog):
                 name = (await self.bot.fetch_user(int(p["discord_user"]))).display_name
             except Exception:
                 name = f"Player {p['discord_user'][:6]}"
-            prob = (game["home_prob"] if p["pick"] == "home" else game["away_prob"]) or 0.5
+            prob = pick_prob(p["pick"], game["home_prob"], game["away_prob"])
             if p["pick"] == winner:
-                gain = p["stake"] * ((1.0 / prob) - 1.0)
+                gain = potential_units(p["stake"], prob)
                 correct.append(f"{name} {p['stake']}u (+{gain:.1f}u)")
             else:
                 wrong.append(f"{name} {p['stake']}u (−{p['stake']}u)")
@@ -579,6 +724,89 @@ class PickemCog(commands.Cog):
         view = LeaderboardView(self.bot, standings)
         await interaction.followup.send(embed=await view.embed(), view=view)
         view.message = await interaction.original_response()
+
+    @pickem.command(name="today", description="Your pick'em card: today's scores, your picks, and payout")
+    @app_commands.describe(user="Whose card to show (defaults to you)")
+    async def today(
+        self, interaction: discord.Interaction, user: discord.Member | None = None,
+    ) -> None:
+        await interaction.response.defer()
+        target = user or interaction.user
+        today = datetime.now(ET).date().isoformat()
+        games = await queries.get_pickem_games_for_date(today)
+        if not games:
+            await interaction.followup.send(f"📋 No pick'em games were posted today ({today}).")
+            return
+        games.sort(key=lambda g: g["start_time"])
+
+        all_picks = await queries.get_pickem_picks_for_date(today)
+        mine_by_msg = {p["message_id"]: p for p in all_picks if p["discord_user"] == str(target.id)}
+        score_map = await _live_score_map(games)
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        # Final scores from the DB backfill the score line for resolved games when
+        # the live scoreboard didn't return them (e.g. ESPN dropped an old game).
+        lines, settled_net, w, l, live_n, risk, pot = [], 0.0, 0, 0, 0, 0.0, 0.0
+        for g in games:
+            mp = mine_by_msg.get(g["message_id"])
+            score = score_map.get(_pair_key(g["home_team"], g["away_team"]))
+            if score is None and g["resolved"]:
+                db = await queries.get_game_scores(g["game_id"])
+                if db is not None:
+                    score = {"hs": db[0], "as_": db[1], "state": "final", "detail": "Final"}
+            entry = _format_game(g, mp, score, now_iso)
+            lines.append(entry["line"])
+            if entry["settled_delta"] is not None:  # implies the user picked this game
+                settled_net += entry["settled_delta"]
+                w, l = (w + 1, l) if mp.get("correct") else (w, l + 1)
+            elif mp:
+                live_n += 1
+                risk += entry["live_risk"]
+                pot += entry["live_pot"]
+
+        embed = discord.Embed(title=f"📋 {target.display_name}'s Pick'em — {today}", colour=COLOUR)
+
+        if mine_by_msg:
+            picked = len(mine_by_msg)
+            trend = "🟢" if settled_net > 0 else ("🔴" if settled_net < 0 else "⚪")
+            summary = [f"**Picked {picked}/{len(games)}** today"]
+            if w or l:
+                summary.append(f"**Settled** {w}-{l} · {trend} **{settled_net:+.1f}u**")
+            if live_n:
+                summary.append(f"**Pending** {live_n} · risking {risk:.0f}u to win **+{pot:.1f}u**")
+            embed.description = "\n".join(summary)
+        else:
+            who = "You haven't" if target == interaction.user else f"{target.display_name} hasn't"
+            embed.description = f"_{who} picked any games today — here's the slate._"
+
+        # Game grid, chunked to respect Discord's 1024-char field cap.
+        chunk, size = [], 0
+        first = True
+        for ln in lines:
+            if size + len(ln) + 1 > 1024:
+                embed.add_field(name="Games" if first else "​", value="\n".join(chunk), inline=False)
+                chunk, size, first = [], 0, False
+            chunk.append(ln)
+            size += len(ln) + 1
+        if chunk:
+            embed.add_field(name="Games" if first else "​", value="\n".join(chunk), inline=False)
+
+        board = _today_board(all_picks)
+        if len(board) > 1:
+            ranked = sorted(board.items(), key=lambda kv: kv[1]["net"], reverse=True)
+            medals = {0: "🥇", 1: "🥈", 2: "🥉"}
+            blines = []
+            for i, (uid, b) in enumerate(ranked[:5]):
+                try:
+                    nm = (await self.bot.fetch_user(int(uid))).display_name
+                except Exception:
+                    nm = f"Player {uid[:6]}"
+                mark = " ⬅️" if uid == str(target.id) else ""
+                blines.append(f"{medals.get(i, f'`#{i+1}`')} **{nm}** {b['net']:+.1f}u ({b['w']}-{b['l']}){mark}")
+            embed.add_field(name="Today's board (settled)", value="\n".join(blines), inline=False)
+
+        embed.set_footer(text="🔵 live · 🟢/🔴 your side ahead/behind · payouts at market win%")
+        await interaction.followup.send(embed=embed)
 
     @pickem.command(name="channel", description="Set the pick'em channel")
     @app_commands.describe(channel="Where the daily pick'em is posted")
