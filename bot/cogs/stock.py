@@ -2423,6 +2423,8 @@ class StockCog(commands.Cog):
         try:
             from zoneinfo import ZoneInfo
             et = datetime.now(ZoneInfo("America/New_York"))
+            if et.weekday() >= 5:  # Sat/Sun — market closed, no close to report
+                return
             if et.hour < 16:  # before market close — wait
                 return
             today = et.date().isoformat()
