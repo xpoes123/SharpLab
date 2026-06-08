@@ -108,20 +108,29 @@ async def _award_trade_xp(interaction: discord.Interaction) -> None:
         log.debug("trade xp award failed for %s", interaction.user.id, exc_info=True)
 
 
-# Common crypto tickers — typed bare (BTC) they map to Yahoo's BTC-USD form.
-# Anything with an explicit -USD suffix is also treated as crypto/FX.
+# Bare crypto tickers — typed without a suffix (BTC) they map to Yahoo's BTC-USD
+# form. This list is deliberately limited to coins that do NOT collide with a real
+# US-listed company/ETF, because this is a stock-first brokerage: a bare ticker
+# that's a real security must resolve to that security, not silently to a coin.
+# (e.g. LTC=LTC Properties, SUI=Sun Communities, VET=Vermilion, AXS=Axis Capital,
+# BCH=Banco de Chile, ATOM=Atomera, LINK=Interlink, APT=Alpha Pro Tech, NEAR/ARB=
+# real ETFs — all live as stocks; use the explicit `LTC-USD` form for the coin.)
+# BTC/ETH/XRP/MANA are kept because their only equity match is a crypto fund, so a
+# bare BTC clearly means Bitcoin. Don't re-add a ticker here without checking it
+# isn't a tradeable equity — doing so traps any existing position under that symbol
+# (the sell path normalizes to -USD and then can't find the bare-ticker holding).
 CRYPTO_SYMBOLS = {
-    "BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "AVAX", "LINK", "DOT", "MATIC",
-    "LTC", "BCH", "SHIB", "TRX", "UNI", "ATOM", "XLM", "NEAR", "APT", "ARB",
-    "OP", "PEPE", "BNB", "TON", "SUI", "INJ", "FIL", "ICP", "HBAR", "ALGO",
-    "VET", "AAVE", "MKR", "GRT", "SAND", "MANA", "AXS", "FTM", "RNDR", "TIA",
+    "BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "AVAX", "DOT", "MATIC", "SHIB",
+    "UNI", "XLM", "OP", "PEPE", "BNB", "TON", "INJ", "FIL", "ICP", "HBAR",
+    "ALGO", "AAVE", "MKR", "GRT", "SAND", "MANA", "FTM", "RNDR", "TIA",
 }
 
 
 def _normalize_symbol(raw: str) -> str:
     """Canonicalise a user-entered symbol. Bare crypto tickers (BTC, ETH, …) and
     anything already ending in -USD become Yahoo's `BTC-USD` form; everything
-    else is treated as a normal stock/ETF ticker."""
+    else — including tickers that are real companies sharing a coin's name — is
+    treated as a normal stock/ETF ticker."""
     s = raw.strip().upper()
     if not s or s.endswith("-USD"):
         return s
