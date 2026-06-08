@@ -531,7 +531,7 @@ class BetsCog(commands.Cog):
             odds=american_odds, units=units, line=line,
             notes=prop + (f" — {notes}" if notes else ""),
         )
-        await queries.insert_bet(bet)
+        bet_id = await queries.insert_bet(bet)
         try:
             from bot.cogs.progression import award_xp, XP_BET
             await award_xp(interaction.client, str(interaction.user.id), XP_BET, interaction.channel)
@@ -541,7 +541,8 @@ class BetsCog(commands.Cog):
         am = f"+{american_odds}" if american_odds > 0 else str(american_odds)
         await interaction.followup.send(
             f"✅ Logged prop — **{player} {side.title()} {line:g} {stat_label}** @ `{am}` · {units:g}u on `{book}`\n"
-            f"*{target.away_team} @ {target.home_team}*  ·  grade it later with `/bet record` once the game's final.")
+            f"*{target.away_team} @ {target.home_team}*  ·  grade it later with `/bet record` once the game's final.\n"
+            f"Bet ID: #{bet_id}")
 
     # ── /bet view ─────────────────────────────────────────────────────────────
 
