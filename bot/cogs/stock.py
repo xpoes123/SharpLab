@@ -807,7 +807,6 @@ async def _compute_portfolio(uid: str) -> dict | None:
         cost = shares * dca
         q = quotes.get(sym)
         if not q:
-            total_cost += cost
             stocks.append({"sym": sym, "shares": shares, "dca": dca, "cost": cost,
                            "available": False})
             continue
@@ -1467,6 +1466,11 @@ async def _leaderboard_rows(users: list[str]) -> list[dict]:
     week_cut = (now - timedelta(days=7)).isoformat()
     ytd_cut = datetime(now.year, 1, 1, tzinfo=timezone.utc).isoformat()
 
+    week_snaps, ytd_snaps = await asyncio.gather(
+        queries.get_all_snapshot_values_asof(week_cut),
+        queries.get_all_snapshot_values_asof(ytd_cut),
+    )
+
     rows: list[dict] = []
     for uid in users:
         positions = all_positions[uid]
@@ -1510,8 +1514,8 @@ async def _leaderboard_rows(users: list[str]) -> list[dict]:
             "account_value": stock_value + options_value + cash,
             "day_gain": day_gain,
             "day_base": stock_value_prev,
-            "week_base": await queries.get_snapshot_value_asof(uid, week_cut),
-            "ytd_base": await queries.get_snapshot_value_asof(uid, ytd_cut),
+            "week_base": week_snaps.get(uid),
+            "ytd_base": ytd_snaps.get(uid),
         })
     return rows
 
@@ -2737,16 +2741,21 @@ class StockCog(commands.Cog):
             if not _manual_triggered(m["direction"], m["target_price"], q["price"]):
                 continue
             await queries.deactivate_stock_monitor(m["monitor_id"])
-            channel = self.bot.get_channel(int(m["channel_id"]))
-            if channel is None:
-                continue
             arrow = "📈" if m["direction"] == "above" else "📉"
+            alert_text = (
+                f"{arrow} <@{m['discord_user']}> **{_display_ticker(m['ticker'])}** is "
+                f"now **${q['price']:,.2f}** — {m['direction']} your "
+                f"${m['target_price']:,.2f} target."
+            )
             try:
-                await channel.send(
-                    f"{arrow} <@{m['discord_user']}> **{_display_ticker(m['ticker'])}** is "
-                    f"now **${q['price']:,.2f}** — {m['direction']} your "
-                    f"${m['target_price']:,.2f} target."
-                )
+                channel = self.bot.get_channel(int(m["channel_id"])) or await self.bot.fetch_channel(int(m["channel_id"]))
+                await channel.send(alert_text)
+            except (discord.NotFound, discord.Forbidden):
+                try:
+                    user = await self.bot.fetch_user(int(m["discord_user"]))
+                    await user.send(alert_text)
+                except Exception:
+                    pass
             except discord.HTTPException:
                 log.exception("monitor_loop: failed to post manual alert")
 
@@ -3035,6 +3044,7 @@ class StockCog(commands.Cog):
             await interaction.response.send_message(str(e), ephemeral=True)
             return
 
+        await interaction.response.defer(ephemeral=True)
         warn = ""
         if date is None:   # near the live price — warn (don't block; people may log old data)
             ok, live = await live_price_check(symbol, price)
@@ -3055,7 +3065,7 @@ class StockCog(commands.Cog):
         )
         cash_line = f"\nCash: **${new_cash:,.2f}**" + (
             " ⚠️ you're in the red" if new_cash < 0 else "")
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"Recorded **BUY** `{symbol}` — {shares:g} sh @ `{price:,.2f}` "
             f"(−${shares * price:,.2f}).\n{position_line}{cash_line}{warn}",
             ephemeral=True,
@@ -3096,6 +3106,7 @@ class StockCog(commands.Cog):
             await interaction.response.send_message(str(e), ephemeral=True)
             return
 
+        await interaction.response.defer(ephemeral=True)
         sell_warn = ""
         if date is None:   # near the live price — warn (don't block)
             ok, live = await live_price_check(symbol, price)
@@ -3106,7 +3117,7 @@ class StockCog(commands.Cog):
         current = await queries.get_stock_holding(str(interaction.user.id), symbol)
         held = current["shares"] if current else 0.0
         if shares > held + 1e-9:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"You only hold {held:g} sh of `{symbol}` — can't sell {shares:g}.",
                 ephemeral=True,
             )
@@ -3131,7 +3142,7 @@ class StockCog(commands.Cog):
         )
         cash_line = f"\nCash: **${new_cash:,.2f}**" + (
             " ⚠️ you're in the red" if new_cash < 0 else "")
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"Recorded **SELL** `{symbol}` — {shares:g} sh @ `{price:,.2f}` "
             f"(+${shares * price:,.2f}) · realized P/L `{_fmt_pnl(realized)}`."
             f"\n{position_line}{cash_line}{sell_warn}",
@@ -3299,6 +3310,7 @@ class StockCog(commands.Cog):
             await interaction.response.send_message(str(e), ephemeral=True)
             return
 
+        await interaction.response.defer(ephemeral=True)
         opt_warn = ""
         if date is None:   # warn (don't block) if the premium looks off for a "now" trade
             ok, reason = await live_option_check(sym, otype, strike, expiry_iso, premium)
@@ -3347,7 +3359,7 @@ class StockCog(commands.Cog):
         })
         cash_line = f"\nCash: **${new_cash:,.2f}**" + (
             " ⚠️ you're in the red" if new_cash < 0 else "")
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"Recorded **{side.upper()}** {contracts} × `{spec}` @ `{premium:,.2f}` "
             f"({'−' if cash_flow < 0 else '+'}${abs(cash_flow):,.2f})"
             f"{realized_line}.\n{position_line}{cash_line}{opt_warn}",
@@ -3444,12 +3456,17 @@ class StockCog(commands.Cog):
         value_total = 0.0
         unrealized_total = 0.0
         lines: list[str] = []
+        hidden_expired = 0
         for p in open_positions:
             key = (p["underlying"], p["opt_type"], p["strike"], p["expiry"])
             info = prices.get(key, {})
             premium = info.get("premium")
             expired = info.get("expired", _is_expired(p["expiry"]))
             pl = _option_position_pnl(p, premium)
+            # Skip expired worthless positions — they clutter the list but have no value
+            if expired and (premium is None or premium <= 0) and pl["value"] <= 0:
+                hidden_expired += 1
+                continue
             value_total += pl["value"]
             unrealized_total += pl["unrealized"]
 
@@ -3472,6 +3489,8 @@ class StockCog(commands.Cog):
                 f"**{premium:,.2f}** · P/L `{sign}{u:,.2f} ({sign}{upct:.2f}%)`"
             )
 
+        if hidden_expired:
+            lines.append(f"_({hidden_expired} expired worthless position{'s' if hidden_expired != 1 else ''} hidden)_")
         total_pnl = unrealized_total + realized_total
         color = 0x57F287 if total_pnl >= 0 else 0xED4245
         embed = discord.Embed(

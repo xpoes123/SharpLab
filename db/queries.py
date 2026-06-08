@@ -3670,6 +3670,20 @@ async def get_snapshot_value_asof(discord_user: str, cutoff_utc_iso: str) -> flo
         return float(row[0]) if row else None
 
 
+async def get_all_snapshot_values_asof(cutoff_utc_iso: str) -> dict[str, float]:
+    """Account value per user from their latest snapshot at/before a cutoff.
+    Returns {discord_user: account_value}; missing = no snapshot that far back."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT discord_user, account_value FROM portfolio_snapshots "
+            "WHERE captured_at <= ? "
+            "GROUP BY discord_user HAVING captured_at = MAX(captured_at)",
+            (cutoff_utc_iso,),
+        )
+        rows = await cur.fetchall()
+        return {r[0]: float(r[1]) for r in rows}
+
+
 async def get_all_portfolio_users() -> list[str]:
     """Every user that has any portfolio footprint: a stock trade, an option
     trade, or a cash balance. Used by the hourly snapshot loop."""
