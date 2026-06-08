@@ -3,6 +3,8 @@
 import asyncio
 import json
 import os
+import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from math import isqrt
@@ -24,6 +26,8 @@ from web.blotto import router as blotto_router, blotto_websocket, cleanup_stale_
 from web.hq import router as hq_router
 
 DB_PATH = os.environ.get("SHARPLAB_DB_PATH", "data/sharplab.db")
+
+_ANALYTICS_RATE: dict[str, list[float]] = defaultdict(list)
 
 
 def _ts(s: str | None) -> datetime | None:
@@ -97,7 +101,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://sharplab.djiang.xyz", "http://localhost:8000"],
     allow_methods=["GET", "POST"],
-    allow_headers=["*"],
+    allow_headers=["Content-Type", "X-Api-Key", "Authorization"],
 )
 
 # Mount game routers
@@ -776,16 +780,32 @@ async def dashboard_results(sport: str = Query("all"), limit: int = Query(10, ge
         )
 
     pref = ["draftkings", "fanduel", "betmgm", "caesars", "fanatics"]
+    game_ids = [g["game_id"] for g in games]
+    if game_ids:
+        _ph = ",".join("?" * len(game_ids))
+        all_polls_rows = await _fetch_all(
+            f"SELECT game_id, source, captured_at, payload FROM odds_snapshots "
+            f"WHERE game_id IN ({_ph}) AND kind = 'poll' ORDER BY captured_at ASC",
+            tuple(game_ids),
+        )
+        all_closes_rows = await _fetch_all(
+            f"SELECT game_id, source, captured_at, payload FROM odds_snapshots "
+            f"WHERE game_id IN ({_ph}) AND kind = 'close'",
+            tuple(game_ids),
+        )
+    else:
+        all_polls_rows, all_closes_rows = [], []
+    polls_by_game: dict[str, list] = {gid: [] for gid in game_ids}
+    for r in all_polls_rows:
+        polls_by_game[r["game_id"]].append(r)
+    closes_by_game: dict[str, list] = {gid: [] for gid in game_ids}
+    for r in all_closes_rows:
+        closes_by_game[r["game_id"]].append(r)
+
     results = []
     for g in games:
-        polls = await _fetch_all(
-            "SELECT source, captured_at, payload FROM odds_snapshots WHERE game_id = ? AND kind = 'poll' "
-            "ORDER BY captured_at ASC", (g["game_id"],),
-        )
-        closes = await _fetch_all(
-            "SELECT source, captured_at, payload FROM odds_snapshots WHERE game_id = ? AND kind = 'close'",
-            (g["game_id"],),
-        )
+        polls = polls_by_game.get(g["game_id"], [])
+        closes = closes_by_game.get(g["game_id"], [])
         close_meta = {r["source"]: (r["captured_at"], json.loads(r["payload"])) for r in closes}
         close_by = {s: p for s, (c, p) in close_meta.items()}
         poll_by: dict[str, list] = {}
@@ -846,8 +866,17 @@ async def analytics_event(request: Request):
     """Record a cookieless analytics event (pageview / duration). Privacy-friendly:
     IPs are SHA-256 hashed and truncated, never stored raw."""
     import hashlib
+    body_bytes = await request.body()
+    if len(body_bytes) > 4096:
+        raise HTTPException(status_code=413, detail="Payload too large")
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    window = [t for t in _ANALYTICS_RATE[client_ip] if now - t < 60]
+    if len(window) >= 30:
+        raise HTTPException(status_code=429, detail="Too many requests")
+    _ANALYTICS_RATE[client_ip] = window + [now]
     try:
-        body = await request.json()
+        body = json.loads(body_bytes)
     except Exception:
         return JSONResponse({"ok": False}, status_code=400)
     etype = str(body.get("type", ""))[:32]
@@ -858,6 +887,8 @@ async def analytics_event(request: Request):
     ip = fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "")
     ip_hash = hashlib.sha256(ip.encode()).hexdigest()[:16] if ip else ""
     extras = {k: v for k, v in body.items() if k not in ("type", "sid", "page", "ref", "ts")}
+    if extras:
+        extras = {k[:64]: str(v)[:256] for k, v in list(extras.items())[:5]}
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO web_events (ts, sid, type, page, ref, ua, ip_hash, data) VALUES (?,?,?,?,?,?,?,?)",

@@ -16,7 +16,7 @@ import aiosqlite
 import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from db import queries
 from shared.achievements import ALL_ACHIEVEMENTS
@@ -482,11 +482,27 @@ async def hq_profile(handle: str):
     }
 
 
+_SENSITIVE_HOLDING = {"cost_basis", "dca"}
+
+
+def _strip_holding(h: dict) -> dict:
+    return {k: v for k, v in h.items() if k not in _SENSITIVE_HOLDING}
+
+
 @router.get("/hq/stocks")
-async def hq_stocks():
+async def hq_stocks(request: Request):
     """Every trader's portfolio — value (latest hourly snapshot), realized P&L,
     and open holdings. Public, cached briefly."""
-    return await _CACHE.get("stocks", _SERVER_TTL, _build_stocks, swr=_SWR)
+    sess = auth.read_session(request)
+    data = await _CACHE.get("stocks", _SERVER_TTL, _build_stocks, swr=_SWR)
+    if sess:
+        return data
+    # Unauthenticated: strip sensitive per-holding fields
+    traders = [
+        {**t, "holdings": [_strip_holding(h) for h in t.get("holdings", [])]}
+        for t in data.get("traders", [])
+    ]
+    return {"traders": traders}
 
 
 async def _build_stocks():
@@ -700,15 +716,34 @@ async def _build_earnings():
     return {"days": days}
 
 
+_SENSITIVE_TRADER = {"transactions"}
+_SENSITIVE_STOCK_HOLDING = {"cost_basis", "dca"}
+_SENSITIVE_OPTION = {"avg_premium", "option_strike", "option_premium"}
+
+
 @router.get("/hq/stocks/{handle}")
-async def hq_stock_trader(handle: str):
+async def hq_stock_trader(handle: str, request: Request):
     """One trader's full portfolio: equity curve, stock + option positions, txns."""
     who = await _resolve_handle(handle)
     if not who:
         return JSONResponse({"error": "not_found"}, status_code=404)
     uid = who["discord_user"]
-    return await _CACHE.get(f"trader:{uid}", _TRADER_TTL,
-                            lambda: _build_trader(uid, who), swr=_SWR)
+    data = await _CACHE.get(f"trader:{uid}", _TRADER_TTL,
+                             lambda: _build_trader(uid, who), swr=_SWR)
+    sess = auth.read_session(request)
+    if sess and sess.get("id") == uid:
+        return data
+    # Public or other-user view: strip sensitive fields
+    stripped = {k: v for k, v in data.items() if k not in _SENSITIVE_TRADER}
+    stripped["stock_holdings"] = [
+        {k: v for k, v in h.items() if k not in _SENSITIVE_STOCK_HOLDING}
+        for h in data.get("stock_holdings", [])
+    ]
+    stripped["option_positions"] = [
+        {k: v for k, v in o.items() if k not in _SENSITIVE_OPTION}
+        for o in data.get("option_positions", [])
+    ]
+    return stripped
 
 
 async def _build_trader(uid: str, who: dict):
@@ -955,7 +990,7 @@ async def hq_stock_trade(body: StockTradeIn, request: Request):
                                       datetime.now(timezone.utc).isoformat(), "via HQ")
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
-    _CACHE.invalidate("stocks", f"trader:{sess['id']}")   # reflect the trade immediately
+    _CACHE.invalidate("stocks", f"trader:{sess['id']}", "earnings")   # reflect the trade immediately
     return {"ok": True, "side": body.side, "ticker": ticker, "shares": body.shares,
             "price": body.price, "warning": warning}
 
@@ -996,18 +1031,25 @@ async def hq_option_trade(body: OptionTradeIn, request: Request):
                                        body.premium, datetime.now(timezone.utc).isoformat(), "via HQ")
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
-    _CACHE.invalidate("stocks", f"trader:{sess['id']}")   # reflect the trade immediately
+    _CACHE.invalidate("stocks", f"trader:{sess['id']}", "earnings")   # reflect the trade immediately
     return {"ok": True, "warning": option_warning}
 
 
 class BetLogIn(BaseModel):
     game_id: str
     market: str               # spread | moneyline | total
-    side: str                 # team name, "over", or "under"
+    side: str = Field(..., max_length=64)
     odds: int
     units: float = 1.0
     line: float | None = None
-    book: str = "other"
+    book: str = Field("other", max_length=32)
+
+    @field_validator("odds")
+    @classmethod
+    def validate_odds(cls, v: int) -> int:
+        if not (100 <= abs(v) <= 100000):
+            raise ValueError("odds must be between ±100 and ±100000")
+        return v
 
 
 @router.post("/hq/bet/log")

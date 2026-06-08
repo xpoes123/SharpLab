@@ -213,6 +213,11 @@ async def figgie_websocket(websocket: WebSocket, room_id: str):
             await _handle_message(room, player, data)
     except WebSocketDisconnect:
         player.ws = None
+        all_disconnected = all(p.ws is None for p in room.players.values())
+        if all_disconnected and room_id in rooms:
+            if room.game_task and not room.game_task.done():
+                room.game_task.cancel()
+            del rooms[room_id]
     except Exception:
         player.ws = None
 
