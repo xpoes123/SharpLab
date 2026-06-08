@@ -148,7 +148,7 @@ class OddsPollingWorkflow:
                 await workflow.execute_activity(
                     fetch_nba_player_props,
                     game_ids,
-                    start_to_close_timeout=timedelta(seconds=90),
+                    start_to_close_timeout=timedelta(seconds=600),
                     retry_policy=RetryPolicy(maximum_attempts=2),
                 )
 
@@ -166,7 +166,7 @@ class OddsPollingWorkflow:
                     await workflow.execute_activity(
                         fetch_nba_player_prop_alts,
                         alt_targets,
-                        start_to_close_timeout=timedelta(seconds=90),
+                        start_to_close_timeout=timedelta(seconds=600),
                         retry_policy=RetryPolicy(maximum_attempts=2),
                     )
 
@@ -265,6 +265,7 @@ class CloseCaptureWorkflow:
                 sport=sport,
             ),
             start_to_close_timeout=timedelta(seconds=30),
+            schedule_to_close_timeout=timedelta(minutes=5),
             retry_policy=RetryPolicy(maximum_attempts=3),
         )
 
@@ -287,6 +288,7 @@ class CloseCaptureWorkflow:
                 sport=sport,
             ),
             start_to_close_timeout=timedelta(seconds=30),
+            schedule_to_close_timeout=timedelta(minutes=5),
             retry_policy=RetryPolicy(maximum_attempts=3),
         )
         if kalshi_results:
@@ -306,6 +308,7 @@ class CloseCaptureWorkflow:
                 sport=sport,
             ),
             start_to_close_timeout=timedelta(seconds=30),
+            schedule_to_close_timeout=timedelta(minutes=5),
             retry_policy=RetryPolicy(maximum_attempts=3),
         )
         if polymarket_results:
@@ -435,4 +438,5 @@ class InjuryPollingWorkflow:
                         )
 
             await workflow.sleep(timedelta(minutes=interval_minutes))
+            # sport is intentionally omitted — injuries are NBA-only, hardcoded above
             workflow.continue_as_new(args=[interval_minutes])

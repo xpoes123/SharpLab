@@ -36,7 +36,15 @@ TASK_QUEUE = "sports-quant-lab"
 async def main() -> None:
     await init_db()
 
-    client = await Client.connect("localhost:7233")
+    for attempt in range(30):
+        try:
+            client = await Client.connect("localhost:7233")
+            break
+        except Exception as e:
+            if attempt == 29:
+                raise
+            log.warning(f"Temporal not ready (attempt {attempt + 1}/30), retrying in 10s: {e}")
+            await asyncio.sleep(10)
 
     worker = Worker(
         client,
