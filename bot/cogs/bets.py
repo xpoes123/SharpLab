@@ -384,6 +384,17 @@ class BetsCog(commands.Cog):
             )
             return
 
+        if not (american_odds <= -100 or american_odds >= 100):
+            await interaction.followup.send(
+                f'Invalid odds `{odds}` — must be ≤ -100 or ≥ +100 (e.g. -110, +150).',
+                ephemeral=True,
+            )
+            return
+
+        if units <= 0:
+            await interaction.followup.send('Units must be a positive number.', ephemeral=True)
+            return
+
         target = await queries.get_game_by_id(game)
         if target is None:
             await interaction.followup.send(
@@ -496,6 +507,18 @@ class BetsCog(commands.Cog):
         except Exception:
             await interaction.followup.send(f"Couldn't parse odds `{odds}`. Use American (-115), decimal, or cents.", ephemeral=True)
             return
+
+        if not (american_odds <= -100 or american_odds >= 100):
+            await interaction.followup.send(
+                f'Invalid odds `{odds}` — must be ≤ -100 or ≥ +100 (e.g. -110, +150).',
+                ephemeral=True,
+            )
+            return
+
+        if units <= 0:
+            await interaction.followup.send('Units must be a positive number.', ephemeral=True)
+            return
+
         target = await queries.get_game_by_id(game)
         if target is None:
             await interaction.followup.send("Game not found — pick from the dropdown.", ephemeral=True)
