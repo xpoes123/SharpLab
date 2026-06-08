@@ -515,7 +515,7 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
-        # Migration: add stock_holdings for /stock_portfolio
+        # Migration: create dead stock_holdings table (required so the backfill to stock_trades below is idempotent on old DBs — do NOT write to this table)
         try:
             await db.execute(
                 "CREATE TABLE IF NOT EXISTS stock_holdings "
