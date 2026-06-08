@@ -429,7 +429,7 @@ async def _ticker_history(sym: str) -> list:
     hit = _hist_cache.get(sym)
     if hit is not None and (time.monotonic() - hit[0]) < _HIST_TTL:
         return hit[1]
-    series = await asyncio.get_event_loop().run_in_executor(None, _fetch_history_blocking, sym)
+    series = await asyncio.get_running_loop().run_in_executor(None, _fetch_history_blocking, sym)
     _hist_cache[sym] = (time.monotonic(), series)
     return series
 
