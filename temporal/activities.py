@@ -13,7 +13,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -725,7 +725,8 @@ async def fetch_polymarket_odds_batch(games: list[Game]) -> OddsBatch:
                     params={"tag_slug": sport, "active": "true", "closed": "false", "limit": 300},
                     timeout=20.0,
                 )
-                evs = r.json() if isinstance(r.json(), list) else r.json().get("data", [])
+                data = r.json()
+                evs = data if isinstance(data, list) else data.get("data", [])
             except Exception:
                 evs = []
             by_sport[sport] = [e for e in evs if " vs" in (e.get("title") or "").lower()]
@@ -788,7 +789,8 @@ async def fetch_polymarket_close_snapshot(inp: FetchCloseSnapshotInput) -> list[
                 params={"tag_slug": inp.sport, "active": "true", "closed": "false", "limit": 300},
                 timeout=20.0,
             )
-            evs = r.json() if isinstance(r.json(), list) else r.json().get("data", [])
+            data = r.json()
+            evs = data if isinstance(data, list) else data.get("data", [])
         except Exception:
             evs = []
     games_ev = [e for e in evs if hl in (e.get("title") or "").lower() and al in (e.get("title") or "").lower()]
@@ -979,7 +981,6 @@ def _pick_game_for_date(candidates: list, game_date: str):
         return None
     if not game_date:
         return candidates[0]  # no date info → legacy behaviour (most recent)
-    from datetime import timedelta
     try:
         ref = datetime.fromisoformat(game_date).replace(tzinfo=timezone.utc) + timedelta(hours=22)
     except ValueError:
@@ -1002,7 +1003,6 @@ async def resolve_bets_for_game(result: GameResult) -> int:
     Match a completed game to a DB game by team suffix AND date, then resolve all
     open/graded bets. Marks the game 'final'. Returns the count of bets resolved.
     """
-    from datetime import timedelta
     cutoff = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
 
     candidates = await queries.get_games_by_team_suffixes(
