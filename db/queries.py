@@ -173,8 +173,12 @@ async def purge_post_tip_closes(grace_seconds: int = 0) -> int:
         late = [r["snapshot_id"] for r in rows
                 if (c := _p(r["captured_at"])) and (st := _p(r["start_time"]))
                 and (c - st).total_seconds() > grace_seconds]
-        for sid in late:
-            await db.execute("DELETE FROM odds_snapshots WHERE snapshot_id = ?", (sid,))
+        if late:
+            placeholders = ",".join("?" * len(late))
+            await db.execute(
+                f"DELETE FROM odds_snapshots WHERE snapshot_id IN ({placeholders})",
+                late,
+            )
         await db.commit()
     return len(late)
 
@@ -356,13 +360,13 @@ async def insert_bet(bet: Bet) -> int:
         return cursor.lastrowid  # type: ignore[return-value]
 
 
-async def get_bets_for_user(discord_user: str) -> list[Bet]:
-    """Return all bets for a user, newest first."""
+async def get_bets_for_user(discord_user: str, limit: int = 100) -> list[Bet]:
+    """Return bets for a user, newest first."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT * FROM bets WHERE discord_user = ? ORDER BY placed_at DESC",
-            (discord_user,),
+            "SELECT * FROM bets WHERE discord_user = ? ORDER BY placed_at DESC LIMIT ?",
+            (discord_user, limit),
         )
         rows = await cursor.fetchall()
     return [_row_to_bet(r) for r in rows]
@@ -384,13 +388,14 @@ async def get_all_settled_bets(since_iso: str | None = None) -> list[Bet]:
     return [_row_to_bet(r) for r in rows]
 
 
-async def get_graded_bets_for_user(discord_user: str) -> list[Bet]:
-    """Return all bets with CLV computed (graded/won/lost/push/void), newest first."""
+async def get_graded_bets_for_user(discord_user: str, limit: int = 100) -> list[Bet]:
+    """Return bets with CLV computed (graded/won/lost/push/void), newest first."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT * FROM bets WHERE discord_user = ? AND clv IS NOT NULL ORDER BY placed_at DESC",
-            (discord_user,),
+            "SELECT * FROM bets WHERE discord_user = ? AND clv IS NOT NULL "
+            "ORDER BY placed_at DESC LIMIT ?",
+            (discord_user, limit),
         )
         rows = await cursor.fetchall()
     return [_row_to_bet(r) for r in rows]
@@ -1659,19 +1664,22 @@ async def get_games_with_open_paper_bets() -> list[str]:
 
 async def resolve_paper_bet(
     paper_bet_id: int, status: str, payout: int, clv: float | None = None,
-) -> None:
-    """Mark a paper bet as resolved with final status, payout, and optional CLV."""
+) -> int:
+    """Mark a paper bet as resolved with final status, payout, and optional CLV.
+
+    Returns rowcount (1 if updated, 0 if already resolved/missing)."""
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
+        cursor = await db.execute(
             """
             UPDATE paper_bets
             SET status = ?, payout = ?, resolved_at = ?, clv = ?
-            WHERE paper_bet_id = ?
+            WHERE paper_bet_id = ? AND status = 'open'
             """,
             (status, payout, now, clv, paper_bet_id),
         )
         await db.commit()
+        return cursor.rowcount
 
 
 async def get_paper_bet_stats(discord_user: str) -> dict:
@@ -1795,6 +1803,7 @@ async def get_paper_streak(discord_user: str) -> tuple[str, int]:
             SELECT status FROM paper_bets
             WHERE discord_user = ? AND status IN ('won', 'lost')
             ORDER BY resolved_at DESC
+            LIMIT 200
             """,
             (discord_user,),
         )
@@ -2282,10 +2291,19 @@ async def get_active_duel_in_channel(channel_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+_DUEL_COLUMNS = frozenset({
+    "status", "winner_id", "score_challenger", "score_opponent",
+    "games_played", "finished_at",
+})
+
+
 async def update_duel(duel_id: int, **kwargs: object) -> None:
     """Update duel fields dynamically."""
     if not kwargs:
         return
+    invalid = set(kwargs) - _DUEL_COLUMNS
+    if invalid:
+        raise ValueError(f"Invalid duel column(s): {invalid}")
     sets = ", ".join(f"{k} = ?" for k in kwargs)
     vals = list(kwargs.values()) + [duel_id]
     async with aiosqlite.connect(DB_PATH) as db:
@@ -2382,10 +2400,18 @@ async def get_tournament_entries(tournament_id: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+_TOURNAMENT_COLUMNS = frozenset({
+    "status", "bracket_json", "finished_at",
+})
+
+
 async def update_tournament(tournament_id: int, **kwargs: object) -> None:
     """Update tournament fields dynamically."""
     if not kwargs:
         return
+    invalid = set(kwargs) - _TOURNAMENT_COLUMNS
+    if invalid:
+        raise ValueError(f"Invalid tournament column(s): {invalid}")
     sets = ", ".join(f"{k} = ?" for k in kwargs)
     vals = list(kwargs.values()) + [tournament_id]
     async with aiosqlite.connect(DB_PATH) as db:
@@ -2435,7 +2461,7 @@ async def get_casino_win_streak(discord_user: str) -> int:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT wagered, payout FROM casino_history "
-            "WHERE discord_user = ? ORDER BY id DESC",
+            "WHERE discord_user = ? ORDER BY id DESC LIMIT 200",
             (discord_user,),
         )
         rows = await cursor.fetchall()
@@ -2872,7 +2898,6 @@ async def cleanup_stale_tournaments() -> int:
     Refunds buy-ins to all entrants. Returns the number of tournaments cleaned up.
     """
     now_iso = datetime.now(timezone.utc).isoformat()
-    cleaned = 0
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
@@ -2896,14 +2921,16 @@ async def cleanup_stale_tournaments() -> int:
                         )
                     except Exception:
                         log.warning("Failed to refund tournament buy-in for user %s (tournament %s)", entry["discord_user"], t["tournament_id"], exc_info=True)
+        if stale:
+            placeholders = ",".join("?" * len(stale))
+            ids = [t["tournament_id"] for t in stale]
             await db.execute(
-                "UPDATE tournaments SET status = 'cancelled', finished_at = ? "
-                "WHERE tournament_id = ?",
-                (now_iso, t["tournament_id"]),
+                f"UPDATE tournaments SET status = 'cancelled', finished_at = ? "
+                f"WHERE tournament_id IN ({placeholders})",
+                [now_iso, *ids],
             )
-            cleaned += 1
         await db.commit()
-    return cleaned
+    return len(stale)
 
 
 async def cleanup_stale_game_sessions() -> int:
