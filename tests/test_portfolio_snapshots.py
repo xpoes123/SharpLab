@@ -403,6 +403,21 @@ class TestCrypto:
         assert stock._normalize_symbol("aapl") == "AAPL"            # normal stock untouched
         assert stock._normalize_symbol("") == ""
 
+    def test_tickers_that_are_real_companies_stay_equities(self):
+        # Stock-first: a bare ticker that's a real US-listed security must resolve
+        # to that security, never a coin. (LTC=LTC Properties, SUI=Sun Communities,
+        # VET=Vermilion, etc.) The coin is still reachable via the explicit -USD form.
+        for sym in ("LTC", "SUI", "VET", "AXS", "BCH", "ATOM", "LINK", "APT", "TRX", "NEAR", "ARB"):
+            assert stock._normalize_symbol(sym) == sym, f"{sym} should stay an equity"
+            assert stock._normalize_symbol(sym.lower()) == sym
+            assert stock._normalize_symbol(f"{sym}-USD") == f"{sym}-USD"  # explicit coin still works
+            assert sym not in stock.CRYPTO_SYMBOLS
+
+    def test_iconic_coins_still_map_to_usd(self):
+        # Coins whose only equity match is a crypto fund (or none) still go bare->-USD.
+        for sym in ("BTC", "ETH", "XRP", "MANA", "SOL", "DOGE"):
+            assert stock._normalize_symbol(sym) == f"{sym}-USD"
+
     def test_crypto_composition_bucket(self):
         meta = {
             "BTC-USD": {"quote_type": "CRYPTOCURRENCY", "beta": None},
