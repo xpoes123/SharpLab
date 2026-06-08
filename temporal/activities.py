@@ -19,6 +19,7 @@ from typing import Any
 import httpx
 from dotenv import load_dotenv
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
 from db import queries, schema
 from shared.models import Bet, Game, GameResult, InjuryAlert, OddsBatch, OddsSnapshot, get_team_abbr, get_kalshi_code
@@ -282,6 +283,8 @@ async def fetch_nba_player_props(game_ids: list[str]) -> int:
                 await queries.upsert_player_props(records)
                 total += len(records)
     activity.logger.info(f"[fetch_nba_player_props] stored {total} prop lines for {len(game_ids)} games")
+    if total == 0 and game_ids:
+        raise ApplicationError("No prop data returned — will retry")
     return total
 
 
@@ -325,6 +328,8 @@ async def fetch_nba_player_prop_alts(game_ids: list[str]) -> int:
                 await queries.upsert_player_prop_alts(records)
                 total += len(records)
     activity.logger.info(f"[fetch_nba_player_prop_alts] stored {total} alt rows for {len(game_ids)} games")
+    if total == 0 and game_ids:
+        raise ApplicationError("No alt prop data returned — will retry")
     return total
 
 
@@ -385,9 +390,7 @@ async def fetch_kalshi_odds_batch(games: list[Game], sport: str = "nba") -> Odds
             params={"limit": 200, "status": "open", "series_ticker": series_ticker},
             timeout=10.0,
         )
-        if resp.status_code != 200:
-            activity.logger.warning(f"[fetch_kalshi_odds_batch] HTTP {resp.status_code}")
-            return empty
+        resp.raise_for_status()
         markets = resp.json().get("markets", [])
 
     # Group markets by event; derive each event's team codes from the MARKET
@@ -606,11 +609,7 @@ async def fetch_kalshi_close_snapshot(inp: FetchCloseSnapshotInput) -> list[Odds
             params={"limit": 200, "status": "open", "series_ticker": series_ticker},
             timeout=10.0,
         )
-        if resp.status_code != 200:
-            activity.logger.warning(
-                f"[fetch_kalshi_close_snapshot] HTTP {resp.status_code} for {game.game_id}"
-            )
-            return []
+        resp.raise_for_status()
         markets = resp.json().get("markets", [])
 
     # Find this game's event by matching the unordered pair of team codes from
@@ -626,8 +625,20 @@ async def fetch_kalshi_close_snapshot(inp: FetchCloseSnapshotInput) -> list[Odds
 
     if not game_markets:
         activity.logger.warning(
-            f"[fetch_kalshi_close_snapshot] No open market for {a_abbr}@{h_abbr}"
+            f"[fetch_kalshi_close_snapshot] No open market for {a_abbr}@{h_abbr} — trying last DB snapshot"
         )
+        # Kalshi may suspend the market just before tip; fall back to last known price
+        db_snaps = await queries.get_latest_snapshots_for_game(inp.game_id)
+        kalshi_snap = next((s for s in db_snaps if s.source == "kalshi"), None)
+        if kalshi_snap:
+            return [OddsSnapshot(
+                snapshot_id=inp.snapshot_id,
+                game_id=inp.game_id,
+                kind="close",
+                source="kalshi",
+                captured_at_utc_iso=captured_at,
+                payload=kalshi_snap.payload,
+            )]
         return []
 
     result = _kalshi_ml_from_markets(game_markets, h_abbr, a_abbr)
@@ -727,7 +738,8 @@ async def fetch_polymarket_odds_batch(games: list[Game]) -> OddsBatch:
                 )
                 data = r.json()
                 evs = data if isinstance(data, list) else data.get("data", [])
-            except Exception:
+            except json.JSONDecodeError:
+                activity.logger.exception(f"[fetch_polymarket_odds_batch] malformed JSON for sport={sport}")
                 evs = []
             by_sport[sport] = [e for e in evs if " vs" in (e.get("title") or "").lower()]
 
@@ -791,7 +803,8 @@ async def fetch_polymarket_close_snapshot(inp: FetchCloseSnapshotInput) -> list[
             )
             data = r.json()
             evs = data if isinstance(data, list) else data.get("data", [])
-        except Exception:
+        except json.JSONDecodeError:
+            activity.logger.exception(f"[fetch_polymarket_close_snapshot] malformed JSON for {inp.game_id}")
             evs = []
     games_ev = [e for e in evs if hl in (e.get("title") or "").lower() and al in (e.get("title") or "").lower()]
     ev = next((e for e in games_ev if (e.get("slug") or "").endswith(et_date)), None) or (games_ev[0] if games_ev else None)
