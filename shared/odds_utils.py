@@ -223,6 +223,8 @@ def parse_odds_input(raw: str) -> tuple[int, str]:
 
     if raw.endswith("%"):
         prob = float(raw[:-1]) / 100
+        if not (0 < prob < 1):
+            raise ValueError(f"Probability must be between 0% and 100% exclusive, got {raw!r}")
         return prob_to_american(prob), "percent"
 
     # Cents with an explicit suffix: '52c', '52¢', '52 cents'
@@ -242,6 +244,8 @@ def parse_odds_input(raw: str) -> tuple[int, str]:
             return decimal_to_american(val), "decimal"
 
     val = int(raw.lstrip("+"))
+    if val == 0:
+        raise ValueError("American odds cannot be zero")
 
     # Cents: unsigned integer 1–99 (Kalshi / Polymarket price)
     if not raw.startswith("-") and not raw.startswith("+") and 1 <= val <= 99:

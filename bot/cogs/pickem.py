@@ -260,10 +260,10 @@ async def _live_score_map(games: list[dict]) -> dict[frozenset, dict]:
     score_map: dict[frozenset, dict] = {}
     for sport, dates in by_sport.items():
         try:
-            fetched = (
-                await _fetch_scores_nba(sorted(dates)) if sport == "nba"
-                else await _fetch_scores_espn(sorted(dates), sport)
-            )
+            if sport == "nba":
+                fetched = await _fetch_scores_nba(sorted(dates))
+            else:
+                fetched, _ = await _fetch_scores_espn(sorted(dates), sport)
             score_map.update(_build_score_map(fetched))
         except Exception:
             log.warning("pickem card: score fetch failed for %s", sport, exc_info=True)
@@ -639,11 +639,15 @@ class PickemCog(commands.Cog):
         if not picks:
             return ""
         away_list, home_list = [], []
+        user_cache: dict[str, str] = {}
         for p in picks:
-            try:
-                name = (await self.bot.fetch_user(int(p["discord_user"]))).display_name
-            except Exception:
-                name = f"Player {p['discord_user'][:6]}"
+            uid = p["discord_user"]
+            if uid not in user_cache:
+                try:
+                    user_cache[uid] = (await self.bot.fetch_user(int(uid))).display_name
+                except Exception:
+                    user_cache[uid] = f"Player {uid[:6]}"
+            name = user_cache[uid]
             entry = f"{name} {p['stake']}u"
             (away_list if p["pick"] == "away" else home_list).append(entry)
         return (
