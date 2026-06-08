@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS games (
 );
 CREATE INDEX IF NOT EXISTS idx_games_sport ON games(sport);
 CREATE INDEX IF NOT EXISTS idx_games_status ON games(status);
+CREATE INDEX IF NOT EXISTS idx_games_sport_start ON games(sport, start_time);
 
 CREATE TABLE IF NOT EXISTS odds_snapshots (
     snapshot_id  TEXT PRIMARY KEY,
@@ -30,6 +31,7 @@ CREATE TABLE IF NOT EXISTS odds_snapshots (
 );
 CREATE INDEX IF NOT EXISTS idx_odds_snapshots_game ON odds_snapshots(game_id);
 CREATE INDEX IF NOT EXISTS idx_odds_snapshots_game_source_kind ON odds_snapshots(game_id, source, kind);
+CREATE INDEX IF NOT EXISTS idx_odds_snapshots_game_source_kind_time ON odds_snapshots(game_id, source, kind, captured_at);
 
 CREATE TABLE IF NOT EXISTS bets (
     bet_id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -183,6 +185,8 @@ CREATE TABLE IF NOT EXISTS user_settings (
     discord_user          TEXT PRIMARY KEY,
     craps_default_bet     INTEGER,
     crapless_default_bet  INTEGER,
+    odds_format           TEXT NOT NULL DEFAULT 'american',
+    books                 TEXT,
     livebet_alerts        INTEGER NOT NULL DEFAULT 0, -- opt-in to live in-game bet swing pings
     stock_alerts          INTEGER NOT NULL DEFAULT 0  -- opt-in to portfolio swing alerts (≥10% daily moves)
 );
@@ -421,6 +425,7 @@ CREATE TABLE IF NOT EXISTS pickem_games (
     odds_source  TEXT                -- 'kalshi' | bookmaker key
 );
 CREATE INDEX IF NOT EXISTS idx_pickem_games_state ON pickem_games(locked, resolved);
+CREATE INDEX IF NOT EXISTS idx_pickem_games_date ON pickem_games(posted_date);
 
 CREATE TABLE IF NOT EXISTS pickem_picks (
     message_id   TEXT NOT NULL,
@@ -444,6 +449,9 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass  # column already exists
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_games_sport_start ON games(sport, start_time)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_odds_snapshots_game_source_kind_time ON odds_snapshots(game_id, source, kind, captured_at)")
+        await db.commit()
         # Migration: add sport column
         try:
             await db.execute("ALTER TABLE games ADD COLUMN sport TEXT NOT NULL DEFAULT 'nba'")
@@ -664,17 +672,21 @@ async def init_db() -> None:
                 "message_id TEXT PRIMARY KEY, game_id TEXT NOT NULL, sport TEXT NOT NULL, "
                 "home_team TEXT NOT NULL, away_team TEXT NOT NULL, start_time TEXT NOT NULL, "
                 "posted_date TEXT NOT NULL, locked INTEGER NOT NULL DEFAULT 0, "
-                "resolved INTEGER NOT NULL DEFAULT 0, winner TEXT)"
+                "resolved INTEGER NOT NULL DEFAULT 0, winner TEXT, "
+                "home_prob REAL, away_prob REAL, odds_source TEXT)"
             )
             await db.execute(
                 "CREATE TABLE IF NOT EXISTS pickem_picks ("
                 "message_id TEXT NOT NULL, discord_user TEXT NOT NULL, "
-                "pick TEXT NOT NULL CHECK(pick IN ('home','away')), picked_at TEXT NOT NULL, "
+                "pick TEXT NOT NULL CHECK(pick IN ('home','away')), "
+                "stake INTEGER NOT NULL DEFAULT 1, picked_at TEXT NOT NULL, "
                 "correct INTEGER, PRIMARY KEY (message_id, discord_user))"
             )
             await db.commit()
         except Exception:
             pass
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_pickem_games_date ON pickem_games(posted_date)")
+        await db.commit()
         # Migration: add win-probability columns to pickem_games
         for col in ("home_prob REAL", "away_prob REAL", "odds_source TEXT"):
             try:
@@ -749,8 +761,13 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        try:  # add `odds_format` to an already-existing user_settings table
+            await db.execute("ALTER TABLE user_settings ADD COLUMN odds_format TEXT NOT NULL DEFAULT 'american'")
+            await db.commit()
+        except Exception:
+            pass
         try:  # add `books` to an already-existing user_settings table
-            await db.execute("ALTER TABLE user_settings ADD COLUMN books TEXT NOT NULL DEFAULT ''")
+            await db.execute("ALTER TABLE user_settings ADD COLUMN books TEXT")
             await db.commit()
         except Exception:
             pass
