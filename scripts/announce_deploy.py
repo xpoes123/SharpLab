@@ -23,6 +23,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import anthropic
 import httpx
 from dotenv import load_dotenv
 
@@ -45,9 +46,8 @@ def _in_quiet_hours() -> bool:
     h = datetime.now(ZoneInfo("America/New_York")).hour
     return h >= QUIET_START_HOUR or h < MORNING_HOUR
 
-HAIKU = "claude-haiku-4-5-20251001"
+HAIKU = "claude-haiku-4-5"
 SONNET = "claude-sonnet-4-6"
-ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 DISCORD_LIMIT = 2000
 
 # Record separators for safe git-log parsing.
@@ -55,22 +55,13 @@ FS, RS = "\x1f", "\x1e"
 
 
 def _claude(api_key: str, model: str, prompt: str, max_tokens: int) -> str:
-    r = httpx.post(
-        ANTHROPIC_URL,
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
-        json={
-            "model": model,
-            "max_tokens": max_tokens,
-            "messages": [{"role": "user", "content": prompt}],
-        },
-        timeout=60.0,
+    client = anthropic.Anthropic(api_key=api_key)
+    msg = client.messages.create(
+        model=model,
+        max_tokens=max_tokens,
+        messages=[{"role": "user", "content": prompt}],
     )
-    r.raise_for_status()
-    return "".join(b.get("text", "") for b in r.json().get("content", [])).strip()
+    return "".join(b.text for b in msg.content if hasattr(b, "text")).strip()
 
 
 def _commits(since: str) -> list[dict]:
