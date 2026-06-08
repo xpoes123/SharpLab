@@ -5,6 +5,7 @@ and posts any opportunities to a channel. Detection math lives in shared/signals
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from datetime import datetime, timedelta, timezone
@@ -102,7 +103,14 @@ class Signals(commands.Cog):
 
     async def _post(self, embed: discord.Embed) -> None:
         cid = await self._channel_id()
-        ch = self.bot.get_channel(cid) or await self.bot.fetch_channel(cid)
+        try:
+            ch = self.bot.get_channel(cid) or await self.bot.fetch_channel(cid)
+        except discord.NotFound:
+            log.warning("Signals channel %d not found — configure with /signals channel", cid)
+            return
+        except discord.Forbidden:
+            log.warning("No permission to post to signals channel %d", cid)
+            return
         await ch.send(embed=embed)
 
     def _fresh(self, sig_key: str) -> bool:
@@ -145,8 +153,9 @@ class Signals(commands.Cog):
         stale_cut = now - timedelta(minutes=STALE_MINUTES)
 
         games = []
+        window_start = (now + timedelta(minutes=5)).isoformat()
         for sport in ("nba", "mlb"):
-            games += await queries.get_games_in_window(now.isoformat(), horizon, sport)
+            games += await queries.get_games_in_window(window_start, horizon, sport)
 
         posted = 0
         for g in games:
@@ -171,7 +180,11 @@ class Signals(commands.Cog):
                 # Detect cheaply on the DB picture; if anything trips, pull LIVE prices
                 # once and re-detect on those. Only a live-confirmed signal is posted.
                 if sig.find_ml_arb(current, min_roi=ARB_MIN_ROI) or sig.find_total_middle(current) or sig.find_spread_middle(current):
-                    live = await self._live_current(g)
+                    try:
+                        live = await asyncio.wait_for(self._live_current(g), timeout=15.0)
+                    except asyncio.TimeoutError:
+                        log.warning("signals: live fetch timed out for %s", g.game_id)
+                        continue
                     if not live:
                         continue
                     arb = sig.find_ml_arb(live, min_roi=ARB_MIN_ROI)

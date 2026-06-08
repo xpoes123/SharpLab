@@ -268,21 +268,24 @@ async def _fetch_scores_nba(dates: list[str]) -> list[dict]:
         return resp.json().get("data", [])
 
 
-async def _fetch_scores_espn(dates: list[str], sport: str) -> list[dict]:
+async def _fetch_scores_espn(dates: list[str], sport: str) -> tuple[list[dict], bool]:
     url = ESPN_SCORES_URL.get(sport)
     if not url:
-        return []
+        return [], False
     results: list[dict] = []
+    had_error = False
     async with httpx.AsyncClient() as client:
         for date_str in dates:
             espn_date = date_str.replace("-", "")
             try:
                 resp = await client.get(url, params={"dates": espn_date}, timeout=15.0)
                 if resp.status_code != 200:
+                    had_error = True
                     continue
                 data = resp.json()
             except Exception:
                 log.warning("Failed to fetch ESPN scores for date %s", date_str, exc_info=True)
+                had_error = True
                 continue
             for event in data.get("events", []):
                 status_obj = event.get("status", {})
@@ -313,7 +316,7 @@ async def _fetch_scores_espn(dates: list[str], sport: str) -> list[dict]:
                     game["period"] = 0
                 if "home_team" in game and "visitor_team" in game:
                     results.append(game)
-    return results
+    return results, had_error
 
 
 async def _preload_game_odds(dates: list[str], sport: str = "nba") -> dict[tuple[str, str], dict]:
@@ -488,7 +491,7 @@ class OddsCog(commands.Cog):
             src, val = b
             snap = next(s for s in snapshots if s.source == src)
             fields.append((f"Spread ({home})", f"`{val:+.1f}` ({_fmt_prob(snap.payload.get('spread_odds'))}) — {BOOK_LABELS.get(src, src)}"))
-            fields.append((f"Spread ({away})", f"`{-val:+.1f}` ({_fmt_prob(snap.payload.get('spread_odds'))}) — {BOOK_LABELS.get(src, src)}"))
+            fields.append((f"Spread ({away})", f"`{-val:+.1f}` ({_fmt_prob(snap.payload.get('spread_away_odds') or snap.payload.get('spread_odds'))}) — {BOOK_LABELS.get(src, src)}"))
         b = best("ml_home", reverse=True)
         if b:
             src, val = b
@@ -556,7 +559,8 @@ class OddsCog(commands.Cog):
         if target is None:
             await interaction.followup.send("Game not found.")
             return
-        all_snaps = await queries.get_snapshots_for_game_since(game, "2000-01-01T00:00:00Z")
+        since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        all_snaps = await queries.get_snapshots_for_game_since(game, since)
         ml_snaps = [s for s in all_snaps if s.source in PREDICTION_MARKET_SOURCES]
         dk_snaps = [s for s in all_snaps if s.source == "draftkings" and s.payload.get("spread") is not None]
         if not ml_snaps and not dk_snaps:
@@ -613,17 +617,21 @@ class OddsCog(commands.Cog):
         dates = [game_day.strftime("%Y-%m-%d")]
         if post_midnight:
             dates.append(_now.strftime("%Y-%m-%d"))
+        espn_had_error = False
         try:
             if sport == "nba":
                 games, odds_lookup = await asyncio.gather(_fetch_scores_nba(dates), _preload_game_odds(dates, sport=sport))
             else:
-                games, odds_lookup = await asyncio.gather(_fetch_scores_espn(dates, sport), _preload_game_odds(dates, sport=sport))
+                (games, espn_had_error), odds_lookup = await asyncio.gather(_fetch_scores_espn(dates, sport), _preload_game_odds(dates, sport=sport))
         except Exception as e:
             await interaction.followup.send(f"Could not fetch scores: {e}")
             return
         label = SPORT_LABELS.get(sport, sport.upper())
         if not games:
-            await interaction.followup.send(f"No {label} games found.")
+            if espn_had_error:
+                await interaction.followup.send(f"Could not fetch {label} scores — data source error.")
+            else:
+                await interaction.followup.send(f"No {label} games found.")
             return
         def _sort_key(g: dict) -> int:
             period, status = g.get("period", 0), g.get("status", "")
