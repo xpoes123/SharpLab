@@ -180,13 +180,22 @@ def _pick_odds_from_snapshots(
     home_l = home_team.lower()
     away_l = away_team.lower()
 
+    def _matches(s: str, team: str) -> bool:
+        return s == team or s in team or team in s
+
     if market == "moneyline":
-        if side_l in home_l and side_l not in away_l:
+        home_match = _matches(side_l, home_l)
+        away_match = _matches(side_l, away_l)
+        if home_match and not away_match:
             return payload.get("ml_home")
-        if side_l in away_l and side_l not in home_l:
+        if away_match and not home_match:
             return payload.get("ml_away")
 
     elif market == "spread":
+        home_match = _matches(side_l, home_l)
+        away_match = _matches(side_l, away_l)
+        if away_match and not home_match:
+            return payload.get("spread_away_odds") or payload.get("spread_odds")
         return payload.get("spread_odds")
 
     elif market == "total":
@@ -315,11 +324,14 @@ def _resolve_paper_bet(
     home_l = home_team.lower()
     away_l = away_team.lower()
 
+    def _team_match(s: str, team: str) -> bool:
+        return s == team or s in team or team in s
+
     def _is_home(s: str) -> bool:
-        return s in home_l and s not in away_l
+        return _team_match(s, home_l) and not _team_match(s, away_l)
 
     def _is_away(s: str) -> bool:
-        return s in away_l and s not in home_l
+        return _team_match(s, away_l) and not _team_match(s, home_l)
 
     if market == "moneyline":
         if _is_home(side):
@@ -363,12 +375,21 @@ def _close_odds_for_paper_bet(pb: dict, home_team: str, away_team: str, payload:
     home = home_team.lower()
     away = away_team.lower()
 
+    def _m(s: str, team: str) -> bool:
+        return s == team or s in team or team in s
+
     if market == "moneyline":
-        if side in home and side not in away:
+        home_match = _m(side, home)
+        away_match = _m(side, away)
+        if home_match and not away_match:
             return payload.get("ml_home")
-        if side in away and side not in home:
+        if away_match and not home_match:
             return payload.get("ml_away")
     elif market == "spread":
+        away_match = _m(side, away)
+        home_match = _m(side, home)
+        if away_match and not home_match:
+            return payload.get("spread_away_odds") or payload.get("spread_odds")
         return payload.get("spread_odds")
     elif market == "total":
         if side == "over":
@@ -467,6 +488,18 @@ class TradingCog(commands.Cog):
         if game is None:
             return
 
+        # ── Auto-void cancelled / postponed games ─────────────────────────────
+        if getattr(game, "status", None) in ("cancelled", "postponed"):
+            paper_bets = await queries.get_open_paper_bets_for_game(game_id)
+            for pb in paper_bets:
+                await queries.resolve_paper_bet(pb["paper_bet_id"], "push", pb["wager"])
+                await queries.update_balance(pb["discord_user"], pb["wager"])
+                log.info(
+                    "[paper_resolution] bet #%d → void (game %s), refunded %dc",
+                    pb["paper_bet_id"], game_id, pb["wager"],
+                )
+            return
+
         # ── Path 1: scores already in DB (Temporal ran) ───────────────────────
         scores = await queries.get_game_scores(game_id)
 
@@ -477,6 +510,17 @@ class TradingCog(commands.Cog):
                 start = start.replace(tzinfo=timezone.utc)
             if datetime.now(timezone.utc) < start + _GAME_COMPLETION_BUFFER:
                 return  # game still in progress — check again later
+            # Stale: past start + 12h with no score — void and refund
+            if datetime.now(timezone.utc) > start + timedelta(hours=12):
+                paper_bets = await queries.get_open_paper_bets_for_game(game_id)
+                for pb in paper_bets:
+                    await queries.resolve_paper_bet(pb["paper_bet_id"], "push", pb["wager"])
+                    await queries.update_balance(pb["discord_user"], pb["wager"])
+                    log.info(
+                        "[paper_resolution] bet #%d → void (stale, no score after 12h), refunded %dc",
+                        pb["paper_bet_id"], pb["wager"],
+                    )
+                return
             scores = await _fetch_espn_score_for_game(game)
             if scores is None:
                 return  # ESPN doesn't have a final score yet
@@ -528,6 +572,12 @@ class TradingCog(commands.Cog):
         if wager < MIN_BET:
             await interaction.followup.send(
                 f"Wager must be at least {MIN_BET} coin.",
+                ephemeral=True,
+            )
+            return
+        if wager > 100_000:
+            await interaction.followup.send(
+                "Wager cannot exceed 100,000 coins per trade.",
                 ephemeral=True,
             )
             return
@@ -811,7 +861,11 @@ class TradingCog(commands.Cog):
         if recent:
             recent_lines = []
             for pb in recent:
-                status_icon = {"won": "\u2705", "lost": "\u274c", "push": "\u2796", "void": "\u23ed\ufe0f"}.get(pb["status"], "?")
+                is_cashout = pb["status"] == "void" and pb.get("payout", 0) > 0
+                if is_cashout:
+                    status_icon = "\U0001f4b0"
+                else:
+                    status_icon = {"won": "\u2705", "lost": "\u274c", "push": "\u2796", "void": "\u23ed\ufe0f"}.get(pb["status"], "?")
                 game = await queries.get_game_by_id(pb["game_id"])
                 if game:
                     game_str = f"{game.away_team.split()[-1]}@{game.home_team.split()[-1]}"
@@ -822,8 +876,9 @@ class TradingCog(commands.Cog):
                     market_str += f" {pb['line']:+.1f}"
                 pnl = pb["payout"] - pb["wager"]
                 clv_bit = f" ({pb['clv']:+.1f}pp)" if pb.get("clv") is not None else ""
+                status_label = "cashed out" if is_cashout else pb["status"]
                 recent_lines.append(
-                    f"{status_icon} {game_str} {market_str} {pb['side']} — "
+                    f"{status_icon} {game_str} {market_str} {pb['side']} [{status_label}] — "
                     f"`{pnl:+d}`c{clv_bit}"
                 )
             embed.add_field(
@@ -930,6 +985,11 @@ class TradingCog(commands.Cog):
 
         # Resolve as void with the cashout amount
         await queries.resolve_paper_bet(pb["paper_bet_id"], "void", cashout_value)
+        # Guard against double-credit: re-read to confirm the update landed
+        refreshed = await queries.get_paper_bet_by_id(bet_id)
+        if refreshed is None or refreshed["status"] != "void":
+            await interaction.followup.send("This trade was already cashed out or resolved.", ephemeral=True)
+            return
         if cashout_value > 0:
             new_balance = await queries.update_balance(pb["discord_user"], cashout_value)
         else:
