@@ -371,6 +371,70 @@ class UtilsCog(commands.Cog):
         embed.set_footer(text=f"Normal approx σ={sigma} pts • fair if lines symmetric")
         await interaction.response.send_message(embed=embed)
 
+    # ── /calc parlay-vig ─────────────────────────────────────────────────────
+
+    @calc.command(name="parlay-vig", description="Compounded hold across all legs of a parlay")
+    @app_commands.describe(
+        legs="Space-separated YOUR_SIDE/OTHER_SIDE pairs, one per leg "
+             "(e.g. -110/-110 -115/+100 -105/+110). Any odds format.",
+    )
+    async def parlay_vig(self, interaction: discord.Interaction, legs: str) -> None:
+        raw_legs = legs.split()
+        if len(raw_legs) < 2:
+            await interaction.response.send_message(
+                "Need at least 2 legs. Format: `-110/-110 -115/+100` (your side / other side per leg).",
+                ephemeral=True,
+            )
+            return
+
+        parsed = []
+        for i, raw in enumerate(raw_legs, 1):
+            parts = raw.split("/")
+            if len(parts) != 2:
+                await interaction.response.send_message(
+                    f"Leg {i}: expected `YOUR_SIDE/OTHER_SIDE`, got `{raw}`. Example: `-110/-110`.",
+                    ephemeral=True,
+                )
+                return
+            try:
+                parsed.append((odds_breakdown(parts[0]), odds_breakdown(parts[1])))
+            except Exception:
+                await interaction.response.send_message(
+                    f"Leg {i}: couldn't parse `{raw}`.", ephemeral=True
+                )
+                return
+
+        leg_rows = []
+        fair_parlay_prob = 1.0
+        actual_parlay_decimal = 1.0
+        for i, (a, b) in enumerate(parsed, 1):
+            overround = a["prob"] + b["prob"]
+            leg_hold = (overround - 1) / overround
+            fair_prob = a["prob"] / overround
+            fair_parlay_prob *= fair_prob
+            actual_parlay_decimal *= a["decimal"]
+            aa, ba = a["american"], b["american"]
+            leg_rows.append(
+                f"Leg {i}: `{'+' if aa > 0 else ''}{aa}` / `{'+' if ba > 0 else ''}{ba}` "
+                f"— hold `{leg_hold * 100:.2f}%`"
+            )
+
+        fair_parlay_decimal = 1.0 / fair_parlay_prob
+        total_hold = 1.0 - actual_parlay_decimal / fair_parlay_decimal
+
+        actual_am = decimal_to_american(actual_parlay_decimal)
+        fair_am = decimal_to_american(fair_parlay_decimal)
+        s_act = "+" if actual_am > 0 else ""
+        s_fair = "+" if fair_am > 0 else ""
+
+        color = 0xED4245 if total_hold > 0.10 else 0xFAA61A if total_hold > 0.05 else 0x57F287
+        embed = discord.Embed(title=f"{len(parsed)}-Leg Parlay — Compounded Hold", color=color)
+        embed.add_field(name="Legs", value="\n".join(leg_rows), inline=False)
+        embed.add_field(name="Actual parlay", value=f"`{s_act}{actual_am}` (`{actual_parlay_decimal:.4f}x`)", inline=True)
+        embed.add_field(name="Fair parlay", value=f"`{s_fair}{fair_am}` (`{fair_parlay_decimal:.4f}x`)", inline=True)
+        embed.add_field(name="Total hold", value=f"`{total_hold * 100:.2f}%`", inline=True)
+        await interaction.response.send_message(embed=embed)
+
     # ── /calc vig ────────────────────────────────────────────────────────────
 
     @calc.command(name="vig", description="Market hold/vig + de-vigged fair odds (2-way or multi-way)")
@@ -460,7 +524,8 @@ class UtilsCog(commands.Cog):
                 "`/calc arb <odds…> [total]` — cross-book arb check + stake split\n"
                 "`/calc hedge <stake> <orig_odds> <hedge_odds>` — lock in profit\n"
                 "`/calc middle <gap> <odds1> <odds2> [sport]` — middle EV + probability\n"
-                "`/calc vig <odds…>` — market hold + de-vigged fair odds"
+                "`/calc parlay-vig <side/other …>` — compounded hold across parlay legs\n"
+                "`/calc vig <odds…>` — single-market hold + de-vigged fair odds"
             ),
             inline=False,
         )
