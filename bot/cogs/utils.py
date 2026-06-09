@@ -2,6 +2,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
+from math import erf, sqrt
 
 from shared.odds_utils import (
     american_to_decimal,
@@ -13,6 +14,13 @@ from shared.odds_utils import (
 )
 import logging
 log = logging.getLogger(__name__)
+
+
+def _norm_cdf(x: float) -> float:
+    return (1.0 + erf(x / sqrt(2))) / 2
+
+
+_SPORT_SIGMA = {"nfl": 13.5, "nba": 11.5, "mlb": 1.5}
 
 
 def _parse_odds(raw: str) -> tuple[str, float, int, float]:
@@ -224,6 +232,145 @@ class UtilsCog(commands.Cog):
         embed.add_field(name="Verdict", value=verdict, inline=False)
         await interaction.response.send_message(embed=embed)
 
+    # ── /calc hedge ──────────────────────────────────────────────────────────
+
+    @calc.command(name="hedge", description="Hedge calculator — lock in profit or cut variance on an open bet")
+    @app_commands.describe(
+        stake="Your original stake amount",
+        original_odds="Odds at which you originally bet (any format)",
+        hedge_odds="Current odds on the OTHER side to hedge against (any format)",
+    )
+    async def hedge(self, interaction: discord.Interaction, stake: float, original_odds: str, hedge_odds: str) -> None:
+        if stake <= 0:
+            await interaction.response.send_message("Stake must be positive.", ephemeral=True)
+            return
+
+        try:
+            orig = odds_breakdown(original_odds)
+            hedg = odds_breakdown(hedge_odds)
+        except Exception:
+            await interaction.response.send_message(
+                "Couldn't parse those odds. Try `-110`, `+150`, `1.91`, or `0.52`.", ephemeral=True
+            )
+            return
+
+        d1 = orig["decimal"]
+        d2 = hedg["decimal"]
+
+        # Full lock: stake * d1 / d2 on the other side equalises both outcomes
+        hedge_stake = stake * d1 / d2
+        total_at_risk = stake + hedge_stake
+        guaranteed_return = stake * d1          # both sides pay out stake * d1
+        guaranteed_profit = guaranteed_return - total_at_risk
+        guaranteed_roi = guaranteed_profit / total_at_risk * 100
+
+        a1 = orig["american"]
+        a2 = hedg["american"]
+        s1 = "+" if a1 > 0 else ""
+        s2 = "+" if a2 > 0 else ""
+
+        profitable = guaranteed_profit > 0
+        color = 0x57F287 if profitable else 0xFAA61A
+
+        embed = discord.Embed(title="Hedge Calculator", color=color)
+        embed.add_field(name="Original bet", value=f"`{stake:.2f}` at `{s1}{a1}`", inline=True)
+        embed.add_field(name="No-hedge win", value=f"`+{stake * (d1 - 1):.2f}`", inline=True)
+        embed.add_field(name="No-hedge loss", value=f"`-{stake:.2f}`", inline=True)
+        embed.add_field(
+            name="Full lock hedge",
+            value=f"Stake `{hedge_stake:.2f}` at `{s2}{a2}` (other side)",
+            inline=False,
+        )
+        embed.add_field(name="Total at risk", value=f"`{total_at_risk:.2f}`", inline=True)
+        embed.add_field(name="Guaranteed profit", value=f"`{guaranteed_profit:+.2f}`", inline=True)
+        embed.add_field(name="Guaranteed ROI", value=f"`{guaranteed_roi:+.2f}%`", inline=True)
+        if not profitable:
+            embed.add_field(
+                name="Note",
+                value="Full lock guarantees a loss — line has moved against you. "
+                      "Hedge only to reduce variance, not to lock profit.",
+                inline=False,
+            )
+        await interaction.response.send_message(embed=embed)
+
+    # ── /calc middle ──────────────────────────────────────────────────────────
+
+    @calc.command(name="middle", description="Middle calculator — probability and EV of a two-position middle")
+    @app_commands.describe(
+        gap="Size of the middle window in points (e.g. 1 for +3 vs -2, 3 for +6 vs -3)",
+        odds1="Odds on side 1 (any format)",
+        odds2="Odds on side 2 (any format)",
+        total="Total to stake across both sides (default: 100, split evenly)",
+        sport="Sport for margin distribution: nfl (default), nba, or mlb",
+    )
+    async def middle(
+        self,
+        interaction: discord.Interaction,
+        gap: float,
+        odds1: str,
+        odds2: str,
+        total: float = 100.0,
+        sport: str = "nfl",
+    ) -> None:
+        if gap <= 0:
+            await interaction.response.send_message("Gap must be positive.", ephemeral=True)
+            return
+        if total <= 0:
+            await interaction.response.send_message("Total stake must be positive.", ephemeral=True)
+            return
+
+        sport_key = sport.lower().strip()
+        if sport_key not in _SPORT_SIGMA:
+            await interaction.response.send_message(
+                f"Unknown sport `{sport}`. Use `nfl`, `nba`, or `mlb`.", ephemeral=True
+            )
+            return
+
+        try:
+            leg1 = odds_breakdown(odds1)
+            leg2 = odds_breakdown(odds2)
+        except Exception:
+            await interaction.response.send_message("Couldn't parse those odds.", ephemeral=True)
+            return
+
+        sigma = _SPORT_SIGMA[sport_key]
+        # P(result lands inside gap) using normal approximation centred on midpoint
+        p_middle = 2 * _norm_cdf(gap / (2 * sigma)) - 1
+
+        stake_each = total / 2
+        d1, d2 = leg1["decimal"], leg2["decimal"]
+
+        both_win = stake_each * (d1 - 1) + stake_each * (d2 - 1)   # middle fires
+        s1_only  = stake_each * (d1 - 1) - stake_each               # side 1 wins, side 2 loses
+        s2_only  = stake_each * (d2 - 1) - stake_each               # side 2 wins, side 1 loses
+
+        # Expected value: assume 50/50 split on misses (symmetric lines)
+        miss_ev = (s1_only + s2_only) / 2
+        ev = p_middle * both_win + (1 - p_middle) * miss_ev
+        ev_pct = ev / total * 100
+
+        a1, a2 = leg1["american"], leg2["american"]
+        sg1 = "+" if a1 > 0 else ""
+        sg2 = "+" if a2 > 0 else ""
+
+        color = 0x57F287 if ev > 0 else 0xFAA61A
+        embed = discord.Embed(title=f"{sport_key.upper()} Middle Calculator", color=color)
+        embed.add_field(name="Middle gap", value=f"`{gap} pts`", inline=True)
+        embed.add_field(name="Middle probability", value=f"`{p_middle * 100:.2f}%`", inline=True)
+        embed.add_field(name="Stake each side", value=f"`{stake_each:.2f}`", inline=True)
+        embed.add_field(
+            name="Scenarios",
+            value=(
+                f"**Both win (middle fires):** `{both_win:+.2f}`\n"
+                f"**Side 1 only** (`{sg1}{a1}`): `{s1_only:+.2f}`\n"
+                f"**Side 2 only** (`{sg2}{a2}`): `{s2_only:+.2f}`"
+            ),
+            inline=False,
+        )
+        embed.add_field(name="EV", value=f"`{ev:+.2f}` (`{ev_pct:+.2f}%`)", inline=True)
+        embed.set_footer(text=f"Normal approx σ={sigma} pts • fair if lines symmetric")
+        await interaction.response.send_message(embed=embed)
+
     # ── /calc vig ────────────────────────────────────────────────────────────
 
     @calc.command(name="vig", description="Market hold/vig + de-vigged fair odds (2-way or multi-way)")
@@ -311,6 +458,8 @@ class UtilsCog(commands.Cog):
                 "`/calc parlay <legs>` — parlay calculator\n"
                 "`/calc convert <odds>` — American ↔ decimal ↔ %\n"
                 "`/calc arb <odds…> [total]` — cross-book arb check + stake split\n"
+                "`/calc hedge <stake> <orig_odds> <hedge_odds>` — lock in profit\n"
+                "`/calc middle <gap> <odds1> <odds2> [sport]` — middle EV + probability\n"
                 "`/calc vig <odds…>` — market hold + de-vigged fair odds"
             ),
             inline=False,
