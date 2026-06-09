@@ -156,6 +156,74 @@ class UtilsCog(commands.Cog):
         embed.add_field(name="Implied %", value=f"`{implied_prob * 100:.2f}%`", inline=True)
         await interaction.response.send_message(embed=embed)
 
+    # ── /calc arb ────────────────────────────────────────────────────────────
+
+    @calc.command(name="arb", description="Arbitrage calculator — checks if a cross-book arb exists and sizes stakes")
+    @app_commands.describe(
+        odds="Space-separated odds for each side from different books (e.g. -110 +115). "
+             "Any format: American, decimal, cents, or %.",
+        total="Total amount to stake across all sides (default: 100)",
+    )
+    async def arb(self, interaction: discord.Interaction, odds: str, total: float = 100.0) -> None:
+        if total <= 0:
+            await interaction.response.send_message("Total stake must be positive.", ephemeral=True)
+            return
+
+        try:
+            legs = [odds_breakdown(x) for x in odds.split()]
+        except Exception:
+            await interaction.response.send_message(
+                "Couldn't parse those odds. Space-separate each side, e.g. `-110 +115` or `1.91 2.15`.",
+                ephemeral=True,
+            )
+            return
+
+        if len(legs) < 2:
+            await interaction.response.send_message(
+                "Give odds for at least 2 sides (one per book).", ephemeral=True
+            )
+            return
+
+        # sum of implied probs; < 1.0 means an arb exists
+        implied_total = sum(l["prob"] for l in legs)
+        is_arb = implied_total < 1.0
+        margin = 1.0 - implied_total  # positive = arb gap
+
+        # guaranteed return when arb exists: R = total / sum(1/d_i) = total / implied_total
+        guaranteed_return = total / implied_total
+        guaranteed_profit = guaranteed_return - total
+        roi_pct = (guaranteed_return / total - 1) * 100
+
+        # optimal stake per side: s_i = total * (1/d_i) / sum(1/d_j)
+        rows = []
+        for i, l in enumerate(legs, 1):
+            stake = total * l["prob"] / implied_total
+            payout = stake * l["decimal"]
+            a = l["american"]
+            sign = "+" if a > 0 else ""
+            rows.append(
+                f"Side {i}: `{sign}{a}` → stake `{stake:.2f}` → return `{payout:.2f}`"
+            )
+
+        if is_arb:
+            color = 0x57F287  # green
+            title = "Arbitrage Detected"
+            verdict = f"Guaranteed profit: `{guaranteed_profit:.2f}` on `{total:.2f}` staked"
+        else:
+            color = 0xED4245  # red
+            title = "No Arbitrage"
+            deficit = implied_total - 1.0
+            verdict = f"Book margin: `{deficit * 100:.2f}%` against you — odds don't cover all outcomes"
+
+        embed = discord.Embed(title=title, color=color)
+        embed.add_field(name="Stakes (optimal split)", value="\n".join(rows), inline=False)
+        embed.add_field(name="Total implied", value=f"`{implied_total * 100:.2f}%`", inline=True)
+        embed.add_field(name="Arb margin", value=f"`{margin * 100:+.2f}%`", inline=True)
+        if is_arb:
+            embed.add_field(name="Guaranteed ROI", value=f"`{roi_pct:+.2f}%`", inline=True)
+        embed.add_field(name="Verdict", value=verdict, inline=False)
+        await interaction.response.send_message(embed=embed)
+
     # ── /calc vig ────────────────────────────────────────────────────────────
 
     @calc.command(name="vig", description="Market hold/vig + de-vigged fair odds (2-way or multi-way)")
@@ -241,7 +309,9 @@ class UtilsCog(commands.Cog):
                 "`/calc ev <odds> <true_prob>` — expected value\n"
                 "`/calc kelly <bankroll> <odds> <edge>` — Kelly stake\n"
                 "`/calc parlay <legs>` — parlay calculator\n"
-                "`/calc convert <odds>` — American ↔ decimal ↔ %"
+                "`/calc convert <odds>` — American ↔ decimal ↔ %\n"
+                "`/calc arb <odds…> [total]` — cross-book arb check + stake split\n"
+                "`/calc vig <odds…>` — market hold + de-vigged fair odds"
             ),
             inline=False,
         )
