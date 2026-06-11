@@ -587,6 +587,39 @@ class PickemCog(commands.Cog):
                 "start_time": g.start_time_utc_iso,
             }, today)
 
+    async def _post_for_date(self, channel: discord.TextChannel, date: str) -> None:
+        """Post (or re-post) the pick'em slate for an explicit date string (YYYY-MM-DD)."""
+        dt = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=ET)
+        start = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+        s_utc = start.astimezone(timezone.utc).isoformat()
+        e_utc = end.astimezone(timezone.utc).isoformat()
+
+        games: list = []
+        for sport in ("nba", "mlb"):
+            try:
+                games += await queries.get_games_in_window(s_utc, e_utc, sport=sport)
+            except Exception:
+                log.exception("pickem: failed to load %s games for %s", sport, date)
+        games.sort(key=lambda g: g.start_time_utc_iso)
+
+        if not games:
+            await channel.send(f"📋 **Pick'em — {date}**\nNo NBA or MLB games on the slate for {date}.")
+            return
+
+        await channel.send(
+            f"📋 **Pick'em — {date}**\n"
+            "Tap a team, then stake **1–5 units**."
+        )
+        for g in games:
+            if await queries.pickem_game_exists(g.game_id, date):
+                continue
+            await self._post_game(channel, {
+                "game_id": g.game_id, "sport": g.sport,
+                "home_team": g.home_team, "away_team": g.away_team,
+                "start_time": g.start_time_utc_iso,
+            }, date)
+
     async def _post_game(self, channel: discord.TextChannel, gd: dict, posted_date: str) -> None:
         probs = await _win_probs(gd["game_id"])
         if probs:
@@ -738,12 +771,18 @@ class PickemCog(commands.Cog):
         target = user or interaction.user
         today = datetime.now(ET).date().isoformat()
         games = await queries.get_pickem_games_for_date(today)
+        # Fall back to yesterday if today's card hasn't been posted yet.
+        date_label = today
         if not games:
-            await interaction.followup.send(f"📋 No pick'em games were posted today ({today}).")
-            return
+            yesterday = (datetime.now(ET).date() - timedelta(days=1)).isoformat()
+            games = await queries.get_pickem_games_for_date(yesterday)
+            if not games:
+                await interaction.followup.send(f"📋 No pick'em games were posted today ({today}).")
+                return
+            date_label = yesterday
         games.sort(key=lambda g: g["start_time"])
 
-        all_picks = await queries.get_pickem_picks_for_date(today)
+        all_picks = await queries.get_pickem_picks_for_date(date_label)
         mine_by_msg = {p["message_id"]: p for p in all_picks if p["discord_user"] == str(target.id)}
         score_map = await _live_score_map(games)
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -768,7 +807,7 @@ class PickemCog(commands.Cog):
                 risk += entry["live_risk"]
                 pot += entry["live_pot"]
 
-        embed = discord.Embed(title=f"📋 {target.display_name}'s Pick'em — {today}", colour=COLOUR)
+        embed = discord.Embed(title=f"📋 {target.display_name}'s Pick'em — {date_label}", colour=COLOUR)
 
         if mine_by_msg:
             picked = len(mine_by_msg)
@@ -827,8 +866,9 @@ class PickemCog(commands.Cog):
             f"✅ Daily pick'em will post in {channel.mention}.", ephemeral=True,
         )
 
-    @pickem.command(name="post", description="Post today's pick'em now (admin)")
-    async def post_now(self, interaction: discord.Interaction) -> None:
+    @pickem.command(name="post", description="Post today's (or a specific date's) pick'em now (admin)")
+    @app_commands.describe(date="Date to post in YYYY-MM-DD format (default: today)")
+    async def post_now(self, interaction: discord.Interaction, date: str | None = None) -> None:
         if not interaction.user.guild_permissions.manage_guild:
             await interaction.response.send_message(
                 "You need **Manage Server** to trigger a post.", ephemeral=True,
@@ -839,8 +879,16 @@ class PickemCog(commands.Cog):
         if channel is None:
             await interaction.followup.send("Pick'em channel not found.", ephemeral=True)
             return
-        await self._post_recap(channel)
-        await self._post_today(channel)
+        if date:
+            try:
+                datetime.strptime(date, "%Y-%m-%d")
+            except ValueError:
+                await interaction.followup.send("Invalid date format — use YYYY-MM-DD.", ephemeral=True)
+                return
+            await self._post_for_date(channel, date)
+        else:
+            await self._post_recap(channel)
+            await self._post_today(channel)
         await interaction.followup.send(f"Posted in {channel.mention}.", ephemeral=True)
 
 
