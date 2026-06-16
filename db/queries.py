@@ -3165,44 +3165,61 @@ async def update_error_ticket_id(error_id: int, ticket_id: str) -> None:
 
 # ── Stock trades + derived holdings ─────────────────────────────────────────
 # stock_trades is the source of truth. Holdings (shares + DCA) are aggregated
-# from the trade log using average-cost-basis accounting:
-#   buy:  cost_basis += shares*price;        net_shares += shares
-#   sell: cost_basis -= shares*avg_cost;     net_shares -= shares
-# where avg_cost = cost_basis / net_shares immediately before the sell.
+# from the trade log using SIGNED average-cost-basis accounting — net shares may
+# be negative (a short). A sell beyond the held long opens/extends a short; a buy
+# covers it (and can flip back to long). Same machinery as _aggregate_option_trades.
 
 
 def _aggregate_trades(trades: list[dict]) -> dict:
     """Reduce a chronologically-ordered list of trades for one ticker.
 
-    Returns a dict with: shares, dca_price, cost_basis, realized_pnl, invested,
-    closed. Realized P/L accumulates on every sell as (sell_price -
-    avg_cost_at_sale) * sold_shares. `invested` is lifetime capital deployed
-    (sum of all buy costs) — used as the denominator for % return. Closed
-    positions (shares <= 0 after sells) still return their realized_pnl and
-    invested — callers that only want open positions should filter on `closed`.
+    Signed average-cost accounting — `shares` may be NEGATIVE (a short). A sell
+    that exceeds the held long opens/extends a short; a buy covers it (and any
+    excess flips back to long). Returns: shares (signed), dca_price (avg OPEN
+    price of the current position, always > 0 while open), cost_basis (gross =
+    |shares|·dca_price, always >= 0), realized_pnl, invested, closed.
+
+    Realized P/L accrues on any trade that REDUCES the position:
+        sign(shares) * (close_price - avg) * closed_qty
+    i.e. (price - avg) closing a long, (avg - price) covering a short. `invested`
+    is lifetime capital deployed (every trade that opens or adds to a position,
+    long or short) — the denominator for % return. Closed positions (net 0) still
+    return their realized_pnl and invested; filter on `closed` for open-only.
     """
-    shares = 0.0
-    cost_basis = 0.0
+    net = 0.0          # signed shares
+    avg = 0.0          # avg open price of the current position
     realized_pnl = 0.0
     invested = 0.0
     for t in trades:
-        if t["side"] == "buy":
-            shares += t["shares"]
-            cost_basis += t["shares"] * t["price"]
-            invested += t["shares"] * t["price"]  # every buy opens/adds — capital in
-        else:  # sell
-            if shares <= 0:
-                continue  # phantom sells should be blocked at write time
-            avg_cost = cost_basis / shares
-            sold = min(t["shares"], shares)
-            realized_pnl += sold * (t["price"] - avg_cost)
-            shares -= sold
-            cost_basis -= sold * avg_cost
-    closed = shares <= 1e-9
+        qty = t["shares"]
+        px = t["price"]
+        d = qty if t["side"] == "buy" else -qty
+        if net == 0:
+            net, avg = d, px
+            invested += qty * px                  # opens a fresh position
+            continue
+        if (net > 0) == (d > 0):
+            # Same side: blend into the running average open price.
+            total = abs(net) + qty
+            avg = (avg * abs(net) + px * qty) / total
+            net += d
+            invested += qty * px                  # adds to the position
+            continue
+        # Opposing side: close up to |net|, then flip any remainder.
+        close_qty = min(qty, abs(net))
+        realized_pnl += (1 if net > 0 else -1) * (px - avg) * close_qty
+        net += d
+        remaining = qty - close_qty
+        if remaining > 1e-9:
+            avg = px                              # flipped: new lot opens here
+            invested += remaining * px            # capital for the flipped-into side
+        elif abs(net) <= 1e-9:
+            net, avg = 0.0, 0.0
+    closed = abs(net) <= 1e-9
     return {
-        "shares": 0.0 if closed else shares,
-        "dca_price": 0.0 if closed else cost_basis / shares,
-        "cost_basis": 0.0 if closed else cost_basis,
+        "shares": 0.0 if closed else net,
+        "dca_price": 0.0 if closed else avg,
+        "cost_basis": 0.0 if closed else abs(net) * avg,
         "realized_pnl": realized_pnl,
         "invested": invested,
         "closed": closed,
@@ -4031,7 +4048,7 @@ async def get_all_stock_holdings() -> list[dict]:
     out: list[dict] = []
     for uid, positions in (await get_all_stock_positions()).items():
         for p in positions:
-            if not p.get("closed") and (p.get("shares") or 0) > 0:
+            if not p.get("closed") and abs(p.get("shares") or 0) > 1e-9:
                 out.append({"discord_user": uid, "ticker": p["ticker"], "shares": p["shares"]})
     return out
 

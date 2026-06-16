@@ -82,7 +82,8 @@ function holdingsTable() {
     const ah = h.extended
       ? `<span class="muted" style="font-size:10px;margin-left:auto;white-space:nowrap" title="${h.extended.session === "pre" ? "Pre-market" : "After-hours"}">🌙 ${money2(h.extended.price)} <span class="${cls(h.extended.pct)}">${h.extended.pct >= 0 ? "+" : ""}${h.extended.pct.toFixed(1)}%</span></span>`
       : "";
-    return `<tr data-ticker="${h.ticker}" style="cursor:pointer${sel}"><td><div style="display:flex;align-items:center;gap:6px"><strong>${h.ticker}</strong>${ah}</div></td><td class="num">${h.shares}</td>
+    const shCell = h.shares < 0 ? `<span class="neg">short ${(-h.shares).toLocaleString()}</span>` : `${h.shares}`;
+    return `<tr data-ticker="${h.ticker}" style="cursor:pointer${sel}"><td><div style="display:flex;align-items:center;gap:6px"><strong>${h.ticker}</strong>${ah}</div></td><td class="num">${shCell}</td>
       <td class="num muted">${money2(h.dca)}</td><td class="num">${money(h.cost_basis)}</td>
       <td class="num">${chgCell(h)}</td><td class="num">${ucell}</td><td class="num">${rcell}</td></tr>`;
   };

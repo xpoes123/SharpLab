@@ -465,7 +465,7 @@ async def hq_profile(handle: str):
         positions = []
     realized = round(sum(p.get("realized_pnl", 0) for p in positions)
                      + await queries.get_realized_adjustment_total(uid), 2)
-    open_positions = sum(1 for p in positions if p.get("shares", 0) > 0)
+    open_positions = sum(1 for p in positions if abs(p.get("shares", 0)) > 1e-9)
 
     return {
         "user": {"id": uid, "username": who.get("username") or f"Player {uid[:6]}",
@@ -550,7 +550,7 @@ async def _build_stocks():
     user_positions = {u: all_positions.get(u, []) for u in users}
     user_options = {u: all_options.get(u, []) for u in users}
     all_tickers = sorted({p["ticker"] for ps in user_positions.values()
-                          for p in ps if p.get("shares", 0) > 0})
+                          for p in ps if abs(p.get("shares", 0)) > 1e-9})
     from bot.cogs.stock import fetch_quotes, effective_price  # lazy import (heavy deps)
     # extended=True → value holdings off the pre/post-market print after the close.
     quotes = await fetch_quotes(all_tickers, extended=True) if all_tickers else {}
@@ -588,7 +588,7 @@ async def _build_stocks():
         holdings, unreal, have_unreal = [], 0.0, False
         stock_day, have_day = 0.0, False
         for p in positions:
-            if p.get("shares", 0) <= 0:
+            if abs(p.get("shares", 0)) <= 1e-9:
                 continue
             price = qprice.get(p["ticker"])
             prev = qprev.get(p["ticker"])
@@ -760,7 +760,7 @@ async def _build_trader(uid: str, who: dict):
 
     sp = await queries.get_stock_positions_full(uid)
     stock_realized = sum(p.get("realized_pnl", 0) for p in sp)
-    open_pos = [p for p in sp if p.get("shares", 0) > 0]
+    open_pos = [p for p in sp if abs(p.get("shares", 0)) > 1e-9]
     # lazy import (heavy deps)
     from datetime import timedelta
     from bot.cogs.stock import fetch_quotes, _ticker_history, _close_on_or_before, effective_price

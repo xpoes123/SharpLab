@@ -64,6 +64,7 @@ ALL_ACHIEVEMENTS: list[Achievement] = [
     Achievement("options_first", "Optioned Up", "Trade your first option contract", "Investing", "\U0001f4d1", 25),
     Achievement("stock_50", "Day Trader", "Make 50 stock trades", "Investing", "\U0001f4ca", 150),
     Achievement("options_5", "Contract Killer", "Make 5 option trades", "Investing", "\U0001f9fe", 75),
+    Achievement("stock_short", "Short Seller", "Open a short stock position", "Investing", "\U0001f4c9", 50),
     Achievement("bet_100", "Wiseguy", "Log 100 bets", "Betting", "\U0001f3b0", 300),
     # ── Web / HQ ──
     Achievement("web_login", "Plugged In", "Sign in to SharpLab HQ", "Web", "\U0001f50c", 20),

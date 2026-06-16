@@ -59,7 +59,7 @@ def _base_stats(**over):
         "duel_wins": 0, "tourney_wins": 0, "balance": 0,
         "num_bets": 0, "bet_wins": 0, "pos_clv": 0,
         "num_trades": 0, "distinct_holdings": 0, "realized_pnl": 0,
-        "traded_crypto": False, "has_options": False, "num_option_trades": 0,
+        "traded_crypto": False, "has_short": False, "has_options": False, "num_option_trades": 0,
         "level": 0, "messages": 0, "voice_minutes": 0,
         "web_logins": 0, "web_traded": 0, "web_visits": 0,
     }
@@ -89,6 +89,7 @@ class TestNewAchievementConditions:
         assert "stock_bull" in _earned(_base_stats(realized_pnl=10000))
         assert "stock_bull" not in _earned(_base_stats(realized_pnl=9999))
         assert "crypto_first" in _earned(_base_stats(traded_crypto=True))
+        assert "stock_short" in _earned(_base_stats(has_short=True))
         assert "options_first" in _earned(_base_stats(has_options=True))
 
     def test_empty_user_earns_nothing(self):
