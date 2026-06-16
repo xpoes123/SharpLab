@@ -61,6 +61,56 @@ class TestAggregateStockTrades:
         # % return = total P/L / invested = 100 / 200 = 50%
         assert (r["realized_pnl"] / r["invested"]) == pytest.approx(0.5)
 
+    def test_open_short(self):
+        # sell 10 @100 from flat -> short 10, no realized, positive gross cost basis
+        r = _queries._aggregate_trades([_S("sell", 10, 100)])
+        assert not r["closed"]
+        assert r["shares"] == pytest.approx(-10)
+        assert r["dca_price"] == pytest.approx(100.0)
+        assert r["cost_basis"] == pytest.approx(1000.0)   # gross, always >= 0
+        assert r["realized_pnl"] == 0.0
+        assert r["invested"] == pytest.approx(1000.0)
+
+    def test_short_round_trip_profit(self):
+        # short 10 @100, cover 10 @80 -> +200 (price fell)
+        r = _queries._aggregate_trades([_S("sell", 10, 100), _S("buy", 10, 80)])
+        assert r["closed"]
+        assert r["realized_pnl"] == pytest.approx(200.0)   # 10 * (100 - 80)
+        assert r["invested"] == pytest.approx(1000.0)
+
+    def test_partial_cover_of_short(self):
+        # short 10 @100, cover 4 @90 -> +40 realized, still short 6 @100
+        r = _queries._aggregate_trades([_S("sell", 10, 100), _S("buy", 4, 90)])
+        assert r["shares"] == pytest.approx(-6)
+        assert r["dca_price"] == pytest.approx(100.0)
+        assert r["realized_pnl"] == pytest.approx(40.0)    # 4 * (100 - 90)
+        assert r["invested"] == pytest.approx(1000.0)      # only the opening sell
+
+    def test_add_to_short_averages(self):
+        # short 5 @100, short 5 more @120 -> short 10 @110 avg
+        r = _queries._aggregate_trades([_S("sell", 5, 100), _S("sell", 5, 120)])
+        assert r["shares"] == pytest.approx(-10)
+        assert r["dca_price"] == pytest.approx(110.0)
+        assert r["realized_pnl"] == 0.0
+        assert r["invested"] == pytest.approx(1100.0)      # 500 + 600
+
+    def test_flip_long_to_short(self):
+        # long 2 @50, sell 5 @60 -> close 2 long (+20), open short 3 @60
+        r = _queries._aggregate_trades([_S("buy", 2, 50), _S("sell", 5, 60)])
+        assert r["shares"] == pytest.approx(-3)
+        assert r["dca_price"] == pytest.approx(60.0)
+        assert r["realized_pnl"] == pytest.approx(20.0)    # 2 * (60 - 50)
+        # capital in: 2*50 (long) + 3*60 (flipped-into short) = 100 + 180
+        assert r["invested"] == pytest.approx(280.0)
+
+    def test_flip_short_to_long(self):
+        # short 3 @100, buy 5 @90 -> cover 3 (+30), open long 2 @90
+        r = _queries._aggregate_trades([_S("sell", 3, 100), _S("buy", 5, 90)])
+        assert r["shares"] == pytest.approx(2)
+        assert r["dca_price"] == pytest.approx(90.0)
+        assert r["realized_pnl"] == pytest.approx(30.0)    # 3 * (100 - 90)
+        assert r["invested"] == pytest.approx(480.0)       # 3*100 + 2*90
+
 
 # ── Signed average-cost option aggregator ────────────────────────────────────
 

@@ -168,6 +168,17 @@ def _fmt_pnl(amount: float) -> str:
     return f"{sign}{amount:,.2f}"
 
 
+def _fmt_position(holding: dict | None) -> str:
+    """One-line position summary for /stock buy|sell confirmations. Handles
+    shorts (negative shares) by labelling them and quoting the average entry."""
+    if not holding:
+        return "Position closed."
+    sh = holding["shares"]
+    if sh < 0:
+        return f"Position: **short {abs(sh):g}** sh @ avg **{holding['dca_price']:,.2f}**"
+    return f"Position: **{sh:g}** sh @ DCA **{holding['dca_price']:,.2f}**"
+
+
 def _parse_executed_at(value: str | None) -> str | None:
     """Accept 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM' (UTC); return ISO 8601.
     None passes through (caller will default to now)."""
@@ -557,12 +568,14 @@ async def _holdings_autocomplete(interaction: "discord.Interaction", current: st
     cur = (current or "").upper().strip()
     out = []
     for p in positions:
-        if p.get("closed") or (p.get("shares") or 0) <= 0:
+        sh = p.get("shares") or 0
+        if p.get("closed") or abs(sh) <= 1e-9:
             continue
         t = p["ticker"]
         if cur and cur not in t:
             continue
-        out.append(app_commands.Choice(name=f"{t} — {p['shares']:g} sh", value=t))
+        label = f"{t} — short {abs(sh):g} sh" if sh < 0 else f"{t} — {sh:g} sh"
+        out.append(app_commands.Choice(name=label, value=t))
     return out[:25]
 
 
@@ -796,7 +809,8 @@ async def _compute_portfolio(uid: str) -> dict | None:
     quotes = await fetch_quotes([p["ticker"] for p in open_positions], extended=True) if open_positions else {}
 
     total_value = 0.0
-    total_cost = 0.0
+    total_cost = 0.0          # signed (shares·dca) — feeds the unrealized identity
+    total_gross_cost = 0.0    # |shares|·dca — % denominator (shorts have negative cost)
     total_day_change = 0.0
     stocks: list[dict] = []
 
@@ -813,15 +827,16 @@ async def _compute_portfolio(uid: str) -> dict | None:
         price = effective_price(q)
         prev = q["prev_close"]
         value = shares * price
-        pl = value - cost
+        pl = value - cost   # = shares·(price−dca): a short profits when price falls
         day_change = shares * (price - prev)
         total_value += value
         total_cost += cost
+        total_gross_cost += abs(cost)
         total_day_change += day_change
         stocks.append({
             "sym": sym, "shares": shares, "dca": dca, "cost": cost, "available": True,
             "price": price, "prev": prev, "value": value,
-            "pl": pl, "pl_pct": (pl / cost * 100) if cost else 0.0,
+            "pl": pl, "pl_pct": (pl / abs(cost) * 100) if cost else 0.0,
             "day_change": day_change,
             "day_pct": ((price - prev) / prev * 100) if prev else 0.0,
         })
@@ -859,7 +874,7 @@ async def _compute_portfolio(uid: str) -> dict | None:
     realized_total += option_realized
     realized_total += await queries.get_realized_adjustment_total(uid)
     unrealized = (total_value - total_cost) + options_unrealized
-    combined_cost = total_cost + options_cost
+    combined_cost = total_gross_cost + options_cost
     total_pnl = unrealized + realized_total
     base = total_value - total_day_change
     return {
@@ -867,7 +882,7 @@ async def _compute_portfolio(uid: str) -> dict | None:
         "options": options,
         "has_options": bool(option_positions),
         "stock_value": total_value,
-        "stock_cost": total_cost,
+        "stock_cost": total_gross_cost,
         "day_change": total_day_change,
         "day_pct": (total_day_change / base * 100) if base else 0.0,
         "options_value": options_value,
@@ -905,13 +920,14 @@ def _build_overview_embed(target: discord.abc.User, d: dict) -> discord.Embed:
     lines: list[str] = []
     for h in d["stocks"]:
         sym = h["sym"]
+        qty = f"short {abs(h['shares']):g}" if h["shares"] < 0 else f"{h['shares']:g}"
         if not h["available"]:
-            lines.append(f"`{sym}` — {h['shares']:g} sh @ {_fmt_price(h['dca'])} DCA · *price unavailable*")
+            lines.append(f"`{sym}` — {qty} sh @ {_fmt_price(h['dca'])} DCA · *price unavailable*")
             continue
         sign = "+" if h["pl"] >= 0 else ""
         emoji = "🟢" if h["pl"] >= 0 else "🔴"
         lines.append(
-            f"{emoji} [`{sym}`]({_yahoo_url(sym)}) · {h['shares']:g} sh @ {_fmt_price(h['dca'])} → "
+            f"{emoji} [`{sym}`]({_yahoo_url(sym)}) · {qty} sh @ {_fmt_price(h['dca'])} → "
             f"**{_fmt_price(h['price'])}** · P/L `{sign}{h['pl']:,.2f} ({sign}{h['pl_pct']:.2f}%)`"
         )
 
@@ -1032,16 +1048,14 @@ def _parse_utc(iso: str) -> datetime | None:
 
 
 def _shares_held_asof(trades: list[dict], cutoff: datetime) -> float:
-    """Net shares held after applying all of a ticker's trades up to `cutoff`."""
+    """Net shares held after applying all of a ticker's trades up to `cutoff`.
+    Signed: a position oversold past flat goes negative (a short)."""
     shares = 0.0
     for t in trades:
         dt = _parse_utc(t["executed_at"])
         if dt is None or dt > cutoff:
             continue
-        if t["side"] == "buy":
-            shares += t["shares"]
-        else:
-            shares -= min(t["shares"], shares)
+        shares += t["shares"] if t["side"] == "buy" else -t["shares"]
     return shares
 
 
@@ -1101,11 +1115,11 @@ def _reconstruct_stock_history_sync(trades: list[dict], end_date: date) -> list[
         total = 0.0
         for sym in tickers:
             shares = _shares_held_asof(by_ticker.get(sym, []), cutoff)
-            if shares <= 0:
+            if abs(shares) <= 1e-9:
                 continue
             px = ff.get(sym, {}).get(d)
             if px is not None and not pd.isna(px):
-                total += shares * float(px)
+                total += shares * float(px)   # shorts subtract (negative shares)
         out.append((d, total))
     return out
 
@@ -2862,11 +2876,12 @@ class StockCog(commands.Cog):
             cost = shares * dca
             value = shares * price
             pl = value - cost
-            pl_pct = (pl / cost * 100) if cost else 0.0
+            pl_pct = (pl / abs(cost) * 100) if cost else 0.0
+            qty = f"short `{abs(shares):g}`" if shares < 0 else f"`{shares:g}`"
             embed.add_field(
                 name="Your Position",
                 value=(
-                    f"`{shares:g}` sh @ DCA `{dca:,.2f}`\n"
+                    f"{qty} sh @ DCA `{dca:,.2f}`\n"
                     f"Value: `{_fmt_money(value, quote['currency'])}`\n"
                     f"Unrealized P/L: `{_fmt_change(pl, pl_pct)}`"
                 ),
@@ -3052,6 +3067,14 @@ class StockCog(commands.Cog):
                 warn = (f"\n⚠️ heads up: `{price:,.2f}` is {abs(price - live) / live * 100:.0f}% off the live "
                         f"**{symbol}** ${live:,.2f} — recorded anyway (pass `date:` for a real past fill).")
 
+        # A buy covers any open short first; realize P/L on the covered portion
+        # (avg short entry − cover price) before the trade is written.
+        current = await queries.get_stock_holding(str(interaction.user.id), symbol)
+        net = current["shares"] if current else 0.0
+        avg = current["dca_price"] if current else 0.0
+        covered = min(shares, max(-net, 0.0))
+        realized = covered * (avg - price)
+
         await queries.add_stock_trade(
             str(interaction.user.id), symbol, "buy", shares, price, executed_at, notes
         )
@@ -3059,15 +3082,13 @@ class StockCog(commands.Cog):
             str(interaction.user.id), -(shares * price), allow_negative=True)
         await _check_achievements(interaction)
         holding = await queries.get_stock_holding(str(interaction.user.id), symbol)
-        position_line = (
-            f"Position: **{holding['shares']:g}** sh @ DCA **{holding['dca_price']:,.2f}**"
-            if holding else "Position closed."
-        )
+        position_line = _fmt_position(holding)
+        realized_line = f" · realized P/L `{_fmt_pnl(realized)}`" if covered > 1e-9 else ""
         cash_line = f"\nCash: **${new_cash:,.2f}**" + (
             " ⚠️ you're in the red" if new_cash < 0 else "")
         await interaction.followup.send(
             f"Recorded **BUY** `{symbol}` — {shares:g} sh @ `{price:,.2f}` "
-            f"(−${shares * price:,.2f}).\n{position_line}{cash_line}{warn}",
+            f"(−${shares * price:,.2f}){realized_line}.\n{position_line}{cash_line}{warn}",
             ephemeral=True,
         )
         await self._maybe_post_rohan_pick(interaction, "BOUGHT", f"**{shares:g}** {symbol} @ ${price:,.2f}")
@@ -3114,20 +3135,14 @@ class StockCog(commands.Cog):
                 sell_warn = (f"\n⚠️ heads up: `{price:,.2f}` is {abs(price - live) / live * 100:.0f}% off the live "
                              f"**{symbol}** ${live:,.2f} — recorded anyway (pass `date:` for a real past fill).")
 
+        # Selling beyond a held long opens/extends a SHORT (no guard). Realize
+        # P/L only on the long portion this sell closes (price − avg cost); the
+        # short-opening remainder realizes nothing until it's covered.
         current = await queries.get_stock_holding(str(interaction.user.id), symbol)
-        held = current["shares"] if current else 0.0
-        if shares > held + 1e-9:
-            await interaction.followup.send(
-                f"You only hold {held:g} sh of `{symbol}` — can't sell {shares:g}.",
-                ephemeral=True,
-            )
-            return
-
-        # Compute realized P/L for this individual sell, using the average
-        # cost basis at the moment of execution. This is the same number the
-        # aggregator will record cumulatively.
-        avg_cost = current["dca_price"]
-        realized = shares * (price - avg_cost)
+        net = current["shares"] if current else 0.0
+        avg_cost = current["dca_price"] if current else 0.0
+        closed_qty = min(shares, max(net, 0.0))
+        realized = closed_qty * (price - avg_cost)
 
         await queries.add_stock_trade(
             str(interaction.user.id), symbol, "sell", shares, price, executed_at, notes
@@ -3136,16 +3151,18 @@ class StockCog(commands.Cog):
             str(interaction.user.id), shares * price, allow_negative=True)
         await _check_achievements(interaction)
         holding = await queries.get_stock_holding(str(interaction.user.id), symbol)
-        position_line = (
-            f"Position: **{holding['shares']:g}** sh @ DCA **{holding['dca_price']:,.2f}**"
-            if holding else "Position closed."
-        )
+        position_line = _fmt_position(holding)
+        realized_line = f" · realized P/L `{_fmt_pnl(realized)}`" if closed_qty > 1e-9 else ""
+        short_note = ""
+        if holding and holding["shares"] < 0:
+            short_note = (f"\n📉 You're now **short {abs(holding['shares']):g}** sh — "
+                          f"buy to cover.")
         cash_line = f"\nCash: **${new_cash:,.2f}**" + (
             " ⚠️ you're in the red" if new_cash < 0 else "")
         await interaction.followup.send(
             f"Recorded **SELL** `{symbol}` — {shares:g} sh @ `{price:,.2f}` "
-            f"(+${shares * price:,.2f}) · realized P/L `{_fmt_pnl(realized)}`."
-            f"\n{position_line}{cash_line}{sell_warn}",
+            f"(+${shares * price:,.2f}){realized_line}."
+            f"\n{position_line}{short_note}{cash_line}{sell_warn}",
             ephemeral=True,
         )
         await self._maybe_post_rohan_pick(interaction, "SOLD", f"**{shares:g}** {symbol} @ ${price:,.2f}")

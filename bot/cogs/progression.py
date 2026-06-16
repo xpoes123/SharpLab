@@ -130,6 +130,7 @@ async def gather_achievement_stats(uid: str) -> dict:
         "distinct_holdings": len(open_positions),
         "realized_pnl": sum(p["realized_pnl"] for p in positions),
         "traded_crypto": any(t["ticker"].upper().endswith("-USD") for t in trades),
+        "has_short": any(p["shares"] < 0 for p in open_positions),
         "has_options": len(options) > 0,
         "web_traded": any((t.get("notes") or "") == "via HQ" for t in trades),
         # Web / HQ
@@ -183,6 +184,7 @@ def _achievement_checks(s: dict) -> list[tuple[str, bool]]:
         ("stock_green", s["realized_pnl"] >= 1000),
         ("stock_bull", s["realized_pnl"] >= 10000),
         ("crypto_first", s["traded_crypto"]),
+        ("stock_short", s["has_short"]),
         ("options_first", s["has_options"]),
         ("options_5", s["num_option_trades"] >= 5),
         ("bet_100", s["num_bets"] >= 100),

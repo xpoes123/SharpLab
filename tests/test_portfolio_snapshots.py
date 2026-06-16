@@ -114,13 +114,13 @@ class TestSharesHeldAsOf:
         assert asof("2026-05-04T00:00:00+00:00") == 6      # after the sell
         assert asof("2026-05-06T00:00:00+00:00") == 8      # after second buy
 
-    def test_oversell_clamped(self):
+    def test_oversell_opens_short(self):
         trades = [
             self._t("buy", 5, "2026-05-01T00:00:00+00:00"),
-            self._t("sell", 50, "2026-05-02T00:00:00+00:00"),  # phantom oversell
+            self._t("sell", 50, "2026-05-02T00:00:00+00:00"),  # sells past flat → short
         ]
         asof = stock._shares_held_asof(trades, datetime(2026, 5, 3, tzinfo=timezone.utc))
-        assert asof == 0  # never goes negative
+        assert asof == -45  # net is signed: a short position
 
     def test_naive_timestamp_treated_as_utc(self):
         trades = [self._t("buy", 3, "2026-05-01T00:00:00")]  # no tz
