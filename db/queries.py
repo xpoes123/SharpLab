@@ -3558,6 +3558,42 @@ async def get_all_realized_adjustments() -> dict[str, float]:
         return {r[0]: float(r[1]) for r in rows}
 
 
+async def get_day_realized_pnl(discord_user: str, since_iso: str) -> float:
+    """Realized P/L booked on/after since_iso (UTC ISO): stock + option closes
+    plus manual adjustments. Computed as realized(all) − realized(before since_iso)
+    per ticker/spec, so each close is valued at the average cost basis it actually
+    closed against. since_iso must use the same '+00:00' UTC format as executed_at
+    for the lexical comparison to be correct."""
+    total = 0.0
+
+    by_ticker: dict[str, list[dict]] = {}
+    for t in await get_stock_trades(discord_user):
+        by_ticker.setdefault(t["ticker"], []).append(t)
+    for ts in by_ticker.values():
+        before = [t for t in ts if t["executed_at"] < since_iso]
+        total += _aggregate_trades(ts)["realized_pnl"] - _aggregate_trades(before)["realized_pnl"]
+
+    by_spec: dict[tuple, list[dict]] = {}
+    for t in await get_option_trades(discord_user):
+        key = (t["underlying"], t["opt_type"], t["strike"], t["expiry"])
+        by_spec.setdefault(key, []).append(t)
+    for ts in by_spec.values():
+        before = [t for t in ts if t["executed_at"] < since_iso]
+        total += (_aggregate_option_trades(ts)["realized_pnl"]
+                  - _aggregate_option_trades(before)["realized_pnl"])
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT COALESCE(SUM(amount), 0) FROM realized_adjustments "
+            "WHERE discord_user = ? AND created_at >= ?",
+            (discord_user, since_iso),
+        )
+        row = await cur.fetchone()
+        total += float(row[0]) if row else 0.0
+
+    return total
+
+
 # ── Portfolio snapshots (equity curve for /stock graph) ──────────────────────
 
 

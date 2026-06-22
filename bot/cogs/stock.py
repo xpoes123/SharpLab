@@ -77,6 +77,15 @@ def _market_today() -> str:
     return datetime.now(ZoneInfo("America/New_York")).date().isoformat()
 
 
+def _market_day_start_utc() -> str:
+    """UTC ISO timestamp (…+00:00) of the start of the current US/Eastern calendar
+    day — the boundary for 'realized today', aligned with the ET market day."""
+    from zoneinfo import ZoneInfo
+    start_et = datetime.now(ZoneInfo("America/New_York")).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    return start_et.astimezone(timezone.utc).isoformat()
+
+
 def _display_ticker(symbol: str) -> str:
     """Strip Yahoo's -USD suffix for crypto display (BTC-USD -> BTC)."""
     return symbol[:-4] if symbol.endswith("-USD") else symbol
@@ -873,6 +882,7 @@ async def _compute_portfolio(uid: str) -> dict | None:
 
     realized_total += option_realized
     realized_total += await queries.get_realized_adjustment_total(uid)
+    day_realized = await queries.get_day_realized_pnl(uid, _market_day_start_utc())
     unrealized = (total_value - total_cost) + options_unrealized
     combined_cost = total_gross_cost + options_cost
     total_pnl = unrealized + realized_total
@@ -885,6 +895,9 @@ async def _compute_portfolio(uid: str) -> dict | None:
         "stock_cost": total_gross_cost,
         "day_change": total_day_change,
         "day_pct": (total_day_change / base * 100) if base else 0.0,
+        "day_realized": day_realized,
+        "day_total": total_day_change + day_realized,
+        "day_total_pct": ((total_day_change + day_realized) / base * 100) if base else 0.0,
         "options_value": options_value,
         "options_unrealized": options_unrealized,
         "options_cost": options_cost,
@@ -978,8 +991,8 @@ def _build_overview_embed(target: discord.abc.User, d: dict) -> discord.Embed:
                     value=f"`{_fmt_change(d['unrealized'], d['unrealized_pct'])}`", inline=True)
     embed.add_field(name="Realized P/L", value=f"`{_fmt_pnl(d['realized_total'])}`", inline=True)
     embed.add_field(name="Total P/L", value=f"`{_fmt_pnl(d['total_pnl'])}`", inline=True)
-    embed.add_field(name="Today (stocks)",
-                    value=f"`{_fmt_change(d['day_change'], d['day_pct'])}`", inline=True)
+    embed.add_field(name="Today",
+                    value=f"`{_fmt_change(d['day_total'], d['day_total_pct'])}`", inline=True)
     return embed
 
 
@@ -1003,15 +1016,16 @@ def _build_today_embed(target: discord.abc.User, d: dict) -> discord.Embed:
 
     description = _join_capped(lines, limit=4000, noun="position") if lines \
         else "_No priced stock positions today._"
-    color = 0x57F287 if d["day_change"] >= 0 else 0xED4245
+    color = 0x57F287 if d["day_total"] >= 0 else 0xED4245
     embed = discord.Embed(
         title=f"{target.display_name}'s Portfolio — Today",
         description=description,
         color=color,
     )
-    base = d["stock_value"] - d["day_change"]
-    embed.add_field(name="Day P/L (stocks)",
-                    value=f"`{_fmt_change(d['day_change'], d['day_pct'])}`", inline=True)
+    embed.add_field(name="Day P/L",
+                    value=f"`{_fmt_change(d['day_total'], d['day_total_pct'])}`", inline=True)
+    embed.add_field(name="• market move", value=f"`{_fmt_pnl(d['day_change'])}`", inline=True)
+    embed.add_field(name="• realized today", value=f"`{_fmt_pnl(d['day_realized'])}`", inline=True)
     if movers:
         top = movers[0]
         embed.add_field(name="Top gainer",
@@ -1021,7 +1035,8 @@ def _build_today_embed(target: discord.abc.User, d: dict) -> discord.Embed:
         embed.add_field(name="Top loser",
                         value=f"`{bot_['sym']}` {('+' if bot_['day_pct']>=0 else '')}{bot_['day_pct']:.2f}%",
                         inline=True)
-    embed.set_footer(text="Day change reflects stock positions only (options excluded).")
+    embed.set_footer(text="Day P/L = today's market move on held stocks + realized gains booked today "
+                          "(options market move excluded).")
     return embed
 
 
