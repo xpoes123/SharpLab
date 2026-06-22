@@ -128,17 +128,21 @@ def _draft(api_key: str, summaries: list[str], note: str) -> str:
 def _post_discord(token: str, channel: str, content: str, images: list[str] | None = None) -> None:
     url = f"https://discord.com/api/v10/channels/{channel}/messages"
     auth = {"Authorization": f"Bot {token}"}
+    embed = {"description": content, "color": 0x7AA2F7}  # Tokyo-night blue
+    payload = {"embeds": [embed]}
     paths = [p for p in (images or []) if Path(p).is_file()]
     if not paths:
         r = httpx.post(url, headers={**auth, "Content-Type": "application/json"},
-                       json={"content": content}, timeout=30.0)
+                       json=payload, timeout=30.0)
         r.raise_for_status()
         return
-    # Multipart: message content + up to 10 image attachments.
+    # Multipart: embed + up to 10 image attachments. The first attachment renders
+    # inside the embed; the rest show as a gallery below it.
+    embed["image"] = {"url": f"attachment://{Path(paths[0]).name}"}
     files = {}
     for i, p in enumerate(paths[:10]):
         files[f"files[{i}]"] = (Path(p).name, Path(p).read_bytes(), "image/png")
-    r = httpx.post(url, headers=auth, data={"payload_json": json.dumps({"content": content})},
+    r = httpx.post(url, headers=auth, data={"payload_json": json.dumps(payload)},
                    files=files, timeout=60.0)
     r.raise_for_status()
 
