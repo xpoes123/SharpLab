@@ -603,6 +603,32 @@ def _bs_price(opt_type: str, S: float, K: float, T: float, r: float, sigma: floa
     return round(max(0.0, val), 2)
 
 
+def _bs_greeks(opt_type: str, S: float, K: float, T: float, r: float, sigma: float) -> dict | None:
+    """Per-share Black-Scholes Greeks for a European call/put. Returns
+    {delta, gamma, theta, vega} or None when inputs are degenerate (expired /
+    no vol). theta is per CALENDAR DAY, vega is per 1 vol point (1%) — the units a
+    broker shows. delta is per share (calls 0..1, puts -1..0)."""
+    import math
+    from statistics import NormalDist
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return None
+    nd = NormalDist()
+    N, pdf = nd.cdf, nd.pdf
+    srt = sigma * math.sqrt(T)
+    d1 = (math.log(S / K) + (r + sigma * sigma / 2) * T) / srt
+    d2 = d1 - srt
+    disc = math.exp(-r * T)
+    if opt_type == "call":
+        delta = N(d1)
+        theta = (-(S * pdf(d1) * sigma) / (2 * math.sqrt(T)) - r * K * disc * N(d2))
+    else:
+        delta = N(d1) - 1
+        theta = (-(S * pdf(d1) * sigma) / (2 * math.sqrt(T)) + r * K * disc * N(-d2))
+    gamma = pdf(d1) / (S * srt)
+    vega = S * pdf(d1) * math.sqrt(T)
+    return {"delta": delta, "gamma": gamma, "theta": theta / 365.0, "vega": vega / 100.0}
+
+
 def _fmt_market_cap(mc: float) -> str:
     if mc >= 1e12:
         return f"${mc / 1e12:.1f}T"
@@ -697,6 +723,7 @@ async def fetch_option_prices(
             for s in items:
                 key = (s["underlying"], s["opt_type"], s["strike"], s["expiry"])
                 premium = None
+                iv = None
                 if chains is not None:
                     df = chains[s["opt_type"]]
                     sel = df[(df["strike"] - s["strike"]).abs() < 1e-6]
@@ -708,6 +735,9 @@ async def fetch_option_prices(
                             premium = last
                         elif bid > 0 and ask > 0:
                             premium = (bid + ask) / 2
+                        ivv = float(sel["impliedVolatility"].iloc[0])
+                        if 0.05 <= ivv <= 5.0:
+                            iv = ivv
                 estimated = False
                 if premium is None and not expired:
                     spot = spots.get(s["underlying"])
@@ -736,7 +766,8 @@ async def fetch_option_prices(
                             if s["opt_type"] == "call"
                             else max(0.0, s["strike"] - spot)
                         )
-                out[key] = {"premium": premium, "expired": expired, "estimated": estimated}
+                out[key] = {"premium": premium, "expired": expired, "estimated": estimated,
+                            "iv": iv, "spot": spots.get(s["underlying"])}
         return out
 
     fetched = await asyncio.get_running_loop().run_in_executor(None, _fetch)
@@ -777,6 +808,23 @@ def _is_expired(expiry: str) -> bool:
         return date.fromisoformat(expiry) < datetime.now(timezone.utc).date()
     except ValueError:
         return False
+
+
+def option_greeks(pos: dict, info: dict) -> dict | None:
+    """Greeks for an open option position from a fetch_option_prices() info row.
+    Returns {iv, delta, theta, dte} for display (delta per share; theta = $/day for
+    ONE contract), or None when the contract can't be priced (expired / no IV)."""
+    spot, iv = info.get("spot"), info.get("iv")
+    if not spot or not iv:
+        return None
+    try:
+        dte = max(0, (date.fromisoformat(pos["expiry"]) - datetime.now(timezone.utc).date()).days)
+    except ValueError:
+        return None
+    g = _bs_greeks(pos["opt_type"], spot, pos["strike"], dte / 365.0, 0.045, iv)
+    if not g:
+        return None
+    return {"iv": iv, "delta": g["delta"], "theta": g["theta"] * OPTION_MULTIPLIER, "dte": dte}
 
 
 def _option_position_pnl(pos: dict, premium: float | None) -> dict:
@@ -3516,9 +3564,12 @@ class StockCog(commands.Cog):
             sign = "+" if u >= 0 else ""
             emoji = "🟢" if u >= 0 else "🔴"
             flag = " ⚠️" if expired else ""
+            gk = option_greeks(p, info)
+            greeks = (f"\n   ┕ IV `{gk['iv'] * 100:.0f}%` · Δ `{gk['delta']:+.2f}` · "
+                      f"Θ `{gk['theta']:+.2f}/d` · `{gk['dte']}d` left") if gk else ""
             lines.append(
                 f"{emoji} {label}{flag} · {side_word} {abs(net)} @ {p['avg_premium']:,.2f} → "
-                f"**{premium:,.2f}** · P/L `{sign}{u:,.2f} ({sign}{upct:.2f}%)`"
+                f"**{premium:,.2f}** · P/L `{sign}{u:,.2f} ({sign}{upct:.2f}%)`{greeks}"
             )
 
         if hidden_expired:

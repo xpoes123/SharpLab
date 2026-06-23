@@ -888,7 +888,7 @@ async def _build_trader(uid: str, who: dict):
     # Live-price the open contracts (yfinance chains + Black-Scholes fallback), exactly
     # like the bot's /stock profile — otherwise options show no current price or P/L and
     # the summary leans on a stale snapshot that predates recently-added contracts.
-    from bot.cogs.stock import _price_option_positions, _option_position_pnl
+    from bot.cogs.stock import _price_option_positions, _option_position_pnl, option_greeks
     open_op = [o for o in op if o.get("net_contracts", 0)]
     opt_prices = await _price_option_positions(open_op) if open_op else {}
     options_value_live = 0.0
@@ -904,6 +904,7 @@ async def _build_trader(uid: str, who: dict):
             options_unreal += pl["unrealized"]
             options_priced_any = True
         cost = pl["cost"]
+        gk = option_greeks(o, opt_prices.get(key, {}))
         option_positions.append({
             "underlying": o["underlying"], "opt_type": o["opt_type"], "strike": o["strike"],
             "expiry": o["expiry"], "contracts": o.get("net_contracts", 0),
@@ -914,6 +915,12 @@ async def _build_trader(uid: str, who: dict):
             "unrealized_pct": round(pl["unrealized"] / cost * 100, 2) if (pl["priced"] and cost) else None,
             "expired": opt_prices.get(key, {}).get("expired", False),
             "estimated": opt_prices.get(key, {}).get("estimated", False),
+            # Greeks (market data — not stripped for non-owners): IV, per-share delta,
+            # $/day theta for one contract, days-to-expiry.
+            "iv": round(gk["iv"] * 100, 1) if gk else None,
+            "delta": round(gk["delta"], 2) if gk else None,
+            "theta": round(gk["theta"], 2) if gk else None,
+            "dte": gk["dte"] if gk else None,
         })
 
     txns = []
