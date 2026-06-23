@@ -17,6 +17,15 @@ def test_implied_vol_falls_back_in_option_greeks():
     assert g and g["delta"] > 0.9   # deep ITM → delta near 1
 
 
+def test_stale_premium_inverting_to_absurd_iv_is_dropped():
+    # The real AMD LEAP case: short-dated deep-ITM call whose stale lastPrice carries
+    # ~$38 of time value → inverts to >300% vol → Greeks suppressed rather than shown.
+    from datetime import date, timedelta
+    expiry = (date.today() + timedelta(days=206)).isoformat()
+    pos = {"opt_type": "call", "strike": 70, "expiry": expiry, "net_contracts": 1}
+    assert option_greeks(pos, {"spot": 517, "iv": None, "premium": 485.68}) is None
+
+
 def test_atm_call_textbook():
     # S=K=100, T=1y, r=5%, vol=20% — standard textbook case.
     g = _bs_greeks("call", 100, 100, 1.0, 0.05, 0.20)
@@ -52,6 +61,7 @@ def test_option_greeks_scaling_and_guards():
 if __name__ == "__main__":
     for fn in [test_atm_call_textbook, test_put_call_delta_parity,
                test_degenerate_inputs_return_none, test_option_greeks_scaling_and_guards,
-               test_implied_vol_roundtrips, test_implied_vol_falls_back_in_option_greeks]:
+               test_implied_vol_roundtrips, test_implied_vol_falls_back_in_option_greeks,
+               test_stale_premium_inverting_to_absurd_iv_is_dropped]:
         fn()
     print("greeks checks OK")
