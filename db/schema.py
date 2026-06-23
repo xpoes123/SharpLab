@@ -376,6 +376,15 @@ CREATE TABLE IF NOT EXISTS ticker_meta (
     updated_at  TEXT NOT NULL  -- UTC ISO 8601; used for cache TTL
 );
 
+CREATE TABLE IF NOT EXISTS ticker_quotes (
+    ticker      TEXT PRIMARY KEY,
+    price       REAL,          -- regular-session last price
+    prev_close  REAL,
+    currency    TEXT,
+    extended    TEXT,          -- JSON {session, price, pct} when pre/post-market, else NULL
+    updated_at  TEXT NOT NULL  -- UTC ISO 8601; how stale the quote is
+);
+
 CREATE TABLE IF NOT EXISTS reaction_roles (
     message_id  TEXT NOT NULL,
     emoji       TEXT NOT NULL,   -- str(emoji): unicode char or '<:name:id>'
@@ -778,6 +787,16 @@ async def init_db() -> None:
             pass
         try:  # add `stock_alerts` opt-in flag to an already-existing user_settings table
             await db.execute("ALTER TABLE user_settings ADD COLUMN stock_alerts INTEGER NOT NULL DEFAULT 0")
+            await db.commit()
+        except Exception:
+            pass
+        # Migration: warm quote store so HQ stock pages never block on yfinance
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS ticker_quotes ("
+                "ticker TEXT PRIMARY KEY, price REAL, prev_close REAL, currency TEXT, "
+                "extended TEXT, updated_at TEXT NOT NULL)"
+            )
             await db.commit()
         except Exception:
             pass

@@ -3698,6 +3698,44 @@ async def upsert_ticker_meta(
         await db.commit()
 
 
+async def get_all_ticker_quotes() -> dict[str, dict]:
+    """Warm quote store: {ticker: {price, prev_close, currency, extended, updated_at}}.
+    `extended` is decoded back to a dict (or None). Read by the HQ stock pages so a
+    page load never blocks on yfinance — a background loop keeps this fresh."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM ticker_quotes")
+        out = {}
+        for r in await cur.fetchall():
+            q = dict(r)
+            q["extended"] = json.loads(q["extended"]) if q.get("extended") else None
+            out[r["ticker"]] = q
+        return out
+
+
+async def upsert_ticker_quotes_bulk(quotes: dict[str, dict]) -> int:
+    """Insert/refresh many tickers' live quotes (from fetch_quotes), stamping updated_at.
+    `quotes` is {ticker: {price, prev_close, currency, extended?}}. Returns rows written."""
+    if not quotes:
+        return 0
+    ts = datetime.now(timezone.utc).isoformat()
+    rows = [
+        (t.upper(), q.get("price"), q.get("prev_close"), q.get("currency"),
+         json.dumps(q["extended"]) if q.get("extended") else None, ts)
+        for t, q in quotes.items()
+    ]
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.executemany(
+            "INSERT INTO ticker_quotes (ticker, price, prev_close, currency, extended, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(ticker) DO UPDATE SET price=excluded.price, prev_close=excluded.prev_close, "
+            "currency=excluded.currency, extended=excluded.extended, updated_at=excluded.updated_at",
+            rows,
+        )
+        await db.commit()
+    return len(rows)
+
+
 async def get_latest_snapshot_at(discord_user: str) -> str | None:
     """captured_at of the user's most recent snapshot, or None. For cadence dedup."""
     async with aiosqlite.connect(DB_PATH) as db:

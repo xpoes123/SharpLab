@@ -42,11 +42,22 @@ const STYLE = `<style>
 .chip.pos{border-color:#9ece6a55}.chip.neg{border-color:#f7768e55}
 .chip.more{color:var(--muted)}
 a.chip:hover{border-color:var(--accent)}
+.refbar{display:flex;align-items:center;justify-content:flex-end;gap:10px;margin:2px 0 -4px}
+#refreshBtn[disabled]{opacity:.6;cursor:default}
+#refreshBtn .gl{display:inline-block}
+#refreshBtn.spinning .gl{animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 </style>`;
 
 let me = null;
+let QUOTES_AT = null;
 
-async function main() {
+function asofLabel(iso) {
+  if (!iso) return "prices loading…";
+  return "prices as of " + new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+async function load() {
   let data;
   try {
     [data, me] = await Promise.all([
@@ -57,8 +68,18 @@ async function main() {
     app.innerHTML = `<div class="hero"><p class="muted">Couldn't load portfolios.</p></div>`;
     return;
   }
+  QUOTES_AT = data.quotes_at || null;
   render(data.traders || []);
 }
+
+async function refreshPrices(btn) {
+  if (btn) { btn.disabled = true; btn.classList.add("spinning"); }
+  try { await fetch("/api/v1/hq/stocks/refresh", { method: "POST" }); } catch {}
+  await load();   // re-render with fresh prices (rebuilds the button, clearing its state)
+}
+
+// Server keeps the quote store warm every 5 min; re-pull the rendered data on the same beat.
+function main() { load(); setInterval(load, 300000); }
 
 function tradePanel() {
   if (!me || !me.authenticated) return "";
@@ -257,7 +278,11 @@ function render(traders) {
   const totRet = invested > 0 ? (totPnl / invested) * 100 : null;
   const hstat = (k, v) => `<div class="hstat"><div class="k">${k}</div><div class="hv">${v}</div></div>`;
 
-  let html = STYLE + tradePanel() + `<div class="lbhero">
+  let html = STYLE + tradePanel() + `<div class="refbar">
+    <span class="muted sm" id="asof">${asofLabel(QUOTES_AT)}</span>
+    <button class="btn ghost" id="refreshBtn" title="Refresh prices"><span class="gl">⟳</span> Refresh</button>
+  </div>
+  <div class="lbhero">
     <div class="lbhero-top">
       <div><div class="muted lbl">Combined portfolio value</div><div class="bigval">${money(totVal)}</div></div>
       <div style="text-align:right">
@@ -282,12 +307,17 @@ function render(traders) {
 
   app.innerHTML = html;
   wireTradePanel();
-  app.addEventListener("click", (e) => {
-    const b = e.target.closest("[data-spie]");
-    if (!b) return;
-    serverPieMode = b.dataset.spie;
-    document.getElementById("spieBox").innerHTML = serverPieBody();
-  });
+  const rb = document.getElementById("refreshBtn");
+  if (rb) rb.onclick = () => refreshPrices(rb);
+  if (!render._wired) {   // delegate once — render() now reruns on the 5-min poll
+    render._wired = true;
+    app.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-spie]");
+      if (!b) return;
+      serverPieMode = b.dataset.spie;
+      document.getElementById("spieBox").innerHTML = serverPieBody();
+    });
+  }
 }
 
 function plink2(t) {

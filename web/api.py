@@ -23,7 +23,7 @@ from web.trading_floor import router as tf_router, tf_websocket, cleanup_stale_t
 from web.solitairechess import router as sc_router, solchess_websocket, cleanup_stale_solchess_rooms
 from web.minesweeper import router as minesweeper_router, minesweeper_websocket, cleanup_stale_minesweeper_rooms
 from web.blotto import router as blotto_router, blotto_websocket, cleanup_stale_blotto_rooms
-from web.hq import router as hq_router
+from web.hq import router as hq_router, quote_refresh_loop
 
 DB_PATH = os.environ.get("SHARPLAB_DB_PATH", "data/sharplab.db")
 
@@ -85,7 +85,9 @@ async def lifespan(app: FastAPI):
     sc_cleanup_task = asyncio.create_task(cleanup_stale_solchess_rooms())
     ms_cleanup_task = asyncio.create_task(cleanup_stale_minesweeper_rooms())
     blotto_cleanup_task = asyncio.create_task(cleanup_stale_blotto_rooms())
+    quote_task = asyncio.create_task(quote_refresh_loop())   # keep HQ stock prices warm
     yield
+    quote_task.cancel()
     cleanup_task.cancel()
     figgie_cleanup_task.cancel()
     bingo_cleanup_task.cancel()
