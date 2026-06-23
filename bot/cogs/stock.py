@@ -842,6 +842,10 @@ def option_greeks(pos: dict, info: dict) -> dict | None:
     # Chain IV is often missing/garbage for deep-ITM LEAPS — back it out of the premium.
     if not iv and info.get("premium"):
         iv = _implied_vol(pos["opt_type"], info["premium"], spot, pos["strike"], dte / 365.0, 0.045)
+        # Illiquid deep-ITM LEAPS quote a stale lastPrice that inverts to absurd vol;
+        # don't show 300%+ "IV" — drop the Greeks rather than mislead.
+        if iv and iv > 2.5:
+            iv = None
     if not iv:
         return None
     g = _bs_greeks(pos["opt_type"], spot, pos["strike"], dte / 365.0, 0.045, iv)
