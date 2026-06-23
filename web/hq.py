@@ -128,6 +128,65 @@ class AsyncTTLCache:
 _CACHE = AsyncTTLCache()
 
 
+# ── Warm quote store ──────────────────────────────────────────────────────────
+# The HQ stock pages used to call the slow yfinance `.info` path live on every cache
+# miss (tens of seconds for ~40 held tickers, serial). Instead a background loop
+# refreshes all held tickers into the `ticker_quotes` table every QUOTE_REFRESH_SEC,
+# and the pages read that store (instant). A manual refresh button hits the same path,
+# throttled so it never re-fetches if it ran in the last QUOTE_REFRESH_SEC.
+QUOTE_REFRESH_SEC = 300.0          # 5 min
+_quote_refresh_at = 0.0            # monotonic of last *actual* fetch
+_quote_refresh_lock = asyncio.Lock()
+
+
+async def refresh_quote_store(*, force: bool = False) -> bool:
+    """Fetch live quotes for every held ticker and upsert them into `ticker_quotes`.
+    Throttled: returns False without fetching if a refresh ran < QUOTE_REFRESH_SEC ago
+    (unless force). Single-flight via a lock so a burst of refresh clicks = one fetch."""
+    global _quote_refresh_at
+    async with _quote_refresh_lock:
+        age = time.monotonic() - _quote_refresh_at
+        if not force and _quote_refresh_at and age < QUOTE_REFRESH_SEC:
+            return False
+        holdings = await queries.get_all_stock_holdings()
+        opts = await queries.get_all_option_positions()
+        tickers = {h["ticker"] for h in holdings if abs(h.get("shares", 0)) > 1e-9}
+        tickers |= {o["underlying"] for ol in opts.values() for o in ol
+                    if o.get("net_contracts", 0)}
+        if not tickers:
+            _quote_refresh_at = time.monotonic()
+            return True
+        from bot.cogs.stock import fetch_quotes  # lazy import (heavy deps)
+        quotes = await fetch_quotes(sorted(tickers), extended=True)
+        await queries.upsert_ticker_quotes_bulk(quotes)
+        _quote_refresh_at = time.monotonic()
+        _CACHE.invalidate("stocks", "server")   # let the next page load show fresh prices
+        log.info("quote store refreshed: %d/%d tickers", len(quotes), len(tickers))
+        return True
+
+
+async def quote_refresh_loop() -> None:
+    """Background task (started from the web lifespan): keep the quote store warm."""
+    while True:
+        try:
+            await refresh_quote_store(force=True)
+        except Exception:
+            log.exception("quote_refresh_loop iteration failed")
+        await asyncio.sleep(QUOTE_REFRESH_SEC)
+
+
+def _quotes_from_store(rows: dict[str, dict], tickers: list[str]) -> dict[str, dict]:
+    """Shape warm-store rows like fetch_quotes output (price/prev_close/currency/extended)
+    for the given tickers, so effective_price() and the builders work unchanged."""
+    out = {}
+    for t in tickers:
+        r = rows.get(t)
+        if r and r.get("price") is not None:
+            out[t] = {"price": r["price"], "prev_close": r.get("prev_close"),
+                      "currency": r.get("currency") or "USD", "extended": r.get("extended")}
+    return out
+
+
 async def _spy_history() -> list[tuple[str, float]]:
     """Daily SPY closes (2y), cached for an hour. [] on failure."""
     if _SPY_CACHE["data"] and time.monotonic() - float(_SPY_CACHE["t"]) < 3600:
@@ -502,7 +561,16 @@ async def hq_stocks(request: Request):
         {**t, "holdings": [_strip_holding(h) for h in t.get("holdings", [])]}
         for t in data.get("traders", [])
     ]
-    return {"traders": traders}
+    return {"traders": traders, "quotes_at": data.get("quotes_at")}
+
+
+@router.post("/hq/stocks/refresh")
+async def hq_stocks_refresh():
+    """Manual 'refresh prices' button. Re-pulls live quotes into the warm store, but
+    throttled — if a refresh ran in the last QUOTE_REFRESH_SEC it's a no-op (so a room
+    full of people mashing the button = one yfinance pull). Returns whether it fetched."""
+    fetched = await refresh_quote_store(force=False)
+    return {"refreshed": fetched, "throttle_sec": QUOTE_REFRESH_SEC}
 
 
 async def _build_stocks():
@@ -551,9 +619,12 @@ async def _build_stocks():
     user_options = {u: all_options.get(u, []) for u in users}
     all_tickers = sorted({p["ticker"] for ps in user_positions.values()
                           for p in ps if abs(p.get("shares", 0)) > 1e-9})
-    from bot.cogs.stock import fetch_quotes, effective_price  # lazy import (heavy deps)
-    # extended=True → value holdings off the pre/post-market print after the close.
-    quotes = await fetch_quotes(all_tickers, extended=True) if all_tickers else {}
+    from bot.cogs.stock import effective_price  # lazy import (heavy deps)
+    # Read prices from the warm quote store (kept fresh by quote_refresh_loop) instead of
+    # hitting yfinance live — the request path must never block on a slow .info call.
+    store = await queries.get_all_ticker_quotes()
+    quotes = _quotes_from_store(store, all_tickers)
+    quotes_at = max((store[t]["updated_at"] for t in all_tickers if store.get(t)), default=None)
     qprice = {t: (effective_price(quotes[t]) if quotes.get(t) and quotes[t].get("price") else None)
               for t in all_tickers}
     qprev = {t: (quotes[t].get("prev_close") if quotes.get(t) else None) for t in all_tickers}
@@ -646,8 +717,7 @@ async def _build_stocks():
             "holdings": sorted(holdings, key=lambda h: (h["value"] or h["cost_basis"] or 0), reverse=True),
         })
     traders.sort(key=lambda t: (t["account_value"] is not None, t["account_value"] or 0), reverse=True)
-    data = {"traders": traders}
-    return data
+    return {"traders": traders, "quotes_at": quotes_at}
 
 
 def _period_pnl(trades, series, shares_now, price_now, cuts, close_on_or_before):
@@ -763,10 +833,10 @@ async def _build_trader(uid: str, who: dict):
     open_pos = [p for p in sp if abs(p.get("shares", 0)) > 1e-9]
     # lazy import (heavy deps)
     from datetime import timedelta
-    from bot.cogs.stock import fetch_quotes, _ticker_history, _close_on_or_before, effective_price
-    # extended=True for one trader's holdings → include pre/post-market prints (e.g. an
-    # earnings move after the close). Fine here (a handful of tickers); never on the leaderboard.
-    quotes = await fetch_quotes([p["ticker"] for p in open_pos], extended=True) if open_pos else {}
+    from bot.cogs.stock import _ticker_history, _close_on_or_before, effective_price
+    # Prices come from the warm quote store (quote_refresh_loop), never a live yfinance call.
+    store = await queries.get_all_ticker_quotes()
+    quotes = _quotes_from_store(store, [p["ticker"] for p in open_pos])
     # 1y daily-close series per holding (cached), so the browser can chart any ticker
     # instantly without a second round-trip.
     hist_list = await asyncio.gather(*[_ticker_history(p["ticker"]) for p in open_pos]) if open_pos else []
