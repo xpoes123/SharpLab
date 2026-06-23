@@ -629,6 +629,24 @@ def _bs_greeks(opt_type: str, S: float, K: float, T: float, r: float, sigma: flo
     return {"delta": delta, "gamma": gamma, "theta": theta / 365.0, "vega": vega / 100.0}
 
 
+def _implied_vol(opt_type: str, premium: float, S: float, K: float, T: float, r: float) -> float | None:
+    """Back out implied vol from a market premium by bisection on _bs_price (price is
+    monotonic in sigma). Used when the data provider's chain IV is missing/garbage
+    (common for deep-ITM LEAPS). None if the premium is below intrinsic / unsolvable."""
+    if premium <= 0 or T <= 0 or S <= 0 or K <= 0:
+        return None
+    lo, hi = 1e-4, 5.0
+    if _bs_price(opt_type, S, K, T, r, hi) < premium:   # premium richer than 500% vol → give up
+        return None
+    for _ in range(60):
+        mid = (lo + hi) / 2
+        if _bs_price(opt_type, S, K, T, r, mid) < premium:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2
+
+
 def _fmt_market_cap(mc: float) -> str:
     if mc >= 1e12:
         return f"${mc / 1e12:.1f}T"
@@ -815,11 +833,16 @@ def option_greeks(pos: dict, info: dict) -> dict | None:
     Returns {iv, delta, theta, dte} for display (delta per share; theta = $/day for
     ONE contract), or None when the contract can't be priced (expired / no IV)."""
     spot, iv = info.get("spot"), info.get("iv")
-    if not spot or not iv:
+    if not spot:
         return None
     try:
         dte = max(0, (date.fromisoformat(pos["expiry"]) - datetime.now(timezone.utc).date()).days)
     except ValueError:
+        return None
+    # Chain IV is often missing/garbage for deep-ITM LEAPS — back it out of the premium.
+    if not iv and info.get("premium"):
+        iv = _implied_vol(pos["opt_type"], info["premium"], spot, pos["strike"], dte / 365.0, 0.045)
+    if not iv:
         return None
     g = _bs_greeks(pos["opt_type"], spot, pos["strike"], dte / 365.0, 0.045, iv)
     if not g:
