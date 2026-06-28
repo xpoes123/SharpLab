@@ -343,6 +343,12 @@ def _kalshi_ml_from_markets(
     Prices are fee-inclusive executable costs, so each side's implied prob
     includes Kalshi's vig — directly comparable to a sportsbook moneyline.
     Returns None if prices are missing or not in (0, 1).
+
+    Requires a genuine resting ASK on BOTH sides. On a thin/just-opened market a
+    side often has only a stray bid; kalshi_exec_price would then fall back to the
+    bid/ask mid (≈ bid/2), fabricating a tiny prob, and devigging that against the
+    other side's parked ask produces a bogus lopsided line (e.g. MLB 5%/95%
+    pre-game). No two-sided quote → no snapshot → consumers fall back to a book.
     """
     home_prob: float | None = None
     away_prob: float | None = None
@@ -350,6 +356,9 @@ def _kalshi_ml_from_markets(
     for m in game_markets:
         ticker = m.get("ticker", "")
         suffix = ticker.split("-")[-1].upper()
+        ask = m.get("yes_ask_dollars")
+        if not ask or not (0 < float(ask) < 1):
+            continue  # no real ask on this side — don't trust a fabricated price
         price = kalshi_exec_price(m)
         if price is None:
             continue
