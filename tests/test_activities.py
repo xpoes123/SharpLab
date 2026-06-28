@@ -151,6 +151,19 @@ def test_kalshi_ml_from_markets_returns_none_on_empty():
     assert _kalshi_ml_from_markets([], home_abbr="PHX", away_abbr="DEN") is None
 
 
+def test_kalshi_ml_from_markets_none_when_a_side_has_no_ask():
+    """Thin market: away side has only a stray bid, no resting ask. Must NOT
+    fabricate a lopsided line (the 5%/95% MLB pre-game bug) — return None so
+    consumers fall back to a real book."""
+    thin = [
+        {**_KALSHI_MARKETS[0], "yes_bid_dollars": 0.90, "yes_ask_dollars": 0.95},  # PHX parked high
+        {"event_ticker": _KALSHI_MARKETS[1]["event_ticker"],
+         "ticker": _KALSHI_MARKETS[1]["ticker"],
+         "yes_bid_dollars": 0.10, "yes_ask_dollars": None},  # DEN bid only, no ask
+    ]
+    assert _kalshi_ml_from_markets(thin, home_abbr="PHX", away_abbr="DEN") is None
+
+
 # ── TEAM_ABBR sanity — NBA ────────────────────────────────────────────────────
 
 def test_team_abbr_nba_has_30_teams():
