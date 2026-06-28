@@ -1051,11 +1051,7 @@ async def hq_stock_trade(body: StockTradeIn, request: Request):
             or not (0 < body.shares <= 1_000_000) or not (0 < body.price <= 1_000_000)
             or body.shares * body.price > 100_000_000):
         return JSONResponse({"error": "bad_input"}, status_code=400)
-    if body.side == "sell":
-        holding = await queries.get_stock_holding(sess["id"], ticker)
-        held = holding["shares"] if holding else 0.0
-        if body.shares > held + 1e-9:
-            return JSONResponse({"error": f"You only hold {held:g} sh of {ticker}."}, status_code=409)
+    # Selling beyond a held long opens/extends a SHORT (no guard — mirrors /stock sell).
     # HQ trades are always "now": warn (don't block) if the price is off the live quote.
     from bot.cogs.stock import live_price_check
     ok, live = await live_price_check(ticker, body.price)
@@ -1067,9 +1063,15 @@ async def hq_stock_trade(body: StockTradeIn, request: Request):
                                       datetime.now(timezone.utc).isoformat(), "via HQ")
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
+    # Cash flows like Discord: a buy debits, a sell/short credits (overdraft allowed).
+    cash_flow = body.shares * body.price * (-1 if body.side == "buy" else 1)
+    new_cash = await queries.adjust_stock_cash(sess["id"], cash_flow, allow_negative=True)
+    holding = await queries.get_stock_holding(sess["id"], ticker)
+    short_shares = abs(holding["shares"]) if (holding and holding["shares"] < -1e-9) else None
     _CACHE.invalidate("stocks", f"trader:{sess['id']}", "earnings")   # reflect the trade immediately
     return {"ok": True, "side": body.side, "ticker": ticker, "shares": body.shares,
-            "price": body.price, "warning": warning}
+            "price": body.price, "warning": warning, "cash": round(new_cash, 2),
+            "short_shares": short_shares}
 
 
 class OptionTradeIn(BaseModel):
@@ -1108,8 +1110,11 @@ async def hq_option_trade(body: OptionTradeIn, request: Request):
                                        body.premium, datetime.now(timezone.utc).isoformat(), "via HQ")
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
+    # Premium flows through cash like Discord: buying debits, writing (sell) credits.
+    cash_flow = (-1 if body.side == "buy" else 1) * abs(body.contracts) * body.premium * queries.OPTION_MULTIPLIER
+    new_cash = await queries.adjust_stock_cash(sess["id"], cash_flow, allow_negative=True)
     _CACHE.invalidate("stocks", f"trader:{sess['id']}", "earnings")   # reflect the trade immediately
-    return {"ok": True, "warning": option_warning}
+    return {"ok": True, "warning": option_warning, "cash": round(new_cash, 2)}
 
 
 class BetLogIn(BaseModel):

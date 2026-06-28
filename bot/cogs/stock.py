@@ -9,6 +9,8 @@ All commands live under a single /stock group:
 - /stock cash <amount> [action]     — set/deposit/withdraw uninvested cash.
 - /stock buy <ticker> <sh> <px>     — record a buy (stocks, ETFs, or crypto: BTC, ETH, …).
 - /stock sell <ticker> <sh> <px>    — record a sell (realized P/L computed).
+- /stock short <ticker> <sh> <px>   — open/add a short (alias for an opening sell).
+- /stock cover <ticker> <sh> <px>   — buy to cover an open short (alias for a closing buy).
 - /stock trades [ticker] [user]     — show recent trade history.
 - /stock leaderboard                — server-wide ranking by total P/L (unrealized + realized).
 - /stock movers                     — S&P 100 gainers and losers today.
@@ -3136,6 +3138,11 @@ class StockCog(commands.Cog):
         date: str | None = None,
         notes: str | None = None,
     ) -> None:
+        await self._record_buy(interaction, ticker, shares, price, date, notes)
+
+    async def _record_buy(self, interaction, ticker, shares, price, date, notes, *, verb="BUY") -> None:
+        """Shared body for /stock buy and /stock cover. `verb` only changes the wording —
+        a buy and a cover are the same trade (a buy that closes an open short first)."""
         symbol = _normalize_symbol(ticker)
         if not symbol:
             await interaction.response.send_message("Please provide a ticker.", ephemeral=True)
@@ -3164,6 +3171,11 @@ class StockCog(commands.Cog):
         avg = current["dca_price"] if current else 0.0
         covered = min(shares, max(-net, 0.0))
         realized = covered * (avg - price)
+        if verb == "COVER" and covered <= 1e-9:
+            await interaction.followup.send(
+                f"You have no open **{symbol}** short to cover — use `/stock buy` to go long.",
+                ephemeral=True)
+            return
 
         await queries.add_stock_trade(
             str(interaction.user.id), symbol, "buy", shares, price, executed_at, notes
@@ -3177,7 +3189,7 @@ class StockCog(commands.Cog):
         cash_line = f"\nCash: **${new_cash:,.2f}**" + (
             " ⚠️ you're in the red" if new_cash < 0 else "")
         await interaction.followup.send(
-            f"Recorded **BUY** `{symbol}` — {shares:g} sh @ `{price:,.2f}` "
+            f"Recorded **{verb}** `{symbol}` — {shares:g} sh @ `{price:,.2f}` "
             f"(−${shares * price:,.2f}){realized_line}.\n{position_line}{cash_line}{warn}",
             ephemeral=True,
         )
@@ -3204,6 +3216,11 @@ class StockCog(commands.Cog):
         date: str | None = None,
         notes: str | None = None,
     ) -> None:
+        await self._record_sell(interaction, ticker, shares, price, date, notes)
+
+    async def _record_sell(self, interaction, ticker, shares, price, date, notes, *, verb="SELL") -> None:
+        """Shared body for /stock sell and /stock short. `verb` only changes the wording —
+        a sell and a short are the same trade (a sell past flat opens a short)."""
         symbol = _normalize_symbol(ticker)
         if not symbol:
             await interaction.response.send_message("Please provide a ticker.", ephemeral=True)
@@ -3246,17 +3263,60 @@ class StockCog(commands.Cog):
         short_note = ""
         if holding and holding["shares"] < 0:
             short_note = (f"\n📉 You're now **short {abs(holding['shares']):g}** sh — "
-                          f"buy to cover.")
+                          f"buy/cover to close.")
+        elif verb == "SHORT":   # sold into an existing long — reduced it, didn't go short
+            short_note = "\nℹ️ This reduced your long — you're not short yet."
         cash_line = f"\nCash: **${new_cash:,.2f}**" + (
             " ⚠️ you're in the red" if new_cash < 0 else "")
         await interaction.followup.send(
-            f"Recorded **SELL** `{symbol}` — {shares:g} sh @ `{price:,.2f}` "
+            f"Recorded **{verb}** `{symbol}` — {shares:g} sh @ `{price:,.2f}` "
             f"(+${shares * price:,.2f}){realized_line}."
             f"\n{position_line}{short_note}{cash_line}{sell_warn}",
             ephemeral=True,
         )
         await self._maybe_post_rohan_pick(interaction, "SOLD", f"**{shares:g}** {symbol} @ ${price:,.2f}")
         await _award_trade_xp(interaction)
+
+    # ── /stock short + /stock cover ───────────────────────────────────────────
+
+    @stock.command(name="short", description="Open or add to a short position (sell shares you don't own)")
+    @app_commands.describe(
+        ticker="Ticker to short (stock/ETF or crypto)",
+        shares="Number of shares to short (fractional ok)",
+        price="Execution price per share",
+        date="Optional trade date (YYYY-MM-DD or YYYY-MM-DD HH:MM, UTC). Defaults to now.",
+        notes="Optional note",
+    )
+    async def short(
+        self,
+        interaction: discord.Interaction,
+        ticker: str,
+        shares: float,
+        price: float,
+        date: str | None = None,
+        notes: str | None = None,
+    ) -> None:
+        await self._record_sell(interaction, ticker, shares, price, date, notes, verb="SHORT")
+
+    @stock.command(name="cover", description="Buy to cover (close or reduce) an open short")
+    @app_commands.describe(
+        ticker="Pick the short you're covering (or type a ticker)",
+        shares="Number of shares to buy back (fractional ok)",
+        price="Execution price per share",
+        date="Optional trade date (YYYY-MM-DD or YYYY-MM-DD HH:MM, UTC). Defaults to now.",
+        notes="Optional note",
+    )
+    @app_commands.autocomplete(ticker=_holdings_autocomplete)
+    async def cover(
+        self,
+        interaction: discord.Interaction,
+        ticker: str,
+        shares: float,
+        price: float,
+        date: str | None = None,
+        notes: str | None = None,
+    ) -> None:
+        await self._record_buy(interaction, ticker, shares, price, date, notes, verb="COVER")
 
     # ── /stock trades ────────────────────────────────────────────────────────
 

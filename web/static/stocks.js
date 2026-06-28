@@ -90,7 +90,7 @@ function tradePanel() {
       <button data-i="stock" class="on">Stock</button><button data-i="crypto">Crypto</button><button data-i="option">Option</button>
     </div>
     <div class="tradeform">
-      <input id="tk" placeholder="Ticker — sell? pick a holding" list="myStocks" autocomplete="off" />
+      <input id="tk" placeholder="Ticker — oversell to open a short" list="myStocks" autocomplete="off" />
       <datalist id="myStocks">${MY_HOLDINGS.map((h) => `<option value="${h.ticker}">${h.ticker} · ${h.shares} sh</option>`).join("")}</datalist>
       <input id="qty" type="number" step="any" placeholder="Shares" />
       <input id="px" type="number" step="any" placeholder="Price" />
@@ -102,7 +102,7 @@ function tradePanel() {
     </div>
     <div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <button id="buyBtn" class="btn buy">Buy</button>
-      <button id="sellBtn" class="btn sell">Sell</button>
+      <button id="sellBtn" class="btn sell" title="Sell your shares, or oversell to open/extend a short">Sell / Short</button>
       <span id="tradeMsg" class="muted" style="font-size:13px"></span>
     </div></div>`;
 }
@@ -141,7 +141,10 @@ function wireTradePanel() {
       const r = await fetch(url, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { msg.className = "neg"; msg.textContent = j.error || "Couldn't record that."; return; }
-      msg.className = "pos"; msg.textContent = `✓ ${side === "buy" ? "Bought" : "Sold"} ${qty} ${tk}`;
+      msg.className = "pos";
+      msg.textContent = `✓ ${side === "buy" ? "Bought" : "Sold"} ${qty} ${tk}`
+        + (j.short_shares ? ` · now short ${j.short_shares}` : "")
+        + (j.warning ? ` · ⚠️ ${j.warning}` : "");
       ["tk", "qty", "px", "strike"].forEach((id) => { const el = document.getElementById(id); if (el) el.value = ""; });
       setTimeout(main, 1000);
     } catch { msg.className = "neg"; msg.textContent = "Network error."; }
