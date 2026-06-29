@@ -142,7 +142,10 @@ def _normalize_symbol(raw: str) -> str:
     anything already ending in -USD become Yahoo's `BTC-USD` form; everything
     else — including tickers that are real companies sharing a coin's name — is
     treated as a normal stock/ETF ticker."""
-    s = raw.strip().upper()
+    # Discord autocomplete doesn't constrain input: the field can hold a choice's
+    # label ("AMZU — 226 sh") and submit it verbatim. A real ticker has no spaces,
+    # so take the first token — kills the whole label-leak class.
+    s = (raw.strip().upper().split() or [""])[0]
     if not s or s.endswith("-USD"):
         return s
     if s in CRYPTO_SYMBOLS:
