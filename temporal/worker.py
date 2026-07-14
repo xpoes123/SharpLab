@@ -75,7 +75,19 @@ async def main() -> None:
     await ensure_workflows(client, TASK_QUEUE)
 
     log.info(f"Worker started on task queue: {TASK_QUEUE}")
-    await worker.run()
+    # Re-ensure hourly, not just at startup: a long-running workflow can die
+    # mid-run (crash, non-determinism, retention) while the worker stays up, and
+    # nothing recreated it until the next deploy — that's how MLB polling went
+    # dark for ~5 days (odds-polling-mlb-v2 vanished 2026-07-09, worker up since 07-08).
+    async def reensure_loop() -> None:
+        while True:
+            await asyncio.sleep(3600)
+            try:
+                await ensure_workflows(client, TASK_QUEUE)
+            except Exception as e:  # ponytail: never let re-ensure kill the worker
+                log.warning(f"periodic re-ensure failed: {e!r}")
+
+    await asyncio.gather(worker.run(), reensure_loop())
 
 
 if __name__ == "__main__":
