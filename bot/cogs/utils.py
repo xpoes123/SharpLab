@@ -1,4 +1,7 @@
 """Pure-math utility commands — no API calls, no DB."""
+import ast
+import math
+import operator
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -21,6 +24,43 @@ def _norm_cdf(x: float) -> float:
 
 
 _SPORT_SIGMA = {"nfl": 13.5, "nba": 11.5, "mlb": 1.5}
+
+
+# ── safe arithmetic eval (ast, no builtins) ──────────────────────────────────
+_BINOPS = {
+    ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
+    ast.Div: operator.truediv, ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod, ast.Pow: operator.pow,
+}
+_UNARY = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+_NAMES = {"pi": math.pi, "e": math.e, "tau": math.tau, "inf": math.inf}
+_FUNCS = {
+    n: getattr(math, n) for n in (
+        "sqrt", "log", "log2", "log10", "exp", "sin", "cos", "tan",
+        "asin", "acos", "atan", "floor", "ceil", "factorial", "gcd", "hypot",
+    )
+}
+_FUNCS.update(abs=abs, round=round, min=min, max=max)
+
+
+def _safe_eval(expr: str) -> float:
+    """Evaluate an arithmetic expression with no access to builtins/attributes."""
+    def ev(node):
+        if isinstance(node, ast.Constant):
+            if not isinstance(node.value, (int, float)):
+                raise ValueError("only numbers")
+            return node.value
+        if isinstance(node, ast.BinOp) and type(node.op) in _BINOPS:
+            return _BINOPS[type(node.op)](ev(node.left), ev(node.right))
+        if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY:
+            return _UNARY[type(node.op)](ev(node.operand))
+        if isinstance(node, ast.Name) and node.id in _NAMES:
+            return _NAMES[node.id]
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _FUNCS:
+            return _FUNCS[node.func.id](*[ev(a) for a in node.args])
+        raise ValueError("unsupported expression")
+    # ponytail: 2**5000-style pow bombs cost ~ms and reply is capped below; not guarding.
+    return ev(ast.parse(expr, mode="eval").body)
 
 
 def _parse_odds(raw: str) -> tuple[str, float, int, float]:
@@ -479,6 +519,29 @@ class UtilsCog(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     # ── /help ──────────────────────────────────────────────────────────────────
+
+    @app_commands.command(name="calculate", description="Evaluate a math expression, e.g. 2*(3+4)/5")
+    @app_commands.describe(expression="Math expression. Supports + - * / % ** and sqrt/log/sin/… and pi/e")
+    async def calculate(self, interaction: discord.Interaction, expression: str) -> None:
+        try:
+            result = _safe_eval(expression)
+        except Exception:
+            await interaction.response.send_message(f"❌ Can't evaluate `{expression[:100]}`", ephemeral=True)
+            return
+        await interaction.response.send_message(f"`{expression}` = **{result:g}**"[:1900])
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        if message.author.bot or not message.content.startswith("="):
+            return
+        expr = message.content[1:].strip()
+        if not expr:
+            return
+        try:
+            result = _safe_eval(expr)
+        except Exception:
+            return  # not a valid expression — stay silent, it might just be normal chat
+        await message.reply(f"**{result:g}**", mention_author=False)
 
     @app_commands.command(name="help", description="List all SharpLab commands")
     async def help(self, interaction: discord.Interaction) -> None:
