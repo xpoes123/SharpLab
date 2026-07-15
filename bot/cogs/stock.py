@@ -1300,6 +1300,67 @@ def _render_equity_curve_png(
     return buf.getvalue()
 
 
+async def _intraday_png(symbol: str, prev_close: float | None) -> bytes | None:
+    """Fetch today's intraday prices and render a Tokyo-Night line chart PNG.
+    Returns None if there's not enough data to plot. Sync work runs in executor."""
+    import yfinance as yf
+
+    def _work() -> bytes | None:
+        df = yf.download(
+            tickers=symbol, period="1d", interval="5m",
+            auto_adjust=False, progress=False, threads=False,
+        )
+        if df is None or df.empty:
+            return None
+        close = df["Close"]
+        if hasattr(close, "columns"):  # multi-index when yfinance wraps single ticker
+            close = close.iloc[:, 0]
+        close = close.dropna()
+        if len(close) < 2:
+            return None
+        xs = list(close.index.to_pydatetime())
+        ys = [float(v) for v in close.values]
+
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+
+        base = prev_close if prev_close else ys[0]
+        up = ys[-1] >= base
+        line = "#9ece6a" if up else "#f7768e"
+
+        fig, ax = plt.subplots(figsize=(9, 4.0), dpi=110)
+        fig.patch.set_facecolor("#1a1b26")
+        ax.set_facecolor("#1a1b26")
+        ax.plot(xs, ys, color=line, linewidth=2.0)
+        ax.fill_between(xs, ys, min(ys), color=line, alpha=0.12)
+        if prev_close:
+            ax.axhline(prev_close, color="#565f89", linewidth=1.0, linestyle="--")
+
+        ax.set_title(f"{symbol} — Today", color="#c0caf5", fontsize=14, pad=12)
+        for spine in ("top", "right"):
+            ax.spines[spine].set_visible(False)
+        for spine in ("left", "bottom"):
+            ax.spines[spine].set_color("#414868")
+        ax.tick_params(colors="#a9b1d6", labelsize=9)
+        ax.grid(True, color="#292e42", linewidth=0.6)
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"${v:,.2f}"))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+        fig.autofmt_xdate(rotation=0, ha="center")
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", facecolor=fig.get_facecolor())
+        plt.close(fig)
+        return buf.getvalue()
+
+    try:
+        return await asyncio.get_running_loop().run_in_executor(None, _work)
+    except Exception as e:
+        log.warning(f"intraday chart failed for {symbol}: {e}")
+        return None
+
+
 # ── Benchmark (S&P 500) ──────────────────────────────────────────────────────
 
 _spy_cache: dict = {"at": None, "series": None}
@@ -2984,7 +3045,15 @@ class StockCog(commands.Cog):
             )
 
         embed.add_field(name="Yahoo Finance", value=f"[Open ↗]({url})", inline=False)
-        await interaction.followup.send(embed=embed)
+
+        png = await _intraday_png(symbol, prev)
+        if png:
+            embed.set_image(url="attachment://intraday.png")
+            await interaction.followup.send(
+                embed=embed, file=discord.File(io.BytesIO(png), filename="intraday.png")
+            )
+        else:
+            await interaction.followup.send(embed=embed)
 
     # ── /stock profile ───────────────────────────────────────────────────────
 
