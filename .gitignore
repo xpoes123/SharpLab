@@ -13,5 +13,9 @@ wheels/
 .env
 data/
 
+# Local data — not for tracking
+backups/
+discord_chat/
+
 # deploy announcer marker (VPS-local)
 .last_announced_sha
