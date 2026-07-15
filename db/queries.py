@@ -3565,13 +3565,30 @@ async def get_day_realized_pnl(discord_user: str, since_iso: str) -> float:
     closed against. since_iso must use the same '+00:00' UTC format as executed_at
     for the lexical comparison to be correct."""
     total = 0.0
+    prev_closes = {t: q.get("prev_close") for t, q in (await get_all_ticker_quotes()).items()}
 
     by_ticker: dict[str, list[dict]] = {}
     for t in await get_stock_trades(discord_user):
         by_ticker.setdefault(t["ticker"], []).append(t)
-    for ts in by_ticker.values():
+    for tk, ts in by_ticker.items():
         before = [t for t in ts if t["executed_at"] < since_iso]
-        total += _aggregate_trades(ts)["realized_pnl"] - _aggregate_trades(before)["realized_pnl"]
+        today = [t for t in ts if t["executed_at"] >= since_iso]
+        prev = prev_closes.get(tk.upper())
+        if prev:
+            # Value today's closes from yesterday's close, not from cost basis: a sale
+            # should book only TODAY's move — the rest of the P/L was already counted
+            # on the days it happened. Collapse the start-of-day position into one lot
+            # priced at prev_close, then replay today's trades on top.
+            start = _aggregate_trades(before)
+            synth = [] if start["closed"] else [{
+                "side": "buy" if start["shares"] > 0 else "sell",
+                "shares": abs(start["shares"]), "price": prev, "executed_at": since_iso,
+            }]
+            total += _aggregate_trades(synth + today)["realized_pnl"]
+        else:
+            # ponytail: no warm prev_close for this ticker → fall back to cost-basis
+            # realized (the old behavior). Rare; add a prev_close source if it bites.
+            total += _aggregate_trades(ts)["realized_pnl"] - _aggregate_trades(before)["realized_pnl"]
 
     by_spec: dict[tuple, list[dict]] = {}
     for t in await get_option_trades(discord_user):
