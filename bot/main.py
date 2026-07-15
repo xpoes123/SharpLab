@@ -14,6 +14,12 @@ from shared.log_config import setup_logging
 load_dotenv()
 setup_logging()
 
+# yfinance caches timezones in a sqlite DB under $HOME/.cache by default, but
+# systemd runs us with HOME unset → "unable to open database file" (breaks
+# /stock movers and any batch download). Point it at our writable data/ dir.
+import yfinance as yf  # noqa: E402
+yf.set_tz_cache_location(os.path.join(os.getcwd(), "data", "yf_cache"))
+
 log = logging.getLogger(__name__)
 
 # Game commands that must not be started inside threads (they create their own threads)
