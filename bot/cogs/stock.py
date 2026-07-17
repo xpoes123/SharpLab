@@ -2679,14 +2679,17 @@ class StockCog(commands.Cog):
                 await queries.set_bot_setting(_EARNINGS_SETTING, today_iso)
                 return
 
-            # Map each open-position ticker → the users holding it, so we can @-ping
-            # holders about THEIR earnings (any market cap), not just flag with 📍.
+            # 📍 flag = held by anyone; pings go ONLY to opted-in holders (/stock
+            # alerts on) — earnings pings are opt-in, same toggle as swing alerts.
+            optin = await queries.get_stock_alert_optin_users()
+            held: set[str] = set()
             held_by: dict[str, list[str]] = {}
             for uid, plist in (await queries.get_all_stock_positions()).items():
                 for p in plist:
                     if not p.get("closed") and p.get("shares"):
-                        held_by.setdefault(p["ticker"], []).append(uid)
-            held = set(held_by)
+                        held.add(p["ticker"])
+                        if uid in optin:
+                            held_by.setdefault(p["ticker"], []).append(uid)
             MC_FLOOR, CAP = 2e9, 18   # notable large-caps only (≥$2B); keep it readable
 
             def group_lines(items: list[dict]) -> list[str]:
@@ -2873,8 +2876,8 @@ class StockCog(commands.Cog):
         except ValueError:
             return DEFAULT_STOCK_ALERTS_CHANNEL_ID
 
-    @stock.command(name="alerts", description="Opt in/out of portfolio swing alerts on your holdings")
-    @app_commands.describe(enabled="On to get pinged when a holding swings ≥10% on the day; off to stop (default: off)")
+    @stock.command(name="alerts", description="Opt in/out of swing + earnings alerts on your holdings")
+    @app_commands.describe(enabled="On to get pinged on ≥10% daily swings and when a holding reports earnings; off to stop (default: off)")
     @app_commands.choices(enabled=[
         app_commands.Choice(name="on", value="on"),
         app_commands.Choice(name="off", value="off"),
@@ -2882,8 +2885,8 @@ class StockCog(commands.Cog):
     async def stock_alerts(self, interaction: discord.Interaction, enabled: app_commands.Choice[str]) -> None:
         on = enabled.value == "on"
         await queries.set_stock_alerts_enabled(str(interaction.user.id), on)
-        msg = ("✅ You'll get pinged when one of your holdings swings ≥10% on the day."
-               if on else "✅ Portfolio swing alerts are off for you.")
+        msg = ("✅ You'll get pinged on ≥10% daily swings and when a holding reports earnings."
+               if on else "✅ Swing + earnings alerts are off for you.")
         await interaction.response.send_message(msg, ephemeral=True)
 
     # ── Rohan's picks ─────────────────────────────────────────────────────────

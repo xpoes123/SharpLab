@@ -73,9 +73,18 @@ HOME_EMOJI = "🏠"
 SPORT_EMOJI = {"nba": "🏀", "wnba": "🏀", "mlb": "⚾"}
 
 # Per-sport daily pick'em cap. Sports not listed post their whole slate. MLB runs
-# ~15 games/day, so we keep only the 5 marquee games (biggest favorites).
+# ~15 games/day, so we keep only 5: any game with a pinned team (below) first,
+# then filled out with the marquee (biggest-favorite) games.
 _SPORT_DAILY_CAP = {"mlb": 5}
 PICKEM_SPORTS = ("nba", "wnba", "mlb")
+# MLB teams whose games are always kept in the daily slate. Matched as a substring
+# of either team's full name (e.g. "red sox" ⊂ "Boston Red Sox").
+_PINNED_MLB = ("brewers", "red sox", "mets", "rockies", "dodgers")
+
+
+def _pinned_mlb(game) -> bool:
+    names = f"{game.home_team} {game.away_team}".lower()
+    return any(p in names for p in _PINNED_MLB)
 
 MIN_PICKS_FOR_ACCURACY = 20
 COLOUR = 0x1ABC9C
@@ -574,13 +583,21 @@ class PickemCog(commands.Cog):
             if cap is None or len(games) <= cap:
                 slate += games
                 continue
+            # Pinned-team games are always kept (MLB); the rest of the slots go to
+            # the most-lopsided ("marquee") games.
+            pinned = sorted((g for g in games if sport == "mlb" and _pinned_mlb(g)),
+                            key=lambda g: g.start_time_utc_iso)
+            pinned_ids = {g.game_id for g in pinned}
             scored = []
             for g in games:
+                if g.game_id in pinned_ids:
+                    continue
                 probs = await _win_probs(g.game_id)
                 dev = abs(probs[0] - 0.5) if probs else -1.0  # no odds → fill last
                 scored.append((dev, g.start_time_utc_iso, g))
             scored.sort(key=lambda t: (-t[0], t[1]))  # most lopsided, then earliest
-            slate += [g for _, _, g in scored[:cap]]
+            fill = max(0, cap - len(pinned))
+            slate += pinned[:cap] + [g for _, _, g in scored[:fill]]
 
         slate.sort(key=lambda g: g.start_time_utc_iso)
         return slate
