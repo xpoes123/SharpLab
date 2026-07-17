@@ -1487,6 +1487,27 @@ async def get_casino_stats_by_game(discord_user: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def get_casino_net_since(since_iso: str) -> list[dict]:
+    """Per-user casino net (payout − wagered), wagered, and rounds since a UTC ISO
+    timestamp. For the weekly recap. Ordered by net desc."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT discord_user,
+                   SUM(payout) - SUM(wagered) AS net,
+                   SUM(wagered) AS wagered,
+                   COUNT(id) AS rounds
+            FROM casino_history
+            WHERE played_at >= ?
+            GROUP BY discord_user
+            ORDER BY net DESC
+            """,
+            (since_iso,),
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+
 async def get_casino_leaderboard(limit: int = 10) -> list[dict]:
     """Top casino users by current balance, with net profit from history."""
     async with aiosqlite.connect(DB_PATH) as db:
