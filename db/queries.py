@@ -3483,10 +3483,11 @@ async def get_reaction_roles_for_message(message_id: str) -> list[dict]:
 
 # ── Stock cash positions ────────────────────────────────────────────────────
 # A per-user cash balance. Buys debit it and sells credit it (see the /stock
-# buy|sell and /option handlers, which call adjust_stock_cash with
-# allow_negative=True so a buy bigger than the balance goes into the red).
-# /stock cash still lets users set/deposit/withdraw manually. An account's value
-# = positions (stocks + options) + cash.
+# buy|sell and /option handlers). Trade-driven debits are FLOORED AT 0, not
+# overdrafted: most users never /stock cash deposit, so a buy bigger than the
+# balance is assumed to be funded by money they already had — cash only becomes
+# meaningful once selling generates proceeds. /stock cash lets users
+# set/deposit/withdraw manually. An account's value = positions (stocks + options) + cash.
 
 
 async def get_stock_cash(discord_user: str) -> float:

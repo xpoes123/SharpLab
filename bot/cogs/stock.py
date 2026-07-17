@@ -3195,9 +3195,10 @@ class StockCog(commands.Cog):
             return
         uid = str(interaction.user.id)
         await queries.add_realized_adjustment(uid, amount, note)
-        new_cash = await queries.adjust_stock_cash(uid, amount, allow_negative=True)
-        cash_line = f"\nCash: **${new_cash:,.2f}**" + (
-            " ⚠️ you're in the red" if new_cash < 0 else "")
+        # Cash floored at 0 (a realized loss still books to P/L via the adjustment
+        # above, but never drives the cash balance negative).
+        new_cash = await queries.adjust_stock_cash(uid, amount)
+        cash_line = f"\nCash: **${new_cash:,.2f}**"
         await interaction.response.send_message(
             f"Logged realized {'gain' if amount > 0 else 'loss'} of "
             f"`{_fmt_pnl(amount)}` to your P/L and cash.{cash_line}",
@@ -3265,14 +3266,17 @@ class StockCog(commands.Cog):
         await queries.add_stock_trade(
             str(interaction.user.id), symbol, "buy", shares, price, executed_at, notes
         )
+        # Floored at 0: a buy spends available cash, and any excess is funded by
+        # money the user already had (most people never /stock cash deposit). Cash
+        # only becomes meaningful once selling generates proceeds — so a buy never
+        # drives the balance negative (which used to make account value go negative).
         new_cash = await queries.adjust_stock_cash(
-            str(interaction.user.id), -(shares * price), allow_negative=True)
+            str(interaction.user.id), -(shares * price))
         await _check_achievements(interaction)
         holding = await queries.get_stock_holding(str(interaction.user.id), symbol)
         position_line = _fmt_position(holding)
         realized_line = f" · realized P/L `{_fmt_pnl(realized)}`" if covered > 1e-9 else ""
-        cash_line = f"\nCash: **${new_cash:,.2f}**" + (
-            " ⚠️ you're in the red" if new_cash < 0 else "")
+        cash_line = f"\nCash: **${new_cash:,.2f}**"
         await interaction.followup.send(
             f"Recorded **{verb}** `{symbol}` — {shares:g} sh @ `{price:,.2f}` "
             f"(−${shares * price:,.2f}){realized_line}.\n{position_line}{cash_line}{warn}",
@@ -3588,8 +3592,9 @@ class StockCog(commands.Cog):
             executed_at, notes,
         )
         # Premium flows through cash: buying debits, selling/writing credits.
+        # Floored at 0 (like /stock buy) — a debit never drives cash negative.
         cash_flow = (-1 if side == "buy" else 1) * contracts * premium * OPTION_MULTIPLIER
-        new_cash = await queries.adjust_stock_cash(uid, cash_flow, allow_negative=True)
+        new_cash = await queries.adjust_stock_cash(uid, cash_flow)
 
         after = await queries.get_option_trades(uid, sym)
         agg = queries._aggregate_option_trades([t for t in after if _match(t)])
