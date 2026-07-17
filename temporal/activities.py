@@ -41,7 +41,7 @@ ESPN_INJURIES_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nb
 
 # ── Sport config maps ────────────────────────────────────────────────────────
 
-ODDS_API_SPORT_KEY = {"nba": "basketball_nba", "mlb": "baseball_mlb"}
+ODDS_API_SPORT_KEY = {"nba": "basketball_nba", "mlb": "baseball_mlb", "wnba": "basketball_wnba"}
 KALSHI_SERIES = {"nba": "KXNBAGAME", "mlb": "KXMLBGAME"}
 ESPN_SCORES_URL = {
     "nba": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
@@ -257,18 +257,20 @@ def _parse_player_props(game_id: str, captured_at: str, data: dict) -> list[dict
 
 
 @activity.defn
-async def fetch_nba_player_props(game_ids: list[str]) -> int:
-    """Fetch + upsert NBA player props for the given games (one Odds API call per
-    game, billed per market). Returns the number of prop lines stored."""
+async def fetch_nba_player_props(game_ids: list[str], sport: str = "nba") -> int:
+    """Fetch + upsert player props for the given games (one Odds API call per
+    game, billed per market). Same market keys serve NBA and WNBA; The Odds API
+    just omits any a sport doesn't offer. Returns the number of prop lines stored."""
     if not ODDS_API_KEY or not game_ids:
         return 0
+    sport_key = ODDS_API_SPORT_KEY.get(sport, "basketball_nba")
     captured_at = datetime.now(timezone.utc).isoformat()
     total = 0
     async with httpx.AsyncClient() as client:
         for gid in game_ids:
             try:
                 resp = await client.get(
-                    f"{ODDS_API_BASE}/sports/basketball_nba/events/{gid}/odds",
+                    f"{ODDS_API_BASE}/sports/{sport_key}/events/{gid}/odds",
                     params={"apiKey": ODDS_API_KEY, "regions": "us",
                             "markets": NBA_PROP_MARKETS, "oddsFormat": "american"},
                     timeout=25.0,
@@ -299,19 +301,21 @@ async def games_with_open_prop_bets() -> list[str]:
 
 
 @activity.defn
-async def fetch_nba_player_prop_alts(game_ids: list[str]) -> int:
+async def fetch_nba_player_prop_alts(game_ids: list[str], sport: str = "nba") -> int:
     """Fetch + upsert the full ALTERNATE-line prop ladders for the given games (one
     Odds API call per game, billed per alt market). Stored under the base market key
-    (player_assists) with the line in the PK, so CLV can read the exact alt price."""
+    (player_assists) with the line in the PK, so CLV can read the exact alt price.
+    Same alt market keys serve NBA and WNBA."""
     if not ODDS_API_KEY or not game_ids:
         return 0
+    sport_key = ODDS_API_SPORT_KEY.get(sport, "basketball_nba")
     captured_at = datetime.now(timezone.utc).isoformat()
     total = 0
     async with httpx.AsyncClient() as client:
         for gid in game_ids:
             try:
                 resp = await client.get(
-                    f"{ODDS_API_BASE}/sports/basketball_nba/events/{gid}/odds",
+                    f"{ODDS_API_BASE}/sports/{sport_key}/events/{gid}/odds",
                     params={"apiKey": ODDS_API_KEY, "regions": "us",
                             "markets": NBA_PROP_ALT_MARKETS, "oddsFormat": "american"},
                     timeout=25.0,

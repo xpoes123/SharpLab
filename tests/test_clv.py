@@ -10,6 +10,39 @@ from shared.odds_utils import (
     _PP_PER_HALF_POINT_SPREAD,
     _PP_PER_HALF_POINT_TOTAL,
 )
+from shared.prop_clv import prop_clv_at_line
+
+
+class TestWnbaPropClv:
+    """prop_clv.py is sport-agnostic; this exercises it on WNBA-shaped capture rows
+    (the merged main + alt ladder that queries.get_prop_close_rows returns)."""
+
+    def test_wnba_over_beats_close_at_exact_line(self):
+        # Bet Over 18.5 pts at +100 (50% implied). Two books close the exact line
+        # two-way; de-vigged fair Over prob > 50% → positive CLV.
+        rows = [
+            {"source": "williamhill_us", "line": 18.5, "over_odds": -130, "under_odds": +110},
+            {"source": "fanatics", "line": 18.5, "over_odds": -125, "under_odds": +105},
+        ]
+        res = prop_clv_at_line("over", 18.5, +100, rows)
+        assert res is not None
+        assert res["devigged"] is True
+        assert res["n_books"] == 2
+        assert res["bet_implied"] == pytest.approx(0.5, abs=0.01)
+        assert res["clv"] > 0  # fair Over ~55% vs 50% bet-implied
+
+    def test_wnba_no_price_at_line_returns_none(self):
+        # Only a 17.5 line captured; a bet at 18.5 has no real close → None (never faked).
+        rows = [{"source": "fanatics", "line": 17.5, "over_odds": -110, "under_odds": -110}]
+        assert prop_clv_at_line("over", 18.5, -110, rows) is None
+
+    def test_wnba_alt_line_one_sided_uses_vigged_implied(self):
+        # Alt ladder often prices only one side. Falls back to that side's vigged implied.
+        rows = [{"source": "fanatics", "line": 24.5, "over_odds": +250, "under_odds": None}]
+        res = prop_clv_at_line("over", 24.5, +300, rows)
+        assert res is not None
+        assert res["devigged"] is False
+        assert res["close_prob"] == pytest.approx(american_to_prob(+250), abs=1e-6)
 
 
 # ── side_is_home ──────────────────────────────────────────────────────────────
