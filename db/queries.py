@@ -3381,6 +3381,16 @@ async def get_stock_holding(discord_user: str, ticker: str) -> dict | None:
     return {"ticker": ticker.upper(), **agg}
 
 
+async def get_ticker_position(discord_user: str, ticker: str) -> dict | None:
+    """Aggregate for a single ticker incl. realized_pnl, whether it's open OR fully
+    closed. Unlike get_stock_holding (which returns None once closed), this keeps the
+    realized P/L of a sold-out position — for /stock lookup. None only if never traded."""
+    trades = await get_stock_trades(discord_user, ticker)
+    if not trades:
+        return None
+    return {"ticker": ticker.upper(), **_aggregate_trades(trades)}
+
+
 async def get_stock_positions_full(discord_user: str) -> list[dict]:
     """All tickers the user has touched, open OR closed. Each row carries
     realized_pnl; closed rows have shares=0 but still report their realized P/L."""
