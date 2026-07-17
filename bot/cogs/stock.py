@@ -3066,24 +3066,26 @@ class StockCog(commands.Cog):
                 inline=True,
             )
 
-        holding = await queries.get_stock_holding(str(interaction.user.id), symbol)
-        if holding:
-            shares = holding["shares"]
-            dca = holding["dca_price"]
-            cost = shares * dca
-            value = shares * price
-            pl = value - cost
-            pl_pct = (pl / abs(cost) * 100) if cost else 0.0
-            qty = f"short `{abs(shares):g}`" if shares < 0 else f"`{shares:g}`"
-            embed.add_field(
-                name="Your Position",
-                value=(
-                    f"{qty} sh @ DCA `{dca:,.2f}`\n"
-                    f"Value: `{_fmt_money(value, quote['currency'])}`\n"
-                    f"Unrealized P/L: `{_fmt_change(pl, pl_pct)}`"
-                ),
-                inline=False,
-            )
+        pos = await queries.get_ticker_position(str(interaction.user.id), symbol)
+        if pos:
+            shares = pos["shares"]
+            realized = pos["realized_pnl"]
+            lines: list[str] = []
+            if shares != 0:   # still holding — show the open leg + unrealized
+                dca = pos["dca_price"]
+                cost = shares * dca
+                value = shares * price
+                pl = value - cost
+                pl_pct = (pl / abs(cost) * 100) if cost else 0.0
+                qty = f"short `{abs(shares):g}`" if shares < 0 else f"`{shares:g}`"
+                lines.append(f"{qty} sh @ DCA `{dca:,.2f}`")
+                lines.append(f"Value: `{_fmt_money(value, quote['currency'])}`")
+                lines.append(f"Unrealized P/L: `{_fmt_change(pl, pl_pct)}`")
+            if abs(realized) > 1e-9:   # realized from any shares sold (incl. sold-out)
+                lines.append(f"Realized P/L: `{_fmt_pnl(realized)}`")
+            if lines:
+                title = "Your Position" if shares != 0 else "Your History"
+                embed.add_field(name=title, value="\n".join(lines), inline=False)
 
         embed.add_field(name="Yahoo Finance", value=f"[Open ↗]({url})", inline=False)
 
