@@ -2679,7 +2679,14 @@ class StockCog(commands.Cog):
                 await queries.set_bot_setting(_EARNINGS_SETTING, today_iso)
                 return
 
-            held = {h["ticker"] for h in await queries.get_all_stock_holdings()}
+            # Map each open-position ticker → the users holding it, so we can @-ping
+            # holders about THEIR earnings (any market cap), not just flag with 📍.
+            held_by: dict[str, list[str]] = {}
+            for uid, plist in (await queries.get_all_stock_positions()).items():
+                for p in plist:
+                    if not p.get("closed") and p.get("shares"):
+                        held_by.setdefault(p["ticker"], []).append(uid)
+            held = set(held_by)
             MC_FLOOR, CAP = 2e9, 18   # notable large-caps only (≥$2B); keep it readable
 
             def group_lines(items: list[dict]) -> list[str]:
@@ -2700,13 +2707,31 @@ class StockCog(commands.Cog):
                 sections.append("🌙 **Tonight · after close**\n" + "\n".join(tl))
             if ml:
                 sections.append("🌅 **Tomorrow · before open**\n" + "\n".join(ml))
-            if not sections:
+
+            # Holder pings: every held ticker reporting (any cap), @-mentioning owners.
+            # Must live in message CONTENT — mentions inside an embed don't notify.
+            def holder_lines(items: list[dict], when: str) -> list[str]:
+                out = []
+                for e in items:
+                    us = held_by.get(e["symbol"])
+                    if us:
+                        out.append(f"📍 **{e['symbol']}** reports {when} — "
+                                   + " ".join(f"<@{u}>" for u in us))
+                return out
+            pings = (holder_lines(tonight, "tonight after close")
+                     + holder_lines(morning, "tomorrow before open"))
+            holder_content = ("**Earnings for your holdings:**\n" + "\n".join(pings))[:1900] if pings else None
+
+            if not sections and not holder_content:
                 await queries.set_bot_setting(_EARNINGS_SETTING, today_iso)
                 return
-            embed = discord.Embed(title="📅 Earnings on deck",
-                                  description="\n\n".join(sections), colour=0xE0AF68)
-            embed.set_footer(text="📍 = held in the server · large-caps only · via Nasdaq")
-            await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+            embed = None
+            if sections:
+                embed = discord.Embed(title="📅 Earnings on deck",
+                                      description="\n\n".join(sections), colour=0xE0AF68)
+                embed.set_footer(text="📍 = held in the server · large-caps only · via Nasdaq")
+            await channel.send(content=holder_content, embed=embed,
+                               allowed_mentions=discord.AllowedMentions(users=True))
             await queries.set_bot_setting(_EARNINGS_SETTING, today_iso)
         except Exception:
             log.exception("earnings digest failed")
