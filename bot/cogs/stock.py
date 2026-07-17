@@ -71,6 +71,14 @@ def _swing_pct(price: float, prev_close: float | None) -> float:
     return (price - prev_close) / prev_close * 100.0
 
 
+def _period_return_pct(base: float | None, change: float) -> float | None:
+    """Percent return over a period, or None when the base is non-positive. A
+    negative/zero starting equity (overdrafted cash, net-short book) makes a
+    percentage meaningless and — worse — flips its sign, so a real gain reads as a
+    huge negative %. `if base` isn't enough: a negative base is truthy."""
+    return (change / base * 100) if base and base > 0 else None
+
+
 def _market_today() -> str:
     """Today's date in US/Eastern (the market's calendar day). Used for the daily
     swing-alert dedup so the reset lands at ET midnight — NOT at UTC midnight, which
@@ -1436,7 +1444,9 @@ def _sharpe_ratio(values: list[float]) -> float | None:
 def _benchmark_stats(points: list[tuple], bench: list[tuple] | None) -> dict:
     """Alpha vs SPY and Sharpe over the window covered by `points`."""
     out: dict = {"alpha": None, "sharpe": _sharpe_ratio([v for _, v in points])}
-    if bench and len(bench) >= 2 and points[0][1] and bench[0][1]:
+    # Both bases must be positive — a negative starting equity flips the return's
+    # sign and yields a nonsense alpha (see _period_return_pct).
+    if bench and len(bench) >= 2 and points[0][1] > 0 and bench[0][1] > 0:
         port_ret = points[-1][1] / points[0][1] - 1
         spy_ret = bench[-1][1] / bench[0][1] - 1
         out["alpha"] = (port_ret - spy_ret) * 100
@@ -1489,14 +1499,16 @@ async def _build_graph(target: discord.abc.User, data: dict | None = None):
 
     first_v, last_v = points[0][1], points[-1][1]
     change = last_v - first_v
-    pct = (change / first_v * 100) if first_v else 0.0
+    pct = _period_return_pct(first_v, change)
     color = 0x57F287 if change >= 0 else 0xED4245
     embed = discord.Embed(title=f"{target.display_name}'s Portfolio Value", color=color)
     embed.set_image(url="attachment://portfolio.png")
     span_days = (points[-1][0] - points[0][0]).days or 1
     embed.add_field(name="Now", value=f"`{_fmt_money(last_v)}`", inline=True)
+    # No percent when the window started at a non-positive value — show $ only.
+    change_str = _fmt_change(change, pct) if pct is not None else _fmt_pnl(change)
     embed.add_field(name=f"Change ({span_days}d)",
-                    value=f"`{_fmt_change(change, pct)}`", inline=True)
+                    value=f"`{change_str}`", inline=True)
     if stats["alpha"] is not None:
         verb = "beating" if stats["alpha"] >= 0 else "trailing"
         embed.add_field(name="vs S&P 500",
@@ -1719,14 +1731,15 @@ def _render_leaderboard_embed(rows: list[dict], period: str, names: dict[str, st
                 f"`{_pct_str(r['pct'])}` on `{_fmt_money(r['invested'])}`"
             )
         elif period == "daily":
-            base = r["day_base"]
-            pct = (r["day_gain"] / base * 100) if base else 0.0
-            lines.append(f"{medal} **{name}** · `{_fmt_pnl(r['day_gain'])}` · `{_pct_str(pct)}`")
+            pct = _period_return_pct(r["day_base"], r["day_gain"])
+            pct_txt = _pct_str(pct) if pct is not None else "—"
+            lines.append(f"{medal} **{name}** · `{_fmt_pnl(r['day_gain'])}` · `{pct_txt}`")
         else:
             base = r["week_base"] if period == "weekly" else r["ytd_base"]
             gain = r["account_value"] - base
-            pct = (gain / base * 100) if base else 0.0
-            lines.append(f"{medal} **{name}** · `{_fmt_pnl(gain)}` · `{_pct_str(pct)}`")
+            pct = _period_return_pct(base, gain)
+            pct_txt = _pct_str(pct) if pct is not None else "—"
+            lines.append(f"{medal} **{name}** · `{_fmt_pnl(gain)}` · `{pct_txt}`")
 
     color = 0x5865F2
     embed = discord.Embed(

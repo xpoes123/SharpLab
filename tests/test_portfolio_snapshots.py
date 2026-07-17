@@ -476,3 +476,24 @@ class TestLeaderboardRender:
         ]
         names = {"a": "a", "b": "b"}
         assert _order(stock._render_leaderboard_embed(rows, "ytd", names)) == ["a", "b"]
+
+
+# ── negative starting-equity guard (aitik bug: +$17k but -1360%) ──────────────
+
+def test_period_return_pct_negative_base_returns_none():
+    # base < 0 (overdrafted equity) → a real gain must NOT read as a negative %.
+    assert stock._period_return_pct(-1266.72, 17232.53) is None
+    assert stock._period_return_pct(0.0, 100.0) is None
+
+
+def test_period_return_pct_positive_base_normal():
+    assert stock._period_return_pct(1000.0, 100.0) == pytest.approx(10.0)
+
+
+def test_benchmark_stats_no_alpha_when_base_negative():
+    # portfolio series starts negative → alpha undefined, not a garbage number.
+    dt0 = datetime(2026, 6, 29, tzinfo=timezone.utc)
+    dt1 = datetime(2026, 7, 17, tzinfo=timezone.utc)
+    points = [(dt0, -1266.72), (dt1, 15965.81)]
+    bench = [(dt0, 1000.0), (dt1, 1050.0)]
+    assert stock._benchmark_stats(points, bench)["alpha"] is None
