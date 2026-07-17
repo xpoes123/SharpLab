@@ -1,6 +1,7 @@
 """Cash now moves with trades: buys debit, sells credit, options too (premium×100).
-Overdraft is allowed (warn-but-allow), and manual realized-gain injection credits
-cash while logging to the realized adjustment total."""
+Trade-driven debits are floored at 0 (a buy bigger than the balance is funded by
+money the user already had — cash matters once selling generates proceeds), and
+manual realized-gain injection credits cash while logging to the realized total."""
 from __future__ import annotations
 
 import asyncio
@@ -37,20 +38,31 @@ def test_adjust_allows_negative_when_requested(tmp_db):
 
 
 def test_buy_then_sell_cash_round_trip(tmp_db):
-    # Mirror the command flow: a buy debits cost, a sell credits proceeds.
+    # Mirror the command flow: a buy debits cost (floored at 0), a sell credits.
     _run(_queries.set_stock_cash("u1", 1000.0))
-    _run(_queries.adjust_stock_cash("u1", -(10 * 100.0), allow_negative=True))  # buy 10 @100
+    _run(_queries.adjust_stock_cash("u1", -(10 * 100.0)))  # buy 10 @100
     assert _run(_queries.get_stock_cash("u1")) == 0.0
-    _run(_queries.adjust_stock_cash("u1", 10 * 150.0, allow_negative=True))      # sell 10 @150
+    _run(_queries.adjust_stock_cash("u1", 10 * 150.0))      # sell 10 @150
     assert _run(_queries.get_stock_cash("u1")) == 1500.0  # +500 realized gain landed in cash
 
 
+def test_buy_over_balance_floors_no_deposit(tmp_db):
+    # The never-deposit model: cash starts at 0, a buy spends "prior capital" and
+    # must NOT drive cash negative — otherwise account value goes negative and the
+    # return-% math flips sign. Selling then creates real, positive proceeds.
+    assert _run(_queries.get_stock_cash("u1")) == 0.0
+    _run(_queries.adjust_stock_cash("u1", -(10 * 100.0)))   # buy 10 @100 on $0 cash
+    assert _run(_queries.get_stock_cash("u1")) == 0.0       # floored, not −1000
+    _run(_queries.adjust_stock_cash("u1", 10 * 150.0))      # sell 10 @150
+    assert _run(_queries.get_stock_cash("u1")) == 1500.0
+
+
 def test_option_premium_moves_cash_x100(tmp_db):
-    # Buy 2 contracts @ $3.00 → −$600; sell 2 @ $5.00 → +$1000.
+    # Buy 2 contracts @ $3.00 → −$600 (floored); sell 2 @ $5.00 → +$1000.
     _run(_queries.set_stock_cash("u1", 1000.0))
-    _run(_queries.adjust_stock_cash("u1", -(2 * 3.0 * 100), allow_negative=True))
+    _run(_queries.adjust_stock_cash("u1", -(2 * 3.0 * 100)))
     assert _run(_queries.get_stock_cash("u1")) == 400.0
-    _run(_queries.adjust_stock_cash("u1", 2 * 5.0 * 100, allow_negative=True))
+    _run(_queries.adjust_stock_cash("u1", 2 * 5.0 * 100))
     assert _run(_queries.get_stock_cash("u1")) == 1400.0
 
 
