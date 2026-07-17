@@ -45,6 +45,7 @@ ODDS_API_SPORT_KEY = {"nba": "basketball_nba", "mlb": "baseball_mlb", "wnba": "b
 KALSHI_SERIES = {"nba": "KXNBAGAME", "mlb": "KXMLBGAME"}
 ESPN_SCORES_URL = {
     "nba": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+    "wnba": "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/scoreboard",
     "mlb": "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard",
 }
 

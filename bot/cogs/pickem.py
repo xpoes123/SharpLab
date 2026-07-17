@@ -70,7 +70,12 @@ _PICKEM_CHANNEL_SETTING = "pickem_channel"
 
 AWAY_EMOJI = "✈️"
 HOME_EMOJI = "🏠"
-SPORT_EMOJI = {"nba": "🏀", "mlb": "⚾"}
+SPORT_EMOJI = {"nba": "🏀", "wnba": "🏀", "mlb": "⚾"}
+
+# Per-sport daily pick'em cap. Sports not listed post their whole slate. MLB runs
+# ~15 games/day, so we keep only the 5 marquee games (biggest favorites).
+_SPORT_DAILY_CAP = {"mlb": 5}
+PICKEM_SPORTS = ("nba", "wnba", "mlb")
 
 MIN_PICKS_FOR_ACCURACY = 20
 COLOUR = 0x1ABC9C
@@ -490,7 +495,7 @@ class PickemCog(commands.Cog):
         self.lock_loop.cancel()
         self.resolve_loop.cancel()
 
-    pickem = app_commands.Group(name="pickem", description="Daily NBA/MLB pick'em")
+    pickem = app_commands.Group(name="pickem", description="Daily NBA/WNBA/MLB pick'em")
 
     async def _channel(self) -> discord.TextChannel | None:
         raw = await queries.get_bot_setting(_PICKEM_CHANNEL_SETTING)
@@ -551,6 +556,35 @@ class PickemCog(commands.Cog):
             embed.add_field(name="How everyone did", value="\n".join(lines)[:1024], inline=False)
         await channel.send(embed=embed)
 
+    async def _slate(self, s_utc: str, e_utc: str) -> list:
+        """Pick'em slate across all sports in [s_utc, e_utc), sorted by tip time.
+        A sport with a daily cap (see _SPORT_DAILY_CAP) keeps only its most lopsided
+        'marquee favorite' games — ranked by distance from a coin flip — with earliest
+        tip breaking ties and filling in when a game has no odds captured yet."""
+        by_sport: dict[str, list] = {}
+        for sport in PICKEM_SPORTS:
+            try:
+                by_sport[sport] = await queries.get_games_in_window(s_utc, e_utc, sport=sport)
+            except Exception:
+                log.exception("pickem: failed to load %s games", sport)
+
+        slate: list = []
+        for sport, games in by_sport.items():
+            cap = _SPORT_DAILY_CAP.get(sport)
+            if cap is None or len(games) <= cap:
+                slate += games
+                continue
+            scored = []
+            for g in games:
+                probs = await _win_probs(g.game_id)
+                dev = abs(probs[0] - 0.5) if probs else -1.0  # no odds → fill last
+                scored.append((dev, g.start_time_utc_iso, g))
+            scored.sort(key=lambda t: (-t[0], t[1]))  # most lopsided, then earliest
+            slate += [g for _, _, g in scored[:cap]]
+
+        slate.sort(key=lambda g: g.start_time_utc_iso)
+        return slate
+
     async def _post_today(self, channel: discord.TextChannel) -> None:
         now_et = datetime.now(ET)
         today = now_et.date().isoformat()
@@ -559,16 +593,10 @@ class PickemCog(commands.Cog):
         s_utc = start.astimezone(timezone.utc).isoformat()
         e_utc = end.astimezone(timezone.utc).isoformat()
 
-        games: list = []
-        for sport in ("nba", "mlb"):
-            try:
-                games += await queries.get_games_in_window(s_utc, e_utc, sport=sport)
-            except Exception:
-                log.exception("pickem: failed to load %s games", sport)
-        games.sort(key=lambda g: g.start_time_utc_iso)
+        games = await self._slate(s_utc, e_utc)
 
         if not games:
-            await channel.send(f"📋 **Daily Pick'em — {today}**\nNo NBA or MLB games on the slate today.")
+            await channel.send(f"📋 **Daily Pick'em — {today}**\nNo games on the slate today.")
             return
 
         await channel.send(
@@ -595,16 +623,10 @@ class PickemCog(commands.Cog):
         s_utc = start.astimezone(timezone.utc).isoformat()
         e_utc = end.astimezone(timezone.utc).isoformat()
 
-        games: list = []
-        for sport in ("nba", "mlb"):
-            try:
-                games += await queries.get_games_in_window(s_utc, e_utc, sport=sport)
-            except Exception:
-                log.exception("pickem: failed to load %s games for %s", sport, date)
-        games.sort(key=lambda g: g.start_time_utc_iso)
+        games = await self._slate(s_utc, e_utc)
 
         if not games:
-            await channel.send(f"📋 **Pick'em — {date}**\nNo NBA or MLB games on the slate for {date}.")
+            await channel.send(f"📋 **Pick'em — {date}**\nNo games on the slate for {date}.")
             return
 
         await channel.send(

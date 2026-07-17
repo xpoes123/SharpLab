@@ -91,6 +91,7 @@ KALSHI_SERIES = {"nba": "KXNBAGAME", "mlb": "KXMLBGAME"}
 
 ESPN_SCORES_URL = {
     "nba": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+    "wnba": "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/scoreboard",
     "mlb": "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard",
 }
 
