@@ -143,11 +143,13 @@ class OddsPollingWorkflow:
                     retry_policy=RetryPolicy(maximum_attempts=3),
                 )
 
-            # ── Step 9: NBA player props (one Odds API call per game) ─────────
-            if sport == "nba" and workflow.patched("nba-player-props"):
+            # ── Step 9: player props (one Odds API call per game) — NBA + WNBA ─
+            # Same market keys and endpoints serve both; the last pre-tip poll is
+            # the closing prop line (upserted, so it overwrites in place).
+            if sport in ("nba", "wnba") and workflow.patched("nba-player-props"):
                 await workflow.execute_activity(
                     fetch_nba_player_props,
-                    game_ids,
+                    args=[game_ids, sport],
                     start_to_close_timeout=timedelta(seconds=600),
                     retry_policy=RetryPolicy(maximum_attempts=2),
                 )
@@ -155,7 +157,7 @@ class OddsPollingWorkflow:
             # ── Step 9b: alt-line ladders, only for games with open prop bets ──
             # (alts cost extra quota per market, so we target games people bet on
             # rather than the whole board; gives exact alt-line CLV, no slope.)
-            if sport == "nba" and workflow.patched("nba-prop-alts"):
+            if sport in ("nba", "wnba") and workflow.patched("nba-prop-alts"):
                 bet_games = await workflow.execute_activity(
                     games_with_open_prop_bets,
                     start_to_close_timeout=timedelta(seconds=20),
@@ -165,7 +167,7 @@ class OddsPollingWorkflow:
                 if alt_targets:
                     await workflow.execute_activity(
                         fetch_nba_player_prop_alts,
-                        alt_targets,
+                        args=[alt_targets, sport],
                         start_to_close_timeout=timedelta(seconds=600),
                         retry_policy=RetryPolicy(maximum_attempts=2),
                     )

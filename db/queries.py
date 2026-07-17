@@ -565,6 +565,38 @@ async def get_player_prop_alts_for_game(game_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def get_prop_close_rows(
+    player: str, market: str, game_date: str, sport: str = "wnba"
+) -> list[dict]:
+    """Captured CLOSING prop rows for one player+market on a given game date, merged
+    main board + alt ladders. Rows come out in exactly the shape
+    shared.prop_clv.prop_clv_at_line expects for its `rows` arg:
+    [{source, line, over_odds, under_odds, captured_at}].
+
+    `game_date` is a 'YYYY-MM-DD' UTC calendar date matched against games.start_time
+    (stored UTC ISO). A US-evening WNBA tip can land on the next UTC day, so pass the
+    UTC date of the tip (or query the adjacent day too if unsure).
+
+    Read-only; intended for external consumers (e.g. vigil) to compute prop CLV off
+    SharpLab's captured closes. The values are the last pre-tip poll per book — the
+    polling loop stops refreshing a game once it tips, so that poll IS the close."""
+    game_sub = (
+        "SELECT game_id FROM games WHERE sport = ? AND substr(start_time, 1, 10) = ?"
+    )
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            f"SELECT source, line, over_odds, under_odds, captured_at FROM player_props "
+            f"  WHERE game_id IN ({game_sub}) AND player = ? AND market = ? "
+            f"UNION ALL "
+            f"SELECT source, line, over_odds, under_odds, captured_at FROM player_prop_alts "
+            f"  WHERE game_id IN ({game_sub}) AND player = ? AND market = ?",
+            (sport, game_date, player, market, sport, game_date, player, market),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
 async def get_games_with_open_prop_bets() -> list[str]:
     """Distinct game_ids that have at least one open player-prop bet (for targeting
     which games' alternate ladders we bother polling)."""
