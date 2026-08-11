@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import random
 from datetime import datetime, timedelta, timezone
 import aiosqlite
 
@@ -4412,3 +4413,476 @@ async def get_pickem_resolved_picks() -> list[dict]:
         )
         rows = await cur.fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Sports trading cards (see docs/superpowers/specs/2026-08-11-sports-card-packs-design.md)
+# ---------------------------------------------------------------------------
+QUICK_SELL_FRACTION = 0.75  # quick-sell returns this share of book value in coins
+
+
+async def card_set_exists(sport: str, season: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT 1 FROM card_sets WHERE sport = ? AND season = ?", (sport, season)
+        )
+        return await cur.fetchone() is not None
+
+
+async def create_card_set(
+    sport: str, season: int, name: str, total_packs: int, base_cost: int, created_at: str
+) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO card_sets (sport, season, name, total_packs, base_cost, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (sport, season, name, total_packs, base_cost, created_at),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def insert_card_designs(set_id: int, designs: list[dict]) -> int:
+    """Bulk-insert designs for a set. Each design dict: subject_key, subject_name, team,
+    rarity, is_rookie, career_fame, total_copies, stats(dict), headshot_url, book_value."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.executemany(
+            "INSERT OR IGNORE INTO card_designs "
+            "(set_id, subject_key, subject_name, team, rarity, is_rookie, career_fame, "
+            " total_copies, stats, headshot_url, book_value) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    set_id,
+                    d["subject_key"],
+                    d["subject_name"],
+                    d.get("team"),
+                    d["rarity"],
+                    1 if d.get("is_rookie") else 0,
+                    d.get("career_fame"),
+                    d["total_copies"],
+                    json.dumps(d.get("stats") or {}),
+                    d.get("headshot_url"),
+                    d["book_value"],
+                )
+                for d in designs
+            ],
+        )
+        await db.commit()
+        return len(designs)
+
+
+def _set_row(r: aiosqlite.Row) -> dict:
+    return {
+        "set_id": r["set_id"],
+        "sport": r["sport"],
+        "season": r["season"],
+        "name": r["name"],
+        "total_packs": r["total_packs"],
+        "packs_opened": r["packs_opened"],
+        "pack_cost": r["base_cost"],
+        "closed": bool(r["closed"]),
+    }
+
+
+async def list_card_sets(include_closed: bool = True) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        sql = "SELECT * FROM card_sets"
+        if not include_closed:
+            sql += " WHERE closed = 0"
+        sql += " ORDER BY sport, season DESC"
+        cur = await db.execute(sql)
+        return [_set_row(r) for r in await cur.fetchall()]
+
+
+async def get_card_set(sport: str, season: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM card_sets WHERE sport = ? AND season = ?", (sport, season)
+        )
+        r = await cur.fetchone()
+        return _set_row(r) if r else None
+
+
+async def get_card_set_by_id(set_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM card_sets WHERE set_id = ?", (set_id,))
+        r = await cur.fetchone()
+        return _set_row(r) if r else None
+
+
+def _design_public(r: aiosqlite.Row) -> dict:
+    return {
+        "design_id": r["design_id"],
+        "name": r["subject_name"],
+        "team": r["team"],
+        "rarity": r["rarity"],
+        "is_rookie": bool(r["is_rookie"]),
+        "total_copies": r["total_copies"],
+        "minted": r["minted"],
+        "headshot_url": r["headshot_url"],
+        "stats": json.loads(r["stats"]) if r["stats"] else {},
+        "book_value": r["book_value"],
+    }
+
+
+async def mint_pack(user: str, set_id: int, pack_size: int, source: str, now_iso: str) -> list[dict]:
+    """Open one pack: real coin debit (packs are a true sink — no 1000-coin faucet floor here,
+    else free packs + quick-sell would print coins), weighted draw from the finite pool, mint
+    serial-numbered instances. Atomic in one connection. Raises ValueError on any refusal."""
+    from shared import cards as engine
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            srow = (
+                await (await db.execute("SELECT * FROM card_sets WHERE set_id = ?", (set_id,))).fetchone()
+            )
+            if srow is None:
+                raise ValueError("no such set")
+            if srow["closed"] or srow["packs_opened"] >= srow["total_packs"]:
+                raise ValueError("this set is sold out")
+            cost = 0 if source == "daily" else srow["base_cost"]
+            if cost > 0:
+                bal = (
+                    await (await db.execute(
+                        "SELECT balance FROM casino_wallets WHERE discord_user = ?", (user,)
+                    )).fetchone()
+                )
+                have = bal["balance"] if bal else 0
+                if have < cost:
+                    raise ValueError(f"need {cost} coins — you have {have}")
+                await db.execute(
+                    "INSERT INTO casino_wallets (discord_user, balance) VALUES (?, ?) "
+                    "ON CONFLICT(discord_user) DO UPDATE SET balance = balance - ?",
+                    (user, CASINO_STARTING_COINS - cost, cost),
+                )
+            drows = (
+                await (await db.execute(
+                    "SELECT * FROM card_designs WHERE set_id = ?", (set_id,)
+                )).fetchall()
+            )
+            manifest = [{"rarity": d["rarity"]} for d in drows]
+            pool = {
+                i: (d["total_copies"] - d["minted"])
+                for i, d in enumerate(drows)
+                if d["total_copies"] > d["minted"]
+            }
+            drawn = engine.open_pack(pool, manifest, random.Random(), pack_size)
+            if not drawn:
+                raise ValueError("no cards left in this set")
+            out = []
+            for c in drawn:
+                d = drows[c["design_index"]]
+                serial = d["minted"] + 1
+                await db.execute(
+                    "UPDATE card_designs SET minted = minted + 1 WHERE design_id = ?",
+                    (d["design_id"],),
+                )
+                # keep our local copy's minted in sync in case the same design is drawn twice
+                drows[c["design_index"]] = {**dict(d), "minted": serial}
+                cur = await db.execute(
+                    "INSERT INTO card_instances "
+                    "(design_id, owner_id, serial, is_holo, gem, book_value, acquired_cost, source, acquired_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        d["design_id"], user, serial, 1 if c["is_holo"] else 0, c["gem"],
+                        c["book_value"], (cost / len(drawn)), source, now_iso,
+                    ),
+                )
+                out.append({
+                    "instance_id": cur.lastrowid,
+                    "design_id": d["design_id"],
+                    "name": d["subject_name"],
+                    "team": d["team"],
+                    "sport": srow["sport"],
+                    "season": srow["season"],
+                    "rarity": d["rarity"],
+                    "is_rookie": bool(d["is_rookie"]),
+                    "is_holo": c["is_holo"],
+                    "gem": c["gem"],
+                    "serial": serial,
+                    "total_copies": d["total_copies"],
+                    "book_value": c["book_value"],
+                    "headshot_url": d["headshot_url"],
+                    "stats": json.loads(d["stats"]) if d["stats"] else {},
+                })
+            await db.execute(
+                "UPDATE card_sets SET packs_opened = packs_opened + 1, "
+                "closed = CASE WHEN packs_opened + 1 >= total_packs THEN 1 ELSE closed END "
+                "WHERE set_id = ?",
+                (set_id,),
+            )
+            await db.commit()
+            return out
+        except Exception:
+            await db.execute("ROLLBACK")
+            raise
+
+
+async def get_collection(user: str) -> tuple[list[dict], float]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT i.*, d.subject_name, d.team, d.rarity, d.headshot_url, d.stats, d.total_copies, "
+            "       s.sport, s.season "
+            "FROM card_instances i JOIN card_designs d ON i.design_id = d.design_id "
+            "JOIN card_sets s ON d.set_id = s.set_id WHERE i.owner_id = ? "
+            "ORDER BY i.book_value DESC",
+            (user,),
+        )
+        rows = await cur.fetchall()
+    cards_out = [
+        {
+            "instance_id": r["instance_id"],
+            "design_id": r["design_id"],
+            "name": r["subject_name"],
+            "team": r["team"],
+            "sport": r["sport"],
+            "season": r["season"],
+            "rarity": r["rarity"],
+            "is_holo": bool(r["is_holo"]),
+            "gem": r["gem"],
+            "serial": r["serial"],
+            "total_copies": r["total_copies"],
+            "book_value": r["book_value"],
+            "headshot_url": r["headshot_url"],
+            "stats": json.loads(r["stats"]) if r["stats"] else {},
+        }
+        for r in rows
+    ]
+    return cards_out, round(sum(r["book_value"] for r in rows), 2)
+
+
+async def sell_instance(user: str, instance_id: int) -> tuple[dict, int]:
+    """Quick-sell one owned card for QUICK_SELL_FRACTION of book value in coins.
+    Returns (sold_card_summary, coins_credited). Raises ValueError if not owned."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            r = await (await db.execute(
+                "SELECT i.*, d.subject_name, d.rarity FROM card_instances i "
+                "JOIN card_designs d ON i.design_id = d.design_id "
+                "WHERE i.instance_id = ? AND i.owner_id = ?",
+                (instance_id, user),
+            )).fetchone()
+            if r is None:
+                raise ValueError("you don't own that card")
+            coins = max(1, round(r["book_value"] * QUICK_SELL_FRACTION))
+            await db.execute("DELETE FROM card_instances WHERE instance_id = ?", (instance_id,))
+            await db.execute(
+                "INSERT INTO casino_wallets (discord_user, balance) VALUES (?, ?) "
+                "ON CONFLICT(discord_user) DO UPDATE SET balance = balance + ?",
+                (user, CASINO_STARTING_COINS + coins, coins),
+            )
+            await db.commit()
+            return ({"name": r["subject_name"], "rarity": r["rarity"], "serial": r["serial"]}, coins)
+        except Exception:
+            await db.execute("ROLLBACK")
+            raise
+
+
+async def get_catalog(set_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        srow = await (await db.execute("SELECT * FROM card_sets WHERE set_id = ?", (set_id,))).fetchone()
+        if srow is None:
+            return None
+        rows = await (await db.execute(
+            "SELECT * FROM card_designs WHERE set_id = ? ORDER BY book_value DESC", (set_id,)
+        )).fetchall()
+    designs = [_design_public(r) for r in rows]
+    return {"set": _set_row(srow), "designs": designs}
+
+
+async def find_designs_by_name(name: str, limit: int = 25) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT d.*, s.sport, s.season FROM card_designs d JOIN card_sets s ON d.set_id = s.set_id "
+            "WHERE d.subject_name LIKE ? ORDER BY d.book_value DESC LIMIT ?",
+            (f"%{name}%", limit),
+        )
+        rows = await cur.fetchall()
+    return [{**_design_public(r), "sport": r["sport"], "season": r["season"]} for r in rows]
+
+
+async def get_design_owners(design_id: int) -> tuple[dict | None, list[dict]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        d = await (await db.execute(
+            "SELECT d.*, s.sport, s.season FROM card_designs d JOIN card_sets s ON d.set_id = s.set_id "
+            "WHERE d.design_id = ?", (design_id,)
+        )).fetchone()
+        if d is None:
+            return None, []
+        rows = await (await db.execute(
+            "SELECT owner_id, serial, is_holo, gem FROM card_instances WHERE design_id = ? ORDER BY serial",
+            (design_id,),
+        )).fetchall()
+    owners = [
+        {"owner_id": r["owner_id"], "serial": r["serial"], "is_holo": bool(r["is_holo"]), "gem": r["gem"]}
+        for r in rows
+    ]
+    return {**_design_public(d), "sport": d["sport"], "season": d["season"]}, owners
+
+
+# --- daily free pack ---
+async def has_claimed_daily_pack(user: str, day: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT 1 FROM card_pack_claims WHERE discord_user = ? AND day = ?", (user, day)
+        )
+        return await cur.fetchone() is not None
+
+
+async def record_daily_pack_claim(user: str, day: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO card_pack_claims (discord_user, day) VALUES (?, ?)", (user, day)
+        )
+        await db.commit()
+
+
+# --- wishlist ---
+async def add_card_want(user: str, design_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO card_wants (discord_user, design_id) VALUES (?, ?)",
+            (user, design_id),
+        )
+        await db.commit()
+
+
+async def remove_card_want(user: str, design_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "DELETE FROM card_wants WHERE discord_user = ? AND design_id = ?", (user, design_id)
+        )
+        await db.commit()
+
+
+async def get_card_wanters(design_id: int) -> list[str]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT discord_user FROM card_wants WHERE design_id = ?", (design_id,)
+        )
+        return [r["discord_user"] for r in await cur.fetchall()]
+
+
+# --- trading (card-for-card) ---
+async def create_card_trade(
+    from_user: str, to_user: str, offer_ids: list[int], want_ids: list[int], now_iso: str
+) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO card_trades (from_user, to_user, offer_ids, want_ids, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (from_user, to_user, json.dumps(offer_ids), json.dumps(want_ids), now_iso),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def get_card_trade(trade_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        r = await (await db.execute("SELECT * FROM card_trades WHERE trade_id = ?", (trade_id,))).fetchone()
+        if r is None:
+            return None
+        return {
+            "trade_id": r["trade_id"], "from_user": r["from_user"], "to_user": r["to_user"],
+            "offer_ids": json.loads(r["offer_ids"]), "want_ids": json.loads(r["want_ids"]),
+            "status": r["status"], "created_at": r["created_at"],
+        }
+
+
+async def list_incoming_card_trades(user: str) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM card_trades WHERE to_user = ? AND status = 'pending' ORDER BY trade_id DESC",
+            (user,),
+        )
+        return [
+            {
+                "trade_id": r["trade_id"], "from_user": r["from_user"], "to_user": r["to_user"],
+                "offer_ids": json.loads(r["offer_ids"]), "want_ids": json.loads(r["want_ids"]),
+                "status": r["status"], "created_at": r["created_at"],
+            }
+            for r in await cur.fetchall()
+        ]
+
+
+async def set_card_trade_status(trade_id: int, status: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE card_trades SET status = ? WHERE trade_id = ?", (status, trade_id))
+        await db.commit()
+
+
+async def accept_card_trade(trade_id: int, accepting_user: str) -> dict:
+    """Atomically swap ownership. Verifies the trade is pending, addressed to accepting_user, and
+    that both sides still own exactly the instances they committed. Raises ValueError otherwise."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            t = await (await db.execute("SELECT * FROM card_trades WHERE trade_id = ?", (trade_id,))).fetchone()
+            if t is None:
+                raise ValueError("no such trade")
+            if t["status"] != "pending":
+                raise ValueError("trade is no longer pending")
+            if t["to_user"] != accepting_user:
+                raise ValueError("this trade isn't addressed to you")
+            offer_ids = json.loads(t["offer_ids"])
+            want_ids = json.loads(t["want_ids"])
+            from_user, to_user = t["from_user"], t["to_user"]
+
+            async def _owned_by(ids: list[int], owner: str) -> bool:
+                if not ids:
+                    return True
+                q = f"SELECT COUNT(*) c FROM card_instances WHERE owner_id = ? AND instance_id IN ({','.join('?' * len(ids))})"
+                row = await (await db.execute(q, (owner, *ids))).fetchone()
+                return row["c"] == len(ids)
+
+            if not await _owned_by(offer_ids, from_user):
+                raise ValueError("the offering player no longer owns those cards")
+            if not await _owned_by(want_ids, to_user):
+                raise ValueError("you no longer own the requested cards")
+            for iid in offer_ids:
+                await db.execute(
+                    "UPDATE card_instances SET owner_id = ?, source = 'trade' WHERE instance_id = ?",
+                    (to_user, iid),
+                )
+            for iid in want_ids:
+                await db.execute(
+                    "UPDATE card_instances SET owner_id = ?, source = 'trade' WHERE instance_id = ?",
+                    (from_user, iid),
+                )
+            await db.execute("UPDATE card_trades SET status = 'accepted' WHERE trade_id = ?", (trade_id,))
+            await db.commit()
+            return {"offer_ids": offer_ids, "want_ids": want_ids, "from_user": from_user, "to_user": to_user}
+        except Exception:
+            await db.execute("ROLLBACK")
+            raise
+
+
+async def get_owned_instances(user: str, instance_ids: list[int]) -> list[dict]:
+    """Fetch specific owned instances (for validating a proposed trade)."""
+    if not instance_ids:
+        return []
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        q = (
+            "SELECT i.instance_id, i.serial, i.is_holo, i.gem, d.subject_name, d.rarity "
+            "FROM card_instances i JOIN card_designs d ON i.design_id = d.design_id "
+            f"WHERE i.owner_id = ? AND i.instance_id IN ({','.join('?' * len(instance_ids))})"
+        )
+        cur = await db.execute(q, (user, *instance_ids))
+        return [dict(r) for r in await cur.fetchall()]
