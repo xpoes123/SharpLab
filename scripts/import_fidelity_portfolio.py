@@ -7,45 +7,46 @@ account, so the user's existing stock_trades / option_trades / stock_cash are
 deleted and rebuilt from the snapshot. Any manual trades made between snapshots
 are already baked into the new snapshot — keeping them would double-count.
 
-Source: Portfolio_Positions_Jun-22-2026.csv (Fidelity export). Equity rows become
+Source: Portfolio_Positions_Aug-10-2026.csv (Fidelity export). Equity rows become
 `buy` trades at average cost basis (cost_basis_total / quantity); money-market
-sweep balances become the brokerage cash balance.
+sweep balances become the brokerage cash balance. Duplicate ticker rows (same
+holding across accounts or Cash+Margin lots) are consolidated by summing shares
+and cost basis, so price stays the blended average cost.
 """
 import sqlite3
 import sys
 
 USER = "695018847874318378"
-TS = "2026-06-22T22:27:00+00:00"
-NOTE = "Imported from Fidelity portfolio Jun-22-2026"
+TS = "2026-08-10T15:32:00+00:00"
+NOTE = "Imported from Fidelity portfolio Aug-10-2026"
 DB = sys.argv[1] if len(sys.argv) > 1 else "data/sharplab.db"
 
 # (ticker, quantity, cost_basis_total) — price = cost_basis_total / quantity
 EQUITIES = [
     # Individual - TOD
     ("HITI", 2, 8.66), ("ERBB", 1000, 11.50),
-    # ROTH IRA
-    ("VOO", 60.772, 30458.52), ("BRK-B", 44, 20950.37), ("MA", 4.009, 1374.36),
-    ("TSM", 4.018, 612.67), ("GOOGL", 5.012, 356.60), ("EPD", 45.076, 776.20),
-    ("TSEM", 5, 175.70), ("MSFT", 4.039, 1505.36), ("FBTC", 20, 1047.80),
-    ("RTX", 6.068, 606.00), ("AMD", 2, 253.43), ("SNPS", 2, 917.00),
-    ("NVDA", 4.002, 47.95), ("NVO", 15.023, 645.10), ("JD", 25.327, 615.54),
-    ("AAPL", 2.096, 349.89), ("RMBS", 4, 190.40), ("IDXX", 1, 712.85),
-    ("BABA", 4.493, 319.24), ("BIDU", 4, 314.92), ("TCEHY", 7, 298.78),
-    ("GE", 1.017, 113.68), ("AMZN", 1, 122.91), ("BA", 1, 168.89),
-    ("OKLO", 3, 73.05), ("MU", 0.1, 24.22), ("WDS", 5.5, 120.86),
-    ("UBER", 1, 29.22), ("OXY", 1.01, 67.25), ("EXC", 1.026, 46.79),
-    ("AMRC", 1, 10.04), ("CMP", 1, 11.44), ("LYFT", 1, 13.47),
-    ("DEC", 1, 11.07), ("SMR", 1, 17.06), ("UA", 1, 5.95),
-    # HSA
-    ("VOO", 20.2, 11242.54), ("FBTC", 40, 2578.71), ("VTI", 3.024, 976.99),
-    ("VXUS", 11.9, 880.22), ("BRK-B", 2, 972.86), ("FETH", 25, 939.14),
+    # ROTH IRA (BRK-B/SNPS/SMR combine Cash+Margin lots; VOO/FBTC combine w/ HSA)
+    ("VOO", 91.662, 48898.40), ("BRK-B", 46, 22168.51), ("MA", 4.015, 1374.36),
+    ("MSFT", 4.039, 1505.36), ("GOOGL", 5.012, 356.60), ("EPD", 45.076, 776.20),
+    ("TSM", 4.025, 612.67), ("FBTC", 65, 3892.26), ("RTX", 6.068, 606.00),
+    ("TSEM", 5, 175.70), ("SNPS", 3, 1297.99), ("AMD", 2, 253.43),
+    ("NVDA", 4.007, 47.95), ("JD", 25.327, 615.54), ("NVO", 15.023, 645.10),
+    ("AAPL", 2.096, 349.89), ("IDXX", 1, 712.85), ("BABA", 4.534, 319.24),
+    ("BIDU", 4, 314.92), ("TCEHY", 7, 298.78), ("RMBS", 4, 190.40),
+    ("GE", 1.018, 113.68), ("AMZN", 1, 122.91), ("WDS", 10, 213.74),
+    ("OKLO", 3, 73.05), ("MU", 0.1, 24.22), ("SMR", 10, 94.80),
+    ("UBER", 1, 29.22), ("OXY", 1.015, 67.25), ("EXC", 1.026, 46.79),
+    ("CMP", 1, 11.44), ("AMRC", 1, 10.04), ("LYFT", 1, 13.47),
+    ("DEC", 1, 11.07), ("UA", 1, 5.95),
+    # HSA (VOO/FBTC/BRK-B folded into ROTH lines above)
+    ("VTI", 3.033, 980.15), ("VXUS", 11.953, 884.81), ("FETH", 25, 939.14),
 ]
 
-# No option positions in the Jun-22 snapshot (prior WDS call is gone).
+# No option positions in the Aug-10 snapshot.
 OPTIONS = []
 
 # Money-market sweep -> cash (SPAXX Individual + FDRXX ROTH + FDRXX HSA)
-CASH = round(1502.38 + 4.01 + 2.03, 2)
+CASH = round(1301.30 + 20.05 + 0.77, 2)
 
 
 def main():
