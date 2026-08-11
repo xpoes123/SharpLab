@@ -88,6 +88,16 @@ class CardsCog(commands.Cog):
         except Exception:
             log.exception("cards: notable-pull alert failed")
 
+    async def _grant_achievements(self, uid: str, channel) -> None:
+        """Unlock + announce any card achievements earned by this pull (best-effort)."""
+        try:
+            from bot.cogs.progression import evaluate_user_achievements, announce_achievements
+            newly = await evaluate_user_achievements(uid)
+            if newly:
+                await announce_achievements(self.bot, uid, newly, channel=channel)
+        except Exception:
+            log.debug("cards: achievement grant failed for %s", uid, exc_info=True)
+
     async def _dm_wanters(self, cards_out: list[dict], opener: discord.abc.User) -> None:
         for c in cards_out:
             try:
@@ -148,6 +158,7 @@ class CardsCog(commands.Cog):
         await interaction.followup.send(embed=self._reveal_embed(all_cards, title, interaction.user))
         await self._post_notable(all_cards, interaction.user)
         await self._dm_wanters(all_cards, interaction.user)
+        await self._grant_achievements(uid, interaction.channel)
 
     @pack.command(name="daily", description="Claim your free daily pack")
     async def pack_daily(self, interaction: discord.Interaction):
@@ -173,6 +184,7 @@ class CardsCog(commands.Cog):
         await interaction.followup.send(embed=self._reveal_embed(cards_out, title, interaction.user))
         await self._post_notable(cards_out, interaction.user)
         await self._dm_wanters(cards_out, interaction.user)
+        await self._grant_achievements(uid, interaction.channel)
 
     @cards.command(name="collection", description="View a card collection")
     @app_commands.describe(user="Whose collection (default: you)")

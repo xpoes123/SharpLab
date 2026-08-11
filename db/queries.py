@@ -4886,3 +4886,25 @@ async def get_owned_instances(user: str, instance_ids: list[int]) -> list[dict]:
         )
         cur = await db.execute(q, (user, *instance_ids))
         return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_card_stats(uid: str) -> dict:
+    """Card-collection counters for the achievement engine."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        r = await (await db.execute(
+            "SELECT COUNT(*) total, COUNT(DISTINCT d.set_id) sets, "
+            "MAX(d.rarity = 'legendary') has_leg, MAX(i.is_holo) has_holo, "
+            "MAX(i.gem IS NOT NULL) has_gem, MAX(d.total_copies = 1) has_1of1 "
+            "FROM card_instances i JOIN card_designs d ON i.design_id = d.design_id "
+            "WHERE i.owner_id = ?",
+            (uid,),
+        )).fetchone()
+    return {
+        "cards_total": r["total"] or 0,
+        "cards_sets": r["sets"] or 0,
+        "cards_has_legendary": bool(r["has_leg"]),
+        "cards_has_holo": bool(r["has_holo"]),
+        "cards_has_gem": bool(r["has_gem"]),
+        "cards_has_1of1": bool(r["has_1of1"]),
+    }
