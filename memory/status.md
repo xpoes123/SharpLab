@@ -96,3 +96,15 @@ Shared DB (`data/sharplab.db` SQLite, WAL mode). All access through `db/queries.
 4. A predictive model to compare against the market (the original "find edge" goal)
 
 (Pick'em, market signals, stock/options brokerage, and reaction roles now exist.)
+
+## Sports Card Packs (shipped 2026-08-11)
+
+Port of the nsba-markets pack system → NBA/NFL/MLB players. Engine `shared/cards.py`
+(pure, 17 tests); tables `card_*` in `db/schema.py`; all access in `db/queries.py`.
+Discord cog `bot/cogs/cards.py` (`/pack`, `/cards`, `/cardtrade`); web page at
+`/cards` (`web/cards.py` + `web/static/cards.*`). Seed via `scripts/seed_cards.py`
++ `scripts/card_sources.py` (ESPN). 24 sets live (NBA/NFL/MLB × 8 seasons). Rarity =
+career-fame rank × rookie premium; legendaries 1-of-1; holo/gems; vintage pack pricing;
+quick-sell 75%; packs are a REAL coin spend (not the 1000 faucet). 7 card achievements.
+Known limitation: card team labels track the *current* ESPN roster, not the card's
+season (ESPN only returns currently-rostered players). Extend seasons: re-run seeder.
