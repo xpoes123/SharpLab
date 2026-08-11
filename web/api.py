@@ -24,6 +24,7 @@ from web.solitairechess import router as sc_router, solchess_websocket, cleanup_
 from web.minesweeper import router as minesweeper_router, minesweeper_websocket, cleanup_stale_minesweeper_rooms
 from web.blotto import router as blotto_router, blotto_websocket, cleanup_stale_blotto_rooms
 from web.hq import router as hq_router, quote_refresh_loop
+from web.cards import router as cards_router
 
 DB_PATH = os.environ.get("SHARPLAB_DB_PATH", "data/sharplab.db")
 
@@ -115,6 +116,7 @@ app.include_router(sc_router)
 app.include_router(minesweeper_router)
 app.include_router(blotto_router)
 app.include_router(hq_router)
+app.include_router(cards_router)
 
 
 # WebSocket endpoint (not on the API router — different path pattern)

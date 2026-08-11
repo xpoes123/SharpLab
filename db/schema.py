@@ -446,6 +446,77 @@ CREATE TABLE IF NOT EXISTS pickem_picks (
     PRIMARY KEY (message_id, discord_user)
 );
 CREATE INDEX IF NOT EXISTS idx_pickem_picks_user ON pickem_picks(discord_user);
+
+-- Sports trading cards: sets (one per sport-season), designs (a player card),
+-- instances (a minted, serial-numbered copy owned by a user). See docs spec 2026-08-11.
+CREATE TABLE IF NOT EXISTS card_sets (
+    set_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    sport        TEXT NOT NULL,          -- nba/nfl/mlb
+    season       INTEGER NOT NULL,       -- e.g. 2024 (NBA 2024-25 => 2024)
+    name         TEXT NOT NULL,
+    total_packs  INTEGER NOT NULL,
+    packs_opened INTEGER NOT NULL DEFAULT 0,
+    base_cost    INTEGER NOT NULL,       -- coins per pack (vintage-priced at seed time)
+    closed       INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT NOT NULL,
+    UNIQUE(sport, season)
+);
+
+CREATE TABLE IF NOT EXISTS card_designs (
+    design_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    set_id       INTEGER NOT NULL REFERENCES card_sets(set_id),
+    subject_key  TEXT NOT NULL,          -- stable id, e.g. nba|2024|lebron-james-1966
+    subject_name TEXT NOT NULL,
+    team         TEXT,
+    rarity       TEXT NOT NULL,          -- common/uncommon/rare/epic/legendary
+    is_rookie    INTEGER NOT NULL DEFAULT 0,
+    career_fame  REAL,
+    total_copies INTEGER NOT NULL,
+    minted       INTEGER NOT NULL DEFAULT 0,
+    stats        TEXT,                   -- JSON display stats
+    headshot_url TEXT,
+    book_value   REAL NOT NULL,
+    UNIQUE(set_id, subject_key)
+);
+CREATE INDEX IF NOT EXISTS idx_card_designs_set ON card_designs(set_id);
+
+CREATE TABLE IF NOT EXISTS card_instances (
+    instance_id  INTEGER PRIMARY KEY AUTOINCREMENT,
+    design_id    INTEGER NOT NULL REFERENCES card_designs(design_id),
+    owner_id     TEXT NOT NULL,
+    serial       INTEGER NOT NULL,
+    is_holo      INTEGER NOT NULL DEFAULT 0,
+    gem          TEXT,
+    book_value   REAL NOT NULL,
+    acquired_cost REAL NOT NULL DEFAULT 0,
+    source       TEXT NOT NULL DEFAULT 'pack',  -- pack/daily/trade
+    acquired_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_card_instances_owner ON card_instances(owner_id);
+CREATE INDEX IF NOT EXISTS idx_card_instances_design ON card_instances(design_id);
+
+CREATE TABLE IF NOT EXISTS card_wants (
+    discord_user TEXT NOT NULL,
+    design_id    INTEGER NOT NULL REFERENCES card_designs(design_id),
+    PRIMARY KEY (discord_user, design_id)
+);
+
+CREATE TABLE IF NOT EXISTS card_pack_claims (
+    discord_user TEXT NOT NULL,
+    day          TEXT NOT NULL,
+    PRIMARY KEY (discord_user, day)
+);
+
+CREATE TABLE IF NOT EXISTS card_trades (
+    trade_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_user    TEXT NOT NULL,
+    to_user      TEXT NOT NULL,
+    offer_ids    TEXT NOT NULL,          -- JSON list of instance_ids offered
+    want_ids     TEXT NOT NULL,          -- JSON list of instance_ids requested
+    status       TEXT NOT NULL DEFAULT 'pending',  -- pending/accepted/declined/cancelled
+    created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_card_trades_to ON card_trades(to_user, status);
 """
 
 

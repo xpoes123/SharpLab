@@ -1,0 +1,321 @@
+// SharpLab HQ — Cards: your collection + set browser + catalog/odds (read-only).
+// Buying/opening packs happens in Discord; this page just browses.
+
+const app = document.getElementById("app");
+const navRight = document.getElementById("navRight");
+
+const num = (n) => (n == null ? "—" : Number(n).toLocaleString());
+const coins = (n) => "🪙 " + num(Math.round(n || 0));
+const esc = (s) =>
+  String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+const SPORT_EMOJI = { nba: "🏀", nfl: "🏈", mlb: "⚾" };
+const RARITY_ORDER = ["common", "uncommon", "rare", "epic", "legendary"];
+const GEM_EMOJI = { sapphire: "🔵", ruby: "🔴", emerald: "🟢", amethyst: "🟣", diamond: "💎", gold: "🟡" };
+
+// Neutral silhouette placeholder (data URI) — swapped in via onerror so the grid never breaks.
+const SILHOUETTE =
+  "data:image/svg+xml;utf8," +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">' +
+      '<rect width="100" height="100" fill="none"/>' +
+      '<circle cx="50" cy="38" r="20" fill="#3a3f57"/>' +
+      '<path d="M18 92c0-18 14-30 32-30s32 12 32 30z" fill="#3a3f57"/>' +
+      "</svg>"
+  );
+// Expose globally so inline onerror handlers can reach it.
+window.__cardSilh = SILHOUETTE;
+
+async function getJSON(url) {
+  if (MOCK) return mockJSON(url);
+  const r = await fetch(url, { credentials: "include" });
+  if (!r.ok) return { _status: r.status };
+  return r.json();
+}
+
+// ── Nav (login / logout) — mirrors hq.js ──
+function renderNav(user) {
+  if (!user) {
+    navRight.innerHTML = `<a class="btn" href="/api/v1/auth/discord/login">Sign in with Discord</a>`;
+    return;
+  }
+  const av = user.avatar ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png` : null;
+  navRight.innerHTML = `<div class="userbar">
+    ${av ? `<img class="avatar" src="${av}" alt="">` : `<div class="avatar"></div>`}
+    <span>${esc(user.username)}</span>
+    <a class="btn ghost" href="/api/v1/auth/logout">Sign out</a></div>`;
+}
+
+// ── State ──
+const state = { tab: "collection", mine: null, sets: null, catalog: {}, activeSet: null, me: null };
+
+// ── Card tile ──
+function cardTile(c) {
+  const rarity = (c.rarity || "common").toLowerCase();
+  const holo = c.is_holo ? " holo" : "";
+  const sport = (c.sport || "").toLowerCase();
+  const emoji = SPORT_EMOJI[sport] || "🃏";
+  const oneOfOne = Number(c.total_copies) === 1;
+  const serial = c.serial != null
+    ? `<span class="serial${oneOfOne ? " oneofone" : ""}">#${c.serial}/${c.total_copies}</span>`
+    : "";
+  const gem = c.gem
+    ? `<span class="gem-badge">${GEM_EMOJI[String(c.gem).toLowerCase()] || "💠"} ${esc(c.gem)}</span>`
+    : "";
+  const rookie = c.is_rookie ? `<span class="rookie-badge">RC</span>` : "";
+  const src = c.headshot_url || SILHOUETTE;
+  return `<div class="ctile rarity-${rarity}${holo}">
+    <div class="cimg">
+      <img src="${esc(src)}" alt="${esc(c.name)}" loading="lazy"
+           onerror="this.onerror=null;this.src=window.__cardSilh;this.classList.add('silh');">
+      <span class="sport-badge" title="${esc(sport.toUpperCase())}">${emoji}</span>
+      ${gem}${rookie}
+    </div>
+    <div class="cbody">
+      <div class="cname">${esc(c.name)}</div>
+      <div class="cteam">${esc(c.team || "")}</div>
+      <div class="cmeta">
+        <span class="rarity-label">${esc(rarity)}</span>
+        ${serial}
+      </div>
+      <div class="cvalue">${coins(c.book_value)}</div>
+    </div>
+  </div>`;
+}
+
+function emptyBox(icon, msg) {
+  return `<div class="emptybox"><div class="big">${icon}</div>${msg}</div>`;
+}
+
+// ── Views ──
+function renderCollection() {
+  const d = state.mine;
+  if (d && d._status === 401) {
+    return emptyBox("🔒", "<strong>Sign in to see your cards.</strong><br>Then open a pack in Discord with <code>/pack open</code>.");
+  }
+  const cards = (d && d.cards) || [];
+  if (!cards.length) {
+    return emptyBox("🃏", "<strong>No cards yet.</strong><br>Open a pack in Discord with <code>/pack open &lt;sport&gt; &lt;season&gt;</code>.");
+  }
+  // Sort rarest → most common, then by book value.
+  const sorted = [...cards].sort((a, b) => {
+    const ra = RARITY_ORDER.indexOf((b.rarity || "").toLowerCase()) - RARITY_ORDER.indexOf((a.rarity || "").toLowerCase());
+    return ra !== 0 ? ra : (b.book_value || 0) - (a.book_value || 0);
+  });
+  const total = d.collection_value != null
+    ? d.collection_value
+    : cards.reduce((s, c) => s + (c.book_value || 0), 0);
+  const hero = `<div class="collval">
+    <div><div class="lbl">Collection book value</div><div class="bigval">${coins(total)}</div></div>
+    <div class="sub">${cards.length} card${cards.length === 1 ? "" : "s"}</div>
+  </div>`;
+  return hero + `<div class="cardgrid">${sorted.map(cardTile).join("")}</div>`;
+}
+
+function renderSets() {
+  const d = state.sets;
+  if (d && d._status === 401) {
+    return emptyBox("🔒", "<strong>Sign in to browse sets.</strong>");
+  }
+  const sets = (d && d.sets) || [];
+  if (!sets.length) return emptyBox("📦", "No sets available yet.");
+  const rows = sets.map((s) => {
+    const emoji = SPORT_EMOJI[(s.sport || "").toLowerCase()] || "🏟️";
+    const opened = s.packs_opened || 0;
+    const totalP = s.total_packs || 0;
+    const pctVal = totalP ? Math.min(100, Math.round((opened / totalP) * 100)) : 0;
+    const closed = s.closed || (totalP && opened >= totalP);
+    return `<div class="setcard" data-setid="${esc(s.set_id)}">
+      <div>
+        <div class="setname">${emoji} ${esc(s.name)} ${closed ? `<span class="soldout">Sold out</span>` : ""}</div>
+        <div class="setsub">${esc((s.sport || "").toUpperCase())} · ${esc(s.season)}</div>
+      </div>
+      <div class="setright">
+        <div class="price">${coins(s.pack_cost)}<span class="setsub"> / pack</span></div>
+        <div class="progwrap">
+          <div class="progbar"><span style="width:${pctVal}%"></span></div>
+          <div class="progtext">${num(opened)} / ${num(totalP)} packs</div>
+        </div>
+      </div>
+    </div>`;
+  }).join("");
+  return `<p class="muted" style="margin:0 0 14px">Tap a set to see its checklist and pull-rate odds.</p>
+    <div class="setlist">${rows}</div>`;
+}
+
+function renderCatalog(setId) {
+  const d = state.catalog[setId];
+  if (!d) return `<div class="hero"><p class="muted">Loading catalog…</p></div>`;
+  if (d._status === 401) return emptyBox("🔒", "<strong>Sign in to view the catalog.</strong>");
+  const set = d.set || {};
+  const emoji = SPORT_EMOJI[(set.sport || "").toLowerCase()] || "🏟️";
+  const odds = d.odds || {};
+  const pr = odds.pull_rates || {};
+  const oddsCards = [];
+  RARITY_ORDER.forEach((r) => {
+    if (pr[r] != null) oddsCards.push(`<div class="oddscard"><div class="k">${r}</div><div class="v" style="color:var(--r-${r})">${fmtPct(pr[r])}</div></div>`);
+  });
+  if (odds.holo_pct != null) oddsCards.push(`<div class="oddscard"><div class="k">Holo</div><div class="v">${fmtPct(odds.holo_pct)}</div></div>`);
+  const gems = odds.gems || {};
+  Object.keys(gems).forEach((g) => {
+    const info = gems[g] || {};
+    oddsCards.push(`<div class="oddscard"><div class="k">${GEM_EMOJI[g.toLowerCase()] || "💠"} ${esc(g)}</div><div class="v">1 in ${num(info.one_in)}</div><div class="k">${info.mult ? info.mult + "× book" : ""}</div></div>`);
+  });
+
+  const designs = [...(d.designs || [])].sort((a, b) =>
+    RARITY_ORDER.indexOf((b.rarity || "").toLowerCase()) - RARITY_ORDER.indexOf((a.rarity || "").toLowerCase())
+    || (a.name || "").localeCompare(b.name || ""));
+
+  const body = designs.map((x) => {
+    const rarity = (x.rarity || "common").toLowerCase();
+    const rate = pr[rarity];
+    return `<tr>
+      <td class="tm">${esc(x.name)}${x.is_rookie ? ` <span class="rookie-badge" style="position:static">RC</span>` : ""}</td>
+      <td class="muted">${esc(x.team || "")}</td>
+      <td><span class="rarity-label" style="--r:var(--r-${rarity})">${esc(rarity)}</span></td>
+      <td class="num">${rate != null ? fmtPct(rate) : "—"}</td>
+      <td class="num catrow-mint">${num(x.minted)} / ${num(x.total_copies)}</td>
+    </tr>`;
+  }).join("");
+
+  return `<button class="backbtn" data-back="1">← All sets</button>
+    <h2 style="margin-top:0">${emoji} ${esc(set.name || "")} <span class="muted">· ${esc(set.season || "")}</span></h2>
+    <div class="oddsgrid">${oddsCards.join("") || `<div class="muted">No odds published.</div>`}</div>
+    <div class="collval" style="padding:12px 16px;margin-bottom:14px">
+      <div><div class="lbl">Checklist</div></div>
+      <div class="sub">${num(d.total_cards != null ? d.total_cards : designs.length)} designs</div>
+    </div>
+    <div class="card" style="padding:0;overflow-x:auto">
+      <table>
+        <thead><tr><th>Player</th><th>Team</th><th>Rarity</th><th class="num">Pull rate</th><th class="num">Minted</th></tr></thead>
+        <tbody>${body || `<tr><td colspan="5" class="muted" style="padding:18px">No designs.</td></tr>`}</tbody>
+      </table>
+    </div>`;
+}
+
+function fmtPct(p) {
+  if (p == null) return "—";
+  const n = Number(p);
+  return (n < 1 ? +(n).toFixed(2) : Math.round(n * 10) / 10) + "%";
+}
+
+// ── Shell + routing ──
+function tabbar() {
+  const t = (id, label) => `<button class="tab${state.tab === id ? " on" : ""}" data-tab="${id}">${label}</button>`;
+  return `<div class="tabbar">
+    ${t("collection", "My Collection")}${t("sets", "Sets")}${t("catalog", "Catalog")}
+  </div>`;
+}
+
+function draw() {
+  let inner = "";
+  if (state.tab === "collection") inner = renderCollection();
+  else if (state.tab === "sets") inner = renderSets();
+  else if (state.tab === "catalog") {
+    inner = state.activeSet != null
+      ? renderCatalog(state.activeSet)
+      : renderSets(); // no set chosen yet — show the picker
+  }
+  app.innerHTML = tabbar() + `<div id="tabbody">${inner}</div>`;
+}
+
+async function openCatalog(setId) {
+  state.tab = "catalog";
+  state.activeSet = setId;
+  if (!state.catalog[setId]) {
+    draw(); // shows loading
+    state.catalog[setId] = await getJSON(`/api/v1/cards/catalog?set_id=${encodeURIComponent(setId)}`);
+  }
+  draw();
+}
+
+async function ensureSets() {
+  if (!state.sets) state.sets = await getJSON("/api/v1/cards/sets");
+}
+
+app.addEventListener("click", async (e) => {
+  const tabBtn = e.target.closest(".tab");
+  const setCard = e.target.closest(".setcard");
+  const back = e.target.closest("[data-back]");
+  if (tabBtn) {
+    state.tab = tabBtn.dataset.tab;
+    if (state.tab === "sets") { await ensureSets(); }
+    if (state.tab === "catalog") { await ensureSets(); state.activeSet = null; }
+    draw();
+  } else if (setCard) {
+    await openCatalog(setCard.dataset.setid);
+  } else if (back) {
+    state.activeSet = null;
+    state.tab = "sets";
+    draw();
+  }
+});
+
+async function main() {
+  const me = await getJSON("/api/v1/hq/me");
+  const loggedIn = me && me.authenticated;
+  state.me = loggedIn ? me : null;
+  renderNav(loggedIn ? me.user : null);
+  // Preload the two main lists in parallel.
+  const [mine, sets] = await Promise.all([getJSON("/api/v1/cards/mine"), getJSON("/api/v1/cards/sets")]);
+  state.mine = mine;
+  state.sets = sets;
+  draw();
+}
+
+// ─────────────────────────────────────────────────────────────
+// Mock mode (?mock=1): render sample data without a backend so the
+// DOM can be verified. Guarded off by default — real endpoints win.
+// ─────────────────────────────────────────────────────────────
+const MOCK = new URLSearchParams(location.search).get("mock") === "1";
+
+function mockJSON(url) {
+  if (url.startsWith("/api/v1/hq/me"))
+    return { authenticated: true, user: { id: "1", username: "davidj", avatar: null }, balance: 5000 };
+  if (url.startsWith("/api/v1/cards/mine"))
+    return {
+      collection_value: 1730,
+      cards: [
+        { instance_id: 1, name: "LeBron James", rarity: "legendary", sport: "nba", season: "2003",
+          team: "CLE", is_holo: true, gem: "sapphire", serial: 1, total_copies: 1, book_value: 1200,
+          is_rookie: true, headshot_url: "https://a.espncdn.com/i/headshots/nba/players/full/1966.png" },
+        { instance_id: 2, name: "Dwyane Wade", rarity: "epic", sport: "nba", season: "2003",
+          team: "MIA", is_holo: false, gem: null, serial: 7, total_copies: 25, book_value: 380,
+          is_rookie: true, headshot_url: "" },
+        { instance_id: 3, name: "Random Bench Guy", rarity: "common", sport: "mlb", season: "2011",
+          team: "KC", is_holo: false, gem: null, serial: 412, total_copies: 900, book_value: 8,
+          is_rookie: false, headshot_url: "https://example.invalid/404.png" },
+      ],
+    };
+  if (url.startsWith("/api/v1/cards/sets"))
+    return {
+      sets: [
+        { set_id: "nba-2003", sport: "nba", season: "2003", name: "NBA 2003 Rookie Class",
+          pack_cost: 235, packs_opened: 480, total_packs: 500, closed: false },
+        { set_id: "mlb-2011", sport: "mlb", season: "2011", name: "MLB 2011",
+          pack_cost: 108, packs_opened: 500, total_packs: 500, closed: true },
+        { set_id: "nfl-2020", sport: "nfl", season: "2020", name: "NFL 2020",
+          pack_cost: 63, packs_opened: 120, total_packs: 500, closed: false },
+      ],
+    };
+  if (url.startsWith("/api/v1/cards/catalog"))
+    return {
+      set: { name: "NBA 2003 Rookie Class", sport: "nba", season: "2003" },
+      total_cards: 4,
+      designs: [
+        { design_id: 1, name: "LeBron James", team: "CLE", rarity: "legendary", is_rookie: true, total_copies: 1, minted: 1, headshot_url: "" },
+        { design_id: 2, name: "Dwyane Wade", team: "MIA", rarity: "epic", is_rookie: true, total_copies: 25, minted: 7, headshot_url: "" },
+        { design_id: 3, name: "Carmelo Anthony", team: "DEN", rarity: "rare", is_rookie: true, total_copies: 80, minted: 40, headshot_url: "" },
+        { design_id: 4, name: "Random Bench Guy", team: "KC", rarity: "common", is_rookie: false, total_copies: 900, minted: 412, headshot_url: "" },
+      ],
+      odds: {
+        holo_pct: 4.0,
+        pull_rates: { common: 62, uncommon: 24, rare: 10, epic: 3, legendary: 1 },
+        gems: { sapphire: { one_in: 50, mult: 2.0 }, ruby: { one_in: 250, mult: 4.0 }, diamond: { one_in: 2000, mult: 12.0 } },
+      },
+    };
+  return {};
+}
+
+main();
