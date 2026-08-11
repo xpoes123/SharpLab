@@ -82,9 +82,17 @@ ALL_ACHIEVEMENTS: list[Achievement] = [
     Achievement("chat_100", "Chatterbox", "Send 100 messages", "Chat", "\U0001f4ac", 25),
     Achievement("chat_1k", "Loudmouth", "Send 1,000 messages", "Chat", "\U0001f5e3️", 100),
     Achievement("chat_10k", "Yapper", "Send 10,000 messages", "Chat", "\U0001f4e3", 300),
+    # ── Cards (sports card packs) ──
+    Achievement("card_first", "Rookie Collector", "Open your first card pack", "Cards", "\U0001f3b4", 15),
+    Achievement("card_50", "Card Shark", "Own 50 cards", "Cards", "\U0001f0cf", 75),
+    Achievement("card_holo", "Shiny Hunter", "Pull a holo card", "Cards", "✨", 40),
+    Achievement("card_gem", "Gem Mint", "Pull a gem-parallel card", "Cards", "\U0001f48e", 100),
+    Achievement("card_legendary", "Grail Hunter", "Pull a legendary card", "Cards", "\U0001f7e1", 150),
+    Achievement("card_1of1", "One of One", "Own a 1-of-1 card", "Cards", "\U0001f947", 250),
+    Achievement("card_sets_5", "Set Collector", "Own cards from 5 different sets", "Cards", "\U0001f5c3️", 100),
 ]
 
 ACHIEVEMENTS_BY_ID: dict[str, Achievement] = {a.id: a for a in ALL_ACHIEVEMENTS}
 
 CATEGORIES = ["Progression", "Winning", "Diversity", "Social", "Daily",
-              "Wealth", "Betting", "Investing", "Web", "Voice", "Chat"]
+              "Wealth", "Betting", "Investing", "Web", "Voice", "Chat", "Cards"]

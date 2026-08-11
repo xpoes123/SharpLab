@@ -110,8 +110,10 @@ async def gather_achievement_stats(uid: str) -> dict:
     web = await queries.get_web_activity(uid)
     xp = await queries.get_or_create_xp(uid)
     eng = await queries.get_engagement(uid)
+    cards = await queries.get_card_stats(uid)
 
     return {
+        **cards,
         "rounds": stats["rounds"],
         "total_wagered": stats["total_wagered"],
         "streak": await queries.get_casino_win_streak(uid),
@@ -200,6 +202,13 @@ def _achievement_checks(s: dict) -> list[tuple[str, bool]]:
         ("chat_100", s["messages"] >= 100),
         ("chat_1k", s["messages"] >= 1000),
         ("chat_10k", s["messages"] >= 10000),
+        ("card_first", s["cards_total"] >= 1),
+        ("card_50", s["cards_total"] >= 50),
+        ("card_holo", s["cards_has_holo"]),
+        ("card_gem", s["cards_has_gem"]),
+        ("card_legendary", s["cards_has_legendary"]),
+        ("card_1of1", s["cards_has_1of1"]),
+        ("card_sets_5", s["cards_sets"] >= 5),
     ]
 
 
