@@ -35,13 +35,17 @@ TOTAL_PACKS = 500          # print run per set => TOTAL_PACKS * 5 cards
 PACK_SIZE = 5
 MIN_PLAYERS = 20           # skip a season that returns fewer than this (data too thin)
 
-# Newest (== "current") season per sport; older seasons cost more via pack_cost().
-CURRENT = {"nba": 2025, "nfl": 2025, "mlb": 2025}
-# ~15 recent seasons per sport (adjust freely; historical years are best-effort).
+# ESPN keys seasons by ENDING year and all leagues currently report 2026. NFL's
+# 2026 roster has no game stats yet (offseason), so NFL's newest usable set is 2025.
+# Newest (== "current", cheapest) season per sport; older seasons cost more via pack_cost().
+CURRENT = {"nba": 2026, "nfl": 2025, "mlb": 2026}
+# Recent seasons per sport. Historical seasons are roster-constrained (only players
+# still active in 2026 appear), so old years are thin and MIN_PLAYERS-filtered; the
+# per-player career fetch is heavy, so keep the window modest. Re-runnable to extend.
 SEASONS = {
-    "nba": list(range(2011, 2026)),
-    "nfl": list(range(2011, 2026)),
-    "mlb": list(range(2011, 2026)),
+    "nba": list(range(2019, 2027)),
+    "nfl": list(range(2018, 2026)),
+    "mlb": list(range(2019, 2027)),
 }
 FETCHERS = {
     "nba": card_sources.fetch_nba_season,
@@ -51,8 +55,9 @@ FETCHERS = {
 
 
 def _set_name(sport: str, season: int) -> str:
+    # ESPN keys a season by its ENDING year: NBA 2026 == the 2025-26 season.
     if sport == "nba":
-        return f"NBA {season}-{str(season + 1)[-2:]}"
+        return f"NBA {season - 1}-{str(season)[-2:]}"
     return f"{sport.upper()} {season}"
 
 
