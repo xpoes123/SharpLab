@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from db import queries
 from shared import cards as engine
@@ -199,39 +199,63 @@ class PackRevealView(discord.ui.View):
                 pass
 
 
+CURSOR_KEY = "cards_alert_cursor"
+
+
 class CardsCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    async def cog_load(self) -> None:
+        self._rare_pull_watch.start()
+
+    async def cog_unload(self) -> None:
+        self._rare_pull_watch.cancel()
+
+    @tasks.loop(seconds=20)
+    async def _rare_pull_watch(self) -> None:
+        """Announce rarer-than-1% pulls (legendary / gem / holo-epic+) from ANY source — web or
+        Discord opens, daily, trade-ups — by watching the mint log. The DB is the single source
+        of truth, so web opens get a Discord shout-out without the web process touching Discord."""
+        try:
+            raw = await queries.get_bot_setting(CURSOR_KEY)
+            if raw is None:
+                # First run: start at the newest card so we don't replay the whole backlog.
+                await queries.set_bot_setting(CURSOR_KEY, str(await queries.get_max_card_instance_id()))
+                return
+            rows = await queries.get_card_instances_after(int(raw))
+            if not rows:
+                return
+            chan_id = await queries.get_bot_setting(ALERT_CHANNEL_KEY)
+            channel = self.bot.get_channel(int(chan_id)) if chan_id else None
+            if channel:
+                for c in rows:
+                    if not engine.is_rare_pull(c):
+                        continue
+                    emb = discord.Embed(
+                        title=f"{SPORT_EMOJI.get(c['sport'], '🎴')} Rare pull!",
+                        description=f"<@{c['owner_id']}> pulled {_card_line(c)}\n*{c['set_name']}*",
+                        color=RARITY_COLOR.get(c["rarity"], 0xE0AF68),
+                    )
+                    if c.get("headshot_url"):
+                        emb.set_thumbnail(url=c["headshot_url"])
+                    try:
+                        await channel.send(embed=emb)
+                    except Exception:
+                        log.debug("rare-pull post failed for %s", c.get("instance_id"), exc_info=True)
+            await queries.set_bot_setting(CURSOR_KEY, str(rows[-1]["instance_id"]))
+        except Exception:
+            log.exception("rare-pull watcher tick failed")
+
+    @_rare_pull_watch.before_loop
+    async def _before_rare_pull_watch(self) -> None:
+        await self.bot.wait_until_ready()
 
     # ----- pack group -----
     pack = app_commands.Group(name="pack", description="Open sports card packs")
     cards = app_commands.Group(name="cards", description="Your card collection, catalog & trading")
     wishlist = app_commands.Group(name="wishlist", description="Card wishlist", parent=cards)
     cardtrade = app_commands.Group(name="cardtrade", description="Trade cards card-for-card")
-
-    async def _post_notable(self, cards_out: list[dict], opener: discord.abc.User) -> None:
-        """Shout-out for notable pulls to the configured alert channel (best-effort)."""
-        notable = [c for c in cards_out if engine.is_notable_pull(c)]
-        if not notable:
-            return
-        try:
-            chan_id = await queries.get_bot_setting(ALERT_CHANNEL_KEY)
-            if not chan_id:
-                return
-            channel = self.bot.get_channel(int(chan_id))
-            if channel is None:
-                return
-            for c in notable:
-                emb = discord.Embed(
-                    title=f"{SPORT_EMOJI.get(c['sport'],'🎴')} Notable pull!",
-                    description=f"{opener.mention} pulled {_card_line(c)}",
-                    color=RARITY_COLOR.get(c["rarity"], 0x7AA2F7),
-                )
-                if c.get("headshot_url"):
-                    emb.set_thumbnail(url=c["headshot_url"])
-                await channel.send(embed=emb)
-        except Exception:
-            log.exception("cards: notable-pull alert failed")
 
     async def _grant_achievements(self, uid: str, channel) -> None:
         """Unlock + announce any card achievements earned by this pull (best-effort)."""
@@ -325,7 +349,6 @@ class CardsCog(commands.Cog):
                 return
         title = f"{SPORT_EMOJI.get(sport.value,'🎴')} {cset['name']} — {opened} pack{'s' if opened>1 else ''}"
         await self._send_reveal(interaction, all_cards, title, cset["set_id"])
-        await self._post_notable(all_cards, interaction.user)
         await self._dm_wanters(all_cards, interaction.user)
         await self._check_set_completion(uid, cset["set_id"], interaction)
         await self._grant_achievements(uid, interaction.channel)
@@ -352,7 +375,6 @@ class CardsCog(commands.Cog):
         await queries.record_daily_pack_claim(uid, day)
         title = f"🎁 Free daily pack — {cset['name']}"
         await self._send_reveal(interaction, cards_out, title, cset["set_id"])
-        await self._post_notable(cards_out, interaction.user)
         await self._dm_wanters(cards_out, interaction.user)
         await self._check_set_completion(uid, cset["set_id"], interaction)
         await self._grant_achievements(uid, interaction.channel)

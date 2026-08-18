@@ -399,6 +399,17 @@ def test_reveal_order_is_ascending():
     assert [c["rarity"] for c in cards.reveal_order(hand)] == ["common", "rare", "legendary"]
 
 
+def test_is_rare_pull_threshold():
+    # rarer than ~1% -> announce
+    assert cards.is_rare_pull({"rarity": "legendary", "is_holo": False, "gem": None})
+    assert cards.is_rare_pull({"rarity": "rare", "is_holo": False, "gem": "ruby"})
+    assert cards.is_rare_pull({"rarity": "epic", "is_holo": True, "gem": None})
+    # ~1% or more -> quiet
+    assert not cards.is_rare_pull({"rarity": "epic", "is_holo": False, "gem": None})
+    assert not cards.is_rare_pull({"rarity": "rare", "is_holo": True, "gem": None})
+    assert not cards.is_rare_pull({"rarity": "common", "is_holo": False, "gem": "chrome"})
+
+
 def test_pull_label_formats():
     pr = {"common": 62.0, "legendary": 2.3}
     assert cards.pull_label({"rarity": "common", "is_holo": False, "gem": None}, pr).endswith("%")

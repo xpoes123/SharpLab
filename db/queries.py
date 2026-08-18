@@ -4749,6 +4749,38 @@ async def record_daily_pack_claim(user: str, day: str) -> None:
         await db.commit()
 
 
+async def get_max_card_instance_id() -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT COALESCE(MAX(instance_id), 0) FROM card_instances")
+        return (await cur.fetchone())[0]
+
+
+async def get_card_instances_after(after_id: int, limit: int = 200) -> list[dict]:
+    """New minted cards with instance_id > after_id, joined to design + set for the rare-pull
+    watcher. Ordered oldest-first so the cursor advances monotonically."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT i.instance_id, i.owner_id, i.serial, i.is_holo, i.gem, i.book_value, "
+            "d.subject_name, d.total_copies, d.headshot_url, d.rarity, d.is_rookie, s.sport, s.name AS set_name "
+            "FROM card_instances i "
+            "JOIN card_designs d ON i.design_id = d.design_id "
+            "JOIN card_sets s ON d.set_id = s.set_id "
+            "WHERE i.instance_id > ? ORDER BY i.instance_id ASC LIMIT ?",
+            (after_id, limit),
+        )
+        rows = await cur.fetchall()
+    return [
+        {
+            "instance_id": r["instance_id"], "owner_id": r["owner_id"], "serial": r["serial"],
+            "is_holo": bool(r["is_holo"]), "gem": r["gem"], "book_value": r["book_value"],
+            "name": r["subject_name"], "total_copies": r["total_copies"], "headshot_url": r["headshot_url"],
+            "rarity": r["rarity"], "is_rookie": bool(r["is_rookie"]), "sport": r["sport"], "set_name": r["set_name"],
+        }
+        for r in rows
+    ]
+
+
 # --- wishlist ---
 async def add_card_want(user: str, design_id: int) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
