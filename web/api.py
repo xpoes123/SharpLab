@@ -27,6 +27,7 @@ from web.tictactoe import router as tictactoe_router, tictactoe_websocket, clean
 from web.connect4 import router as connect4_router, connect4_websocket, cleanup_stale_connect4_rooms
 from web.rps import router as rps_router, rps_websocket, cleanup_stale_rps_rooms
 from web.battleship import router as battleship_router, battleship_websocket, cleanup_stale_battleship_rooms
+from web.reversi import router as reversi_router, reversi_websocket, cleanup_stale_reversi_rooms
 from web.hq import router as hq_router, quote_refresh_loop
 from web.cards import router as cards_router
 from web.casino import router as casino_router
@@ -37,6 +38,8 @@ from web.g_pokedle import router as pokedle_router
 from web.g_mastermind import router as mastermind_router
 from web.g_mathsprint import router as mathsprint_router
 from web.g_countdown import router as countdown_router
+from web.g_nbaguess import router as nbaguess_router
+from web.g_valorant import router as valorant_router
 from web.blackjack import router as blackjack_router
 from web.baccarat import router as baccarat_router
 from web.videopoker import router as videopoker_router
@@ -110,6 +113,7 @@ async def lifespan(app: FastAPI):
     c4_cleanup_task = asyncio.create_task(cleanup_stale_connect4_rooms())
     rps_cleanup_task = asyncio.create_task(cleanup_stale_rps_rooms())
     bs_cleanup_task = asyncio.create_task(cleanup_stale_battleship_rooms())
+    rev_cleanup_task = asyncio.create_task(cleanup_stale_reversi_rooms())
     quote_task = asyncio.create_task(quote_refresh_loop())   # keep HQ stock prices warm
     yield
     quote_task.cancel()
@@ -124,6 +128,7 @@ async def lifespan(app: FastAPI):
     c4_cleanup_task.cancel()
     rps_cleanup_task.cancel()
     bs_cleanup_task.cancel()
+    rev_cleanup_task.cancel()
 
 
 app = FastAPI(title="SharpLab", docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -153,6 +158,8 @@ app.include_router(pokedle_router)
 app.include_router(mastermind_router)
 app.include_router(mathsprint_router)
 app.include_router(countdown_router)
+app.include_router(nbaguess_router)
+app.include_router(valorant_router)
 app.include_router(blackjack_router)
 app.include_router(baccarat_router)
 app.include_router(videopoker_router)
@@ -165,6 +172,7 @@ app.include_router(tictactoe_router)
 app.include_router(connect4_router)
 app.include_router(rps_router)
 app.include_router(battleship_router)
+app.include_router(reversi_router)
 
 
 # WebSocket endpoint (not on the API router — different path pattern)
@@ -221,6 +229,11 @@ async def ws_rps(websocket: WebSocket, room_id: str):
 @app.websocket("/ws/battleship/{room_id}")
 async def ws_battleship(websocket: WebSocket, room_id: str):
     await battleship_websocket(websocket, room_id)
+
+
+@app.websocket("/ws/reversi/{room_id}")
+async def ws_reversi(websocket: WebSocket, room_id: str):
+    await reversi_websocket(websocket, room_id)
 
 # ── Static data (replicated from bot cogs to avoid importing bot deps) ───────
 

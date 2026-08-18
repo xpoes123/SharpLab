@@ -1,0 +1,150 @@
+/* SharpLab HQ — Reversi (Othello) page.
+   Builds on hqstyle.css (shared vars/header/nav/.btn/.card). Only page-specific
+   styling here. A free (no-coins) game that reuses the web multiplayer pattern. */
+
+/* ── Page intro ── */
+.rv-head { margin: 4px 0 20px; text-align: center; }
+.rv-head h1 { font-size: 26px; margin: 0 0 4px; }
+.rv-head p { color: var(--muted); margin: 0; font-size: 14px; }
+
+.rv-wrap { max-width: 440px; margin: 0 auto; }
+.rv-wrap.wide { max-width: 520px; }
+
+/* ── Lobby ── */
+.rv-lobby { display: flex; flex-direction: column; gap: var(--s-4); }
+.rv-field { display: flex; flex-direction: column; gap: 6px; text-align: left; }
+.rv-field label { font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); font-weight: 700; }
+.rv-input {
+  width: 100%; box-sizing: border-box; background: var(--panel2); color: var(--fg);
+  border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; font-size: 15px;
+  transition: border-color var(--t), box-shadow var(--t);
+}
+.rv-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+.rv-input.code { text-transform: uppercase; letter-spacing: 4px; font-weight: 700; font-family: var(--font-mono); }
+.rv-actions { display: flex; gap: var(--s-2); flex-wrap: wrap; }
+.rv-actions .btn { flex: 1 1 auto; }
+.rv-sep { text-align: center; color: var(--faint); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+.rv-joinrow { display: flex; gap: var(--s-2); }
+.rv-joinrow .rv-input { flex: 1 1 auto; }
+
+/* ── Room / share ── */
+.rv-codebox { text-align: center; }
+.rv-codelabel { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+.rv-code {
+  display: inline-block; margin-top: 6px; font-family: var(--font-mono); font-weight: 800;
+  font-size: 34px; letter-spacing: 8px; color: var(--gold);
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-lg);
+  padding: 8px 20px 8px 28px; cursor: pointer; transition: border-color var(--t), transform var(--t);
+}
+.rv-code:hover { border-color: var(--gold); transform: translateY(-1px); }
+.rv-copyhint { display: block; margin-top: 6px; font-size: 11px; color: var(--faint); }
+
+/* ── Discs (shared look for board + chips + scores) ── */
+.rv-disc {
+  display: inline-block; width: 78%; height: 78%; border-radius: 50%;
+  box-shadow: inset 0 2px 4px rgba(255,255,255,.15), 0 2px 5px rgba(0,0,0,.45);
+}
+.rv-disc.b { background: radial-gradient(circle at 35% 30%, #4a4f5a, #14161c 70%); }
+.rv-disc.w { background: radial-gradient(circle at 35% 30%, #ffffff, #c3c8d2 72%); }
+.rv-disc.inline { width: 14px; height: 14px; vertical-align: middle; flex: 0 0 auto; }
+
+/* ── You-are indicator ── */
+.rv-youare { text-align: center; font-size: 13px; color: var(--muted); font-weight: 600; }
+.rv-youare .rv-disc { margin-right: 3px; }
+
+/* ── Score board ── */
+.rv-scores { display: flex; align-items: center; justify-content: center; gap: var(--s-3); }
+.rv-score {
+  display: flex; align-items: center; gap: 8px; padding: 8px 16px;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-lg);
+  transition: border-color var(--t), box-shadow var(--t);
+}
+.rv-score.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--ring); }
+.rv-scorenum { font-family: var(--font-mono); font-weight: 800; font-size: 22px; color: var(--fg); }
+.rv-scorelbl { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+.rv-scoresep { color: var(--faint); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+
+/* ── Status line ── */
+.rv-status { text-align: center; font-size: 15px; font-weight: 700; min-height: 22px; }
+.rv-status.wait { color: var(--muted); font-weight: 500; }
+.rv-status.yours { color: var(--green); }
+.rv-status.theirs { color: var(--accent2); }
+.rv-status.win { color: var(--green); }
+.rv-status.lose { color: var(--red); }
+.rv-status.draw { color: var(--gold); }
+
+/* ── Player chips ── */
+.rv-players { display: flex; justify-content: center; gap: var(--s-3); flex-wrap: wrap; }
+.rv-pchip {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-pill); font-size: 13px;
+}
+.rv-pchip.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--ring); }
+.rv-pname { font-weight: 700; }
+.rv-pyou { color: var(--faint); font-size: 11px; }
+.rv-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.rv-dot.on { background: var(--green); }
+
+/* ── Board ── */
+.rv-board {
+  display: grid; grid-template-columns: repeat(8, 1fr); gap: 3px;
+  width: 440px; max-width: 100%; margin: 0 auto; aspect-ratio: 1;
+  background: #1b6b45; border: 3px solid #0f3f29; border-radius: var(--r-lg);
+  padding: 3px;
+}
+.rv-cell {
+  display: grid; place-items: center; background: #2f8a5c;
+  border-radius: 3px; cursor: default; user-select: none;
+  transition: background var(--t);
+}
+.rv-cell.playable { cursor: pointer; }
+.rv-cell.playable:hover { background: #38a06c; }
+.rv-board.locked .rv-cell { cursor: default; }
+
+/* Legal-move hint dot (subtle) */
+.rv-hint {
+  width: 26%; height: 26%; border-radius: 50%;
+  background: rgba(255,255,255,.28);
+}
+.rv-cell.playable:hover .rv-hint { background: rgba(255,255,255,.5); }
+
+.rv-disc-in { animation: rv-pop .18s ease both; }
+@keyframes rv-pop { from { transform: scale(.3); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+/* ── Banner + rematch ── */
+.rv-banner { text-align: center; margin-top: 6px; }
+.rv-rematch { margin-top: 4px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .rv-code:hover { transform: none; }
+  .rv-disc-in { animation: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Copied verbatim from tictactoe.css / cards.css so the coins hub + toasts are
+   styled on this page too. This game is free, but the shared nav chip is kept.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.coinschip { font-weight: 700; color: var(--gold); background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; font-size: 13px; white-space: nowrap; cursor: pointer; transition: border-color .15s, transform .15s; }
+.coinschip:hover { border-color: var(--gold); transform: translateY(-1px); }
+
+/* Coins hub modal */
+.hubov { position: fixed; inset: 0; z-index: 250; display: grid; place-items: center; padding: 20px; background: rgba(5,7,11,.6); backdrop-filter: blur(3px); animation: cd-scrim-in .18s ease both; }
+@keyframes cd-scrim-in { from { opacity: 0; } to { opacity: 1; } }
+.hubcard { width: min(460px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px 20px; box-shadow: 0 24px 60px -20px #000; }
+.hubhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.hubhead h3 { margin: 0; font-size: 17px; }
+.hubx { background: none; border: 0; color: var(--muted); font-size: 18px; cursor: pointer; line-height: 1; padding: 4px 8px; border-radius: 8px; }
+.hubx:hover { color: var(--fg); background: var(--panel2); }
+.hubrow { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
+.hubrow:first-of-type { border-top: 0; }
+.hubicon { font-size: 20px; width: 30px; text-align: center; flex: 0 0 auto; }
+.hubt { font-weight: 700; font-size: 14px; }
+.hubd { color: var(--muted); font-size: 12.5px; line-height: 1.45; margin-top: 2px; }
+.hubfoot { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; text-align: right; }
+.hubfoot b { color: var(--gold); }
+
+.cardtoast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 300;
+  background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 18px; font-size: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.5);
+}
