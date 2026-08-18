@@ -133,6 +133,44 @@ async def slots(request: Request, body: SlotsBody):
     return await _play(request, "slots", body.bet, resolve)
 
 
+# ── Plinko — 8-row binomial drop into multiplier buckets (~4.7% house edge) ──
+_PLINKO_MULT = [8.4, 3.0, 1.3, 0.7, 0.4, 0.7, 1.3, 3.0, 8.4]  # E[payout] ≈ 0.953 × bet
+
+
+class PlinkoBody(BaseModel):
+    bet: int
+
+
+@router.post("/plinko")
+async def plinko(request: Request, body: PlinkoBody):
+    def resolve():
+        steps = [secrets.randbelow(2) for _ in range(8)]  # 0=left, 1=right
+        bucket = sum(steps)
+        mult = _PLINKO_MULT[bucket]
+        return round(body.bet * mult), {"bucket": bucket, "mult": mult, "path": steps}
+
+    return await _play(request, "plinko", body.bet, resolve)
+
+
+# ── Crash — pick a cash-out target; win if the curve crashes at/above it (1% edge) ──
+class CrashBody(BaseModel):
+    bet: int
+    target: float  # desired cash-out multiplier (>= 1.01)
+
+
+@router.post("/crash")
+async def crash(request: Request, body: CrashBody):
+    target = max(1.01, min(1000.0, float(body.target)))
+
+    def resolve():
+        u = (secrets.randbelow(10**9)) / 10**9  # [0, 1)
+        point = max(1.0, round(0.99 / (1.0 - u), 2))  # P(point >= x) = 0.99/x
+        won = point >= target
+        return (round(body.bet * target) if won else 0), {"point": point, "target": round(target, 2)}
+
+    return await _play(request, "crash", body.bet, resolve)
+
+
 # ── Roulette — single-zero (European): number 0–36, standard payouts ──
 _RED = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
 

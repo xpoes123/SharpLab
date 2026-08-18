@@ -1,4 +1,4 @@
-// SharpLab HQ — Casino: coinflip, dice, slots, roulette. Play inline for coins.
+// SharpLab HQ — Casino: coinflip, dice, slots, roulette, plinko, crash. Play inline for coins.
 // Bets POST to /api/v1/casino/* (session-cookie auth); each response carries the
 // authoritative new balance, which we push back into the nav chip + page header.
 
@@ -40,6 +40,8 @@ const games = {
   dice: { target: 50, direction: "over" },
   slots: {},
   roulette: { kind: "red", number: 7, dozen: 1 },
+  plinko: {},
+  crash: { target: 2.0 },
 };
 
 // ── POST to a casino endpoint. Returns {detail, payout, won, bet, balance} or {error}. ──
@@ -334,8 +336,155 @@ async function playRoulette(btn) {
   setResult("roulette", res);
 }
 
+// ═══════════════════ Plinko ═══════════════════
+const PLINKO_MULTS = [8.4, 3, 1.3, 0.7, 0.4, 0.7, 1.3, 3, 8.4];
+const PLINKO_ROWS = 8;
+function plinkoPanel() {
+  const rows = [];
+  for (let r = 0; r < PLINKO_ROWS; r++) {
+    const pegs = Array.from({ length: r + 2 }, () => `<span class="peg"></span>`).join("");
+    rows.push(`<div class="plinko-row">${pegs}</div>`);
+  }
+  const buckets = PLINKO_MULTS.map(
+    (m, i) => `<div class="plinko-bucket" data-bucket="${i}">${m}×</div>`
+  ).join("");
+  return `<div class="card gcard">
+    <div class="ghead"><h2><span class="gicon">🔻</span> Plinko</h2><div class="gpay">Edges pay <b>8.4×</b></div></div>
+    <div class="plinko-board" id="plinkoBoard">
+      <div class="plinko-ball" id="plinkoBall"></div>
+      ${rows.join("")}
+    </div>
+    <div class="plinko-buckets">${buckets}</div>
+    ${betInput("plinko")}
+    <button class="btn primary playbtn" data-play="plinko">Drop</button>
+    <div class="result idle" data-result="plinko">Drop the ball.</div>
+  </div>`;
+}
+async function dropPlinkoBall(path, bucket) {
+  const ball = document.getElementById("plinkoBall");
+  if (!ball) return;
+  ball.style.transition = "none";
+  let x = 0.5; // fraction of board width
+  ball.style.left = "50%";
+  ball.style.top = "0%";
+  ball.style.opacity = "1";
+  void ball.offsetWidth;
+  if (REDUCE) {
+    ball.style.left = (bucket / PLINKO_ROWS * 100) + "%";
+    ball.style.top = "100%";
+    return;
+  }
+  for (let i = 0; i < PLINKO_ROWS; i++) {
+    x += (path[i] ? 1 : -1) * (0.5 / PLINKO_ROWS);
+    ball.style.transition = "left .13s ease-in, top .13s ease-in";
+    ball.style.left = (x * 100) + "%";
+    ball.style.top = ((i + 1) / PLINKO_ROWS * 100) + "%";
+    await delay(140);
+  }
+}
+async function playPlinko(btn) {
+  const bet = readBet("plinko");
+  if (bet < 1) return toast("Enter a bet of at least 1 coin");
+  btn.disabled = true;
+  document.querySelectorAll(".plinko-bucket.hit").forEach((b) => b.classList.remove("hit"));
+  const res = await postCasino("/plinko", { bet });
+  if (res.error) { btn.disabled = false; return toast("❌ " + res.error); }
+  const d = res.detail || {};
+  const bucket = d.bucket == null ? 0 : d.bucket;
+  await dropPlinkoBall(d.path || [], bucket);
+  btn.disabled = false;
+  applyBalance(res.balance);
+  const bk = document.querySelector(`.plinko-bucket[data-bucket="${bucket}"]`);
+  if (bk) bk.classList.add("hit");
+  const el = document.querySelector('.result[data-result="plinko"]');
+  if (el) {
+    const net = (res.payout || 0) - (res.bet || 0);
+    el.className = "result " + (res.won ? "win" : "loss");
+    el.textContent = `${d.mult == null ? "" : d.mult + "×  "}${net >= 0 ? "+" : ""}${coins(net)}`;
+  }
+}
+
+// ═══════════════════ Crash ═══════════════════
+function updateCrash() {
+  const t = games.crash.target;
+  const bet = readBet("crash");
+  const sub = document.getElementById("crashSub");
+  if (sub && t >= 1.01)
+    sub.innerHTML = `Payout if hit <b>${coins(bet * t)}</b> at <b>${t.toFixed(2)}×</b>`;
+}
+function syncCrashInputs(src) {
+  const s = document.getElementById("crashSlider");
+  const n = document.getElementById("crashTargetIn");
+  const v = games.crash.target;
+  if (src !== "slider" && s) s.value = Math.min(10, Math.max(1.01, v || 1.01));
+  if (src !== "input" && n) n.value = (v || 1.01).toFixed(2);
+}
+function crashPanel() {
+  return `<div class="card gcard">
+    <div class="ghead"><h2><span class="gicon">🚀</span> Crash</h2><div class="gpay">Cash out before it busts</div></div>
+    <div class="crash-stage"><div class="crash-mult" id="crashMult">1.00×</div></div>
+    <div class="betgroup">
+      <div class="betlbl">Cash-out target</div>
+      <div class="crash-targetrow">
+        <input class="crash-slider" id="crashSlider" type="range" min="1.01" max="10" step="0.01" value="2.00" />
+        <input class="crash-targetin" id="crashTargetIn" type="number" min="1.01" step="0.01" value="2.00" />
+        <span>×</span>
+      </div>
+    </div>
+    <div class="subline" id="crashSub"></div>
+    ${betInput("crash")}
+    <button class="btn primary playbtn" data-play="crash">Bet</button>
+    <div class="result idle" data-result="crash">Set a target, then bet.</div>
+  </div>`;
+}
+async function runCrashAnim(point, target, won) {
+  const el = document.getElementById("crashMult");
+  if (!el) return;
+  el.classList.remove("crashed", "cashed");
+  const top = won ? target : point;
+  if (REDUCE) {
+    el.textContent = top.toFixed(2) + "×";
+    el.classList.add(won ? "cashed" : "crashed");
+    return;
+  }
+  const start = performance.now();
+  const dur = Math.min(2200, 500 + point * 240);
+  await new Promise((resolve) => {
+    function frame(now) {
+      const p = Math.min(1, (now - start) / dur);
+      el.textContent = (1 + (top - 1) * p).toFixed(2) + "×";
+      if (p >= 1) return resolve();
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  });
+  el.textContent = top.toFixed(2) + "×";
+  el.classList.add(won ? "cashed" : "crashed");
+}
+async function playCrash(btn) {
+  const bet = readBet("crash");
+  if (bet < 1) return toast("Enter a bet of at least 1 coin");
+  const target = games.crash.target;
+  if (!(target >= 1.01)) return toast("Cash-out target must be at least 1.01×");
+  btn.disabled = true;
+  const res = await postCasino("/crash", { bet, target });
+  if (res.error) { btn.disabled = false; return toast("❌ " + res.error); }
+  const d = res.detail || {};
+  const point = Number(d.point);
+  const tgt = Number(d.target == null ? target : d.target);
+  await runCrashAnim(point, tgt, res.won);
+  btn.disabled = false;
+  applyBalance(res.balance);
+  const sub = document.getElementById("crashSub");
+  if (sub)
+    sub.innerHTML = res.won
+      ? `Cashed out at <b>${tgt.toFixed(2)}×</b> — it busted at <b>${point.toFixed(2)}×</b>`
+      : `Busted at <b>${point.toFixed(2)}×</b> — target was <b>${tgt.toFixed(2)}×</b>`;
+  setResult("crash", res);
+}
+
 // ── Dispatch ──
-const PLAY = { coinflip: playCoinflip, dice: playDice, slots: playSlots, roulette: playRoulette };
+const PLAY = { coinflip: playCoinflip, dice: playDice, slots: playSlots, roulette: playRoulette, plinko: playPlinko, crash: playCrash };
 
 function buildPage() {
   const signedOut = !state.me
@@ -354,8 +503,11 @@ function buildPage() {
       ${dicePanel()}
       ${slotsPanel()}
       ${roulettePanel()}
+      ${plinkoPanel()}
+      ${crashPanel()}
     </div>`;
   updateDice();
+  updateCrash();
 }
 
 // Delegated events
@@ -366,6 +518,7 @@ app.addEventListener("click", (e) => {
     if (inp) {
       inp.value = chip.dataset.amt === "max" ? Math.max(0, Math.floor(state.balance)) : chip.dataset.amt;
       if (chip.dataset.chip === "dice") updateDice();
+      if (chip.dataset.chip === "crash") updateCrash();
     }
     return;
   }
@@ -394,11 +547,14 @@ app.addEventListener("click", (e) => {
 
 app.addEventListener("input", (e) => {
   if (e.target.id === "diceSlider") { games.dice.target = Number(e.target.value); updateDice(); return; }
+  if (e.target.id === "crashSlider") { games.crash.target = Number(e.target.value); syncCrashInputs("slider"); updateCrash(); return; }
+  if (e.target.id === "crashTargetIn") { games.crash.target = Number(e.target.value); syncCrashInputs("input"); updateCrash(); return; }
   if (e.target.id === "roulNumIn") {
     games.roulette.number = e.target.value;
     if (games.roulette.kind === "number") return;
   }
   if (e.target.dataset && e.target.dataset.betfor === "dice") updateDice();
+  if (e.target.dataset && e.target.dataset.betfor === "crash") updateCrash();
 });
 // Selecting the number field implies a straight-up bet.
 app.addEventListener("focusin", (e) => {
@@ -475,6 +631,20 @@ function mockCasino(path, body) {
       payout = won ? bet * 2 : 0;
     }
     detail = { n, color, kind: k, value: body.value };
+  } else if (path === "/plinko") {
+    const pth = Array.from({ length: PLINKO_ROWS }, () => (Math.random() < 0.5 ? 0 : 1));
+    const bucket = pth.reduce((a, b) => a + b, 0);
+    const mult = PLINKO_MULTS[bucket];
+    payout = Math.round(bet * mult);
+    won = payout > bet;
+    detail = { bucket, mult, path: pth };
+  } else if (path === "/crash") {
+    // Classic crash distribution with ~3% house edge, capped for display.
+    const point = Math.min(50, Math.max(1.0, Math.floor((0.97 / (1 - Math.random())) * 100) / 100));
+    const target = Number(body.target) || 2;
+    won = point >= target;
+    payout = won ? Math.round(bet * target) : 0;
+    detail = { point, target };
   }
   state.balance = Math.max(0, state.balance - bet + payout);
   return { detail, payout, won, bet, balance: state.balance };

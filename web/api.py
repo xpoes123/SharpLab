@@ -27,6 +27,9 @@ from web.hq import router as hq_router, quote_refresh_loop
 from web.cards import router as cards_router
 from web.casino import router as casino_router
 from web.arcade import router as arcade_router
+from web.g_wordle import router as wordle_router
+from web.g_geo import router as geo_router
+from web.g_pokedle import router as pokedle_router
 
 DB_PATH = os.environ.get("SHARPLAB_DB_PATH", "data/sharplab.db")
 
@@ -121,6 +124,9 @@ app.include_router(hq_router)
 app.include_router(cards_router)
 app.include_router(casino_router)
 app.include_router(arcade_router)
+app.include_router(wordle_router)
+app.include_router(geo_router)
+app.include_router(pokedle_router)
 
 
 # WebSocket endpoint (not on the API router — different path pattern)
