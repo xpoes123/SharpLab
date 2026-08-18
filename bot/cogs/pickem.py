@@ -78,6 +78,7 @@ SPORT_EMOJI = {"nba": "🏀", "wnba": "🏀", "mlb": "⚾", "nfl": "🏈"}
 # games, so cap it too (preseason days stay well under the cap and all post).
 _SPORT_DAILY_CAP = {"mlb": 5, "nfl": 8}
 PICKEM_SPORTS = ("nba", "wnba", "mlb", "nfl")
+PICKEM_WEB_URL = "https://sharplab.djiang.xyz/pickem"  # full slate lives here
 # MLB teams whose games are always kept in the daily slate. Matched as a substring
 # of either team's full name (e.g. "red sox" ⊂ "Boston Red Sox").
 _PINNED_MLB = ("brewers", "red sox", "mets", "rockies", "dodgers")
@@ -567,16 +568,25 @@ class PickemCog(commands.Cog):
         await channel.send(embed=embed)
 
     async def _slate(self, s_utc: str, e_utc: str) -> list:
-        """Pick'em slate across all sports in [s_utc, e_utc), sorted by tip time.
-        A sport with a daily cap (see _SPORT_DAILY_CAP) keeps only its most lopsided
-        'marquee favorite' games — ranked by distance from a coin flip — with earliest
-        tip breaking ties and filling in when a game has no odds captured yet."""
-        by_sport: dict[str, list] = {}
+        """The FULL pick'em slate across all sports in [s_utc, e_utc), sorted by tip time.
+        Every game is pickable on the website; Discord posts only `_capped(...)` of these."""
+        slate: list = []
         for sport in PICKEM_SPORTS:
             try:
-                by_sport[sport] = await queries.get_games_in_window(s_utc, e_utc, sport=sport)
+                slate += await queries.get_games_in_window(s_utc, e_utc, sport=sport)
             except Exception:
                 log.exception("pickem: failed to load %s games", sport)
+        slate.sort(key=lambda g: g.start_time_utc_iso)
+        return slate
+
+    async def _capped(self, full: list) -> list:
+        """The Discord subset of the full slate: a sport with a daily cap
+        (see _SPORT_DAILY_CAP) keeps only its most lopsided 'marquee favorite' games —
+        ranked by distance from a coin flip — plus any pinned-team games (MLB). The
+        website still shows every game; this just keeps the Discord post from spamming."""
+        by_sport: dict[str, list] = {}
+        for g in full:
+            by_sport.setdefault(g.sport, []).append(g)
 
         slate: list = []
         for sport, games in by_sport.items():
@@ -584,8 +594,6 @@ class PickemCog(commands.Cog):
             if cap is None or len(games) <= cap:
                 slate += games
                 continue
-            # Pinned-team games are always kept (MLB); the rest of the slots go to
-            # the most-lopsided ("marquee") games.
             pinned = sorted((g for g in games if sport == "mlb" and _pinned_mlb(g)),
                             key=lambda g: g.start_time_utc_iso)
             pinned_ids = {g.game_id for g in pinned}
@@ -603,6 +611,21 @@ class PickemCog(commands.Cog):
         slate.sort(key=lambda g: g.start_time_utc_iso)
         return slate
 
+    async def _persist_web_game(self, g, posted_date: str) -> None:
+        """Persist a non-Discord slate game as a web-only pick'em row so it's pickable at
+        /pickem. Keyed by game_id (its synthetic message_id) — picks, lock, and resolve all
+        key off message_id/game_id, so these rows behave exactly like posted ones."""
+        if await queries.pickem_game_exists(g.game_id, posted_date):
+            return
+        if await queries.get_game_scores(g.game_id) is not None:
+            return  # already final — no point opening it for picks
+        probs = await _win_probs(g.game_id)
+        hp, ap, src = probs if probs else (None, None, None)
+        await queries.add_pickem_game(
+            g.game_id, g.game_id, g.sport, g.home_team, g.away_team,
+            g.start_time_utc_iso, posted_date, hp, ap, src,
+        )
+
     async def _post_today(self, channel: discord.TextChannel) -> None:
         now_et = datetime.now(ET)
         today = now_et.date().isoformat()
@@ -611,18 +634,23 @@ class PickemCog(commands.Cog):
         s_utc = start.astimezone(timezone.utc).isoformat()
         e_utc = end.astimezone(timezone.utc).isoformat()
 
-        games = await self._slate(s_utc, e_utc)
+        full = await self._slate(s_utc, e_utc)
 
-        if not games:
+        if not full:
             await channel.send(f"📋 **Daily Pick'em — {today}**\nNo games on the slate today.")
             return
 
+        posted = await self._capped(full)
+        posted_ids = {g.game_id for g in posted}
+        extra = len(full) - len(posted)
+        more = (f"\n🌐 That's the marquee slate — pick **all {len(full)} games** "
+                f"({extra} more) at {PICKEM_WEB_URL}") if extra > 0 else ""
         await channel.send(
             f"📋 **Daily Pick'em — {today}**\n"
             "Tap a team, then stake **1–5 units**. Everyone starts at 0u and can go "
-            "negative — beat the market to climb the board. Each game locks at tip-off!"
+            "negative — beat the market to climb the board. Each game locks at tip-off!" + more
         )
-        for g in games:
+        for g in posted:
             if await queries.pickem_game_exists(g.game_id, today):
                 continue
             if await queries.get_game_scores(g.game_id) is not None:
@@ -632,6 +660,10 @@ class PickemCog(commands.Cog):
                 "home_team": g.home_team, "away_team": g.away_team,
                 "start_time": g.start_time_utc_iso,
             }, today)
+        # Persist the rest of the full slate as web-only picks (not posted to Discord).
+        for g in full:
+            if g.game_id not in posted_ids:
+                await self._persist_web_game(g, today)
 
     async def _post_for_date(self, channel: discord.TextChannel, date: str) -> None:
         """Post (or re-post) the pick'em slate for an explicit date string (YYYY-MM-DD)."""
@@ -641,17 +673,21 @@ class PickemCog(commands.Cog):
         s_utc = start.astimezone(timezone.utc).isoformat()
         e_utc = end.astimezone(timezone.utc).isoformat()
 
-        games = await self._slate(s_utc, e_utc)
+        full = await self._slate(s_utc, e_utc)
 
-        if not games:
+        if not full:
             await channel.send(f"📋 **Pick'em — {date}**\nNo games on the slate for {date}.")
             return
 
+        posted = await self._capped(full)
+        posted_ids = {g.game_id for g in posted}
+        extra = len(full) - len(posted)
+        more = (f"\n🌐 Pick **all {len(full)} games** ({extra} more) at {PICKEM_WEB_URL}") if extra > 0 else ""
         await channel.send(
             f"📋 **Pick'em — {date}**\n"
-            "Tap a team, then stake **1–5 units**."
+            "Tap a team, then stake **1–5 units**." + more
         )
-        for g in games:
+        for g in posted:
             if await queries.pickem_game_exists(g.game_id, date):
                 continue
             await self._post_game(channel, {
@@ -659,6 +695,9 @@ class PickemCog(commands.Cog):
                 "home_team": g.home_team, "away_team": g.away_team,
                 "start_time": g.start_time_utc_iso,
             }, date)
+        for g in full:
+            if g.game_id not in posted_ids:
+                await self._persist_web_game(g, date)
 
     async def _post_game(self, channel: discord.TextChannel, gd: dict, posted_date: str) -> None:
         probs = await _win_probs(gd["game_id"])
