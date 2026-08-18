@@ -34,11 +34,14 @@ from web.arcade import router as arcade_router
 from web.g_wordle import router as wordle_router
 from web.g_geo import router as geo_router
 from web.g_pokedle import router as pokedle_router
+from web.g_mastermind import router as mastermind_router
 from web.blackjack import router as blackjack_router
 from web.baccarat import router as baccarat_router
 from web.videopoker import router as videopoker_router
 from web.hilo import router as hilo_router
 from web.craps import router as craps_router
+from web.horserace import router as horserace_router
+from web.nbasim_web import router as nbasim_router
 
 DB_PATH = os.environ.get("SHARPLAB_DB_PATH", "data/sharplab.db")
 
@@ -144,11 +147,14 @@ app.include_router(arcade_router)
 app.include_router(wordle_router)
 app.include_router(geo_router)
 app.include_router(pokedle_router)
+app.include_router(mastermind_router)
 app.include_router(blackjack_router)
 app.include_router(baccarat_router)
 app.include_router(videopoker_router)
 app.include_router(hilo_router)
 app.include_router(craps_router)
+app.include_router(horserace_router)
+app.include_router(nbasim_router)
 app.include_router(tictactoe_router)
 app.include_router(connect4_router)
 app.include_router(rps_router)

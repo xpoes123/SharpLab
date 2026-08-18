@@ -110,3 +110,18 @@ def test_roulette_number_pays_36x(monkeypatch):
         assert res["detail"]["color"] == "black"
 
     _run(go())
+
+
+def test_horserace_win_pays_odds(monkeypatch):
+    import web.horserace as hr
+    _fresh_db()
+
+    async def go():
+        await sch.init_db()
+        await _fund("hr", 1000)
+        monkeypatch.setattr(hr._play.__globals__["auth"], "read_session", lambda r: {"id": "hr"})
+        monkeypatch.setattr(hr, "_run_race", lambda: 3)  # horse 3 wins (odds 9.0)
+        res = await hr.horserace(_Req(), hr.RaceBody(bet=10, horse=3))
+        assert res["won"] and res["payout"] == round(10 * 9.0)
+        assert res["detail"]["winner"] == 3
+    _run(go())
