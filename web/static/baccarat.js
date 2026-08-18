@@ -40,7 +40,7 @@ const game = { side: "player", busy: false };
 // ── POST to the baccarat endpoint. Returns {detail, payout, won, bet, balance} or {error}. ──
 async function postBaccarat(body) {
   if (MOCK) return mockBaccarat(body);
-  const r = await fetch("/api/v1/casino/baccarat/baccarat", {
+  const r = await fetch("/api/v1/casino/baccarat", {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },

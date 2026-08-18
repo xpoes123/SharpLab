@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from web.casino import _play
 
-router = APIRouter(prefix="/api/v1/casino/baccarat")
+router = APIRouter(prefix="/api/v1/casino")
 
 # Rank -> baccarat point value (A=1, 2-9 face, 10/J/Q/K=0). Suits are cosmetic.
 _RANKS = [("A", 1), ("2", 2), ("3", 3), ("4", 4), ("5", 5), ("6", 6),
