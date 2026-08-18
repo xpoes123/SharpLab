@@ -212,10 +212,14 @@ def _parse_nba(cats: list[dict], year: int):
     totals = _rows_by_year(_category(cats, "totals"))
     avgs = _rows_by_year(_category(cats, "averages"))
     years = sorted(set(totals) | set(avgs))
-    fame_raw = sum(_num(r.get("points")) for r in totals.values())
+    # Fame = THIS SEASON's production, not career totals. Per-game value × games played,
+    # so an injured/limited season (few games) ranks low even for a career star.
+    a = avgs.get(year, {})
+    fame_raw = (
+        _num(a.get("avgPoints")) + 0.5 * _num(a.get("avgRebounds")) + 0.7 * _num(a.get("avgAssists"))
+    ) * _num(a.get("gamesPlayed"))
     debut = years[0] if years else None
     stats: dict = {}
-    a = avgs.get(year)
     if a:
         stats = {
             "PPG": _num(a.get("avgPoints")),
@@ -231,22 +235,19 @@ def _parse_nfl(cats: list[dict], year: int):
     rushing = _rows_by_year(_category(cats, "rushing"))
     receiving = _rows_by_year(_category(cats, "receiving"))
     years = sorted(set(passing) | set(rushing) | set(receiving))
-    fame_raw = 0.0
-    for y in years:
-        p, r, c = passing.get(y, {}), rushing.get(y, {}), receiving.get(y, {})
-        fame_raw += (
-            _num(p.get("passingYards")) / 25.0
-            + _num(p.get("passingTouchdowns")) * 4.0
-            - _num(p.get("interceptions")) * 2.0
-            + _num(r.get("rushingYards")) / 10.0
-            + _num(r.get("rushingTouchdowns")) * 6.0
-            + _num(c.get("receivingYards")) / 10.0
-            + _num(c.get("receivingTouchdowns")) * 6.0
-        )
-    fame_raw = max(fame_raw, 0.0)
     debut = years[0] if years else None
     stats: dict = {}
+    # Fame = THIS SEASON's fantasy-style production, not career-accumulated.
     p, r, c = passing.get(year, {}), rushing.get(year, {}), receiving.get(year, {})
+    fame_raw = max(0.0, (
+        _num(p.get("passingYards")) / 25.0
+        + _num(p.get("passingTouchdowns")) * 4.0
+        - _num(p.get("interceptions")) * 2.0
+        + _num(r.get("rushingYards")) / 10.0
+        + _num(r.get("rushingTouchdowns")) * 6.0
+        + _num(c.get("receivingYards")) / 10.0
+        + _num(c.get("receivingTouchdowns")) * 6.0
+    ))
     if p:
         stats["PassYds"] = int(_num(p.get("passingYards")))
         stats["PassTD"] = int(_num(p.get("passingTouchdowns")))
@@ -276,10 +277,13 @@ def _parse_mlb(cats: list[dict], year: int):
     hit_raw = hr + hits
     pit_raw = ks + wins
 
-    # Classify: whichever role has more career volume drives the card.
+    # Classify role by career volume, but score fame from THIS SEASON only.
     is_pitcher = pit_raw > hit_raw
     group = "mlb_pitcher" if is_pitcher else "mlb_hitter"
-    fame_raw = pit_raw if is_pitcher else hit_raw
+    _by, _bp = batting.get(year, {}), pitching.get(year, {})
+    season_hit = _num(_by.get("homeRuns")) + _num(_by.get("hits"))
+    season_pit = _num(_bp.get("strikeouts")) + _num(_bp.get("wins"))
+    fame_raw = season_pit if is_pitcher else season_hit
 
     years = sorted(set(batting) | set(pitching))
     debut = years[0] if years else None
