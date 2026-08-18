@@ -355,7 +355,7 @@ const EARN_WAYS = [
   ["💬", "Chat in the server", "5 coins per message, up to 500 a day"],
   ["🎯", "Log a bet", "50 coins for logging a sports bet with /bet log"],
   ["📈", "Log a trade", "50 coins for recording a stock or option trade"],
-  ["🏀", "Daily pick'em", "25 coins each time you make a pick"],
+  ["🏀", "Daily pick'em", "25 coins per pick — plus a coin payout when your pick wins"],
   ["🎁", "Free daily pack", "Open one free card pack every day — pure upside"],
   ["🃏", "Complete a set", "One-time coin bonus for owning every card in a set"],
   ["♻️", "Quick-sell dupes", "Sell duplicate cards back for coins in Discord"],

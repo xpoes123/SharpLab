@@ -64,6 +64,11 @@ async def _win_probs(game_id: str) -> tuple[float, float, str] | None:
 
 ET = ZoneInfo("America/New_York")
 POST_TIME = time(hour=10, minute=0, tzinfo=ET)
+PICKEM_COINS_PER_UNIT = 50  # casino coins paid per unit WON on a correct pick (losses cost no coins)
+
+
+def _pickem_win_coins(gain_units: float) -> int:
+    return max(0, round(gain_units * PICKEM_COINS_PER_UNIT))
 # Monday-morning "last week's winner" callout — runs daily, but only fires on Mondays.
 WEEK_WINNER_TIME = time(hour=11, minute=0, tzinfo=ET)
 
@@ -888,6 +893,17 @@ class PickemCog(commands.Cog):
             home_score, away_score = scores
             winner = _winner_from_scores(home_score, away_score)
             await queries.resolve_pickem_game(g["message_id"], winner)
+            # Pay correct pickers in casino coins (once — resolve only runs on unresolved games).
+            for p in await queries.get_pickem_picks_for_message(g["message_id"]):
+                if p["pick"] != winner:
+                    continue
+                prob = pick_prob(p["pick"], g["home_prob"], g["away_prob"])
+                coins = _pickem_win_coins(potential_units(p["stake"], prob))
+                if coins > 0:
+                    try:
+                        await queries.update_casino_balance(p["discord_user"], coins)
+                    except Exception:
+                        log.debug("pickem win payout failed for %s", p["discord_user"], exc_info=True)
             if channel is not None and _is_posted(g["message_id"]):
                 g["winner"] = winner
                 result = await self._resolved_content(g, home_score, away_score)
@@ -912,7 +928,8 @@ class PickemCog(commands.Cog):
             prob = pick_prob(p["pick"], game["home_prob"], game["away_prob"])
             if p["pick"] == winner:
                 gain = potential_units(p["stake"], prob)
-                correct.append(f"{name} {p['stake']}u (+{gain:.1f}u)")
+                coins = _pickem_win_coins(gain)
+                correct.append(f"{name} {p['stake']}u (+{gain:.1f}u · +{coins}🪙)")
             else:
                 wrong.append(f"{name} {p['stake']}u (−{p['stake']}u)")
         lines = [f"✅ **{winner_team}** won {home_score}–{away_score}"]
