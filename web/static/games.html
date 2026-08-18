@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SharpLab HQ — Games</title>
+<link rel="stylesheet" href="/hqstyle.css" />
+<style>
+  .gamegrid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); margin-top: 8px; }
+  .gtile { display: block; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 20px; box-shadow: var(--shadow-sm); transition: border-color var(--t), box-shadow var(--t), transform var(--t); }
+  .gtile:hover { border-color: var(--accent); box-shadow: var(--shadow); transform: translateY(-2px); text-decoration: none; }
+  .gtile .gicon { font-size: 30px; }
+  .gtile .gname { font-weight: 800; font-size: 17px; margin: 10px 0 4px; color: var(--fg); }
+  .gtile .gblurb { color: var(--muted); font-size: 13px; line-height: 1.5; }
+  .gtile .gmeta { margin-top: 12px; font-size: 11px; letter-spacing: .04em; text-transform: uppercase;
+    color: var(--accent2); font-family: var(--font-mono); }
+  .pagesub { color: var(--muted); margin: 0 0 20px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><a href="/">Sharp<span>Lab</span> HQ</a></div>
+  <nav class="nav"><a href="/">Server</a><a href="/stocks">Stocks</a><a href="/lines">Lines</a><a href="/pickem">Pick'em</a><a href="/cards">Cards</a><a href="/casino">Casino</a><a href="/games">Games</a></nav>
+  <div id="navRight"></div>
+</header>
+<main>
+  <h1 style="font-size:28px;margin:8px 0 6px">🎲 Games</h1>
+  <p class="pagesub">Multiplayer card &amp; brain games — grab a 4-letter room code and pull in the server. No account needed.</p>
+  <div class="gamegrid">
+    <a class="gtile" href="/bridge/">
+      <div class="gicon">🃏</div>
+      <div class="gname">Bridge Variant</div>
+      <div class="gblurb">A 4-player trick-taker with an asymmetric partnership twist.</div>
+      <div class="gmeta">4 players</div>
+    </a>
+    <a class="gtile" href="/chess/">
+      <div class="gicon">♟️</div>
+      <div class="gname">Hearthstone Chess</div>
+      <div class="gblurb">2-player chess × card-game hybrid — capture the king to win.</div>
+      <div class="gmeta">2 players</div>
+    </a>
+    <a class="gtile" href="/ers/">
+      <div class="gicon">✋</div>
+      <div class="gname">Math ERS</div>
+      <div class="gblurb">Egyptian Rat Screw slap game with latency-fair slap resolution.</div>
+      <div class="gmeta">2–6 players</div>
+    </a>
+    <a class="gtile" href="/math24/">
+      <div class="gicon">🔢</div>
+      <div class="gname">Math 24</div>
+      <div class="gblurb">Race to make 24 from four numbers using + − × ÷.</div>
+      <div class="gmeta">Race</div>
+    </a>
+    <a class="gtile" href="/zetamac/">
+      <div class="gicon">⚡</div>
+      <div class="gname">Zetamac Race</div>
+      <div class="gblurb">90-second head-to-head arithmetic speed drill.</div>
+      <div class="gmeta">1v1 · 90s</div>
+    </a>
+  </div>
+</main>
+<script src="/games.js"></script>
+<script src="/track.js"></script>
+</body>
+</html>
