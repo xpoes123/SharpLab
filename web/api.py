@@ -30,6 +30,7 @@ from web.battleship import router as battleship_router, battleship_websocket, cl
 from web.reversi import router as reversi_router, reversi_websocket, cleanup_stale_reversi_rooms
 from web.prisoner import router as prisoner_router, prisoner_websocket, cleanup_stale_prisoner_rooms
 from web.liarsdice import router as liarsdice_router, liarsdice_websocket, cleanup_stale_liarsdice_rooms
+from web.penalties import router as penalties_router, penalties_websocket, cleanup_stale_penalties_rooms
 from web.hq import router as hq_router, quote_refresh_loop
 from web.cards import router as cards_router
 from web.casino import router as casino_router
@@ -41,6 +42,7 @@ from web.g_mastermind import router as mastermind_router
 from web.g_mathsprint import router as mathsprint_router
 from web.g_countdown import router as countdown_router
 from web.g_nbaguess import router as nbaguess_router
+from web.g_stockguess import router as stockguess_router
 from web.g_valorant import router as valorant_router
 from web.blackjack import router as blackjack_router
 from web.baccarat import router as baccarat_router
@@ -49,6 +51,7 @@ from web.hilo import router as hilo_router
 from web.craps import router as craps_router
 from web.horserace import router as horserace_router
 from web.sicbo import router as sicbo_router
+from web.threecardpoker import router as threecardpoker_router
 from web.nbasim_web import router as nbasim_router
 from web.nflsim_web import router as nflsim_router
 
@@ -119,6 +122,7 @@ async def lifespan(app: FastAPI):
     rev_cleanup_task = asyncio.create_task(cleanup_stale_reversi_rooms())
     pd_cleanup_task = asyncio.create_task(cleanup_stale_prisoner_rooms())
     ld_cleanup_task = asyncio.create_task(cleanup_stale_liarsdice_rooms())
+    pen_cleanup_task = asyncio.create_task(cleanup_stale_penalties_rooms())
     quote_task = asyncio.create_task(quote_refresh_loop())   # keep HQ stock prices warm
     yield
     quote_task.cancel()
@@ -136,6 +140,7 @@ async def lifespan(app: FastAPI):
     rev_cleanup_task.cancel()
     pd_cleanup_task.cancel()
     ld_cleanup_task.cancel()
+    pen_cleanup_task.cancel()
 
 
 app = FastAPI(title="SharpLab", docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -166,6 +171,7 @@ app.include_router(mastermind_router)
 app.include_router(mathsprint_router)
 app.include_router(countdown_router)
 app.include_router(nbaguess_router)
+app.include_router(stockguess_router)
 app.include_router(valorant_router)
 app.include_router(blackjack_router)
 app.include_router(baccarat_router)
@@ -174,6 +180,7 @@ app.include_router(hilo_router)
 app.include_router(craps_router)
 app.include_router(horserace_router)
 app.include_router(sicbo_router)
+app.include_router(threecardpoker_router)
 app.include_router(nbasim_router)
 app.include_router(nflsim_router)
 app.include_router(tictactoe_router)
@@ -183,6 +190,7 @@ app.include_router(battleship_router)
 app.include_router(reversi_router)
 app.include_router(prisoner_router)
 app.include_router(liarsdice_router)
+app.include_router(penalties_router)
 
 
 # WebSocket endpoint (not on the API router — different path pattern)
@@ -254,6 +262,11 @@ async def ws_prisoner(websocket: WebSocket, room_id: str):
 @app.websocket("/ws/liarsdice/{room_id}")
 async def ws_liarsdice(websocket: WebSocket, room_id: str):
     await liarsdice_websocket(websocket, room_id)
+
+
+@app.websocket("/ws/penalties/{room_id}")
+async def ws_penalties(websocket: WebSocket, room_id: str):
+    await penalties_websocket(websocket, room_id)
 
 # ── Static data (replicated from bot cogs to avoid importing bot deps) ───────
 

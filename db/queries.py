@@ -4782,6 +4782,7 @@ ACTIVITY_REWARDS = {
     "mastermind_win": (30, 200),  # web arcade: cracked the Mastermind code
     "mathsprint_win": (2, 200),   # web arcade: per correct Math Sprint answer
     "countdown_win": (30, 150),   # web arcade: solved a Countdown numbers round
+    "stockguess_win": (20, 200),  # web arcade: guessed a stock YTD move within tolerance
     # (paper trades already stake coins — no reward, else you could farm the loop)
 }
 
