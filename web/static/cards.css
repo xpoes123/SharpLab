@@ -220,7 +220,23 @@
 
 /* Flip card: the front is the normal .ctile (defines size); a cover overlays it and
    swings away on reveal. Simpler + more robust than a dual-face 3D flip with variable content. */
-.coinschip { font-weight: 700; color: var(--gold); background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; font-size: 13px; white-space: nowrap; }
+.coinschip { font-weight: 700; color: var(--gold); background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; font-size: 13px; white-space: nowrap; cursor: pointer; transition: border-color .15s, transform .15s; }
+.coinschip:hover { border-color: var(--gold); transform: translateY(-1px); }
+
+/* Coins hub modal */
+.hubov { position: fixed; inset: 0; z-index: 250; display: grid; place-items: center; padding: 20px; background: rgba(5,7,11,.6); backdrop-filter: blur(3px); animation: cd-scrim-in .18s ease both; }
+.hubcard { width: min(460px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px 20px; box-shadow: 0 24px 60px -20px #000; }
+.hubhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.hubhead h3 { margin: 0; font-size: 17px; }
+.hubx { background: none; border: 0; color: var(--muted); font-size: 18px; cursor: pointer; line-height: 1; padding: 4px 8px; border-radius: 8px; }
+.hubx:hover { color: var(--fg); background: var(--panel2); }
+.hubrow { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
+.hubrow:first-of-type { border-top: 0; }
+.hubicon { font-size: 20px; width: 30px; text-align: center; flex: 0 0 auto; }
+.hubt { font-weight: 700; font-size: 14px; }
+.hubd { color: var(--muted); font-size: 12.5px; line-height: 1.45; margin-top: 2px; }
+.hubfoot { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; text-align: right; }
+.hubfoot b { color: var(--gold); }
 .dailychip { color: var(--muted); font-size: 14px; }
 .dailychip b { color: var(--fg); font-variant-numeric: tabular-nums; }
 .cd-balance { font-size: 13px; color: var(--gold); font-weight: 700; margin-top: 2px; }

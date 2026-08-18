@@ -108,14 +108,15 @@ class PackRevealView(discord.ui.View):
     rarity so the chase card lands last. Each card shows its pull odds + price (book value =
     EV). A Summary button (and the end of the haul) shows the full list."""
 
-    def __init__(self, cards: list[dict], pull_rates: dict, title: str, opener: discord.abc.User):
+    def __init__(self, cards: list[dict], pull_rates: dict, title: str, opener: discord.abc.User,
+                 start_summary: bool = False):
         super().__init__(timeout=180)
         self.cards = engine.reveal_order(cards)
         self.pull_rates = pull_rates
         self.title = title
         self.opener = opener
-        self.i = 0
-        self.show_summary = False
+        self.i = (len(self.cards) - 1) if start_summary else 0
+        self.show_summary = start_summary  # fast-open lands straight on the full haul
         self.message: discord.Message | None = None
         self._sync_buttons()
 
@@ -312,23 +313,29 @@ class CardsCog(commands.Cog):
                 log.debug("cards: wishlist DM failed for design %s", c.get("design_id"))
 
     async def _send_reveal(
-        self, interaction: discord.Interaction, cards_out: list[dict], title: str, set_id: int
+        self, interaction: discord.Interaction, cards_out: list[dict], title: str, set_id: int,
+        fast: bool = False,
     ) -> None:
-        """Send the animated arrow reveal for a freshly-opened pack."""
+        """Send the pack reveal. `fast` skips the card-by-card animation and lands on the full haul."""
         cat = await queries.get_catalog(set_id)
         pull_rates = engine.set_odds(cat["designs"])["pull_rates"] if cat else {}
-        view = PackRevealView(cards_out, pull_rates, title, interaction.user)
+        view = PackRevealView(cards_out, pull_rates, title, interaction.user, start_summary=fast)
         view.message = await interaction.followup.send(embed=view.current_embed(), view=view)
 
     @pack.command(name="open", description="Buy & open card packs with coins")
-    @app_commands.describe(sport="League", season="Season year (e.g. 2024)", n="How many packs (1-10)")
+    @app_commands.describe(
+        sport="League", season="Season year (e.g. 2024)", n="How many packs (1-10)",
+        fast="Skip the reveal animation and show the whole haul (defaults to your /pack fast setting)",
+    )
     @app_commands.choices(sport=SPORT_CHOICES)
     async def pack_open(
-        self, interaction: discord.Interaction, sport: app_commands.Choice[str], season: int, n: int = 1
+        self, interaction: discord.Interaction, sport: app_commands.Choice[str], season: int,
+        n: int = 1, fast: bool | None = None,
     ):
         await interaction.response.defer()
         n = max(1, min(10, n))
         uid = str(interaction.user.id)
+        use_fast = fast if fast is not None else await queries.get_cards_fast_open(uid)
         cset = await queries.get_card_set(sport.value, season)
         if not cset:
             avail = [s for s in await queries.list_card_sets() if s["sport"] == sport.value]
@@ -348,7 +355,7 @@ class CardsCog(commands.Cog):
                 await interaction.followup.send(f"❌ {e}")
                 return
         title = f"{SPORT_EMOJI.get(sport.value,'🎴')} {cset['name']} — {opened} pack{'s' if opened>1 else ''}"
-        await self._send_reveal(interaction, all_cards, title, cset["set_id"])
+        await self._send_reveal(interaction, all_cards, title, cset["set_id"], fast=use_fast)
         await self._dm_wanters(all_cards, interaction.user)
         await self._check_set_completion(uid, cset["set_id"], interaction)
         await self._grant_achievements(uid, interaction.channel)
@@ -374,10 +381,18 @@ class CardsCog(commands.Cog):
             return
         await queries.record_daily_pack_claim(uid, day)
         title = f"🎁 Free daily pack — {cset['name']}"
-        await self._send_reveal(interaction, cards_out, title, cset["set_id"])
+        await self._send_reveal(interaction, cards_out, title, cset["set_id"],
+                                fast=await queries.get_cards_fast_open(uid))
         await self._dm_wanters(cards_out, interaction.user)
         await self._check_set_completion(uid, cset["set_id"], interaction)
         await self._grant_achievements(uid, interaction.channel)
+
+    @pack.command(name="fast", description="Always skip the pack reveal animation and show the whole haul")
+    @app_commands.describe(enabled="On = fast-open every pack; Off = play the card-by-card reveal")
+    async def pack_fast(self, interaction: discord.Interaction, enabled: bool):
+        await queries.set_cards_fast_open(str(interaction.user.id), enabled)
+        state = "on — packs will open instantly" if enabled else "off — packs play the reveal animation"
+        await interaction.response.send_message(f"⚡ Fast open is now **{state}**.", ephemeral=True)
 
     @cards.command(name="collection", description="View a card collection")
     @app_commands.describe(user="Whose collection (default: you)")
