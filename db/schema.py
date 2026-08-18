@@ -788,6 +788,15 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        # Migration: earnings-results post dedupe (one summary per ticker per report date)
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS earnings_posted "
+                "(ticker TEXT NOT NULL, report_date TEXT NOT NULL, PRIMARY KEY (ticker, report_date))"
+            )
+            await db.commit()
+        except Exception:
+            pass
         # Migration: pickem_favorites table + per-user auto-pick stake
         try:
             await db.execute(

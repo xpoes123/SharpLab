@@ -699,6 +699,47 @@ async def fetch_earnings_calendar(date_iso: str) -> list[dict]:
     return out
 
 
+async def fetch_earnings_result(sym: str, report_date: str) -> dict | None:
+    """If `sym` reported earnings on `report_date` (ET, YYYY-MM-DD) and the actual EPS
+    is out, return {eps_actual, eps_estimate, surprise_pct, when}; else None (not
+    reported / numbers not posted yet / no data). yfinance's earnings_dates is indexed
+    by ET-localized report timestamps."""
+    import math
+
+    import yfinance as yf
+
+    def _fetch() -> dict | None:
+        try:
+            df = yf.Ticker(sym).get_earnings_dates(limit=8)
+        except Exception:
+            return None
+        if df is None or df.empty:
+            return None
+        for ts, row in df.iterrows():
+            try:
+                if ts.date().isoformat() != report_date:
+                    continue
+            except Exception:
+                continue
+            rep = row.get("Reported EPS")
+            if rep is None or (isinstance(rep, float) and math.isnan(rep)):
+                return None  # reported today but the actual isn't published yet
+
+            def _num(v):
+                return None if v is None or (isinstance(v, float) and math.isnan(v)) else float(v)
+
+            hour = ts.hour if hasattr(ts, "hour") else 16
+            return {
+                "eps_actual": float(rep),
+                "eps_estimate": _num(row.get("EPS Estimate")),
+                "surprise_pct": _num(row.get("Surprise(%)")),
+                "when": "after close" if hour >= 12 else "before open",
+            }
+        return None
+
+    return await asyncio.to_thread(_fetch)
+
+
 async def fetch_option_prices(
     specs: list[dict], spots: dict[str, float]
 ) -> dict[tuple, dict]:
@@ -2597,6 +2638,7 @@ class StockCog(commands.Cog):
         self.monitor_loop.start()
         self.daily_digest.start()
         self.earnings_digest.start()
+        self.earnings_results.start()
 
     async def cog_load(self) -> None:
         raw = await queries.get_bot_setting(_SWING_STATE_SETTING)
@@ -2611,6 +2653,7 @@ class StockCog(commands.Cog):
         self.monitor_loop.cancel()
         self.daily_digest.cancel()
         self.earnings_digest.cancel()
+        self.earnings_results.cancel()
 
     @tasks.loop(hours=1)
     async def daily_digest(self) -> None:
@@ -2741,6 +2784,78 @@ class StockCog(commands.Cog):
 
     @earnings_digest.before_loop
     async def _before_earnings_digest(self) -> None:
+        await self.bot.wait_until_ready()
+
+    def _earnings_result_embed(self, sym: str, name: str, res: dict, q: dict | None) -> discord.Embed:
+        est, act, surp = res["eps_estimate"], res["eps_actual"], res["surprise_pct"]
+        beat = (surp is not None and surp >= 0) if surp is not None else (
+            act >= est if est is not None else None)
+        if est is not None:
+            verdict = "🟢 Beat" if act >= est else "🔴 Missed"
+            eps_line = f"**EPS:** ${act:.2f} vs ${est:.2f} est — {verdict}"
+            if surp is not None:
+                eps_line += f" ({surp:+.1f}%)"
+        else:
+            eps_line = f"**EPS:** ${act:.2f} reported"
+        lines = [eps_line]
+        if q:
+            price, prev = effective_price(q), q.get("prev_close")
+            pctv = _swing_pct(price, prev)
+            arrow = "🟢" if pctv >= 0 else "🔴"
+            label = "after hours" if res["when"] == "after close" else "today"
+            lines.append(f"**Reaction:** {arrow} {pctv:+.1f}% {label} (${price:,.2f})")
+        color = 0x9ECE6A if beat else (0xF7768E if beat is False else 0xE0AF68)
+        title = f"📊 {sym}{f' — {name[:40]}' if name else ''} · reported {res['when']}"
+        return discord.Embed(title=title, description="\n".join(lines), colour=color)
+
+    @tasks.loop(minutes=30)
+    async def earnings_results(self) -> None:
+        """After a company the server holds reports, post its results (EPS beat/miss +
+        surprise + price reaction) and @-ping its opted-in holders. Self-gating: fires
+        once the actual EPS is published (shortly after AMC close / BMO open), deduped
+        per (ticker, report date)."""
+        try:
+            from zoneinfo import ZoneInfo
+            et = datetime.now(ZoneInfo("America/New_York"))
+            today_iso = et.date().isoformat()
+            cal = await fetch_earnings_calendar(today_iso)
+            names = {e["symbol"]: e["name"] for e in cal}
+            reporting_today = set(names)
+            if not reporting_today:
+                return
+            optin = await queries.get_stock_alert_optin_users()
+            held_by: dict[str, list[str]] = {}
+            for uid, plist in (await queries.get_all_stock_positions()).items():
+                if uid not in optin:
+                    continue
+                for p in plist:
+                    if not p.get("closed") and p.get("shares"):
+                        held_by.setdefault(p["ticker"], []).append(uid)
+            targets = [s for s in held_by if s in reporting_today]
+            if not targets:
+                return
+            channel = self.bot.get_channel(await self._alerts_channel_id())
+            if channel is None:
+                return
+            for sym in targets:
+                if await queries.earnings_result_posted(sym, today_iso):
+                    continue
+                res = await fetch_earnings_result(sym, today_iso)
+                if res is None:
+                    continue  # reported but numbers not out yet — a later cycle will catch it
+                q = (await fetch_quotes([sym], extended=True)).get(sym)
+                embed = self._earnings_result_embed(sym, names.get(sym, ""), res, q)
+                holders = held_by[sym]
+                content = (f"📊 **{sym}** just reported — "
+                           + " ".join(f"<@{u}>" for u in holders))[:1900]
+                await channel.send(content=content, embed=embed,
+                                   allowed_mentions=discord.AllowedMentions(users=True))
+                await queries.mark_earnings_result_posted(sym, today_iso)
+        except Exception:
+            log.exception("earnings results loop failed")
+
+    @earnings_results.before_loop
+    async def _before_earnings_results(self) -> None:
         await self.bot.wait_until_ready()
 
     stock = app_commands.Group(name="stock", description="Stock quotes, portfolio, and market data")

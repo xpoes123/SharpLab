@@ -4972,3 +4972,22 @@ async def set_pickem_fav_stake(discord_user: str, stake: int) -> None:
             (discord_user, stake),
         )
         await db.commit()
+
+
+# ── Earnings-results post dedupe ─────────────────────────────────────────────
+async def earnings_result_posted(ticker: str, report_date: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT 1 FROM earnings_posted WHERE ticker = ? AND report_date = ?",
+            (ticker, report_date),
+        )
+        return await cur.fetchone() is not None
+
+
+async def mark_earnings_result_posted(ticker: str, report_date: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO earnings_posted (ticker, report_date) VALUES (?, ?)",
+            (ticker, report_date),
+        )
+        await db.commit()
