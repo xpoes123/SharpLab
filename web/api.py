@@ -23,6 +23,7 @@ from web.trading_floor import router as tf_router, tf_websocket, cleanup_stale_t
 from web.solitairechess import router as sc_router, solchess_websocket, cleanup_stale_solchess_rooms
 from web.minesweeper import router as minesweeper_router, minesweeper_websocket, cleanup_stale_minesweeper_rooms
 from web.blotto import router as blotto_router, blotto_websocket, cleanup_stale_blotto_rooms
+from web.tictactoe import router as tictactoe_router, tictactoe_websocket, cleanup_stale_tictactoe_rooms
 from web.hq import router as hq_router, quote_refresh_loop
 from web.cards import router as cards_router
 from web.casino import router as casino_router
@@ -30,6 +31,8 @@ from web.arcade import router as arcade_router
 from web.g_wordle import router as wordle_router
 from web.g_geo import router as geo_router
 from web.g_pokedle import router as pokedle_router
+from web.blackjack import router as blackjack_router
+from web.baccarat import router as baccarat_router
 
 DB_PATH = os.environ.get("SHARPLAB_DB_PATH", "data/sharplab.db")
 
@@ -91,6 +94,7 @@ async def lifespan(app: FastAPI):
     sc_cleanup_task = asyncio.create_task(cleanup_stale_solchess_rooms())
     ms_cleanup_task = asyncio.create_task(cleanup_stale_minesweeper_rooms())
     blotto_cleanup_task = asyncio.create_task(cleanup_stale_blotto_rooms())
+    ttt_cleanup_task = asyncio.create_task(cleanup_stale_tictactoe_rooms())
     quote_task = asyncio.create_task(quote_refresh_loop())   # keep HQ stock prices warm
     yield
     quote_task.cancel()
@@ -101,6 +105,7 @@ async def lifespan(app: FastAPI):
     sc_cleanup_task.cancel()
     ms_cleanup_task.cancel()
     blotto_cleanup_task.cancel()
+    ttt_cleanup_task.cancel()
 
 
 app = FastAPI(title="SharpLab", docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -127,6 +132,9 @@ app.include_router(arcade_router)
 app.include_router(wordle_router)
 app.include_router(geo_router)
 app.include_router(pokedle_router)
+app.include_router(blackjack_router)
+app.include_router(baccarat_router)
+app.include_router(tictactoe_router)
 
 
 # WebSocket endpoint (not on the API router — different path pattern)
@@ -163,6 +171,11 @@ async def ws_minesweeper(websocket: WebSocket, room_id: str):
 @app.websocket("/ws/blotto/{room_id}")
 async def ws_blotto(websocket: WebSocket, room_id: str):
     await blotto_websocket(websocket, room_id)
+
+
+@app.websocket("/ws/tictactoe/{room_id}")
+async def ws_tictactoe(websocket: WebSocket, room_id: str):
+    await tictactoe_websocket(websocket, room_id)
 
 # ── Static data (replicated from bot cogs to avoid importing bot deps) ───────
 

@@ -1,0 +1,123 @@
+/* SharpLab HQ — Tic-Tac-Toe page.
+   Builds on hqstyle.css (shared vars/header/nav/.btn/.card). Only page-specific
+   styling here. A free (no-coins) game that proves the web multiplayer pattern. */
+
+/* ── Page intro ── */
+.ttt-head { margin: 4px 0 20px; text-align: center; }
+.ttt-head h1 { font-size: 26px; margin: 0 0 4px; }
+.ttt-head p { color: var(--muted); margin: 0; font-size: 14px; }
+
+.ttt-wrap { max-width: 440px; margin: 0 auto; }
+
+/* ── Lobby ── */
+.ttt-lobby { display: flex; flex-direction: column; gap: var(--s-4); }
+.ttt-field { display: flex; flex-direction: column; gap: 6px; text-align: left; }
+.ttt-field label { font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); font-weight: 700; }
+.ttt-input {
+  width: 100%; box-sizing: border-box; background: var(--panel2); color: var(--fg);
+  border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; font-size: 15px;
+  transition: border-color var(--t), box-shadow var(--t);
+}
+.ttt-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+.ttt-input.code { text-transform: uppercase; letter-spacing: 4px; font-weight: 700; font-family: var(--font-mono); }
+.ttt-actions { display: flex; gap: var(--s-2); flex-wrap: wrap; }
+.ttt-actions .btn { flex: 1 1 auto; }
+.ttt-sep { text-align: center; color: var(--faint); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+.ttt-joinrow { display: flex; gap: var(--s-2); }
+.ttt-joinrow .ttt-input { flex: 1 1 auto; }
+
+/* ── Room / share ── */
+.ttt-codebox { text-align: center; }
+.ttt-codelabel { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+.ttt-code {
+  display: inline-block; margin-top: 6px; font-family: var(--font-mono); font-weight: 800;
+  font-size: 34px; letter-spacing: 8px; color: var(--gold);
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-lg);
+  padding: 8px 20px 8px 28px; cursor: pointer; transition: border-color var(--t), transform var(--t);
+}
+.ttt-code:hover { border-color: var(--gold); transform: translateY(-1px); }
+.ttt-copyhint { display: block; margin-top: 6px; font-size: 11px; color: var(--faint); }
+
+/* ── Status line ── */
+.ttt-status { text-align: center; font-size: 15px; font-weight: 700; min-height: 22px; }
+.ttt-status.wait { color: var(--muted); font-weight: 500; }
+.ttt-status.yours { color: var(--green); }
+.ttt-status.theirs { color: var(--accent2); }
+.ttt-status.win { color: var(--green); }
+.ttt-status.lose { color: var(--red); }
+.ttt-status.draw { color: var(--gold); }
+
+/* ── Player chips ── */
+.ttt-players { display: flex; justify-content: center; gap: var(--s-3); flex-wrap: wrap; }
+.ttt-pchip {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-pill); font-size: 13px;
+}
+.ttt-pchip.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--ring); }
+.ttt-pchip.me { }
+.ttt-mark { font-family: var(--font-mono); font-weight: 800; font-size: 16px; }
+.ttt-mark.x { color: var(--accent); }
+.ttt-mark.o { color: var(--red); }
+.ttt-pname { font-weight: 700; }
+.ttt-pyou { color: var(--faint); font-size: 11px; }
+.ttt-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.ttt-dot.on { background: var(--green); }
+
+/* ── Board ── */
+.ttt-board {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
+  width: 300px; max-width: 100%; margin: 0 auto; aspect-ratio: 1;
+}
+.ttt-cell {
+  display: grid; place-items: center; background: var(--panel2);
+  border: 1px solid var(--line); border-radius: var(--r-lg);
+  font-family: var(--font-mono); font-weight: 800; font-size: clamp(38px, 12vw, 56px);
+  line-height: 1; cursor: default; user-select: none; color: var(--fg);
+  transition: border-color var(--t), background var(--t), transform var(--t);
+}
+.ttt-cell.playable { cursor: pointer; }
+.ttt-cell.playable:hover { border-color: var(--accent); background: var(--accent-soft); transform: translateY(-1px); }
+.ttt-cell .mx { color: var(--accent); }
+.ttt-cell .mo { color: var(--red); }
+.ttt-cell.win { border-color: var(--green); background: var(--green-soft); }
+.ttt-board.locked .ttt-cell { cursor: default; }
+.ttt-mark-in { animation: ttt-pop .18s ease both; }
+@keyframes ttt-pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+/* ── Banner + rematch ── */
+.ttt-banner { text-align: center; margin-top: 6px; }
+.ttt-rematch { margin-top: 4px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ttt-code:hover, .ttt-cell.playable:hover { transform: none; }
+  .ttt-mark-in { animation: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Copied verbatim from cards.css / pokemon.css so the coins hub + toasts are
+   styled on this page too. This game is free, but the shared nav chip is kept.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.coinschip { font-weight: 700; color: var(--gold); background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; font-size: 13px; white-space: nowrap; cursor: pointer; transition: border-color .15s, transform .15s; }
+.coinschip:hover { border-color: var(--gold); transform: translateY(-1px); }
+
+/* Coins hub modal */
+.hubov { position: fixed; inset: 0; z-index: 250; display: grid; place-items: center; padding: 20px; background: rgba(5,7,11,.6); backdrop-filter: blur(3px); animation: cd-scrim-in .18s ease both; }
+@keyframes cd-scrim-in { from { opacity: 0; } to { opacity: 1; } }
+.hubcard { width: min(460px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px 20px; box-shadow: 0 24px 60px -20px #000; }
+.hubhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.hubhead h3 { margin: 0; font-size: 17px; }
+.hubx { background: none; border: 0; color: var(--muted); font-size: 18px; cursor: pointer; line-height: 1; padding: 4px 8px; border-radius: 8px; }
+.hubx:hover { color: var(--fg); background: var(--panel2); }
+.hubrow { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
+.hubrow:first-of-type { border-top: 0; }
+.hubicon { font-size: 20px; width: 30px; text-align: center; flex: 0 0 auto; }
+.hubt { font-weight: 700; font-size: 14px; }
+.hubd { color: var(--muted); font-size: 12.5px; line-height: 1.45; margin-top: 2px; }
+.hubfoot { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; text-align: right; }
+.hubfoot b { color: var(--gold); }
+
+.cardtoast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 300;
+  background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 18px; font-size: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.5);
+}
