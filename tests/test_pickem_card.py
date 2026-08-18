@@ -8,8 +8,16 @@ from bot.cogs.pickem import (
     _build_score_map,
     _format_game,
     _pair_key,
+    _pickem_win_coins,
     _today_board,
 )
+
+
+def test_pickem_win_coins():
+    assert _pickem_win_coins(2.0) == 100      # 2 units won × 50 coins/unit
+    assert _pickem_win_coins(3.4) == 170
+    assert _pickem_win_coins(0) == 0
+    assert _pickem_win_coins(-1) == 0         # a loss never pays
 
 FUTURE = "2999-01-01T00:00:00+00:00"
 PAST = "2000-01-01T00:00:00+00:00"
