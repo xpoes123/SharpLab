@@ -92,6 +92,12 @@ def _pinned_mlb(game) -> bool:
 MIN_FAV_LEN = 3  # a favorite shorter than this would match too many teams
 
 
+def _is_posted(message_id: str) -> bool:
+    """True if this pick'em row was posted to Discord (numeric message id). Web-only
+    slate rows use game_id as their message_id, so they have no Discord message/view."""
+    return str(message_id).isdigit()
+
+
 def _fav_side(teams: list[str], home_team: str, away_team: str) -> str | None:
     """Which side to auto-pick for a user's favorite teams in this game.
     'home'/'away' if exactly one side matches a favorite, else None (skip: neither,
@@ -506,7 +512,7 @@ class PickemCog(commands.Cog):
         now = datetime.now(timezone.utc).isoformat()
         try:
             for g in await queries.get_unlocked_pickem_games():
-                if g["start_time"] <= now:
+                if g["start_time"] <= now or not _is_posted(g["message_id"]):
                     continue
                 self.bot.add_view(
                     GamePickView(g["message_id"], g["away_team"], g["home_team"]),
@@ -750,7 +756,7 @@ class PickemCog(commands.Cog):
             if g["start_time"] > now:
                 continue
             await queries.lock_pickem_game(g["message_id"])
-            if channel is not None:
+            if channel is not None and _is_posted(g["message_id"]):
                 # Fold "who bet what" into the existing game message instead of posting a
                 # new one — a fresh message notifies everyone with server alerts on (noisy).
                 breakdown = await self._bet_breakdown(g)
@@ -806,7 +812,7 @@ class PickemCog(commands.Cog):
             home_score, away_score = scores
             winner = _winner_from_scores(home_score, away_score)
             await queries.resolve_pickem_game(g["message_id"], winner)
-            if channel is not None:
+            if channel is not None and _is_posted(g["message_id"]):
                 g["winner"] = winner
                 result = await self._resolved_content(g, home_score, away_score)
                 try:

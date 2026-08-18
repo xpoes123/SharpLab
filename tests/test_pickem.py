@@ -192,3 +192,10 @@ def test_favorites_crud_and_autopick(tmp_db):
     assert stake == 3
     assert allf["u1"]["stake"] == 3 and set(allf["u1"]["teams"]) == {"dodgers", "lakers"}
     assert after == ["dodgers"]
+
+
+def test_is_posted_guards_webonly_ids():
+    from bot.cogs.pickem import _is_posted
+    assert _is_posted("1408899221009") is True                       # real Discord message id
+    assert _is_posted("759827c86479e28994e9d71487062482") is False   # web-only row (game_id)
+    assert _is_posted("g1") is False
