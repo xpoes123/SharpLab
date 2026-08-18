@@ -4773,6 +4773,7 @@ ACTIVITY_REWARDS = {
     "pickem_pick": (25, 250),  # daily pick'em
     "bet_log": (50, 1000),     # logging a real sports bet
     "trade_log": (50, 1000),   # logging a stock/option trade
+    "pokemon_guess": (15, 300),  # web arcade: correct "Who's That Pokémon?" guess
     # (paper trades already stake coins — no reward, else you could farm the loop)
 }
 
