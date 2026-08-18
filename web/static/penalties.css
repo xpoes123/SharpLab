@@ -1,0 +1,181 @@
+/* SharpLab HQ — Penalty Shootout page.
+   Builds on hqstyle.css (shared vars/header/nav/.btn/.card). Only page-specific
+   styling here. A free (no-coins) game — 5 kicks each over WebSockets. */
+
+/* ── Page intro ── */
+.pen-head { margin: 4px 0 20px; text-align: center; }
+.pen-head h1 { font-size: 26px; margin: 0 0 4px; }
+.pen-head p { color: var(--muted); margin: 0; font-size: 14px; }
+
+.pen-wrap { max-width: 460px; margin: 0 auto; }
+
+/* ── Lobby ── */
+.pen-lobby { display: flex; flex-direction: column; gap: var(--s-4); }
+.pen-field { display: flex; flex-direction: column; gap: 6px; text-align: left; }
+.pen-field label { font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); font-weight: 700; }
+.pen-input {
+  width: 100%; box-sizing: border-box; background: var(--panel2); color: var(--fg);
+  border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; font-size: 15px;
+  transition: border-color var(--t), box-shadow var(--t);
+}
+.pen-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+.pen-input.code { text-transform: uppercase; letter-spacing: 4px; font-weight: 700; font-family: var(--font-mono); }
+.pen-actions { display: flex; gap: var(--s-2); flex-wrap: wrap; }
+.pen-actions .btn { flex: 1 1 auto; }
+.pen-sep { text-align: center; color: var(--faint); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+.pen-joinrow { display: flex; gap: var(--s-2); }
+.pen-joinrow .pen-input { flex: 1 1 auto; }
+
+/* ── Room / share ── */
+.pen-codebox { text-align: center; }
+.pen-codelabel { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+.pen-code {
+  display: inline-block; margin-top: 6px; font-family: var(--font-mono); font-weight: 800;
+  font-size: 34px; letter-spacing: 8px; color: var(--gold);
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-lg);
+  padding: 8px 20px 8px 28px; cursor: pointer; transition: border-color var(--t), transform var(--t);
+}
+.pen-code:hover { border-color: var(--gold); transform: translateY(-1px); }
+.pen-copyhint { display: block; margin-top: 6px; font-size: 11px; color: var(--faint); }
+
+/* ── Player chips / running score ── */
+.pen-players { display: flex; align-items: center; justify-content: center; gap: var(--s-3); flex-wrap: wrap; }
+.pen-pchip {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-pill); font-size: 13px;
+}
+.pen-pchip.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--ring); }
+.pen-pname { font-weight: 700; }
+.pen-pyou { color: var(--faint); font-size: 11px; }
+.pen-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.pen-dot.on { background: var(--green); }
+.pen-goals {
+  font-family: var(--font-mono); font-weight: 800; font-size: 16px; color: var(--gold);
+  min-width: 18px; text-align: center;
+}
+.pen-vs { font-family: var(--font-mono); font-weight: 800; color: var(--faint); font-size: 15px; }
+
+/* ── Scoreboard pips (5 slots each) ── */
+.pen-scoreboard { display: flex; flex-direction: column; gap: 6px; }
+.pen-sbrow { display: flex; align-items: center; gap: 10px; }
+.pen-sblabel {
+  flex: 0 0 64px; font-size: 12px; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pen-pips { display: flex; flex-wrap: wrap; gap: 4px; }
+.pen-pip {
+  display: grid; place-items: center; width: 22px; height: 22px; font-size: 13px;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 6px;
+}
+.pen-pip.goal { border-color: var(--green); }
+.pen-pip.miss { border-color: var(--red); filter: grayscale(.2); }
+.pen-pip.empty { color: var(--faint); }
+
+/* ── Goal graphic (net, zones, ball, keeper) ── */
+.pen-goal {
+  position: relative; height: 190px; overflow: hidden;
+  background:
+    linear-gradient(to bottom, color-mix(in srgb, var(--accent) 8%, var(--panel2)) 0%, var(--panel2) 62%,
+      color-mix(in srgb, var(--green) 22%, var(--panel)) 62%, color-mix(in srgb, var(--green) 14%, var(--panel)) 100%);
+  border: 1px solid var(--line); border-radius: var(--r-lg);
+}
+.pen-net {
+  position: absolute; top: 10px; left: 5%; right: 5%; height: 108px;
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  border: 3px solid color-mix(in srgb, var(--fg) 55%, transparent);
+  border-radius: 6px 6px 0 0;
+  background-image:
+    repeating-linear-gradient(0deg, transparent 0 11px, color-mix(in srgb, var(--fg) 16%, transparent) 11px 12px),
+    repeating-linear-gradient(90deg, transparent 0 11px, color-mix(in srgb, var(--fg) 16%, transparent) 11px 12px);
+}
+.pen-zone { position: relative; display: grid; place-items: end center; padding-bottom: 4px; }
+.pen-zone + .pen-zone { border-left: 1px dashed color-mix(in srgb, var(--fg) 20%, transparent); }
+.pen-zone-label {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+  color: var(--muted); background: color-mix(in srgb, var(--panel) 70%, transparent);
+  padding: 1px 6px; border-radius: 4px;
+}
+.pen-keeper {
+  position: absolute; top: 46px; font-size: 30px; line-height: 1; z-index: 2;
+  transform: translateX(-50%); transition: left .5s cubic-bezier(.34,1.3,.5,1);
+}
+.pen-ball {
+  position: absolute; bottom: 8px; font-size: 30px; line-height: 1; z-index: 3;
+  transform: translateX(-50%); transition: none;
+}
+.pen-ball.live { transition: left .55s ease-out, bottom .55s ease-out; }
+/* Ball rests at the penalty spot until it flies; live moves it up into the net. */
+.pen-goal.goal .pen-ball.live, .pen-goal.save .pen-ball.live { bottom: 78px; }
+.pos-left { left: 22%; }
+.pos-center { left: 50%; }
+.pos-right { left: 78%; }
+.pen-verdict {
+  position: absolute; inset: 0; display: grid; place-items: center; z-index: 4;
+  font-size: 34px; font-weight: 900; letter-spacing: 2px;
+  text-shadow: 0 2px 10px rgba(0,0,0,.7); animation: pen-pop .25s ease both;
+}
+.pen-verdict.goal { color: var(--green); }
+.pen-verdict.save { color: var(--red); }
+@keyframes pen-pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+/* ── Kick line + status ── */
+.pen-kickline { text-align: center; font-size: 13px; color: var(--muted); }
+.pen-role.shoot { color: var(--green); }
+.pen-role.keep { color: var(--accent2); }
+.pen-status { text-align: center; font-size: 15px; font-weight: 700; min-height: 22px; }
+.pen-status.wait { color: var(--muted); font-weight: 500; }
+.pen-status.yours { color: var(--green); }
+.pen-status.win { color: var(--green); }
+.pen-status.lose { color: var(--red); }
+
+/* ── Choice buttons (shoot corners / dive corners) ── */
+.pen-choices { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s-2); }
+.pen-choice {
+  display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 14px 6px;
+  background: var(--panel2); color: var(--fg);
+  border: 1px solid var(--line); border-radius: var(--r-lg); cursor: pointer;
+  transition: border-color var(--t), background var(--t), transform var(--t);
+}
+.pen-choice:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); transform: translateY(-2px); }
+.pen-choice:disabled { cursor: default; opacity: .55; }
+.pen-choice-icon { font-size: 30px; line-height: 1; }
+.pen-choice-label { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .3px; }
+
+/* ── Banner + rematch ── */
+.pen-banner { text-align: center; margin-top: 6px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .pen-code:hover, .pen-choice:hover:not(:disabled) { transform: none; }
+  .pen-keeper, .pen-ball.live { transition: none; }
+  .pen-verdict { animation: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Copied verbatim from rps.css / cards.css so the coins hub + toasts are styled
+   on this page too. This game is free, but the shared nav chip is kept.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.coinschip { font-weight: 700; color: var(--gold); background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; font-size: 13px; white-space: nowrap; cursor: pointer; transition: border-color .15s, transform .15s; }
+.coinschip:hover { border-color: var(--gold); transform: translateY(-1px); }
+
+/* Coins hub modal */
+.hubov { position: fixed; inset: 0; z-index: 250; display: grid; place-items: center; padding: 20px; background: rgba(5,7,11,.6); backdrop-filter: blur(3px); animation: cd-scrim-in .18s ease both; }
+@keyframes cd-scrim-in { from { opacity: 0; } to { opacity: 1; } }
+.hubcard { width: min(460px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px 20px; box-shadow: 0 24px 60px -20px #000; }
+.hubhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.hubhead h3 { margin: 0; font-size: 17px; }
+.hubx { background: none; border: 0; color: var(--muted); font-size: 18px; cursor: pointer; line-height: 1; padding: 4px 8px; border-radius: 8px; }
+.hubx:hover { color: var(--fg); background: var(--panel2); }
+.hubrow { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
+.hubrow:first-of-type { border-top: 0; }
+.hubicon { font-size: 20px; width: 30px; text-align: center; flex: 0 0 auto; }
+.hubt { font-weight: 700; font-size: 14px; }
+.hubd { color: var(--muted); font-size: 12.5px; line-height: 1.45; margin-top: 2px; }
+.hubfoot { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; text-align: right; }
+.hubfoot b { color: var(--gold); }
+
+.cardtoast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 300;
+  background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 18px; font-size: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.5);
+}
