@@ -17,6 +17,27 @@
 .betmsg.pos, .pos { color: var(--green); }
 .pk-empty { text-align: center; padding: 60px 16px; color: var(--muted); }
 
+/* Leaderboard (This Week / All-Time) */
+.pk-board { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 16px 18px; margin-bottom: 24px; }
+.pk-board > h2 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  font-size: 15px; margin: 0 0 12px; }
+.pk-lb-toggle { display: inline-flex; gap: 4px; margin-left: auto; }
+.pk-lb-btn { background: var(--panel2); color: var(--muted); border: 1px solid var(--line);
+  border-radius: 999px; padding: 3px 12px; font-family: inherit; font-size: 12px; cursor: pointer; }
+.pk-lb-btn.sel { color: var(--text); border-color: var(--accent); }
+.pk-lb-btn:hover { color: var(--text); }
+.pk-lb-list { list-style: none; margin: 0; padding: 0; }
+.pk-lb-row { display: flex; align-items: baseline; gap: 10px; padding: 6px 2px;
+  border-bottom: 1px solid var(--line); font-size: 14px; }
+.pk-lb-row:last-child { border-bottom: 0; }
+.pk-lb-rank { width: 28px; flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pk-lb-name { font-weight: 600; }
+.pk-lb-sub { font-size: 12px; }
+.pk-lb-units { margin-left: auto; font-variant-numeric: tabular-nums; }
+.pk-lb-units.pos { color: var(--green); }
+.pk-lb-units.neg { color: var(--red); }
+
 /* Favorite teams section */
 .pk-favs { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
   padding: 16px 18px; margin-bottom: 24px; }

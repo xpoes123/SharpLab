@@ -7,7 +7,7 @@ import bisect
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 log = logging.getLogger(__name__)
@@ -1215,9 +1215,35 @@ async def hq_bet_mine(request: Request):
     return {"bets": out}
 
 
+def _pickem_week_bounds(dt: datetime) -> tuple[str, str]:
+    """The pick'em week containing `dt` — Monday 00:00 America/New_York → the next
+    Monday — as (start_utc_iso, end_utc_iso). Mirrors bot.cogs.pickem._week_bounds."""
+    et = dt.astimezone(ZoneInfo("America/New_York"))
+    monday = et.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=et.weekday())
+    end = monday + timedelta(days=7)
+    return monday.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()
+
+
+def _pickem_filter_week(rows: list[dict], s_utc: str, e_utc: str) -> list[dict]:
+    lo = datetime.fromisoformat(s_utc.replace("Z", "+00:00"))
+    hi = datetime.fromisoformat(e_utc.replace("Z", "+00:00"))
+    out = []
+    for r in rows:
+        try:
+            st = datetime.fromisoformat(str(r["start_time"]).replace("Z", "+00:00"))
+        except (ValueError, AttributeError, KeyError, TypeError):
+            continue
+        if lo <= st < hi:
+            out.append(r)
+    return out
+
+
 @router.get("/hq/pickem/leaderboard")
-async def hq_pickem_leaderboard():
+async def hq_pickem_leaderboard(period: str = "alltime"):
     rows = await queries.get_pickem_resolved_picks()
+    if period == "week":
+        s_utc, e_utc = _pickem_week_bounds(datetime.now(timezone.utc))
+        rows = _pickem_filter_week(rows, s_utc, e_utc)
     standings = compute_pickem_standings(rows)
     names = await _names(list(standings))
     out = []
@@ -1234,4 +1260,4 @@ async def hq_pickem_leaderboard():
             "points": s["points"],
         })
     out.sort(key=lambda x: x["units"], reverse=True)
-    return {"leaderboard": out}
+    return {"period": "week" if period == "week" else "alltime", "leaderboard": out}

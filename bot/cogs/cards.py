@@ -34,9 +34,47 @@ RARITY_COLOR = {
 GEM_EMOJI = {"chrome": "🔗", "sapphire": "🔷", "ruby": "🔴", "black_lotus": "🌸"}
 SPORT_EMOJI = {"nba": "🏀", "nfl": "🏈", "mlb": "⚾"}
 
+# --- Set-completion reward ----------------------------------------------------
+# Owning >=1 of every design in a set pays a one-time coin bonus. Scaled to the
+# set: a fraction of the set's total book value (one of each design), which grows
+# naturally with both design count and rarity mix. Floored so tiny sets still pay.
+SET_COMPLETION_RATE = 0.25
+SET_COMPLETION_MIN = 250
+
+# --- Dupe trade-up (crafting) -------------------------------------------------
+# Consume N duplicate cards of a rarity -> mint 1 random card of the next rarity
+# up. Only "dupes" (copies beyond the first per design) are eligible, so a
+# trade-up can never destroy a completed checklist. Legendary can't trade up.
+TRADEUP_COST = {"common": 5, "uncommon": 4, "rare": 3, "epic": 3}
+TRADEUP_CHOICES = [app_commands.Choice(name=r.title(), value=r) for r in TRADEUP_COST]
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _completion_reward_for(designs: list[dict]) -> int:
+    """Coin reward for completing a set, from its checklist designs (one of each)."""
+    total_book = sum(d.get("book_value", 0) for d in designs)
+    return max(SET_COMPLETION_MIN, round(SET_COMPLETION_RATE * total_book))
+
+
+def _tradeup_dupes(collection: list[dict], sport: str, season: int, rarity: str) -> list[dict]:
+    """Instances eligible to be traded up: owned cards in this set at `rarity`, minus
+    the single best (highest-book) copy of each design — those best copies stay so
+    completion is never destroyed. Returned cheapest-book first (consume the worst)."""
+    from collections import defaultdict
+
+    by_design: dict[int, list[dict]] = defaultdict(list)
+    for c in collection:
+        if c["rarity"] == rarity and c["sport"] == sport and c["season"] == season:
+            by_design[c["design_id"]].append(c)
+    dupes: list[dict] = []
+    for insts in by_design.values():
+        insts.sort(key=lambda c: c["book_value"], reverse=True)  # best first
+        dupes += insts[1:]  # keep the best copy, rest are dupes
+    dupes.sort(key=lambda c: c["book_value"])  # consume the cheapest dupes first
+    return dupes
 
 
 def _card_line(c: dict) -> str:
@@ -98,6 +136,34 @@ class CardsCog(commands.Cog):
         except Exception:
             log.debug("cards: achievement grant failed for %s", uid, exc_info=True)
 
+    async def _completion_reward(self, set_id: int) -> int:
+        cat = await queries.get_catalog(set_id)
+        return _completion_reward_for(cat["designs"] if cat else [])
+
+    async def _check_set_completion(self, uid: str, set_id: int, interaction: discord.Interaction) -> None:
+        """After a pull, pay + announce if this pull just completed the set (once)."""
+        try:
+            comp = await queries.get_set_completion(uid, set_id)
+            if not comp["complete"]:
+                return
+            if not await queries.mark_set_completion(uid, set_id):
+                return  # already claimed
+            reward = await self._completion_reward(set_id)
+            await queries.update_casino_balance(uid, reward)
+            cset = await queries.get_card_set_by_id(set_id)
+            name = cset["name"] if cset else "the set"
+            emb = discord.Embed(
+                title="🎉 Set complete!",
+                description=(
+                    f"{interaction.user.mention} completed **{name}** — every design owned!\n"
+                    f"Reward: **+{reward}** 🪙"
+                ),
+                color=0xE0AF68,
+            )
+            await interaction.followup.send(embed=emb)
+        except Exception:
+            log.exception("cards: set-completion check failed for %s / set %s", uid, set_id)
+
     async def _dm_wanters(self, cards_out: list[dict], opener: discord.abc.User) -> None:
         for c in cards_out:
             try:
@@ -158,6 +224,7 @@ class CardsCog(commands.Cog):
         await interaction.followup.send(embed=self._reveal_embed(all_cards, title, interaction.user))
         await self._post_notable(all_cards, interaction.user)
         await self._dm_wanters(all_cards, interaction.user)
+        await self._check_set_completion(uid, cset["set_id"], interaction)
         await self._grant_achievements(uid, interaction.channel)
 
     @pack.command(name="daily", description="Claim your free daily pack")
@@ -184,6 +251,7 @@ class CardsCog(commands.Cog):
         await interaction.followup.send(embed=self._reveal_embed(cards_out, title, interaction.user))
         await self._post_notable(cards_out, interaction.user)
         await self._dm_wanters(cards_out, interaction.user)
+        await self._check_set_completion(uid, cset["set_id"], interaction)
         await self._grant_achievements(uid, interaction.channel)
 
     @cards.command(name="collection", description="View a card collection")
@@ -212,21 +280,130 @@ class CardsCog(commands.Cog):
         emb.set_footer(text=f"Collection book value: {round(total)} 🪙  ·  browse at /hq → Cards")
         await interaction.followup.send(embed=emb)
 
-    @cards.command(name="sets", description="Browse available card sets & pack prices")
+    @cards.command(name="sets", description="Browse available card sets & your completion")
     async def sets_cmd(self, interaction: discord.Interaction):
         await interaction.response.defer()
         sets = await queries.list_card_sets()
         if not sets:
             await interaction.followup.send("No card sets seeded yet.")
             return
+        uid = str(interaction.user.id)
         lines = []
+        claimable = 0
         for s in sets:
             pct = round(100 * s["packs_opened"] / s["total_packs"]) if s["total_packs"] else 0
             status = "SOLD OUT" if s["closed"] else f"{s['pack_cost']}🪙/pack · {pct}% opened"
-            lines.append(f"{SPORT_EMOJI.get(s['sport'],'🎴')} **{s['name']}** — {status}")
+            comp = await queries.get_set_completion(uid, s["set_id"])
+            cpct = round(100 * comp["owned"] / comp["total"]) if comp["total"] else 0
+            mark = ""
+            if comp["complete"]:
+                if await queries.set_completion_claimed(uid, s["set_id"]):
+                    mark = " ✅"
+                else:
+                    mark = " 🎁 **claimable!**"
+                    claimable += 1
+            lines.append(
+                f"{SPORT_EMOJI.get(s['sport'],'🎴')} **{s['name']}** — {status}\n"
+                f"　You: {comp['owned']}/{comp['total']} ({cpct}%){mark}"
+            )
         emb = discord.Embed(title="🎴 Card sets", description="\n".join(lines), color=0x7AA2F7)
-        emb.set_footer(text="Older seasons cost more. Open with /pack open <sport> <season>")
+        footer = "Older seasons cost more. Open with /pack open <sport> <season>"
+        if claimable:
+            footer = f"You have {claimable} set(s) to claim — run /cards claim. " + footer
+        emb.set_footer(text=footer)
         await interaction.followup.send(embed=emb)
+
+    @cards.command(name="claim", description="Claim coin rewards for any sets you've fully completed")
+    async def claim(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        uid = str(interaction.user.id)
+        sets = await queries.list_card_sets()
+        paid: list[tuple[str, int]] = []
+        for s in sets:
+            comp = await queries.get_set_completion(uid, s["set_id"])
+            if not comp["complete"]:
+                continue
+            if await queries.mark_set_completion(uid, s["set_id"]):
+                reward = await self._completion_reward(s["set_id"])
+                await queries.update_casino_balance(uid, reward)
+                paid.append((s["name"], reward))
+        if not paid:
+            await interaction.followup.send(
+                "No completed sets to claim. Check `/cards sets` for your progress toward each set."
+            )
+            return
+        total = sum(r for _, r in paid)
+        emb = discord.Embed(
+            title="🎉 Set completion rewards",
+            description="\n".join(f"**{n}** — +{r} 🪙" for n, r in paid),
+            color=0xE0AF68,
+        )
+        emb.set_footer(text=f"Total claimed: +{total} 🪙")
+        await interaction.followup.send(embed=emb)
+
+    @cards.command(name="tradeup", description="Craft: trade duplicate cards up to the next rarity")
+    @app_commands.describe(sport="League", season="Season year", rarity="Rarity of dupes to trade up")
+    @app_commands.choices(sport=SPORT_CHOICES, rarity=TRADEUP_CHOICES)
+    async def tradeup(
+        self,
+        interaction: discord.Interaction,
+        sport: app_commands.Choice[str],
+        season: int,
+        rarity: app_commands.Choice[str],
+    ):
+        await interaction.response.defer()
+        uid = str(interaction.user.id)
+        rar = rarity.value
+        cset = await queries.get_card_set(sport.value, season)
+        if not cset:
+            await interaction.followup.send(f"No **{sport.name} {season}** set exists.")
+            return
+        cost = TRADEUP_COST.get(rar)
+        idx = engine.RARITIES.index(rar)
+        if cost is None or idx >= len(engine.RARITIES) - 1:
+            await interaction.followup.send(f"{rar.title()} cards can't be traded up.")
+            return
+        next_rar = engine.RARITIES[idx + 1]
+        collection, _ = await queries.get_collection(uid)
+        dupes = _tradeup_dupes(collection, sport.value, season, rar)
+        if len(dupes) < cost:
+            need = cost - len(dupes)
+            await interaction.followup.send(
+                f"You need **{cost}** duplicate {RARITY_EMOJI.get(rar,'')} {rar.title()} cards from "
+                f"**{cset['name']}** to trade up to {RARITY_EMOJI.get(next_rar,'')} {next_rar.title()} — "
+                f"you have {len(dupes)} spare (extra copies beyond your first of each design). "
+                f"Pull or trade for **{need}** more."
+            )
+            return
+        consume_ids = [c["instance_id"] for c in dupes[:cost]]
+        # Mint FIRST so a sold-out next tier never eats the user's dupes.
+        minted = await queries.mint_tradeup_card(uid, cset["set_id"], next_rar, _now_iso())
+        if not minted:
+            await interaction.followup.send(
+                f"No {next_rar.title()} cards remain in **{cset['name']}** — that tier is sold out, "
+                f"so there's nothing to trade up into. Your cards are untouched."
+            )
+            return
+        if not await queries.consume_card_instances(uid, consume_ids):
+            # Ownership changed between read and consume (e.g. a concurrent trade). The
+            # minted card stands; better to over-grant than to double-charge.
+            log.warning("cards: tradeup consume failed after mint for %s (ids=%s)", uid, consume_ids)
+            await interaction.followup.send(
+                "Trade-up hit a snag selecting your duplicates (did they change?). "
+                "You kept your card — try again."
+            )
+            return
+        emb = discord.Embed(
+            title=f"🛠️ Trade-up: {cost}× {rar.title()} → {next_rar.title()}",
+            description=f"You crafted:\n{_card_line(minted)}",
+            color=RARITY_COLOR.get(next_rar, 0x7AA2F7),
+        )
+        if minted.get("headshot_url"):
+            emb.set_thumbnail(url=minted["headshot_url"])
+        emb.set_footer(text=f"Consumed {cost} duplicate {rar.title()} card(s) from {cset['name']}")
+        await interaction.followup.send(embed=emb)
+        await self._check_set_completion(uid, cset["set_id"], interaction)
+        await self._grant_achievements(uid, interaction.channel)
 
     @cards.command(name="catalog", description="A set's checklist + pull-rate odds")
     @app_commands.choices(sport=SPORT_CHOICES)

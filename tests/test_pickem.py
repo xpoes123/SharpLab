@@ -2,12 +2,19 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 
 import pytest
 
 import db.schema as _schema
 import db.queries as _queries
-from bot.cogs.pickem import compute_pickem_standings, _winner_from_scores
+from bot.cogs.pickem import (
+    _filter_week,
+    _iso_week_label,
+    _week_bounds,
+    _winner_from_scores,
+    compute_pickem_standings,
+)
 
 
 def _run(coro):
@@ -96,6 +103,53 @@ def test_streak_points_capped():
 def test_winner_from_scores():
     assert _winner_from_scores(110, 99) == "home"
     assert _winner_from_scores(2, 5) == "away"
+
+
+# ── Weekly standings (Mon 00:00 ET → next Mon) ─────────────────────────────────
+
+
+def test_week_bounds_summer_edt():
+    # Wed Aug 19 2026 (EDT, UTC-4): week is Mon Aug 17 00:00 ET → Mon Aug 24 00:00 ET.
+    s, e = _week_bounds(datetime(2026, 8, 19, 16, 0, tzinfo=timezone.utc))
+    assert s == "2026-08-17T04:00:00+00:00"
+    assert e == "2026-08-24T04:00:00+00:00"
+
+
+def test_week_bounds_winter_est():
+    # Wed Jan 14 2026 (EST, UTC-5): week is Mon Jan 12 00:00 ET → Mon Jan 19 00:00 ET.
+    s, e = _week_bounds(datetime(2026, 1, 14, 16, 0, tzinfo=timezone.utc))
+    assert s == "2026-01-12T05:00:00+00:00"
+    assert e == "2026-01-19T05:00:00+00:00"
+
+
+def test_week_bounds_on_monday_midnight_starts_that_week():
+    # Exactly Monday 00:00 ET (04:00 UTC in Aug) is the start of its own week.
+    s, _ = _week_bounds(datetime(2026, 8, 17, 4, 0, tzinfo=timezone.utc))
+    assert s == "2026-08-17T04:00:00+00:00"
+
+
+def test_iso_week_label():
+    assert _iso_week_label(datetime(2026, 8, 19, 16, 0, tzinfo=timezone.utc)) == "2026-W34"
+    assert _iso_week_label(datetime(2026, 1, 14, 16, 0, tzinfo=timezone.utc)) == "2026-W03"
+
+
+def test_filter_week_keeps_only_in_range_and_scores_them():
+    s, e = _week_bounds(datetime(2026, 8, 19, 16, 0, tzinfo=timezone.utc))
+    rows = [
+        # Monday 00:00 ET — in the week (start is inclusive)
+        {"discord_user": "A", "correct": 1, "pick": "home", "start_time": "2026-08-17T04:00:00+00:00"},
+        # Thursday — in the week (trailing-Z form)
+        {"discord_user": "A", "correct": 0, "pick": "home", "start_time": "2026-08-20T23:00:00Z"},
+        # Sunday of the previous week — out
+        {"discord_user": "B", "correct": 1, "pick": "home", "start_time": "2026-08-16T23:00:00+00:00"},
+        # Next Monday 00:00 ET — out (end is exclusive)
+        {"discord_user": "C", "correct": 1, "pick": "home", "start_time": "2026-08-24T04:00:00+00:00"},
+    ]
+    kept = _filter_week(rows, s, e)
+    assert {r["discord_user"] for r in kept} == {"A"}
+    standings = compute_pickem_standings(kept)
+    assert standings["A"]["total"] == 2 and standings["A"]["correct"] == 1
+    assert "B" not in standings and "C" not in standings
 
 
 # ── DB lifecycle ──────────────────────────────────────────────────────────────

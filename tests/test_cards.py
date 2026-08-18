@@ -1,8 +1,12 @@
-"""Unit tests for the pure card-economics engine (shared/cards.py)."""
+"""Unit tests for the pure card-economics engine (shared/cards.py) plus the
+DB-backed set-completion + dupe trade-up features (bot/cogs/cards.py)."""
 
+import asyncio
 import os
 import random
 import sys
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -183,10 +187,204 @@ def test_pack_cost_monotonic_increasing_with_age():
     assert cards.pack_cost(current - 20, current) == round(50 * 1.08 ** 20)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# DB-backed: set-completion rewards + dupe trade-up (bot/cogs/cards.py)
+# ─────────────────────────────────────────────────────────────────────────────
+
+import aiosqlite  # noqa: E402
+
+import db.schema as _schema  # noqa: E402
+import db.queries as _queries  # noqa: E402
+from bot.cogs.cards import _completion_reward_for, _tradeup_dupes  # noqa: E402
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+@pytest.fixture()
+def tmp_db(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    orig_s, orig_q = _schema.DB_PATH, _queries.DB_PATH
+    _schema.DB_PATH = _queries.DB_PATH = db_path
+    _run(_schema.init_db())
+    yield db_path
+    _schema.DB_PATH, _queries.DB_PATH = orig_s, orig_q
+
+
+async def _make_set(sport, season, specs):
+    """specs: list of (rarity, count, total_copies). Returns (set_id, designs) where
+    designs are the catalog dicts (each has design_id + rarity)."""
+    sid = await _queries.create_card_set(sport, season, f"{sport} {season}", 1000, 50, "t")
+    designs, i = [], 0
+    for rarity, count, total_copies in specs:
+        for _ in range(count):
+            designs.append({
+                "subject_key": f"{sport}-{season}-{i}",
+                "subject_name": f"Player {i}",
+                "team": "TST",
+                "rarity": rarity,
+                "total_copies": total_copies,
+                "book_value": cards.BOOK[rarity],
+            })
+            i += 1
+    await _queries.insert_card_designs(sid, designs)
+    cat = await _queries.get_catalog(sid)
+    return sid, cat["designs"]
+
+
+def _dids(designs, rarity):
+    return [d["design_id"] for d in designs if d["rarity"] == rarity]
+
+
+async def _give(user, design_id, serial, rarity, is_holo=0, gem=None):
+    book = cards.book_value(rarity, bool(is_holo), gem)
+    async with aiosqlite.connect(_queries.DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO card_instances "
+            "(design_id, owner_id, serial, is_holo, gem, book_value, acquired_cost, source, acquired_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, 0, 'test', 't')",
+            (design_id, user, serial, is_holo, gem, book),
+        )
+        await db.commit()
+
+
+async def _count_instances(user, set_id, rarity=None):
+    async with aiosqlite.connect(_queries.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        sql = ("SELECT COUNT(*) c FROM card_instances i JOIN card_designs d ON i.design_id = d.design_id "
+               "WHERE i.owner_id = ? AND d.set_id = ?")
+        args = [user, set_id]
+        if rarity:
+            sql += " AND d.rarity = ?"
+            args.append(rarity)
+        return (await (await db.execute(sql, args)).fetchone())["c"]
+
+
+# --- set completion ----------------------------------------------------------
+
+
+def test_completion_reward_formula():
+    # 2 legendaries -> 0.25 * (2*260) = 130, below the 250 floor -> floored to 250.
+    designs = [{"book_value": cards.BOOK["legendary"]}] * 2
+    assert _completion_reward_for(designs) == 250
+    # floored at the minimum for small book totals
+    assert _completion_reward_for([{"book_value": 10}]) == 250
+    # scales up with a big book total
+    big = [{"book_value": 1000}] * 10
+    assert _completion_reward_for(big) == round(0.25 * 10000)
+
+
+def test_set_completion_detection(tmp_db):
+    async def go():
+        sid, designs = await _make_set("nba", 2003, [("common", 3, 50)])
+        dids = _dids(designs, "common")
+        u = "user1"
+        # own none
+        c0 = await _queries.get_set_completion(u, sid)
+        assert c0 == {"owned": 0, "total": 3, "complete": False}
+        # own 2 of 3 -> incomplete
+        await _give(u, dids[0], 1, "common")
+        await _give(u, dids[1], 1, "common")
+        c1 = await _queries.get_set_completion(u, sid)
+        assert c1["owned"] == 2 and not c1["complete"]
+        # own the last design -> complete
+        await _give(u, dids[2], 1, "common")
+        c2 = await _queries.get_set_completion(u, sid)
+        assert c2["owned"] == 3 and c2["complete"]
+        # claim is one-time: True once, then False
+        assert await _queries.mark_set_completion(u, sid) is True
+        assert await _queries.mark_set_completion(u, sid) is False
+        assert await _queries.set_completion_claimed(u, sid) is True
+
+    _run(go())
+
+
+# --- trade-up ----------------------------------------------------------------
+
+
+def test_tradeup_consumes_dupes_and_mints_next_rarity(tmp_db):
+    async def go():
+        # 1 common design (plenty of copies) + 1 uncommon design to mint into.
+        sid, designs = await _make_set("nba", 2010, [("common", 1, 100), ("uncommon", 1, 100)])
+        common_did = _dids(designs, "common")[0]
+        u = "trader"
+        # 6 copies of the one common design -> 5 dupes (best copy protected).
+        for s in range(1, 7):
+            await _give(u, common_did, s, "common")
+        collection, _ = await _queries.get_collection(u)
+        dupes = _tradeup_dupes(collection, "nba", 2010, "common")
+        assert len(dupes) == 5  # 6 copies minus the 1 protected best copy
+        cost = 5
+        consume_ids = [c["instance_id"] for c in dupes[:cost]]
+        # mint first, then consume (mirrors the cog)
+        minted = await _queries.mint_tradeup_card(u, sid, "uncommon", "t")
+        assert minted is not None and minted["rarity"] == "uncommon"
+        assert await _queries.consume_card_instances(u, consume_ids) is True
+        # left with: 1 common (protected) + 1 uncommon
+        assert await _count_instances(u, sid, "common") == 1
+        assert await _count_instances(u, sid, "uncommon") == 1
+
+    _run(go())
+
+
+def test_tradeup_rejects_when_not_enough_dupes(tmp_db):
+    async def go():
+        sid, designs = await _make_set("nba", 2011, [("common", 1, 100)])
+        did = _dids(designs, "common")[0]
+        u = "poor"
+        for s in range(1, 5):  # 4 copies -> only 3 dupes, cost is 5
+            await _give(u, did, s, "common")
+        collection, _ = await _queries.get_collection(u)
+        dupes = _tradeup_dupes(collection, "nba", 2011, "common")
+        assert len(dupes) == 3 and len(dupes) < 5
+
+    _run(go())
+
+
+def test_tradeup_protects_only_copies(tmp_db):
+    async def go():
+        # 3 distinct common designs, exactly one copy each -> zero dupes.
+        sid, designs = await _make_set("nba", 2012, [("common", 3, 100)])
+        u = "collector"
+        for i, did in enumerate(_dids(designs, "common"), start=1):
+            await _give(u, did, i, "common")
+        collection, _ = await _queries.get_collection(u)
+        assert _tradeup_dupes(collection, "nba", 2012, "common") == []
+        # completion stays intact (nothing consumable)
+        assert (await _queries.get_set_completion(u, sid))["complete"] is True
+
+    _run(go())
+
+
+def test_tradeup_selects_cheapest_and_keeps_best(tmp_db):
+    async def go():
+        sid, designs = await _make_set("nba", 2013, [("common", 1, 100)])
+        u = "picky"
+        did = _dids(designs, "common")[0]
+        # one holo (higher book, should be KEPT) + two plain copies (dupes).
+        await _give(u, did, 1, "common", is_holo=1)
+        await _give(u, did, 2, "common")
+        await _give(u, did, 3, "common")
+        collection, _ = await _queries.get_collection(u)
+        dupes = _tradeup_dupes(collection, "nba", 2013, "common")
+        assert len(dupes) == 2
+        # the protected (kept) copy is the holo; dupes are the two plain copies
+        assert all(not c["is_holo"] for c in dupes)
+
+    _run(go())
+
+
 if __name__ == "__main__":
-    # Fallback self-check when pytest is unavailable.
+    import inspect
+
+    # Fallback self-check when pytest is unavailable. Skip fixture-requiring tests.
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+    ran = 0
     for fn in fns:
+        if inspect.signature(fn).parameters:
+            continue  # needs a fixture (tmp_db) — pytest only
         fn()
+        ran += 1
         print(f"ok  {fn.__name__}")
-    print(f"\nALL {len(fns)} CHECKS PASSED")
+    print(f"\n{ran} FIXTURE-FREE CHECKS PASSED")

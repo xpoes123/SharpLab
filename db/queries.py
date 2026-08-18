@@ -4991,3 +4991,140 @@ async def mark_earnings_result_posted(ticker: str, report_date: str) -> None:
             (ticker, report_date),
         )
         await db.commit()
+
+
+# ── Stock dividends ──────────────────────────────────────────────────────────
+async def dividend_paid(discord_user: str, ticker: str, ex_date: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT 1 FROM dividends_paid WHERE discord_user = ? AND ticker = ? AND ex_date = ?",
+            (discord_user, ticker, ex_date),
+        )
+        return await cur.fetchone() is not None
+
+
+async def record_dividend(discord_user: str, ticker: str, ex_date: str, amount: float) -> None:
+    """Log a dividend credit (dedupe key = user+ticker+ex_date). Does NOT move cash —
+    call adjust_stock_cash separately so the caller controls ordering."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO dividends_paid (discord_user, ticker, ex_date, amount, paid_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (discord_user, ticker, ex_date, amount, datetime.now(timezone.utc).isoformat()),
+        )
+        await db.commit()
+
+
+async def get_dividend_income(discord_user: str) -> float:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT COALESCE(SUM(amount), 0) FROM dividends_paid WHERE discord_user = ?",
+            (discord_user,),
+        )
+        row = await cur.fetchone()
+    return float(row[0] or 0.0)
+
+
+# ── Card set-completion + trade-up ───────────────────────────────────────────
+async def get_set_completion(discord_user: str, set_id: int) -> dict:
+    """How much of a set the user owns: {owned, total, complete}. owned = distinct
+    designs in the set they hold >=1 copy of."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        total = (await (await db.execute(
+            "SELECT COUNT(*) c FROM card_designs WHERE set_id = ?", (set_id,)
+        )).fetchone())["c"]
+        owned = (await (await db.execute(
+            "SELECT COUNT(DISTINCT d.design_id) c FROM card_designs d "
+            "JOIN card_instances i ON i.design_id = d.design_id "
+            "WHERE d.set_id = ? AND i.owner_id = ?", (set_id, discord_user)
+        )).fetchone())["c"]
+    return {"owned": owned, "total": total, "complete": total > 0 and owned >= total}
+
+
+async def set_completion_claimed(discord_user: str, set_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT 1 FROM card_set_completed WHERE discord_user = ? AND set_id = ?",
+            (discord_user, set_id),
+        )
+        return await cur.fetchone() is not None
+
+
+async def mark_set_completion(discord_user: str, set_id: int) -> bool:
+    """Record a set-completion claim. Returns True if newly recorded (caller then pays
+    the reward), False if already claimed."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT OR IGNORE INTO card_set_completed (discord_user, set_id, claimed_at) VALUES (?, ?, ?)",
+            (discord_user, set_id, datetime.now(timezone.utc).isoformat()),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def consume_card_instances(discord_user: str, instance_ids: list[int]) -> bool:
+    """Delete the given instances iff the user owns ALL of them (for trade-up). Atomic;
+    returns False (and changes nothing) if any isn't owned."""
+    if not instance_ids:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            ph = ",".join("?" * len(instance_ids))
+            cnt = (await (await db.execute(
+                f"SELECT COUNT(*) c FROM card_instances WHERE owner_id = ? AND instance_id IN ({ph})",
+                (discord_user, *instance_ids),
+            )).fetchone())["c"]
+            if cnt != len(instance_ids):
+                await db.execute("ROLLBACK")
+                return False
+            await db.execute(
+                f"DELETE FROM card_instances WHERE instance_id IN ({ph})", tuple(instance_ids)
+            )
+            await db.commit()
+            return True
+        except Exception:
+            await db.execute("ROLLBACK")
+            raise
+
+
+async def mint_tradeup_card(discord_user: str, set_id: int, target_rarity: str, now_iso: str) -> dict | None:
+    """Mint one random card of `target_rarity` from `set_id` to the user (for trade-up
+    rewards). Rolls holo/gem like a pack pull. Returns the minted card dict, or None if
+    no design of that rarity has copies left."""
+    from shared import cards as engine
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            designs = await (await db.execute(
+                "SELECT * FROM card_designs WHERE set_id = ? AND rarity = ? AND total_copies > minted",
+                (set_id, target_rarity),
+            )).fetchall()
+            if not designs:
+                await db.execute("ROLLBACK")
+                return None
+            d = random.choice(designs)
+            serial = d["minted"] + 1
+            is_holo = engine.roll_holo(random.Random())
+            gem = engine.roll_gem(random.Random())
+            book = engine.book_value(d["rarity"], is_holo, gem)
+            await db.execute("UPDATE card_designs SET minted = minted + 1 WHERE design_id = ?", (d["design_id"],))
+            cur = await db.execute(
+                "INSERT INTO card_instances "
+                "(design_id, owner_id, serial, is_holo, gem, book_value, acquired_cost, source, acquired_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, 0, 'tradeup', ?)",
+                (d["design_id"], discord_user, serial, 1 if is_holo else 0, gem, book, now_iso),
+            )
+            await db.commit()
+            return {
+                "instance_id": cur.lastrowid, "design_id": d["design_id"], "name": d["subject_name"],
+                "rarity": d["rarity"], "is_holo": is_holo, "gem": gem, "serial": serial,
+                "total_copies": d["total_copies"], "book_value": book, "headshot_url": d["headshot_url"],
+            }
+        except Exception:
+            await db.execute("ROLLBACK")
+            raise

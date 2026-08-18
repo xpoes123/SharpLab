@@ -113,6 +113,27 @@ function renderCollection() {
   return hero + `<div class="cardgrid">${sorted.map(cardTile).join("")}</div>`;
 }
 
+// Distinct design_ids the logged-in user owns (from /api/v1/cards/mine).
+function ownedDesignIds() {
+  const owned = new Set();
+  const mine = state.mine;
+  if (mine && mine.cards) mine.cards.forEach((c) => owned.add(c.design_id));
+  return owned;
+}
+
+// Per-set completion (owned distinct designs / total designs) — computed from the
+// user's collection intersected with each set's cached catalog. Returns null when
+// we can't compute it yet (not signed in, or the catalog hasn't loaded).
+function setCompletion(setId) {
+  if (!state.me) return null;
+  const cat = state.catalog[setId];
+  if (!cat || !cat.designs) return null;
+  const owned = ownedDesignIds();
+  const total = cat.designs.length;
+  const have = cat.designs.filter((d) => owned.has(d.design_id)).length;
+  return { have, total, pct: total ? Math.round((have / total) * 100) : 0, done: total > 0 && have >= total };
+}
+
 function renderSets() {
   const d = state.sets;
   if (d && d._status === 401) {
@@ -126,6 +147,13 @@ function renderSets() {
     const totalP = s.total_packs || 0;
     const pctVal = totalP ? Math.min(100, Math.round((opened / totalP) * 100)) : 0;
     const closed = s.closed || (totalP && opened >= totalP);
+    const comp = setCompletion(s.set_id);
+    const compHtml = comp
+      ? `<div class="progwrap">
+          <div class="progbar comp${comp.done ? " done" : ""}"><span style="width:${comp.pct}%"></span></div>
+          <div class="progtext">${comp.done ? "✅ " : ""}${num(comp.have)} / ${num(comp.total)} designs</div>
+        </div>`
+      : "";
     return `<div class="setcard" data-setid="${esc(s.set_id)}">
       <div>
         <div class="setname">${emoji} ${esc(s.name)} ${closed ? `<span class="soldout">Sold out</span>` : ""}</div>
@@ -137,6 +165,7 @@ function renderSets() {
           <div class="progbar"><span style="width:${pctVal}%"></span></div>
           <div class="progtext">${num(opened)} / ${num(totalP)} packs</div>
         </div>
+        ${compHtml}
       </div>
     </div>`;
   }).join("");
@@ -234,13 +263,28 @@ async function ensureSets() {
   if (!state.sets) state.sets = await getJSON("/api/v1/cards/sets");
 }
 
+// Load every set's catalog (cached) so the Sets view can show per-set completion.
+// Uses only existing endpoints; catalogs are shared with the Catalog tab's cache.
+async function ensureSetCompletion() {
+  await ensureSets();
+  if (!state.me) return; // completion is per-user; nothing to show when signed out
+  const sets = (state.sets && state.sets.sets) || [];
+  await Promise.all(
+    sets.map(async (s) => {
+      if (!state.catalog[s.set_id]) {
+        state.catalog[s.set_id] = await getJSON(`/api/v1/cards/catalog?set_id=${encodeURIComponent(s.set_id)}`);
+      }
+    })
+  );
+}
+
 app.addEventListener("click", async (e) => {
   const tabBtn = e.target.closest(".tab");
   const setCard = e.target.closest(".setcard");
   const back = e.target.closest("[data-back]");
   if (tabBtn) {
     state.tab = tabBtn.dataset.tab;
-    if (state.tab === "sets") { await ensureSets(); }
+    if (state.tab === "sets") { await ensureSets(); draw(); await ensureSetCompletion(); }
     if (state.tab === "catalog") { await ensureSets(); state.activeSet = null; }
     draw();
   } else if (setCard) {
