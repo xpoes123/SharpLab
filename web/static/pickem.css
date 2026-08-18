@@ -16,3 +16,22 @@
 .betmsg.neg { color: var(--red); }
 .betmsg.pos, .pos { color: var(--green); }
 .pk-empty { text-align: center; padding: 60px 16px; color: var(--muted); }
+
+/* Favorite teams section */
+.pk-favs { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 16px 18px; margin-bottom: 24px; }
+.pk-favs > h2 { display: flex; align-items: center; gap: 8px; font-size: 15px; margin: 0 0 6px; }
+.fav-stake { background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 2px 6px; font-family: inherit; }
+.fav-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.fav-chip { display: inline-flex; align-items: center; gap: 6px; text-transform: capitalize;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 999px;
+  padding: 4px 6px 4px 12px; font-size: 13px; }
+.fav-rm { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 13px;
+  line-height: 1; padding: 2px 4px; border-radius: 999px; }
+.fav-rm:hover { color: var(--red); background: var(--panel); }
+.fav-add { display: flex; gap: 8px; }
+.fav-input { flex: 1; background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 8px; padding: 8px 12px; font-family: inherit; }
+.fav-input:focus { outline: none; border-color: var(--accent); }
+.fav-msg { font-size: 13px; margin-top: 8px; min-height: 16px; }

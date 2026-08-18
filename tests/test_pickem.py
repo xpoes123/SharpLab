@@ -160,3 +160,35 @@ def test_lock_lifecycle(tmp_db):
     before, after = _run(go())
     assert before == 1
     assert after == 0
+
+
+def test_fav_side():
+    from bot.cogs.pickem import _fav_side
+    # exactly one side matches → that side
+    assert _fav_side(["dodgers"], "Los Angeles Dodgers", "San Diego Padres") == "home"
+    assert _fav_side(["padres"], "Los Angeles Dodgers", "San Diego Padres") == "away"
+    # no match → None
+    assert _fav_side(["yankees"], "Los Angeles Dodgers", "San Diego Padres") is None
+    # both teams favorited (intra-favorite matchup) → None (can't pick a side)
+    assert _fav_side(["dodgers", "padres"], "Los Angeles Dodgers", "San Diego Padres") is None
+    # too-short favorite is ignored (would match everything otherwise)
+    assert _fav_side(["la"], "Los Angeles Dodgers", "San Diego Padres") is None
+
+
+def test_favorites_crud_and_autopick(tmp_db):
+    async def go():
+        await _queries.add_pickem_favorite("u1", "Dodgers")   # stored lowercased
+        await _queries.add_pickem_favorite("u1", "lakers")
+        await _queries.set_pickem_fav_stake("u1", 3)
+        favs = await _queries.get_pickem_favorites("u1")
+        stake = await _queries.get_pickem_fav_stake("u1")
+        allf = await _queries.get_all_pickem_favorites()
+        await _queries.remove_pickem_favorite("u1", "LAKERS")  # case-insensitive remove
+        after = await _queries.get_pickem_favorites("u1")
+        return favs, stake, allf, after
+
+    favs, stake, allf, after = _run(go())
+    assert favs == ["dodgers", "lakers"]
+    assert stake == 3
+    assert allf["u1"]["stake"] == 3 and set(allf["u1"]["teams"]) == {"dodgers", "lakers"}
+    assert after == ["dodgers"]

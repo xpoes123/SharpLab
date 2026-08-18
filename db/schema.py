@@ -447,6 +447,14 @@ CREATE TABLE IF NOT EXISTS pickem_picks (
 );
 CREATE INDEX IF NOT EXISTS idx_pickem_picks_user ON pickem_picks(discord_user);
 
+-- Pick'em favorite teams: auto-pick any unlocked game your favorite team plays in.
+-- `team` is a lowercased substring matched against the full team name.
+CREATE TABLE IF NOT EXISTS pickem_favorites (
+    discord_user TEXT NOT NULL,
+    team         TEXT NOT NULL,
+    PRIMARY KEY (discord_user, team)
+);
+
 -- Sports trading cards: sets (one per sport-season), designs (a player card),
 -- instances (a minted, serial-numbered copy owned by a user). See docs spec 2026-08-11.
 CREATE TABLE IF NOT EXISTS card_sets (
@@ -777,6 +785,20 @@ async def init_db() -> None:
         # Migration: add stake to pickem_picks (1-5 units)
         try:
             await db.execute("ALTER TABLE pickem_picks ADD COLUMN stake INTEGER NOT NULL DEFAULT 1")
+            await db.commit()
+        except Exception:
+            pass
+        # Migration: pickem_favorites table + per-user auto-pick stake
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS pickem_favorites "
+                "(discord_user TEXT NOT NULL, team TEXT NOT NULL, PRIMARY KEY (discord_user, team))"
+            )
+            await db.commit()
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE user_settings ADD COLUMN pickem_fav_stake INTEGER NOT NULL DEFAULT 1")
             await db.commit()
         except Exception:
             pass
