@@ -375,6 +375,84 @@ def test_tradeup_selects_cheapest_and_keeps_best(tmp_db):
     _run(go())
 
 
+# --- reveal helpers (set_odds / reveal_order / pull_label) -------------------
+
+
+def test_set_odds_pull_rates_sum_and_cover():
+    designs = [
+        {"rarity": "common", "total_copies": 330},
+        {"rarity": "rare", "total_copies": 100},
+        {"rarity": "legendary", "total_copies": 10},
+    ]
+    o = cards.set_odds(designs)
+    assert o["holo_pct"] == round(cards.HOLO_RATE * 100, 1)
+    assert set(o["pull_rates"]) == {"common", "rare", "legendary"}
+    assert abs(sum(o["pull_rates"].values()) - 100) < 0.6  # rounding slack
+
+
+def test_reveal_order_is_ascending():
+    hand = [
+        {"rarity": "legendary", "is_holo": False, "book_value": 260},
+        {"rarity": "common", "is_holo": False, "book_value": 3.5},
+        {"rarity": "rare", "is_holo": True, "book_value": 70},
+    ]
+    assert [c["rarity"] for c in cards.reveal_order(hand)] == ["common", "rare", "legendary"]
+
+
+def test_pull_label_formats():
+    pr = {"common": 62.0, "legendary": 2.3}
+    assert cards.pull_label({"rarity": "common", "is_holo": False, "gem": None}, pr).endswith("%")
+    assert cards.pull_label({"rarity": "legendary", "is_holo": False, "gem": None}, pr) == "1 in 43"
+    lab = cards.pull_label({"rarity": "legendary", "is_holo": True, "gem": "ruby"}, pr)
+    assert "ruby 1 in 2,000" in lab and "holo 1 in 5" in lab
+
+
+# --- web open endpoint -------------------------------------------------------
+
+import web.cards as _webcards  # noqa: E402
+
+
+class _FakeReq:
+    pass
+
+
+async def _fund(user, amount):
+    async with aiosqlite.connect(_queries.DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO casino_wallets (discord_user, balance) VALUES (?, ?) "
+            "ON CONFLICT(discord_user) DO UPDATE SET balance = ?",
+            (user, amount, amount),
+        )
+        await db.commit()
+
+
+def test_web_open_mints_and_debits(tmp_db, monkeypatch):
+    async def go():
+        sid, _ = await _make_set("nba", 2024, [("common", 6, 50), ("rare", 4, 30)])
+        u = "webuser"
+        await _fund(u, 500)
+        monkeypatch.setattr(_webcards.auth, "read_session", lambda req: {"id": u})
+        res = await _webcards.open_pack(_FakeReq(), _webcards.OpenBody(sport="nba", season=2024, n=2))
+        assert len(res["cards"]) == 10  # 2 packs x 5
+        idx = [cards.RARITIES.index(c["rarity"]) for c in res["cards"]]
+        assert idx == sorted(idx)  # ascending reveal order
+        assert res["odds"]["pull_rates"]
+        assert await _queries.get_casino_balance(u) == 500 - 50 * 2  # debited base_cost per pack
+
+    _run(go())
+
+
+def test_web_open_insufficient_coins_400(tmp_db, monkeypatch):
+    async def go():
+        await _make_set("nba", 2024, [("common", 6, 50)])
+        await _fund("broke", 10)  # base_cost is 50 — can't afford one pack
+        monkeypatch.setattr(_webcards.auth, "read_session", lambda req: {"id": "broke"})
+        res = await _webcards.open_pack(_FakeReq(), _webcards.OpenBody(sport="nba", season=2024, n=1))
+        assert getattr(res, "status_code", None) == 400
+
+    _run(go())
+
+
 if __name__ == "__main__":
     import inspect
 

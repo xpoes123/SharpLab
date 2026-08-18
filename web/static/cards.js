@@ -167,9 +167,16 @@ function renderSets() {
         </div>
         ${compHtml}
       </div>
+      ${state.me && !closed ? `<div class="setactions"><button class="btn primary openbtn"
+        data-sport="${esc((s.sport || "").toLowerCase())}" data-season="${esc(s.season)}"
+        data-cost="${esc(s.pack_cost)}">Open pack · ${coins(s.pack_cost)}</button></div>` : ""}
     </div>`;
   }).join("");
-  return `<p class="muted" style="margin:0 0 14px">Tap a set to see its checklist and pull-rate odds.</p>
+  const daily = state.me
+    ? `<div class="dailybar"><button class="btn primary dailybtn">🎁 Free daily pack</button>
+       <span class="muted">One free pack a day — newest set.</span></div>`
+    : "";
+  return `${daily}<p class="muted" style="margin:0 0 14px">Tap a set to see its checklist and pull-rate odds, or open a pack.</p>
     <div class="setlist">${rows}</div>`;
 }
 
@@ -278,7 +285,232 @@ async function ensureSetCompletion() {
   );
 }
 
+// ── Open packs (web) ──
+async function postJSON(url, body) {
+  if (MOCK) return mockOpen(url, body);
+  const r = await fetch(url, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  const j = await r.json().catch(() => ({}));
+  return r.ok ? j : { error: j.error || `error ${r.status}` };
+}
+
+function toast(msg) {
+  const t = document.createElement("div");
+  t.className = "cardtoast";
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3200);
+}
+
+async function doOpen(sport, season, btn) {
+  if (btn) btn.disabled = true;
+  window.CardSfx && CardSfx.primeAudio(); // unlock audio on the user gesture
+  const res = await postJSON("/api/v1/cards/open", { sport, season, n: 1 });
+  if (btn) btn.disabled = false;
+  if (res.error) return toast("❌ " + res.error);
+  startReveal(res);
+}
+
+async function doDaily(btn) {
+  if (btn) btn.disabled = true;
+  window.CardSfx && CardSfx.primeAudio();
+  const res = await postJSON("/api/v1/cards/daily", {});
+  if (btn) btn.disabled = false;
+  if (res.error) return toast("🎁 " + res.error);
+  startReveal(res);
+}
+
+async function reloadAfterOpen() {
+  const [mine, sets] = await Promise.all([
+    getJSON("/api/v1/cards/mine"),
+    getJSON("/api/v1/cards/sets"),
+  ]);
+  state.mine = mine;
+  state.sets = sets;
+  state.catalog = {}; // minted counts changed — drop cached catalogs
+  draw();
+  if (state.tab === "sets") { await ensureSetCompletion(); draw(); }
+}
+
+// ── Reveal overlay (ported from nsba-markets) ──
+const PACK_BURST_MS = 900;
+const RARITY_CHIP = ["common", "uncommon", "rare", "epic", "legendary"];
+
+function pullLabel(c, pr, gems) {
+  const rate = pr[(c.rarity || "").toLowerCase()];
+  let base = rate == null ? "—"
+    : rate >= 25 ? `${(+rate).toFixed(1).replace(/\.0$/, "")}%`
+    : `1 in ${Math.round(100 / rate)}`;
+  const extra = [];
+  if (c.gem) {
+    const one = gems[String(c.gem).toLowerCase()];
+    extra.push(`${String(c.gem).replace("_", " ")} 1 in ${one ? num(one.one_in) : "?"}`);
+  }
+  if (c.is_holo) extra.push("holo 1 in 5");
+  return base + (extra.length ? " · " + extra.join(" · ") : "");
+}
+
+function startReveal(payload) {
+  const cards = payload.cards || [];
+  const odds = payload.odds || {};
+  const pr = odds.pull_rates || {};
+  const gems = odds.gems || {};
+  const N = cards.length;
+  if (!N) return;
+  const revealed = cards.map(() => false);
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  const overlay = document.createElement("div");
+  overlay.className = "cd-reveal";
+  document.body.appendChild(overlay);
+  document.body.style.overflow = "hidden";
+
+  const muteLabel = () => (window.CardSfx && CardSfx.isMuted() ? "Sound off" : "Sound on");
+  const oddsCaption = (c) => `Odds <b>${pullLabel(c, pr, gems)}</b> · EV <b>${coins(c.book_value)}</b>`;
+
+  function flipCardHTML(c, i) {
+    const rev = revealed[i];
+    return `<div class="flipcard${rev ? " is-revealed" : ""}" data-flip="${i}">
+      <div class="flipcard-face">
+        ${cardTile(c)}
+        <div class="flipcard-back"><div class="flipcard-back-brand">SharpLab</div><div class="flipcard-back-mark">🃏</div></div>
+      </div>
+      <div class="flip-odds">${rev ? oddsCaption(c) : ""}</div>
+    </div>`;
+  }
+
+  function summaryHTML() {
+    const counts = {};
+    let total = 0;
+    cards.forEach((c) => {
+      const r = (c.rarity || "common").toLowerCase();
+      counts[r] = (counts[r] || 0) + 1;
+      total += c.book_value || 0;
+    });
+    const chips = RARITY_CHIP.filter((r) => counts[r])
+      .map((r) => `<span class="cd-summary-chip cd-summary-${r}">${counts[r]}× ${r}</span>`)
+      .join("");
+    return `<div class="cd-summary-row">${chips}</div>
+      <div class="cd-summary-value">+${num(Math.round(total))} book value</div>`;
+  }
+
+  const allDone = () => revealed.every(Boolean);
+  const doneCount = () => revealed.filter(Boolean).length;
+
+  function updateChrome() {
+    const hint = overlay.querySelector("#revhint");
+    if (hint) hint.textContent = allDone() ? `Your haul — ${N} card${N > 1 ? "s" : ""}` : `Tap to flip · ${doneCount()}/${N}`;
+    const summary = overlay.querySelector("#revsummary");
+    if (summary) { summary.hidden = !allDone(); if (allDone()) summary.innerHTML = summaryHTML(); }
+    const actions = overlay.querySelector("#revactions");
+    if (actions) {
+      actions.innerHTML = allDone()
+        ? `<button class="btn primary" data-close>Continue</button>`
+        : `<button class="btn" data-flipall>Reveal all</button>`;
+    }
+  }
+
+  function flip(i) {
+    if (revealed[i]) return;
+    revealed[i] = true;
+    const el = overlay.querySelector(`.flipcard[data-flip="${i}"]`);
+    if (el) {
+      el.classList.add("is-revealed");
+      const cap = el.querySelector(".flip-odds");
+      if (cap) cap.innerHTML = oddsCaption(cards[i]);
+    }
+    const c = cards[i];
+    if (window.CardSfx) {
+      CardSfx.sfxFlip();
+      CardSfx.sfxReveal((c.rarity || "").toLowerCase(), !!c.is_holo, c.gem || null);
+    }
+    updateChrome();
+  }
+
+  function revealAll() {
+    cards.forEach((_, i) => {
+      if (revealed[i]) return;
+      if (reduce) flip(i);
+      else setTimeout(() => flip(i), i * 90);
+    });
+  }
+
+  function renderCards() {
+    overlay.innerHTML = `
+      <button class="cd-mute">${muteLabel()}</button>
+      <button class="btn cd-close" data-close>Close</button>
+      <p class="cd-reveal-hint" id="revhint"></p>
+      <div class="cd-reveal-grid">${cards.map(flipCardHTML).join("")}</div>
+      <div class="cd-summary" id="revsummary" hidden></div>
+      <div class="cd-reveal-actions" id="revactions"></div>`;
+    updateChrome();
+  }
+
+  function renderPack() {
+    overlay.innerHTML = `
+      <button class="cd-mute">${muteLabel()}</button>
+      <div class="cd-pack-wrap">
+        <div class="cd-pack">
+          <div class="cd-pack-foil"></div><div class="cd-pack-shine"></div>
+          <div class="cd-pack-mark">🎴</div>
+          <div class="cd-pack-label">SharpLab</div>
+          <div class="cd-pack-sub">${N} card${N > 1 ? "s" : ""}</div>
+        </div>
+        <p class="cd-pack-hint">Opening…</p>
+      </div>`;
+  }
+
+  function close() {
+    document.removeEventListener("keydown", onKey);
+    overlay.remove();
+    document.body.style.overflow = "";
+    reloadAfterOpen();
+  }
+
+  function onKey(e) {
+    if (e.key === "Escape") { close(); return; }
+    if ((e.key === " " || e.key === "ArrowRight") && overlay.querySelector(".cd-reveal-grid")) {
+      e.preventDefault();
+      const next = revealed.findIndex((r) => !r);
+      if (next >= 0) flip(next);
+    }
+  }
+
+  overlay.addEventListener("click", (e) => {
+    if (e.target.closest(".cd-mute")) {
+      if (window.CardSfx) CardSfx.toggleMute();
+      overlay.querySelector(".cd-mute").textContent = muteLabel();
+      return;
+    }
+    if (e.target.closest("[data-close]")) return close();
+    if (e.target.closest("[data-flipall]")) return revealAll();
+    const fc = e.target.closest(".flipcard");
+    if (fc) flip(Number(fc.dataset.flip));
+  });
+  document.addEventListener("keydown", onKey);
+
+  if (window.CardSfx) CardSfx.sfxPackOpen();
+  renderPack();
+  setTimeout(renderCards, reduce ? 0 : PACK_BURST_MS);
+}
+
 app.addEventListener("click", async (e) => {
+  const openBtn = e.target.closest(".openbtn");
+  const dailyBtn = e.target.closest(".dailybtn");
+  if (openBtn) {
+    e.stopPropagation();
+    await doOpen(openBtn.dataset.sport, Number(openBtn.dataset.season), openBtn);
+    return;
+  }
+  if (dailyBtn) {
+    e.stopPropagation();
+    await doDaily(dailyBtn);
+    return;
+  }
   const tabBtn = e.target.closest(".tab");
   const setCard = e.target.closest(".setcard");
   const back = e.target.closest("[data-back]");
@@ -360,6 +592,22 @@ function mockJSON(url) {
       },
     };
   return {};
+}
+
+function mockOpen() {
+  const odds = {
+    holo_pct: 20,
+    pull_rates: { common: 62, uncommon: 24, rare: 10, epic: 3, legendary: 1 },
+    gems: { chrome: { one_in: 50, mult: 1.5 }, sapphire: { one_in: 500, mult: 5 }, ruby: { one_in: 2000, mult: 10 }, black_lotus: { one_in: 100000, mult: 25 } },
+  };
+  const cards = [
+    { instance_id: 101, name: "Bench Guy", rarity: "common", sport: "nba", team: "KC", is_holo: false, gem: null, serial: 512, total_copies: 900, book_value: 3.5, is_rookie: false, headshot_url: "" },
+    { instance_id: 102, name: "Role Player", rarity: "uncommon", sport: "nba", team: "DEN", is_holo: false, gem: null, serial: 40, total_copies: 300, book_value: 10, is_rookie: false, headshot_url: "" },
+    { instance_id: 103, name: "Solid Starter", rarity: "rare", sport: "nba", team: "MIA", is_holo: true, gem: null, serial: 12, total_copies: 80, book_value: 70, is_rookie: true, headshot_url: "" },
+    { instance_id: 104, name: "All-Star", rarity: "epic", sport: "nba", team: "LAL", is_holo: false, gem: null, serial: 7, total_copies: 25, book_value: 100, is_rookie: false, headshot_url: "" },
+    { instance_id: 105, name: "LeBron James", rarity: "legendary", sport: "nba", team: "CLE", is_holo: true, gem: "ruby", serial: 1, total_copies: 1, book_value: 5200, is_rookie: true, headshot_url: "https://a.espncdn.com/i/headshots/nba/players/full/1966.png" },
+  ];
+  return { cards, odds, balance: 4200 };
 }
 
 main();

@@ -150,3 +150,133 @@
 
 .emptybox { text-align: center; padding: 48px 20px; color: var(--muted); }
 .emptybox .big { font-size: 40px; margin-bottom: 10px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Pack-opening reveal — ported from nsba-markets (Cards.css / CardTile.css),
+   adapted to SharpLab's .ctile markup + theme vars.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.mono { font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace; }
+
+/* Set-card open buttons */
+.setactions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.setactions .btn { padding: 6px 14px; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 13px; }
+.dailybar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0 0 16px; }
+.dailybar .btn { padding: 7px 16px; border-radius: 9px; font-weight: 700; cursor: pointer; }
+
+.cd-reveal {
+  position: fixed; inset: 0; z-index: 200;
+  display: flex; flex-direction: column; align-items: center; justify-content: safe center;
+  gap: 24px; padding: 40px 20px; overflow-y: auto;
+  background: radial-gradient(120% 90% at 50% 0%, #17233a, #05070b 70%);
+  animation: cd-scrim-in 0.25s ease both;
+}
+@keyframes cd-scrim-in { from { opacity: 0; } to { opacity: 1; } }
+.cd-mute {
+  position: absolute; top: 22px; right: 24px; padding: 6px 12px; border-radius: 999px;
+  border: 1px solid #2a3346; background: rgba(18,22,31,0.55); backdrop-filter: blur(6px);
+  color: #cfd6e6; font-size: 12px; letter-spacing: 0.03em; line-height: 1; cursor: pointer;
+  opacity: 0.6; transition: opacity .15s, border-color .15s, transform .15s; z-index: 10;
+}
+.cd-mute:hover { opacity: 1; border-color: #34d399; transform: scale(1.06); }
+.cd-close { position: absolute; top: 22px; left: 24px; }
+
+/* pack burst */
+.cd-pack-wrap { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+.cd-pack {
+  position: relative; width: 190px; height: 262px; border-radius: 16px; overflow: hidden;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  background: linear-gradient(150deg, #7aa2f7, #5865f2 30%, #bb6bff 62%, #22d3ee 100%);
+  border: 1px solid #8fb0ff;
+  box-shadow: 0 30px 60px -20px #000, 0 0 50px -10px rgba(122,162,247,0.7), inset 0 0 0 3px rgba(255,255,255,0.14);
+  animation: cd-pack-shake 0.7s ease-in-out 2, cd-pack-burst 0.35s ease-in 1 0.9s forwards;
+}
+.cd-pack-foil {
+  position: absolute; inset: 0; mix-blend-mode: overlay; opacity: 0.5;
+  background:
+    repeating-linear-gradient(115deg, #ffffff00 0 8%, #ffffff55 12%, #ffffff00 16%),
+    conic-gradient(from 0deg, #ff5b7f55, #ffd76a55, #22d3ee55, #c07bff55, #ff5b7f55);
+  animation: cd-pack-foil 3s linear infinite;
+}
+@keyframes cd-pack-foil { to { transform: translateX(12%) rotate(2deg); } }
+.cd-pack-shine {
+  position: absolute; top: 0; bottom: 0; width: 45%; filter: blur(2px);
+  background: linear-gradient(100deg, transparent, rgba(255,255,255,0.55), transparent);
+  animation: cd-pack-shine 2.2s ease-in-out infinite;
+}
+@keyframes cd-pack-shine { 0% { left: -50%; } 60%,100% { left: 120%; } }
+.cd-pack-mark { position: relative; z-index: 2; font-size: 54px; filter: drop-shadow(0 4px 16px rgba(0,0,0,0.5)); }
+.cd-pack-label { position: relative; z-index: 2; font-weight: 850; font-size: 17px; color: #fff; text-shadow: 0 2px 10px rgba(0,0,0,0.55); }
+.cd-pack-sub { position: relative; z-index: 2; font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; color: rgba(255,255,255,0.82); }
+@keyframes cd-pack-shake {
+  0%,100% { transform: rotate(0deg) scale(1); }
+  20% { transform: rotate(-4deg) scale(1.02); } 40% { transform: rotate(4deg) scale(1.02); }
+  60% { transform: rotate(-3deg) scale(1.03); } 80% { transform: rotate(3deg) scale(1.03); }
+}
+@keyframes cd-pack-burst { to { transform: scale(1.6); opacity: 0; box-shadow: 0 0 120px 20px rgba(52,211,153,0.8); } }
+.cd-pack-hint { font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: #9aa3b8; margin: 0; }
+
+.cd-reveal-hint { font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: #9aa3b8; margin: 0; text-align: center; }
+.cd-reveal-grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 18px; max-width: 1100px; }
+
+/* Flip card: the front is the normal .ctile (defines size); a cover overlays it and
+   swings away on reveal. Simpler + more robust than a dual-face 3D flip with variable content. */
+.cardtoast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 300;
+  background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 18px; font-size: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.5);
+}
+.flipcard { position: relative; width: 178px; perspective: 1200px; cursor: pointer; }
+.flipcard-face { position: relative; display: block; }
+.flipcard .ctile { width: 100%; }
+.flipcard-back {
+  position: absolute; inset: 0; border-radius: 12px; overflow: hidden; z-index: 3;
+  transform-origin: left center; backface-visibility: hidden;
+  transition: transform 0.55s cubic-bezier(0.4,0.2,0.2,1), opacity 0.35s ease;
+  display: grid; place-items: center;
+  background: radial-gradient(80% 60% at 50% 42%, #24304e, transparent 70%), linear-gradient(160deg, #161d2e, #090c13 70%);
+  border: 1px solid #2b3651;
+  box-shadow: inset 0 0 0 4px #0c1018, inset 0 0 0 5px #223052, 0 14px 34px -18px #000;
+}
+.flipcard-back::before {
+  content: ""; position: absolute; inset: 0; opacity: 0.7;
+  background-image: repeating-linear-gradient(45deg, #7aa2f71a 0 1px, transparent 1px 9px), repeating-linear-gradient(-45deg, #bb9af714 0 1px, transparent 1px 9px);
+  -webkit-mask: radial-gradient(70% 60% at 50% 45%, #000, transparent 75%);
+  mask: radial-gradient(70% 60% at 50% 45%, #000, transparent 75%);
+}
+.flipcard-back-mark { font-size: 40px; filter: drop-shadow(0 0 18px rgba(122,162,247,0.55)); animation: cd-back-float 4.5s ease-in-out infinite; }
+.flipcard-back-brand { position: absolute; top: 14px; left: 0; right: 0; text-align: center; font-size: 9px; letter-spacing: 0.34em; text-transform: uppercase; color: #6b7ba6; }
+@keyframes cd-back-float { 0%,100% { transform: translateY(-2px); } 50% { transform: translateY(2px); } }
+.flipcard.is-revealed .flipcard-back { transform: rotateY(-165deg); opacity: 0; pointer-events: none; }
+.flipcard.is-revealed .ctile { animation: cd-pop 0.4s ease; }
+@keyframes cd-pop { 0% { transform: scale(0.94); } 55% { transform: scale(1.04); } 100% { transform: scale(1); } }
+
+/* odds + EV caption shown once a card is flipped */
+.flip-odds { margin-top: 6px; text-align: center; font-size: 11px; color: var(--muted); min-height: 15px; opacity: 0; transition: opacity .3s ease; }
+.flipcard.is-revealed .flip-odds { opacity: 1; }
+.flip-odds b { color: var(--fg); }
+
+/* haul summary */
+.cd-summary { display: flex; flex-direction: column; align-items: center; gap: 10px; animation: cd-summary-in 0.4s ease both; }
+@keyframes cd-summary-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.cd-summary-row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.cd-summary-chip {
+  font-size: 11.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: capitalize;
+  padding: 5px 12px; border-radius: 999px; border: 1px solid currentColor; color: var(--r-common);
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+.cd-summary-common { color: var(--r-common); }
+.cd-summary-uncommon { color: var(--r-uncommon); }
+.cd-summary-rare { color: var(--r-rare); }
+.cd-summary-epic { color: var(--r-epic); }
+.cd-summary-legendary { color: var(--r-legendary); }
+.cd-summary-value { font-size: 16px; font-weight: 800; color: var(--green); }
+
+.cd-reveal-actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+.cd-reveal .btn { padding: 8px 20px; border-radius: 9px; font-weight: 700; cursor: pointer; }
+.cd-reveal .btn:not(.primary) { background: rgba(255,255,255,0.06); border: 1px solid #2a3346; color: #eaeef7; }
+.cd-reveal .btn:not(.primary):hover { background: rgba(255,255,255,0.12); border-color: #46536e; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cd-reveal, .cd-summary, .cd-pack, .cd-pack-foil, .cd-pack-shine, .flipcard-back, .flipcard.is-revealed .ctile { animation: none; }
+  .flipcard-back { transition: opacity .2s ease; }
+}

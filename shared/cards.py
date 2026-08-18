@@ -174,6 +174,55 @@ def is_notable_pull(card: dict) -> bool:
     return bool(card.get("is_holo")) and rarity == "rare"
 
 
+# --- Reveal helpers (shared by the web page + the Discord animated reveal) ---
+
+def set_odds(designs: list[dict]) -> dict:
+    """Pull-rate odds for a set, from its catalog designs. Single source of truth for the
+    catalog page, the web open response, and the Discord reveal. `designs` carry
+    `rarity` + `total_copies`."""
+    total = sum(d["total_copies"] for d in designs) or 1
+    by_rarity: dict[str, int] = {}
+    for d in designs:
+        by_rarity[d["rarity"]] = by_rarity.get(d["rarity"], 0) + d["total_copies"]
+    return {
+        "holo_pct": round(HOLO_RATE * 100, 1),
+        "pull_rates": {r: round(100 * by_rarity.get(r, 0) / total, 1) for r in RARITIES if by_rarity.get(r)},
+        "gems": {name: {"one_in": den, "mult": mult} for name, (den, mult, _f) in GEMS.items()},
+    }
+
+
+def reveal_order(cards: list[dict]) -> list[dict]:
+    """Cards sorted ascending — common first, chase card last — so a reveal climaxes on the
+    best pull. Tie-break holo then book value."""
+    return sorted(
+        cards,
+        key=lambda c: (
+            RARITIES.index(c["rarity"]) if c.get("rarity") in RARITIES else 0,
+            1 if c.get("is_holo") else 0,
+            c.get("book_value", 0),
+        ),
+    )
+
+
+def pull_label(card: dict, pull_rates: dict[str, float]) -> str:
+    """Human "1 in N" odds for a single card: rarity pull-rate, plus gem/holo notes.
+    `pull_rates` is the per-rarity map from set_odds()."""
+    rate = pull_rates.get(card.get("rarity"))
+    if not rate:
+        base = "—"
+    elif rate >= 25:  # commons/uncommons — "1 in 1" reads broken, so show the percent
+        base = f"{rate:g}%"
+    else:
+        base = f"1 in {round(100 / rate):,}"
+    extra = []
+    gem = card.get("gem")
+    if gem in GEMS:
+        extra.append(f"{gem.replace('_', ' ')} 1 in {GEMS[gem][0]:,}")
+    if card.get("is_holo"):
+        extra.append(f"holo 1 in {round(1 / HOLO_RATE)}")
+    return base + (" · " + " · ".join(extra) if extra else "")
+
+
 def describe_pull(card: dict) -> str:
     """Human-readable tag for a notable pull, e.g. '1-of-1 Legendary LeBron James (2003)'."""
     bits = []

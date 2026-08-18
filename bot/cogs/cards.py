@@ -92,6 +92,113 @@ def _card_line(c: dict) -> str:
     return f"{' '.join(b for b in bits if b)} {name} {tail}".strip()
 
 
+def _badges(c: dict) -> str:
+    bits = []
+    if c.get("is_rookie"):
+        bits.append("🌟 RC")
+    if c.get("gem"):
+        bits.append(f"{GEM_EMOJI.get(c['gem'], '💎')} {c['gem'].replace('_', ' ').title()}")
+    if c.get("is_holo"):
+        bits.append("✨ Holo")
+    return "  ".join(bits)
+
+
+class PackRevealView(discord.ui.View):
+    """Animated pack reveal: step through the haul one card at a time with ◀ ▶, ascending
+    rarity so the chase card lands last. Each card shows its pull odds + price (book value =
+    EV). A Summary button (and the end of the haul) shows the full list."""
+
+    def __init__(self, cards: list[dict], pull_rates: dict, title: str, opener: discord.abc.User):
+        super().__init__(timeout=180)
+        self.cards = engine.reveal_order(cards)
+        self.pull_rates = pull_rates
+        self.title = title
+        self.opener = opener
+        self.i = 0
+        self.show_summary = False
+        self.message: discord.Message | None = None
+        self._sync_buttons()
+
+    def _sync_buttons(self) -> None:
+        last = len(self.cards) - 1
+        self.prev_btn.disabled = not self.show_summary and self.i == 0
+        self.next_btn.disabled = self.show_summary
+        self.summary_btn.disabled = self.show_summary or len(self.cards) == 1
+
+    def current_embed(self) -> discord.Embed:
+        return self._summary_embed() if self.show_summary else self._card_embed(self.i)
+
+    def _card_embed(self, i: int) -> discord.Embed:
+        c = self.cards[i]
+        emb = discord.Embed(
+            title=f"{RARITY_EMOJI.get(c['rarity'], '')} {c['name']}",
+            description=f"{c.get('team') or ''}  {_badges(c)}".strip() or None,
+            color=RARITY_COLOR.get(c["rarity"], 0x7AA2F7),
+        )
+        emb.add_field(name="Rarity", value=c["rarity"].title())
+        emb.add_field(name="Odds to pull", value=engine.pull_label(c, self.pull_rates))
+        emb.add_field(name="Price (EV)", value=f"{round(c['book_value'])} 🪙")
+        if c.get("serial"):
+            emb.add_field(name="Serial", value=f"#{c['serial']}/{c['total_copies']}")
+        if c.get("headshot_url"):
+            emb.set_thumbnail(url=c["headshot_url"])
+        emb.set_footer(text=f"{self.title} · card {i + 1}/{len(self.cards)} · opened by {self.opener.display_name}")
+        return emb
+
+    def _summary_embed(self) -> discord.Embed:
+        total = round(sum(c["book_value"] for c in self.cards))
+        best = self.cards[-1]  # ascending order → last is best
+        emb = discord.Embed(
+            title=f"{self.title} — your haul",
+            description="\n".join(_card_line(c) for c in self.cards),
+            color=RARITY_COLOR.get(best["rarity"], 0x7AA2F7),
+        )
+        if best.get("headshot_url"):
+            emb.set_thumbnail(url=best["headshot_url"])
+        emb.set_footer(text=f"Pack book value: {total} 🪙  ·  opened by {self.opener.display_name}")
+        return emb
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if str(interaction.user.id) != str(self.opener.id):
+            await interaction.response.send_message("That's not your pack!", ephemeral=True)
+            return False
+        return True
+
+    async def _update(self, interaction: discord.Interaction) -> None:
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=self.current_embed(), view=self)
+
+    @discord.ui.button(label="◀", style=discord.ButtonStyle.secondary)
+    async def prev_btn(self, interaction: discord.Interaction, _button: discord.ui.Button):
+        if self.show_summary:
+            self.show_summary = False  # back to the last card
+        elif self.i > 0:
+            self.i -= 1
+        await self._update(interaction)
+
+    @discord.ui.button(label="▶", style=discord.ButtonStyle.primary)
+    async def next_btn(self, interaction: discord.Interaction, _button: discord.ui.Button):
+        if self.i < len(self.cards) - 1:
+            self.i += 1
+        else:
+            self.show_summary = True
+        await self._update(interaction)
+
+    @discord.ui.button(label="📋 Summary", style=discord.ButtonStyle.secondary)
+    async def summary_btn(self, interaction: discord.Interaction, _button: discord.ui.Button):
+        self.show_summary = True
+        await self._update(interaction)
+
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            child.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+
 class CardsCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -180,18 +287,14 @@ class CardsCog(commands.Cog):
             except Exception:
                 log.debug("cards: wishlist DM failed for design %s", c.get("design_id"))
 
-    def _reveal_embed(self, cards_out: list[dict], title: str, opener: discord.abc.User) -> discord.Embed:
-        total = round(sum(c["book_value"] for c in cards_out))
-        best = max(cards_out, key=lambda c: c["book_value"])
-        emb = discord.Embed(
-            title=title,
-            description="\n".join(_card_line(c) for c in cards_out),
-            color=RARITY_COLOR.get(best["rarity"], 0x7AA2F7),
-        )
-        if best.get("headshot_url"):
-            emb.set_thumbnail(url=best["headshot_url"])
-        emb.set_footer(text=f"Pack book value: {total} 🪙  ·  opened by {opener.display_name}")
-        return emb
+    async def _send_reveal(
+        self, interaction: discord.Interaction, cards_out: list[dict], title: str, set_id: int
+    ) -> None:
+        """Send the animated arrow reveal for a freshly-opened pack."""
+        cat = await queries.get_catalog(set_id)
+        pull_rates = engine.set_odds(cat["designs"])["pull_rates"] if cat else {}
+        view = PackRevealView(cards_out, pull_rates, title, interaction.user)
+        view.message = await interaction.followup.send(embed=view.current_embed(), view=view)
 
     @pack.command(name="open", description="Buy & open card packs with coins")
     @app_commands.describe(sport="League", season="Season year (e.g. 2024)", n="How many packs (1-10)")
@@ -221,7 +324,7 @@ class CardsCog(commands.Cog):
                 await interaction.followup.send(f"❌ {e}")
                 return
         title = f"{SPORT_EMOJI.get(sport.value,'🎴')} {cset['name']} — {opened} pack{'s' if opened>1 else ''}"
-        await interaction.followup.send(embed=self._reveal_embed(all_cards, title, interaction.user))
+        await self._send_reveal(interaction, all_cards, title, cset["set_id"])
         await self._post_notable(all_cards, interaction.user)
         await self._dm_wanters(all_cards, interaction.user)
         await self._check_set_completion(uid, cset["set_id"], interaction)
@@ -248,7 +351,7 @@ class CardsCog(commands.Cog):
             return
         await queries.record_daily_pack_claim(uid, day)
         title = f"🎁 Free daily pack — {cset['name']}"
-        await interaction.followup.send(embed=self._reveal_embed(cards_out, title, interaction.user))
+        await self._send_reveal(interaction, cards_out, title, cset["set_id"])
         await self._post_notable(cards_out, interaction.user)
         await self._dm_wanters(cards_out, interaction.user)
         await self._check_set_completion(uid, cset["set_id"], interaction)
