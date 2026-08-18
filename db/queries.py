@@ -1240,11 +1240,16 @@ async def get_balance(discord_user: str) -> int | None:
 # ── Casino Wallets (separate from paper-trading wallets) ──────────────────────
 
 CASINO_STARTING_COINS = 1000
-CASINO_MIN_BALANCE = 1000
+# Floor for debits/tips — you can lose all the way down to 0. It used to be 1000, which
+# both topped every wallet back up to 1000 on play AND floored losses at 1000 — a coin
+# faucet that made coins meaningless. Earning is now the 500/day message reward, the free
+# daily pack, set-completion bonuses, quick-selling dupes, and winning games.
+CASINO_MIN_BALANCE = 0
 
 
 async def get_or_create_casino_wallet(discord_user: str) -> int:
-    """Return casino balance. Creates wallet with starting coins if new."""
+    """Return casino balance. Creates a wallet with starting coins if new — but never tops an
+    existing wallet back up (no faucet)."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
@@ -1253,15 +1258,7 @@ async def get_or_create_casino_wallet(discord_user: str) -> int:
         )
         row = await cursor.fetchone()
         if row is not None:
-            bal = row["balance"]
-            if bal < CASINO_MIN_BALANCE:
-                bal = CASINO_MIN_BALANCE
-                await db.execute(
-                    "UPDATE casino_wallets SET balance = ? WHERE discord_user = ?",
-                    (bal, discord_user),
-                )
-                await db.commit()
-            return bal
+            return row["balance"]
         await db.execute(
             "INSERT INTO casino_wallets (discord_user, balance) VALUES (?, ?)",
             (discord_user, CASINO_STARTING_COINS),
@@ -2081,6 +2078,24 @@ async def set_livebet_alerts_enabled(discord_user: str, enabled: bool) -> None:
         await db.execute(
             "INSERT INTO user_settings (discord_user, livebet_alerts) VALUES (?, ?) "
             "ON CONFLICT(discord_user) DO UPDATE SET livebet_alerts = excluded.livebet_alerts",
+            (discord_user, 1 if enabled else 0),
+        )
+        await db.commit()
+
+
+async def get_cards_fast_open(discord_user: str) -> bool:
+    """Whether the user opted to always fast-open packs (skip the reveal animation)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT cards_fast_open FROM user_settings WHERE discord_user = ?", (discord_user,))
+        row = await cur.fetchone()
+    return bool(row[0]) if row else False
+
+
+async def set_cards_fast_open(discord_user: str, enabled: bool) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO user_settings (discord_user, cards_fast_open) VALUES (?, ?) "
+            "ON CONFLICT(discord_user) DO UPDATE SET cards_fast_open = excluded.cards_fast_open",
             (discord_user, 1 if enabled else 0),
         )
         await db.commit()
@@ -4747,6 +4762,28 @@ async def record_daily_pack_claim(user: str, day: str) -> None:
             "INSERT OR IGNORE INTO card_pack_claims (discord_user, day) VALUES (?, ?)", (user, day)
         )
         await db.commit()
+
+
+DAILY_MESSAGE_REWARD = 500  # coins for your first chat message each day (UTC)
+
+
+async def grant_daily_message_reward(discord_user: str, day: str) -> int:
+    """Grant the once-a-day chat reward on the user's first message of the day. Returns the coins
+    granted (0 if already claimed today). The INSERT OR IGNORE is the atomic per-day lock."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT OR IGNORE INTO daily_message_reward (discord_user, day) VALUES (?, ?)",
+            (discord_user, day),
+        )
+        if cur.rowcount == 0:
+            return 0  # already claimed today
+        await db.execute(
+            "INSERT INTO casino_wallets (discord_user, balance) VALUES (?, ?) "
+            "ON CONFLICT(discord_user) DO UPDATE SET balance = balance + ?",
+            (discord_user, CASINO_STARTING_COINS + DAILY_MESSAGE_REWARD, DAILY_MESSAGE_REWARD),
+        )
+        await db.commit()
+        return DAILY_MESSAGE_REWARD
 
 
 async def get_max_card_instance_id() -> int:

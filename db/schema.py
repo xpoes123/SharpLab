@@ -515,6 +515,12 @@ CREATE TABLE IF NOT EXISTS card_pack_claims (
     PRIMARY KEY (discord_user, day)
 );
 
+CREATE TABLE IF NOT EXISTS daily_message_reward (
+    discord_user TEXT NOT NULL,
+    day          TEXT NOT NULL,
+    PRIMARY KEY (discord_user, day)
+);
+
 CREATE TABLE IF NOT EXISTS card_trades (
     trade_id     INTEGER PRIMARY KEY AUTOINCREMENT,
     from_user    TEXT NOT NULL,
@@ -911,6 +917,11 @@ async def init_db() -> None:
             pass
         try:  # add `stock_alerts` opt-in flag to an already-existing user_settings table
             await db.execute("ALTER TABLE user_settings ADD COLUMN stock_alerts INTEGER NOT NULL DEFAULT 0")
+            await db.commit()
+        except Exception:
+            pass
+        try:  # opt-in: always skip the card-pack reveal animation and show the whole haul at once
+            await db.execute("ALTER TABLE user_settings ADD COLUMN cards_fast_open INTEGER NOT NULL DEFAULT 0")
             await db.commit()
         except Exception:
             pass

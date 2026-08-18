@@ -350,6 +350,33 @@ function toast(msg) {
   setTimeout(() => t.remove(), 3200);
 }
 
+// ── Coins hub: click the nav coins chip to see every way to earn ──
+const EARN_WAYS = [
+  ["💬", "Daily chat reward", "500 coins for your first message in the server each day"],
+  ["🎁", "Free daily pack", "Open one free card pack every day — pure upside"],
+  ["🃏", "Complete a set", "One-time coin bonus for owning every card in a set"],
+  ["♻️", "Quick-sell dupes", "Sell duplicate cards back for coins in Discord"],
+  ["🎮", "Win casino games", "Win at /play in Discord — note: playing no longer hands out free coins"],
+  ["🔄", "Trade cards", "Swap cards with other collectors to complete sets"],
+];
+function showCoinsHub() {
+  if (document.querySelector(".hubov")) return;
+  const rows = EARN_WAYS.map(
+    ([i, t, d]) => `<div class="hubrow"><div class="hubicon">${i}</div>
+      <div><div class="hubt">${esc(t)}</div><div class="hubd">${esc(d)}</div></div></div>`
+  ).join("");
+  const ov = document.createElement("div");
+  ov.className = "hubov";
+  ov.innerHTML = `<div class="hubcard">
+    <div class="hubhead"><h3>Ways to earn 🪙</h3><button class="hubx" aria-label="Close">✕</button></div>
+    ${rows}
+    <div class="hubfoot">Your balance: <b>🪙 ${num(state.balance)}</b></div>
+  </div>`;
+  ov.addEventListener("click", (e) => { if (e.target === ov || e.target.closest(".hubx")) ov.remove(); });
+  document.body.appendChild(ov);
+}
+document.addEventListener("click", (e) => { if (e.target.closest(".coinschip")) showCoinsHub(); });
+
 async function doOpen(sport, season, btn) {
   if (btn) btn.disabled = true;
   window.CardSfx && CardSfx.primeAudio(); // unlock audio on the user gesture
