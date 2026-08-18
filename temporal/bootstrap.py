@@ -21,9 +21,11 @@ log = logging.getLogger(__name__)
 LONG_RUNNING_WORKFLOWS: list[tuple[str, str, list]] = [
     ("OddsPollingWorkflow", "odds-polling-nba-v2", [30, "nba"]),
     ("OddsPollingWorkflow", "odds-polling-mlb-v2", [30, "mlb"]),
+    ("OddsPollingWorkflow", "odds-polling-nfl-v2", [30, "nfl"]),
     ("InjuryPollingWorkflow", "injury-polling-v1", [5]),
     ("BetResolutionWorkflow", "bet-resolution-nba-v2", [2, "nba"]),
     ("BetResolutionWorkflow", "bet-resolution-mlb-v2", [2, "mlb"]),
+    ("BetResolutionWorkflow", "bet-resolution-nfl-v2", [2, "nfl"]),
 ]
 
 

@@ -41,13 +41,30 @@ ESPN_INJURIES_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nb
 
 # ── Sport config maps ────────────────────────────────────────────────────────
 
-ODDS_API_SPORT_KEY = {"nba": "basketball_nba", "mlb": "baseball_mlb", "wnba": "basketball_wnba"}
+ODDS_API_SPORT_KEY = {"nba": "basketball_nba", "mlb": "baseball_mlb", "wnba": "basketball_wnba",
+                      "nfl": "americanfootball_nfl"}
 KALSHI_SERIES = {"nba": "KXNBAGAME", "mlb": "KXMLBGAME"}
 ESPN_SCORES_URL = {
     "nba": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
     "wnba": "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/scoreboard",
     "mlb": "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard",
+    # ESPN's NFL scoreboard returns both preseason (seasontype=1) and regular games.
+    "nfl": "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
 }
+
+# The Odds API splits NFL into two non-overlapping sports: preseason games (mid-Aug)
+# live under the *_preseason key, regular season under the base key. Route by date so
+# pick'em gets preseason games now and auto-flips to the regular season in September
+# with no redeploy. ponytail: single hardcoded season cutoff — bump it next August.
+NFL_REGULAR_SEASON_START = "2026-09-02"
+
+
+def _sport_key(sport: str) -> str:
+    """Odds API sport key for a pipeline sport, date-aware for NFL preseason→regular."""
+    if sport == "nfl":
+        today = datetime.now(timezone.utc).date().isoformat()
+        return "americanfootball_nfl" if today >= NFL_REGULAR_SEASON_START else "americanfootball_nfl_preseason"
+    return ODDS_API_SPORT_KEY.get(sport, "basketball_nba")
 
 
 # ── Input types ────────────────────────────────────────────────────────────────
@@ -74,7 +91,7 @@ async def fetch_games_for_today(sport: str = "nba") -> list[Game]:
     Also upserts games to the DB so the rest of the pipeline can reference them.
     """
     await schema.init_db()
-    sport_key = ODDS_API_SPORT_KEY.get(sport, "basketball_nba")
+    sport_key = _sport_key(sport)
 
     async with httpx.AsyncClient() as client:
         resp = await client.get(
@@ -113,7 +130,7 @@ async def fetch_odds_batch(game_ids: list[str], sport: str = "nba") -> OddsBatch
     Returns one OddsSnapshot per (game, bookmaker) pair.
     """
     captured_at = datetime.now(timezone.utc).isoformat()
-    sport_key = ODDS_API_SPORT_KEY.get(sport, "basketball_nba")
+    sport_key = _sport_key(sport)
 
     params: dict[str, Any] = {
         "apiKey": ODDS_API_KEY,
@@ -180,7 +197,7 @@ async def fetch_close_odds_snapshot(inp: FetchCloseSnapshotInput) -> list[OddsSn
     (Temporal can't handle Optional return types, so we use list as the container.)
     """
     captured_at = datetime.now(timezone.utc).isoformat()
-    sport_key = ODDS_API_SPORT_KEY.get(inp.sport, "basketball_nba")
+    sport_key = _sport_key(inp.sport)
 
     async with httpx.AsyncClient() as client:
         resp = await client.get(
@@ -264,7 +281,7 @@ async def fetch_nba_player_props(game_ids: list[str], sport: str = "nba") -> int
     just omits any a sport doesn't offer. Returns the number of prop lines stored."""
     if not ODDS_API_KEY or not game_ids:
         return 0
-    sport_key = ODDS_API_SPORT_KEY.get(sport, "basketball_nba")
+    sport_key = _sport_key(sport)
     captured_at = datetime.now(timezone.utc).isoformat()
     total = 0
     async with httpx.AsyncClient() as client:
@@ -309,7 +326,7 @@ async def fetch_nba_player_prop_alts(game_ids: list[str], sport: str = "nba") ->
     Same alt market keys serve NBA and WNBA."""
     if not ODDS_API_KEY or not game_ids:
         return 0
-    sport_key = ODDS_API_SPORT_KEY.get(sport, "basketball_nba")
+    sport_key = _sport_key(sport)
     captured_at = datetime.now(timezone.utc).isoformat()
     total = 0
     async with httpx.AsyncClient() as client:

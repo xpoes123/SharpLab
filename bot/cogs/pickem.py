@@ -70,13 +70,14 @@ _PICKEM_CHANNEL_SETTING = "pickem_channel"
 
 AWAY_EMOJI = "✈️"
 HOME_EMOJI = "🏠"
-SPORT_EMOJI = {"nba": "🏀", "wnba": "🏀", "mlb": "⚾"}
+SPORT_EMOJI = {"nba": "🏀", "wnba": "🏀", "mlb": "⚾", "nfl": "🏈"}
 
 # Per-sport daily pick'em cap. Sports not listed post their whole slate. MLB runs
 # ~15 games/day, so we keep only 5: any game with a pinned team (below) first,
-# then filled out with the marquee (biggest-favorite) games.
-_SPORT_DAILY_CAP = {"mlb": 5}
-PICKEM_SPORTS = ("nba", "wnba", "mlb")
+# then filled out with the marquee (biggest-favorite) games. NFL Sundays run ~13
+# games, so cap it too (preseason days stay well under the cap and all post).
+_SPORT_DAILY_CAP = {"mlb": 5, "nfl": 8}
+PICKEM_SPORTS = ("nba", "wnba", "mlb", "nfl")
 # MLB teams whose games are always kept in the daily slate. Matched as a substring
 # of either team's full name (e.g. "red sox" ⊂ "Boston Red Sox").
 _PINNED_MLB = ("brewers", "red sox", "mets", "rockies", "dodgers")
