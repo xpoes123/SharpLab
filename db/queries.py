@@ -4764,7 +4764,54 @@ async def record_daily_pack_claim(user: str, day: str) -> None:
         await db.commit()
 
 
-DAILY_MESSAGE_REWARD = 500  # coins for your first chat message each day (UTC)
+DAILY_MESSAGE_REWARD = 500  # (legacy) coins for your first chat message each day (UTC)
+
+# Activity coin rewards: (coins per event, daily cap per source). Ascending by effort —
+# chatting is a trickle, logging real bets/trades pays more, all capped so nothing is farmable.
+ACTIVITY_REWARDS = {
+    "message": (5, 500),      # small trickle, capped
+    "pickem_pick": (25, 250),  # daily pick'em
+    "bet_log": (50, 1000),     # logging a real sports bet
+    "trade_log": (50, 1000),   # logging a stock/option trade
+    # (paper trades already stake coins — no reward, else you could farm the loop)
+}
+
+
+async def grant_activity_reward(discord_user: str, source: str, day: str) -> int:
+    """Credit the per-event coin reward for `source`, up to that source's daily cap. Returns the
+    coins actually granted (0 once capped). Atomic in one connection — the cap read + write + wallet
+    credit can't race."""
+    amount, cap = ACTIVITY_REWARDS.get(source, (0, 0))
+    if amount <= 0:
+        return 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            row = await (await db.execute(
+                "SELECT earned FROM daily_coin_earn WHERE discord_user=? AND day=? AND source=?",
+                (discord_user, day, source),
+            )).fetchone()
+            earned = row["earned"] if row else 0
+            grant = max(0, min(amount, cap - earned))
+            if grant <= 0:
+                await db.execute("ROLLBACK")
+                return 0
+            await db.execute(
+                "INSERT INTO daily_coin_earn (discord_user, day, source, earned) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(discord_user, day, source) DO UPDATE SET earned = earned + ?",
+                (discord_user, day, source, grant, grant),
+            )
+            await db.execute(
+                "INSERT INTO casino_wallets (discord_user, balance) VALUES (?, ?) "
+                "ON CONFLICT(discord_user) DO UPDATE SET balance = balance + ?",
+                (discord_user, CASINO_STARTING_COINS + grant, grant),
+            )
+            await db.commit()
+            return grant
+        except Exception:
+            await db.execute("ROLLBACK")
+            raise
 
 
 async def grant_daily_message_reward(discord_user: str, day: str) -> int:

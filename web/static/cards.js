@@ -352,12 +352,14 @@ function toast(msg) {
 
 // ── Coins hub: click the nav coins chip to see every way to earn ──
 const EARN_WAYS = [
-  ["💬", "Daily chat reward", "500 coins for your first message in the server each day"],
+  ["💬", "Chat in the server", "5 coins per message, up to 500 a day"],
+  ["🎯", "Log a bet", "50 coins for logging a sports bet with /bet log"],
+  ["📈", "Log a trade", "50 coins for recording a stock or option trade"],
+  ["🏀", "Daily pick'em", "25 coins each time you make a pick"],
   ["🎁", "Free daily pack", "Open one free card pack every day — pure upside"],
   ["🃏", "Complete a set", "One-time coin bonus for owning every card in a set"],
   ["♻️", "Quick-sell dupes", "Sell duplicate cards back for coins in Discord"],
-  ["🎮", "Win casino games", "Win at /play in Discord — note: playing no longer hands out free coins"],
-  ["🔄", "Trade cards", "Swap cards with other collectors to complete sets"],
+  ["🎮", "Win in the casino", "Win at /casino or /play — playing no longer hands out free coins"],
 ];
 function showCoinsHub() {
   if (document.querySelector(".hubov")) return;
