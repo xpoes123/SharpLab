@@ -4774,6 +4774,10 @@ ACTIVITY_REWARDS = {
     "bet_log": (50, 1000),     # logging a real sports bet
     "trade_log": (50, 1000),   # logging a stock/option trade
     "pokemon_guess": (15, 300),  # web arcade: correct "Who's That Pokémon?" guess
+    "wordle_win": (25, 200),     # web arcade: solved Wordle
+    "geo_guess": (15, 200),      # web arcade: correct Geography guess
+    "nba_guess": (15, 200),      # web arcade: correct NBA player guess
+    "pokedle_win": (25, 200),    # web arcade: solved Pokédle
     # (paper trades already stake coins — no reward, else you could farm the loop)
 }
 

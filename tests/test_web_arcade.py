@@ -44,6 +44,14 @@ def test_correct_guess_pays_and_reveals(monkeypatch):
     _run(go())
 
 
+def test_wordle_scoring_handles_duplicates():
+    import web.g_wordle as w  # score_guess(guess, answer)
+    # guess LEVEL vs answer ALLEY: L→present, E→absent (only E is the correct one), V→absent,
+    # E→correct, L→present
+    assert w.score_guess("LEVEL", "ALLEY") == ["present", "absent", "absent", "correct", "present"]
+    assert w.score_guess("ALLEY", "ALLEY") == ["correct"] * 5
+
+
 def test_expired_or_bad_token_400(monkeypatch):
     _fresh_db()
 

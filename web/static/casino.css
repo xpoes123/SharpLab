@@ -153,13 +153,61 @@
 .roulnumin:focus { outline: none; border-color: var(--accent); }
 .roulnumwrap { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
 
+/* ═══════════════════ Plinko ═══════════════════ */
+.plinko-board {
+  position: relative; width: 100%; max-width: 320px; aspect-ratio: 5 / 4; margin: 0 auto;
+  display: flex; flex-direction: column; justify-content: space-around;
+  padding: 10px 8px; background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r);
+}
+.plinko-row { display: flex; justify-content: space-evenly; }
+.peg { width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong); }
+.plinko-ball {
+  position: absolute; width: 12px; height: 12px; border-radius: 50%; z-index: 2;
+  background: radial-gradient(circle at 35% 30%, #f4d47a, var(--gold) 70%);
+  box-shadow: 0 0 8px rgba(224,175,104,.6); transform: translate(-50%, -50%);
+  left: 50%; top: 0; opacity: 0;
+}
+.plinko-buckets { display: flex; gap: 3px; }
+.plinko-bucket {
+  flex: 1; text-align: center; font-size: 10px; font-weight: 700; padding: 5px 2px;
+  border-radius: var(--r-sm); background: var(--panel2); border: 1px solid var(--line);
+  color: var(--muted); font-variant-numeric: tabular-nums;
+  transition: background var(--t), color var(--t), border-color var(--t);
+}
+.plinko-bucket.hit { background: var(--gold); color: var(--bg); border-color: var(--gold); box-shadow: 0 0 14px rgba(224,175,104,.4); }
+
+/* ═══════════════════ Crash ═══════════════════ */
+.crash-stage {
+  display: flex; align-items: center; justify-content: center; height: 96px; overflow: hidden;
+  border-radius: var(--r); background: var(--panel2); border: 1px solid var(--line);
+}
+.crash-mult {
+  font-size: 40px; font-weight: 900; color: var(--green); letter-spacing: .5px;
+  font-variant-numeric: tabular-nums; transition: color .15s, transform .15s;
+}
+.crash-mult.cashed { color: var(--green); }
+.crash-mult.crashed { color: var(--red); animation: crash-shake .4s; }
+@keyframes crash-shake {
+  0%,100% { transform: translateX(0); } 20% { transform: translateX(-6px); }
+  40% { transform: translateX(6px); } 60% { transform: translateX(-4px); } 80% { transform: translateX(4px); }
+}
+.crash-targetrow { display: flex; gap: 8px; align-items: center; }
+.crash-slider { flex: 1; accent-color: var(--accent); }
+.crash-targetin {
+  font-family: inherit; font-size: 14px; font-weight: 700; color: var(--fg); width: 72px;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 6px 8px;
+  font-variant-numeric: tabular-nums;
+}
+.crash-targetin:focus { outline: none; border-color: var(--accent); }
+.crash-targetrow > span { color: var(--muted); font-size: 13px; }
+
 /* ── Signed-out state ── */
 .signedout { text-align: center; padding: 40px 20px; color: var(--muted); }
 .signedout .big { font-size: 40px; margin-bottom: 10px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .coin.flipping, .reel.spin .strip, .roulnum.spin { animation: none; }
-  .dicetrack .marker, .dicetrack .rolledlbl { transition: none; }
+  .coin.flipping, .reel.spin .strip, .roulnum.spin, .crash-mult.crashed { animation: none; }
+  .dicetrack .marker, .dicetrack .rolledlbl, .plinko-ball, .plinko-bucket { transition: none; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

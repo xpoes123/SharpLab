@@ -68,6 +68,34 @@ def test_play_rejects_overdraw(monkeypatch):
     _run(go())
 
 
+def test_plinko_center_and_edge_payouts(monkeypatch):
+    _fresh_db()
+
+    async def go():
+        await sch.init_db()
+        await _fund("pl", 1000)
+        monkeypatch.setattr(casino.auth, "read_session", lambda r: {"id": "pl"})
+        monkeypatch.setattr(casino.secrets, "randbelow", lambda n: 1)  # all right → bucket 8 → 8.4x
+        res = await casino.plinko(_Req(), casino.PlinkoBody(bet=10))
+        assert res["detail"]["bucket"] == 8 and res["payout"] == round(10 * 8.4)
+
+    _run(go())
+
+
+def test_crash_win_when_point_beats_target(monkeypatch):
+    _fresh_db()
+
+    async def go():
+        await sch.init_db()
+        await _fund("cr", 1000)
+        monkeypatch.setattr(casino.auth, "read_session", lambda r: {"id": "cr"})
+        monkeypatch.setattr(casino.secrets, "randbelow", lambda n: 990_000_000)  # u=0.99 → point 99
+        res = await casino.crash(_Req(), casino.CrashBody(bet=10, target=2.0))
+        assert res["won"] and res["payout"] == 20 and res["detail"]["point"] >= 2.0
+
+    _run(go())
+
+
 def test_roulette_number_pays_36x(monkeypatch):
     _fresh_db()
 
