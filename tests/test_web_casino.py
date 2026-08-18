@@ -125,3 +125,21 @@ def test_horserace_win_pays_odds(monkeypatch):
         assert res["won"] and res["payout"] == round(10 * 9.0)
         assert res["detail"]["winner"] == 3
     _run(go())
+
+
+def test_sicbo_number_triple_pays_4x(monkeypatch):
+    import web.sicbo as sb
+    _fresh_db()
+
+    async def go():
+        await sch.init_db()
+        await _fund("sb", 1000)
+        monkeypatch.setattr(sb._play.__globals__["auth"], "read_session", lambda r: {"id": "sb"})
+        monkeypatch.setattr(sb.secrets, "randbelow", lambda n: 2)  # every die = 3 → triple threes
+        # bet the number 3 → appears 3× → 4× payout
+        res = await sb.sicbo(_Req(), sb.SicBoBody(bet=10, kind="num", value=3))
+        assert res["won"] and res["payout"] == 40 and res["detail"]["triple"]
+        # "small" loses on a triple even though sum 9 is in 4-10
+        res2 = await sb.sicbo(_Req(), sb.SicBoBody(bet=10, kind="small"))
+        assert res2["payout"] == 0
+    _run(go())

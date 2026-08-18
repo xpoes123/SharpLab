@@ -1,0 +1,170 @@
+/* SharpLab HQ — Liar's Dice page.
+   Builds on hqstyle.css (shared vars/header/nav/.btn/.card). Only page-specific
+   styling here. A free (no-coins) 2-player bluffing game over WebSockets. */
+
+/* ── Page intro ── */
+.ld-head { margin: 4px 0 20px; text-align: center; }
+.ld-head h1 { font-size: 26px; margin: 0 0 4px; }
+.ld-head p { color: var(--muted); margin: 0 auto; font-size: 14px; max-width: 460px; }
+
+.ld-wrap { max-width: 440px; margin: 0 auto; }
+.ld-wrap.wide { max-width: 560px; }
+
+/* ── Lobby ── */
+.ld-lobby { display: flex; flex-direction: column; gap: var(--s-4); }
+.ld-field { display: flex; flex-direction: column; gap: 6px; text-align: left; }
+.ld-field label { font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); font-weight: 700; }
+.ld-input {
+  width: 100%; box-sizing: border-box; background: var(--panel2); color: var(--fg);
+  border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; font-size: 15px;
+  transition: border-color var(--t), box-shadow var(--t);
+}
+.ld-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+.ld-input.code { text-transform: uppercase; letter-spacing: 4px; font-weight: 700; font-family: var(--font-mono); }
+.ld-actions { display: flex; gap: var(--s-2); flex-wrap: wrap; }
+.ld-actions .btn { flex: 1 1 auto; }
+.ld-sep { text-align: center; color: var(--faint); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+.ld-joinrow { display: flex; gap: var(--s-2); }
+.ld-joinrow .ld-input { flex: 1 1 auto; }
+
+/* ── Table / share ── */
+.ld-table { display: flex; flex-direction: column; gap: var(--s-4); }
+.ld-codebox { text-align: center; }
+.ld-codelabel { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+.ld-code {
+  display: inline-block; margin-top: 6px; font-family: var(--font-mono); font-weight: 800;
+  font-size: 34px; letter-spacing: 8px; color: var(--gold);
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-lg);
+  padding: 8px 20px 8px 28px; cursor: pointer; transition: border-color var(--t), transform var(--t);
+}
+.ld-code:hover { border-color: var(--gold); transform: translateY(-1px); }
+.ld-copyhint { display: block; margin-top: 6px; font-size: 11px; color: var(--faint); }
+
+.ld-label { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); font-weight: 700; margin-bottom: 6px; }
+
+/* ── Status line ── */
+.ld-status { text-align: center; font-size: 15px; font-weight: 700; min-height: 22px; }
+.ld-status.wait { color: var(--muted); font-weight: 500; }
+.ld-status.yours { color: var(--green); }
+.ld-status.theirs { color: var(--accent2); }
+.ld-status.reveal { color: var(--gold); }
+.ld-status.win { color: var(--green); }
+.ld-status.lose { color: var(--red); }
+
+/* ── Player chips ── */
+.ld-players { display: flex; justify-content: center; gap: var(--s-3); flex-wrap: wrap; }
+.ld-pchip {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-pill); font-size: 13px;
+}
+.ld-pchip.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--ring); }
+.ld-pname { font-weight: 700; }
+.ld-pyou { color: var(--faint); font-size: 11px; }
+.ld-count { display: inline-flex; gap: 3px; align-items: center; }
+.ld-mini { width: 8px; height: 8px; border-radius: 2px; background: var(--accent); display: inline-block; }
+.ld-out { color: var(--red); font-size: 11px; font-weight: 700; }
+.ld-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.ld-dot.on { background: var(--green); }
+
+/* ── Current bid ── */
+.ld-curbid { text-align: center; font-size: 15px; display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
+.ld-curbid b { color: var(--gold); }
+
+/* ── Your dice ── */
+.ld-yourdice-wrap { text-align: center; }
+.ld-yourdice { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; min-height: 40px; align-items: center; }
+
+/* ── Dice (pip faces) ── */
+.ld-die {
+  display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr);
+  gap: 2px; width: 54px; height: 54px; padding: 7px; box-sizing: border-box;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 12px;
+}
+.ld-die.big { width: 62px; height: 62px; }
+.ld-die.sm { width: 30px; height: 30px; padding: 4px; border-radius: 7px; gap: 1px; }
+.ld-die.wild { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold) inset; }
+.ld-die.hit { border-color: var(--green); background: var(--green-soft); }
+.ld-pip { display: block; border-radius: 50%; background: transparent; place-self: center; width: 100%; height: 100%; max-width: 9px; max-height: 9px; }
+.ld-die.sm .ld-pip { max-width: 5px; max-height: 5px; }
+.ld-pip.on { background: var(--fg); }
+.ld-die.wild .ld-pip.on { background: var(--gold); }
+.ld-roll-in { animation: ld-roll .28s ease both; }
+@keyframes ld-roll { from { transform: rotate(-18deg) scale(.5); opacity: 0; } to { transform: rotate(0) scale(1); opacity: 1; } }
+
+/* ── Bid builder ── */
+.ld-builder { display: flex; flex-direction: column; gap: var(--s-4); border-top: 1px solid var(--line); padding-top: var(--s-4); }
+.ld-builder-row { display: flex; gap: var(--s-4); flex-wrap: wrap; justify-content: center; align-items: flex-start; }
+.ld-stepper { text-align: center; }
+.ld-stepctrl { display: inline-flex; align-items: center; gap: 10px; }
+.ld-step {
+  width: 36px; height: 36px; border-radius: 10px; background: var(--panel2); color: var(--fg);
+  border: 1px solid var(--line); font-size: 20px; line-height: 1; cursor: pointer;
+  transition: border-color var(--t), background var(--t);
+}
+.ld-step:hover { border-color: var(--accent); background: var(--accent-soft); }
+.ld-qty { font-family: var(--font-mono); font-weight: 800; font-size: 26px; min-width: 32px; text-align: center; color: var(--gold); }
+.ld-facepick { text-align: center; }
+.ld-faces { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
+.ld-facebtn {
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 4px;
+  cursor: pointer; transition: border-color var(--t), transform var(--t); line-height: 0;
+}
+.ld-facebtn:hover:not([disabled]) { border-color: var(--accent); transform: translateY(-1px); }
+.ld-facebtn.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--ring); }
+.ld-facebtn[disabled] { opacity: .3; cursor: not-allowed; }
+.ld-builder-actions { display: flex; gap: var(--s-3); flex-wrap: wrap; justify-content: center; }
+.ld-builder-actions .btn { flex: 1 1 auto; }
+.btn.danger { background: var(--red); border-color: var(--red); color: #fff; }
+.btn.danger[disabled] { opacity: .4; cursor: not-allowed; }
+
+/* ── Reveal ── */
+.ld-reveal {
+  border: 1px solid var(--gold); background: var(--panel2); border-radius: var(--r-lg);
+  padding: 14px 16px; text-align: center; animation: ld-reveal-in .22s ease both;
+}
+@keyframes ld-reveal-in { from { transform: scale(.96); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.ld-reveal-title { font-size: 14px; }
+.ld-reveal-title b { color: var(--gold); }
+.ld-reveal-verdict { font-weight: 800; font-size: 15px; margin: 8px 0 12px; }
+.ld-good { color: var(--green); }
+.ld-bad { color: var(--red); }
+.ld-reveal-hands { display: flex; gap: var(--s-4); justify-content: center; flex-wrap: wrap; }
+.ld-hand { text-align: center; }
+.ld-handdice { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; }
+
+/* ── Banner + rematch ── */
+.ld-banner { text-align: center; margin-top: 6px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ld-code:hover, .ld-facebtn:hover, .ld-facebtn.sel { transform: none; }
+  .ld-roll-in, .ld-reveal { animation: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Copied verbatim from tictactoe.css so the coins hub + toasts are styled on
+   this page too. This game is free, but the shared nav chip is kept.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.coinschip { font-weight: 700; color: var(--gold); background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; font-size: 13px; white-space: nowrap; cursor: pointer; transition: border-color .15s, transform .15s; }
+.coinschip:hover { border-color: var(--gold); transform: translateY(-1px); }
+
+/* Coins hub modal */
+.hubov { position: fixed; inset: 0; z-index: 250; display: grid; place-items: center; padding: 20px; background: rgba(5,7,11,.6); backdrop-filter: blur(3px); animation: cd-scrim-in .18s ease both; }
+@keyframes cd-scrim-in { from { opacity: 0; } to { opacity: 1; } }
+.hubcard { width: min(460px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px 20px; box-shadow: 0 24px 60px -20px #000; }
+.hubhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.hubhead h3 { margin: 0; font-size: 17px; }
+.hubx { background: none; border: 0; color: var(--muted); font-size: 18px; cursor: pointer; line-height: 1; padding: 4px 8px; border-radius: 8px; }
+.hubx:hover { color: var(--fg); background: var(--panel2); }
+.hubrow { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
+.hubrow:first-of-type { border-top: 0; }
+.hubicon { font-size: 20px; width: 30px; text-align: center; flex: 0 0 auto; }
+.hubt { font-weight: 700; font-size: 14px; }
+.hubd { color: var(--muted); font-size: 12.5px; line-height: 1.45; margin-top: 2px; }
+.hubfoot { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; text-align: right; }
+.hubfoot b { color: var(--gold); }
+
+.cardtoast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 300;
+  background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 18px; font-size: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.5);
+}
