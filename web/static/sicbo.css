@@ -1,0 +1,216 @@
+/* SharpLab HQ — Sic Bo page.
+   Builds on hqstyle.css (shared vars/header/nav/.btn/.card). Only Sic Bo-
+   specific styling here. Uses ONLY hqstyle.css CSS vars. */
+
+/* ── Page intro ── */
+.sb-head { margin: 4px 0 20px; }
+.sb-head h1 { font-size: 26px; margin: 0 0 4px; }
+.sb-head p { color: var(--muted); margin: 0; font-size: 14px; }
+
+.balancechip {
+  display: inline-flex; align-items: center; gap: 6px; margin-left: 10px;
+  font-size: 13px; font-weight: 700; color: var(--gold);
+  background: var(--panel2); border: 1px solid var(--line);
+  border-radius: var(--r-pill); padding: 3px 11px; vertical-align: middle;
+}
+
+/* ── Felt table ── */
+.sbtable {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center; gap: 14px;
+  padding: 28px 20px;
+  background:
+    radial-gradient(120% 80% at 50% 0%, rgba(46,160,67,.18), transparent 60%),
+    var(--panel);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+/* ── Dice ── */
+.sbdice { display: flex; gap: 16px; align-items: center; min-height: 76px; }
+.sbdie {
+  position: relative;
+  width: 72px; height: 72px; flex: 0 0 auto;
+  border-radius: 14px; background: #f6f7fb;
+  border: 1px solid rgba(0,0,0,.25);
+  box-shadow: 0 8px 18px rgba(0,0,0,.4);
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  padding: 12px; gap: 2px;
+  user-select: none;
+}
+.sbdie .pip {
+  width: 12px; height: 12px; align-self: center; justify-self: center;
+  border-radius: 50%; background: #1b2430;
+  box-shadow: inset 0 -1px 1px rgba(0,0,0,.3);
+}
+/* Pip grid slots (nw n ne / w c e / sw s se) */
+.sbdie .pip.nw { grid-area: 1 / 1; }
+.sbdie .pip.ne { grid-area: 1 / 3; }
+.sbdie .pip.w  { grid-area: 2 / 1; }
+.sbdie .pip.c  { grid-area: 2 / 2; }
+.sbdie .pip.e  { grid-area: 2 / 3; }
+.sbdie .pip.sw { grid-area: 3 / 1; }
+.sbdie .pip.se { grid-area: 3 / 3; }
+
+.sbdie.empty {
+  background: transparent; box-shadow: none;
+  border: 1px dashed var(--line-strong);
+}
+
+/* Roll / tumble animation */
+.sbdie.roll { animation: sb-tumble .48s cubic-bezier(.25,.6,.3,1) both; }
+.sbdie.roll:nth-child(2) { animation-delay: .07s; }
+.sbdie.roll:nth-child(3) { animation-delay: .14s; }
+@keyframes sb-tumble {
+  0%   { transform: translateY(-18px) rotate(-100deg) scale(.85); opacity: .4; }
+  45%  { transform: translateY(4px) rotate(16deg) scale(1.04); opacity: 1; }
+  70%  { transform: translateY(0) rotate(-6deg) scale(.99); }
+  100% { transform: none; }
+}
+
+.sbtotal {
+  font-size: 13px; font-weight: 800; color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  background: var(--panel2); border: 1px solid var(--line);
+  border-radius: var(--r-pill); padding: 3px 12px;
+}
+.sbtotal .lbl { color: var(--muted); font-weight: 700; margin-right: 6px; }
+
+/* ── Result banner ── */
+.sbbanner {
+  display: flex; align-items: center; justify-content: center; gap: 14px;
+  min-height: 0; height: 0; overflow: hidden;
+  font-weight: 900; text-transform: uppercase; letter-spacing: 1px;
+  transition: height .2s ease;
+}
+.sbbanner.show {
+  height: auto; min-height: 40px; padding: 6px 0;
+  animation: sb-banner-in .3s ease both;
+}
+@keyframes sb-banner-in {
+  from { opacity: 0; transform: scale(.96); }
+  to   { opacity: 1; transform: none; }
+}
+.sbbannerlabel { font-size: 22px; }
+.sbbannerpay {
+  font-size: 15px; font-weight: 800; letter-spacing: normal; text-transform: none;
+  font-variant-numeric: tabular-nums; color: var(--fg);
+  background: var(--panel2); border: 1px solid var(--line);
+  border-radius: var(--r-pill); padding: 3px 12px;
+}
+.sbbanner.win  .sbbannerlabel { color: var(--green); }
+.sbbanner.lose .sbbannerlabel { color: var(--red); }
+
+.sbnote-wrap { min-height: 18px; text-align: center; }
+.sbnote {
+  font-size: 12.5px; color: var(--muted); font-weight: 600;
+}
+
+/* ── Controls card ── */
+.sbcontrols {
+  display: flex; flex-direction: column; gap: 18px;
+  margin-top: 16px;
+}
+
+/* Bet-type selector */
+.sbtypes { display: flex; flex-direction: column; gap: 8px; }
+.sbtypelbl, .sbnumlbl {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted);
+}
+.sbnumlbl { margin-top: 6px; }
+.sbtyperow { display: flex; gap: 10px; flex-wrap: wrap; }
+.sbnumrow { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.sbtype {
+  font-family: inherit; cursor: pointer; color: var(--fg);
+  background: var(--panel2); border: 1px solid var(--line);
+  border-radius: var(--r-sm); transition: border-color var(--t), background var(--t), transform var(--t);
+}
+.sbtype:hover:not(:disabled) { border-color: var(--accent); transform: translateY(-1px); }
+.sbtype:disabled { opacity: .5; cursor: default; }
+.sbtype.on {
+  border-color: var(--green); background: rgba(46,160,67,.14);
+  box-shadow: 0 0 0 1px var(--green) inset;
+}
+
+.sbwide {
+  flex: 1 1 140px; min-width: 130px;
+  display: flex; align-items: baseline; justify-content: center; gap: 8px;
+  padding: 12px 16px; font-size: 16px; font-weight: 900; letter-spacing: .5px;
+}
+.sbwide .sbsub { font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: normal; }
+
+/* Number tiles — render a mini pip die inside each */
+.sbnum {
+  padding: 8px; display: grid; place-items: center;
+  width: 56px; height: 56px;
+}
+.sbnum .sbnumpip { display: block; pointer-events: none; }
+.sbnum .sbdie {
+  width: 40px; height: 40px; border-radius: 9px; padding: 6px; gap: 1px;
+  box-shadow: 0 3px 8px rgba(0,0,0,.35);
+}
+.sbnum .sbdie .pip { width: 7px; height: 7px; }
+/* Number tiles never tumble on render */
+.sbnum .sbdie.roll { animation: none; }
+
+.sbfooter {
+  display: flex; align-items: flex-end; gap: 18px; flex-wrap: wrap;
+  border-top: 1px solid var(--line); padding-top: 16px;
+}
+.sbaction { display: flex; gap: 8px; flex-wrap: wrap; }
+.sbaction .btn.big { padding: 10px 26px; font-size: 15px; }
+
+/* Bet input component (copied from craps.css) */
+.betrow { display: flex; flex-direction: column; gap: 6px; }
+.betrow .betlbl { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+.betline { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.betinput {
+  font-family: inherit; font-size: 15px; font-weight: 700; color: var(--fg);
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: 8px 10px; width: 120px; font-variant-numeric: tabular-nums;
+}
+.betinput:focus { outline: none; border-color: var(--accent); }
+.betinput:disabled { opacity: .5; }
+.chipbtns { display: inline-flex; gap: 5px; flex-wrap: wrap; }
+.chipbtn {
+  font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+  color: var(--muted); background: var(--panel2); border: 1px solid var(--line);
+  border-radius: var(--r-sm); padding: 7px 10px; transition: border-color var(--t), color var(--t);
+}
+.chipbtn:hover { border-color: var(--accent); color: var(--fg); }
+
+@media (prefers-reduced-motion: reduce) {
+  .sbdie.roll, .sbbanner.show, .sbbanner, .sbtype { animation: none; transition: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Copied verbatim from craps.css so the coins hub + toasts are styled on this
+   page too (casino.css is only loaded on the Casino page).
+   ═══════════════════════════════════════════════════════════════════════════ */
+.coinschip { font-weight: 700; color: var(--gold); background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; font-size: 13px; white-space: nowrap; cursor: pointer; transition: border-color .15s, transform .15s; }
+.coinschip:hover { border-color: var(--gold); transform: translateY(-1px); }
+
+/* Coins hub modal */
+.hubov { position: fixed; inset: 0; z-index: 250; display: grid; place-items: center; padding: 20px; background: rgba(5,7,11,.6); backdrop-filter: blur(3px); animation: sb-scrim-in .18s ease both; }
+@keyframes sb-scrim-in { from { opacity: 0; } to { opacity: 1; } }
+.hubcard { width: min(460px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px 20px; box-shadow: 0 24px 60px -20px #000; }
+.hubhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.hubhead h3 { margin: 0; font-size: 17px; }
+.hubx { background: none; border: 0; color: var(--muted); font-size: 18px; cursor: pointer; line-height: 1; padding: 4px 8px; border-radius: 8px; }
+.hubx:hover { color: var(--fg); background: var(--panel2); }
+.hubrow { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
+.hubrow:first-of-type { border-top: 0; }
+.hubicon { font-size: 20px; width: 30px; text-align: center; flex: 0 0 auto; }
+.hubt { font-weight: 700; font-size: 14px; }
+.hubd { color: var(--muted); font-size: 12.5px; line-height: 1.45; margin-top: 2px; }
+.hubfoot { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; text-align: right; }
+.hubfoot b { color: var(--gold); }
+
+.cardtoast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 300;
+  background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 18px; font-size: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.5);
+}
