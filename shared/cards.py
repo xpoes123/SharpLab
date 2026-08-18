@@ -174,6 +174,17 @@ def is_notable_pull(card: dict) -> bool:
     return bool(card.get("is_holo")) and rarity == "rare"
 
 
+def is_rare_pull(card: dict) -> bool:
+    """A pull rarer than ~1% — worth a server-wide shout-out. Legendary (~top 1%), any gem
+    rarer than chrome (chrome is a ~2% roll), or a holo of an epic/legendary. `card` carries
+    rarity/is_holo/gem."""
+    if card.get("rarity") == "legendary":
+        return True
+    if card.get("gem") in ("sapphire", "ruby", "black_lotus"):
+        return True
+    return bool(card.get("is_holo")) and card.get("rarity") in ("epic", "legendary")
+
+
 # --- Reveal helpers (shared by the web page + the Discord animated reveal) ---
 
 def set_odds(designs: list[dict]) -> dict:
