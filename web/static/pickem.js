@@ -82,11 +82,45 @@ function gameCard(g, loggedIn) {
     ${betsDetails(g)}</div>`;
 }
 
+// ── Leaderboard (This Week / All-Time) ──
+function leaderboardSection(board) {
+  const period = board.period || "week";
+  const data = board[period];
+  const rows = (data && data.leaderboard) || [];
+  const toggle = `<span class="pk-lb-toggle">
+    <button class="pk-lb-btn${period === "week" ? " sel" : ""}" data-period="week">This Week</button>
+    <button class="pk-lb-btn${period === "alltime" ? " sel" : ""}" data-period="alltime">All-Time</button>
+  </span>`;
+  let body;
+  if (!data) {
+    body = `<div class="muted" style="font-size:13px">Loading…</div>`;
+  } else if (!rows.length) {
+    body = `<div class="muted" style="font-size:13px">No scored picks ${period === "week" ? "this week yet" : "yet"}.</div>`;
+  } else {
+    const medals = ["🥇", "🥈", "🥉"];
+    const items = rows.slice(0, 10).map((r, i) => {
+      const rank = medals[i] || `#${i + 1}`;
+      const sub = r.total ? `${r.accuracy}% · ${r.correct}/${r.total}` : "";
+      const cls = r.units > 0 ? "pos" : (r.units < 0 ? "neg" : "");
+      return `<li class="pk-lb-row">
+        <span class="pk-lb-rank">${rank}</span>
+        <span class="pk-lb-name">${esc(r.username)}</span>
+        <span class="pk-lb-sub muted">${sub}</span>
+        <span class="pk-lb-units ${cls}">${r.units >= 0 ? "+" : ""}${r.units}u</span></li>`;
+    }).join("");
+    body = `<ol class="pk-lb-list">${items}</ol>`;
+  }
+  return `<div class="pk-board">
+    <h2>🏆 Leaderboard ${toggle}</h2>
+    ${body}</div>`;
+}
+
 function render(open) {
   const loggedIn = !!open.authenticated;
   const games = open.games || [];
   if (!games.length) {
     app.innerHTML = `<div class="pk-wrap"><h1>🎯 Pick'em</h1>
+      ${leaderboardSection(state.board)}
       <div class="pk-empty">No games on today's slate yet. Check back closer to game time.</div></div>`;
     return;
   }
@@ -111,8 +145,19 @@ function render(open) {
   app.innerHTML = `<div class="pk-wrap">
     <h1>🎯 Pick'em — full slate</h1>
     <p class="pk-intro">${note} Only the marquee games get posted to Discord; here's everything.</p>
+    ${leaderboardSection(state.board)}
     ${loggedIn ? favSection(state.fav) : ""}
     ${groups}</div>`;
+}
+
+// Fetch a leaderboard period once (cached in state.board), then re-render.
+async function loadBoard(period) {
+  if (!state.board[period]) {
+    const data = await getJSON(`/api/v1/hq/pickem/leaderboard?period=${period}`);
+    state.board[period] = data && !data._status ? data : { leaderboard: [] };
+  }
+  state.board.period = period;
+  renderAll();
 }
 
 // ── Favorite teams (auto-pick) ──
@@ -160,6 +205,9 @@ function wireEvents() {
     if (e.target.classList.contains("fav-stake")) await postFav({ stake: Number(e.target.value) });
   });
   app.addEventListener("click", async (e) => {
+    // leaderboard period toggle
+    const lbBtn = e.target.closest(".pk-lb-btn");
+    if (lbBtn) { await loadBoard(lbBtn.dataset.period); return; }
     // favorite remove
     const rm = e.target.closest(".fav-rm");
     if (rm) { await postFav({ remove: rm.dataset.team }); return; }
@@ -204,18 +252,24 @@ function renderAll() {
   render(state.open);
 }
 
-const state = { open: { authenticated: false, games: [] }, fav: null };
+const state = {
+  open: { authenticated: false, games: [] },
+  fav: null,
+  board: { period: "week", week: null, alltime: null },
+};
 
 (async function init() {
   wireEvents();
   const me = await getJSON("/api/v1/hq/me");
   const loggedIn = !!(me && me.authenticated);
   renderNav(loggedIn ? me.user : null);
-  const [open, fav] = await Promise.all([
+  const [open, fav, week] = await Promise.all([
     getJSON("/api/v1/hq/pickem/open"),
     loggedIn ? getJSON("/api/v1/hq/pickem/favorites") : Promise.resolve(null),
+    getJSON("/api/v1/hq/pickem/leaderboard?period=week"),
   ]);
   state.open = open._status ? { authenticated: loggedIn, games: [] } : open;
   state.fav = fav && !fav._status ? fav : { favorites: [], stake: 1 };
+  state.board.week = week && !week._status ? week : { leaderboard: [] };
   renderAll();
 })();

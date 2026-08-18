@@ -788,6 +788,28 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        # Migration: dividends paid (one credit per holder per ticker per ex-date)
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS dividends_paid ("
+                "discord_user TEXT NOT NULL, ticker TEXT NOT NULL, ex_date TEXT NOT NULL, "
+                "amount REAL NOT NULL, paid_at TEXT NOT NULL, "
+                "PRIMARY KEY (discord_user, ticker, ex_date))"
+            )
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_dividends_user ON dividends_paid(discord_user)")
+            await db.commit()
+        except Exception:
+            pass
+        # Migration: card set-completion claims (one reward per user per set)
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS card_set_completed ("
+                "discord_user TEXT NOT NULL, set_id INTEGER NOT NULL, claimed_at TEXT NOT NULL, "
+                "PRIMARY KEY (discord_user, set_id))"
+            )
+            await db.commit()
+        except Exception:
+            pass
         # Migration: earnings-results post dedupe (one summary per ticker per report date)
         try:
             await db.execute(

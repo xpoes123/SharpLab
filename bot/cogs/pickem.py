@@ -64,9 +64,12 @@ async def _win_probs(game_id: str) -> tuple[float, float, str] | None:
 
 ET = ZoneInfo("America/New_York")
 POST_TIME = time(hour=10, minute=0, tzinfo=ET)
+# Monday-morning "last week's winner" callout — runs daily, but only fires on Mondays.
+WEEK_WINNER_TIME = time(hour=11, minute=0, tzinfo=ET)
 
 PICKEM_CHANNEL_DEFAULT = 1510694785034354849
 _PICKEM_CHANNEL_SETTING = "pickem_channel"
+_WEEK_WINNER_SETTING = "pickem_week_winner"  # stores the ISO-week label already announced
 
 AWAY_EMOJI = "✈️"
 HOME_EMOJI = "🏠"
@@ -116,6 +119,50 @@ COLOUR = 0x1ABC9C
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _parse_iso(s: str) -> datetime:
+    """Parse a stored UTC ISO timestamp (handles the trailing-Z form)."""
+    return datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
+def _week_bounds(dt: datetime) -> tuple[str, str]:
+    """The pick'em week containing `dt` — Monday 00:00 America/New_York → the next
+    Monday 00:00 ET — returned as (start_utc_iso, end_utc_iso). End is exclusive."""
+    et = dt.astimezone(ET)
+    monday = et.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=et.weekday())
+    end = monday + timedelta(days=7)
+    return monday.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()
+
+
+def _iso_week_label(dt: datetime) -> str:
+    """ISO year-week label (e.g. '2026-W33') for the pick'em week containing `dt`.
+    Used as the week-winner dedupe key."""
+    et = dt.astimezone(ET)
+    y, w, _ = et.isocalendar()
+    return f"{y}-W{w:02d}"
+
+
+def _filter_week(rows: list[dict], s_utc: str, e_utc: str) -> list[dict]:
+    """Keep only resolved-pick rows whose game start falls in [s_utc, e_utc).
+    Preserves input order (user, then start_time) so streaks still compute right."""
+    lo, hi = _parse_iso(s_utc), _parse_iso(e_utc)
+    out: list[dict] = []
+    for r in rows:
+        try:
+            st = _parse_iso(r["start_time"])
+        except (ValueError, AttributeError, KeyError, TypeError):
+            continue
+        if lo <= st < hi:
+            out.append(r)
+    return out
+
+
+async def _weekly_standings(dt: datetime) -> dict[str, dict]:
+    """Pick'em standings over the week that contains `dt`."""
+    rows = await queries.get_pickem_resolved_picks()
+    s_utc, e_utc = _week_bounds(dt)
+    return compute_pickem_standings(_filter_week(rows, s_utc, e_utc))
 
 
 def _winner_from_scores(home_score: int, away_score: int) -> str:
@@ -318,13 +365,23 @@ class LeaderboardView(ui.View):
         ("Streak Points", "points"), ("Market P&L", "units"),
     ]
 
-    def __init__(self, bot: commands.Bot, standings: dict[str, dict]) -> None:
+    def __init__(
+        self, bot: commands.Bot, alltime: dict[str, dict],
+        weekly: dict[str, dict] | None = None, week_label: str = "",
+    ) -> None:
         super().__init__(timeout=180)
         self.bot = bot
-        self.standings = standings
+        self.alltime = alltime
+        self.weekly = weekly or {}
+        self.week_label = week_label
+        self.period = "alltime"  # or "week"
         self.mode = "correct"
         self.message: discord.Message | None = None
         self._names: dict[str, str] = {}
+
+    @property
+    def standings(self) -> dict[str, dict]:
+        return self.weekly if self.period == "week" else self.alltime
 
     async def _name(self, uid: str) -> str:
         if uid not in self._names:
@@ -349,13 +406,21 @@ class LeaderboardView(ui.View):
 
     async def embed(self) -> discord.Embed:
         mode_label = next(lbl for lbl, key in self.MODES if key == self.mode)
-        embed = discord.Embed(title=f"🏆 Pick'em Leaderboard — {mode_label}", colour=COLOUR)
+        period_label = ("This Week" + (f" ({self.week_label})" if self.week_label else "")
+                        if self.period == "week" else "All-Time")
+        embed = discord.Embed(
+            title=f"🏆 Pick'em Leaderboard — {mode_label}",
+            colour=COLOUR,
+        )
+        embed.set_author(name=period_label)
         ranked = self._ranked()
         if not ranked:
-            embed.description = (
-                f"No one qualifies yet (min {MIN_PICKS_FOR_ACCURACY} picks for accuracy)."
-                if self.mode == "accuracy" else "No scored picks yet."
-            )
+            if self.mode == "accuracy":
+                embed.description = f"No one qualifies yet (min {MIN_PICKS_FOR_ACCURACY} picks for accuracy)."
+            elif self.period == "week":
+                embed.description = "No scored picks yet this week."
+            else:
+                embed.description = "No scored picks yet."
             return embed
         medals = {1: "🥇", 2: "🥈", 3: "🥉"}
         lines = []
@@ -393,6 +458,12 @@ class LeaderboardView(ui.View):
     @ui.button(label="Market P&L", style=discord.ButtonStyle.secondary)
     async def units_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
         self.mode = "units"
+        await interaction.response.edit_message(embed=await self.embed(), view=self)
+
+    @ui.button(label="📅 This Week", style=discord.ButtonStyle.success, row=1)
+    async def period_btn(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        self.period = "week" if self.period == "alltime" else "alltime"
+        button.label = "🗓️ All-Time" if self.period == "week" else "📅 This Week"
         await interaction.response.edit_message(embed=await self.embed(), view=self)
 
     async def on_timeout(self) -> None:
@@ -524,12 +595,14 @@ class PickemCog(commands.Cog):
         self.lock_loop.start()
         self.resolve_loop.start()
         self.favorites_loop.start()
+        self.week_winner_loop.start()
 
     async def cog_unload(self) -> None:
         self.post_loop.cancel()
         self.lock_loop.cancel()
         self.resolve_loop.cancel()
         self.favorites_loop.cancel()
+        self.week_winner_loop.cancel()
 
     pickem = app_commands.Group(name="pickem", description="Daily NBA/WNBA/MLB pick'em")
     favorites = app_commands.Group(name="favorites", description="Auto-pick your favorite teams", parent=pickem)
@@ -881,6 +954,77 @@ class PickemCog(commands.Cog):
     async def _before_favorites(self) -> None:
         await self.bot.wait_until_ready()
 
+    # ── Week winner callout ──────────────────────────────────────────────────
+
+    @tasks.loop(time=WEEK_WINNER_TIME)
+    async def week_winner_loop(self) -> None:
+        """On Monday morning ET, celebrate last week's top pick'em player. Deduped
+        via a bot_setting so it posts at most once per completed week."""
+        if datetime.now(ET).weekday() != 0:  # Mondays only
+            return
+        try:
+            await self._post_week_winner()
+        except Exception:
+            log.exception("pickem: week-winner callout failed")
+
+    @week_winner_loop.before_loop
+    async def _before_week_winner(self) -> None:
+        await self.bot.wait_until_ready()
+
+    async def _post_week_winner(self) -> None:
+        # "Last completed week" = the week containing 7 days ago.
+        last_week = datetime.now(timezone.utc) - timedelta(days=7)
+        label = _iso_week_label(last_week)
+        if await queries.get_bot_setting(_WEEK_WINNER_SETTING) == label:
+            return  # already announced this week
+        s_utc, e_utc = _week_bounds(last_week)
+        rows = await queries.get_pickem_resolved_picks()
+        standings = compute_pickem_standings(_filter_week(rows, s_utc, e_utc))
+        channel = await self._channel()
+        if channel is None:
+            log.warning("pickem: week-winner channel not found")
+            return  # retry next run; don't mark done
+        if not standings:
+            await queries.set_bot_setting(_WEEK_WINNER_SETTING, label)  # nothing to celebrate
+            return
+        # Winner: most units, then streak points, then raw correct.
+        ranked = sorted(
+            standings.items(),
+            key=lambda kv: (kv[1]["units"], kv[1]["points"], kv[1]["correct"]),
+            reverse=True,
+        )
+        uid, s = ranked[0]
+        try:
+            name = (await self.bot.fetch_user(int(uid))).display_name
+        except Exception:
+            name = f"Player {uid[:6]}"
+        w, losses = s["correct"], s["total"] - s["correct"]
+        week_num = label.split("W")[-1].lstrip("0") or "0"
+        embed = discord.Embed(
+            title=f"🏆 Week {week_num} Pick'em Winner",
+            description=(
+                f"👑 **{name}** ran the table last week!\n"
+                f"**{w}-{losses}** · **{s['units']:+.1f}u** · {s['points']} streak pts"
+            ),
+            colour=0xF1C40F,
+        )
+        if len(ranked) > 1:
+            others = []
+            medals = {1: "🥈", 2: "🥉"}
+            for i, (ouid, os_) in enumerate(ranked[1:3], 1):
+                try:
+                    onm = (await self.bot.fetch_user(int(ouid))).display_name
+                except Exception:
+                    onm = f"Player {ouid[:6]}"
+                others.append(
+                    f"{medals.get(i, f'#{i+1}')} **{onm}** — "
+                    f"{os_['units']:+.1f}u ({os_['correct']}-{os_['total'] - os_['correct']})"
+                )
+            embed.add_field(name="Runners-up", value="\n".join(others), inline=False)
+        embed.set_footer(text="Fresh week, fresh slate — /pickem leaderboard to chase the crown.")
+        await channel.send(embed=embed)
+        await queries.set_bot_setting(_WEEK_WINNER_SETTING, label)
+
     # ── Commands ─────────────────────────────────────────────────────────────
 
     @favorites.command(name="add", description="Add a favorite team — auto-picks it in every pick'em game")
@@ -939,7 +1083,10 @@ class PickemCog(commands.Cog):
         if not standings:
             await interaction.followup.send("No pick'em games have been scored yet!")
             return
-        view = LeaderboardView(self.bot, standings)
+        now = datetime.now(timezone.utc)
+        s_utc, e_utc = _week_bounds(now)
+        weekly = compute_pickem_standings(_filter_week(rows, s_utc, e_utc))
+        view = LeaderboardView(self.bot, standings, weekly, _iso_week_label(now))
         await interaction.followup.send(embed=await view.embed(), view=view)
         view.message = await interaction.original_response()
 

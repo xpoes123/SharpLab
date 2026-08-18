@@ -127,6 +127,10 @@
 .progbar { height: 6px; border-radius: 999px; background: var(--line); overflow: hidden; margin-top: 4px; }
 .progbar span { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); }
 .progtext { font-size: 11px; color: var(--muted); text-align: right; }
+/* Per-user set-completion bar (distinct from the pack-sold progress above). */
+.progbar.comp span { background: linear-gradient(90deg, var(--r-rare), var(--r-uncommon)); }
+.progbar.comp.done span { background: var(--r-uncommon); }
+.progbar.comp.done + .progtext { color: var(--r-uncommon); font-weight: 700; }
 .soldout {
   font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px;
   color: var(--red); border: 1px solid var(--red); border-radius: 6px; padding: 1px 6px;

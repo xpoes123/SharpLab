@@ -47,6 +47,7 @@ DEFAULT_STOCK_ALERTS_CHANNEL_ID = 1510100250411536495  # auto-swing alerts land 
 MONITOR_POLL_MINUTES = 5
 SWING_THRESHOLD_PCT = 10.0  # auto-alert when a held ticker moves this % on the day
 SWING_MIN_PRICE = 1.0  # skip swing alerts for sub-$1 tickers — penny stocks trip the % on meaningless ticks
+DIVIDEND_LOOKBACK_DAYS = 10  # only pay dividends whose ex-date is within this many days (no back-paying history)
 _ALERTS_CHANNEL_SETTING = "stock_alerts_channel"
 _DIGEST_SETTING = "last_stock_digest"  # ET date of the last daily portfolio report
 _EARNINGS_SETTING = "last_earnings_digest"  # ET date of the last earnings-on-deck digest
@@ -740,6 +741,58 @@ async def fetch_earnings_result(sym: str, report_date: str) -> dict | None:
     return await asyncio.to_thread(_fetch)
 
 
+# ── Dividends ────────────────────────────────────────────────────────────────
+_DIVIDEND_TTL = 6 * 3600.0  # seconds — the payout loop runs every 6h; cache a full cycle
+_dividend_cache: dict[str, tuple[float, list]] = {}  # sym -> (monotonic, [(ex_date_iso, per_share)])
+
+
+async def fetch_dividends(sym: str) -> list[tuple[str, float]]:
+    """Recent cash dividends for `sym` via yfinance's `.dividends` Series (indexed by
+    tz-aware ex-dates → $/share). Returns [(ex_date_iso, per_share), ...] for ex-dates
+    within the last ~30 days, newest last. Cached per-ticker for _DIVIDEND_TTL so a
+    ticker held by many users is fetched once per cycle. Never raises — [] on any error
+    or for tickers with no dividends (crypto/ETF/growth names)."""
+    import math
+
+    import yfinance as yf
+
+    cached = _cache_get(_dividend_cache, sym, _DIVIDEND_TTL)
+    if cached is not None:
+        return cached
+
+    def _fetch() -> list[tuple[str, float]]:
+        try:
+            ser = yf.Ticker(sym).dividends
+        except Exception:
+            return []
+        if ser is None or len(ser) == 0:
+            return []
+        # Only look back a month — the payout loop only pays the last 10 days, and
+        # yfinance can return decades of history we never want to walk.
+        cutoff = date.today() - timedelta(days=30)
+        out: list[tuple[str, float]] = []
+        for ts, amt in ser.items():
+            try:
+                ex = ts.date()
+            except Exception:
+                continue
+            if ex < cutoff:
+                continue
+            try:
+                a = float(amt)
+            except (TypeError, ValueError):
+                continue
+            if math.isnan(a) or a <= 0:
+                continue
+            out.append((ex.isoformat(), a))
+        out.sort(key=lambda x: x[0])
+        return out
+
+    result = await asyncio.to_thread(_fetch)
+    _dividend_cache[sym] = (time.monotonic(), result)
+    return result
+
+
 async def fetch_option_prices(
     specs: list[dict], spots: dict[str, float]
 ) -> dict[tuple, dict]:
@@ -1011,6 +1064,7 @@ async def _compute_portfolio(uid: str) -> dict | None:
 
     realized_total += option_realized
     realized_total += await queries.get_realized_adjustment_total(uid)
+    dividend_income = await queries.get_dividend_income(uid)
     day_realized = await queries.get_day_realized_pnl(uid, _market_day_start_utc())
     unrealized = (total_value - total_cost) + options_unrealized
     combined_cost = total_gross_cost + options_cost
@@ -1036,6 +1090,7 @@ async def _compute_portfolio(uid: str) -> dict | None:
         "unrealized": unrealized,
         "unrealized_pct": (unrealized / combined_cost * 100) if combined_cost else 0.0,
         "total_pnl": total_pnl,
+        "dividend_income": dividend_income,
     }
 
 
@@ -1122,6 +1177,9 @@ def _build_overview_embed(target: discord.abc.User, d: dict) -> discord.Embed:
     embed.add_field(name="Total P/L", value=f"`{_fmt_pnl(d['total_pnl'])}`", inline=True)
     embed.add_field(name="Today",
                     value=f"`{_fmt_change(d['day_total'], d['day_total_pct'])}`", inline=True)
+    if d.get("dividend_income"):
+        embed.add_field(name="Dividends received",
+                        value=f"`{_fmt_money(d['dividend_income'])}`", inline=True)
     return embed
 
 
@@ -2639,6 +2697,7 @@ class StockCog(commands.Cog):
         self.daily_digest.start()
         self.earnings_digest.start()
         self.earnings_results.start()
+        self.dividend_loop.start()
 
     async def cog_load(self) -> None:
         raw = await queries.get_bot_setting(_SWING_STATE_SETTING)
@@ -2654,6 +2713,7 @@ class StockCog(commands.Cog):
         self.daily_digest.cancel()
         self.earnings_digest.cancel()
         self.earnings_results.cancel()
+        self.dividend_loop.cancel()
 
     @tasks.loop(hours=1)
     async def daily_digest(self) -> None:
@@ -2857,6 +2917,104 @@ class StockCog(commands.Cog):
     @earnings_results.before_loop
     async def _before_earnings_results(self) -> None:
         await self.bot.wait_until_ready()
+
+    # ── Dividends ────────────────────────────────────────────────────────────
+    @tasks.loop(hours=6)
+    async def dividend_loop(self) -> None:
+        """A few times a day: pay cash dividends to holders when a stock they own
+        goes ex-dividend. Only ex-dates within the last DIVIDEND_LOOKBACK_DAYS are
+        paid (so a first run can't back-pay years of history); each (holder, ticker,
+        ex-date) is credited exactly once (deduped via dividends_paid). Credited cash
+        goes to brokerage cash, then a consolidated digest pings opted-in holders."""
+        try:
+            from zoneinfo import ZoneInfo
+            today_et = datetime.now(ZoneInfo("America/New_York")).date()
+            cutoff = today_et - timedelta(days=DIVIDEND_LOOKBACK_DAYS)
+
+            holdings = await queries.get_all_stock_holdings()
+            if not holdings:
+                return
+
+            # Batch: one yfinance fetch per distinct ticker, shared across holders.
+            tickers = sorted({h["ticker"] for h in holdings})
+            divs: dict[str, list[tuple[str, float]]] = {}
+            for sym in tickers:
+                try:
+                    divs[sym] = await fetch_dividends(sym)
+                except Exception:
+                    log.exception("dividend_loop: fetch failed for %s", sym)
+                    divs[sym] = []
+                await asyncio.sleep(0)  # cooperatively yield between tickers
+
+            # ticker -> {ex_date -> per_share} restricted to the recent window.
+            recent: dict[str, dict[str, float]] = {}
+            for sym, rows in divs.items():
+                keep = {ex: ps for ex, ps in rows if ex >= cutoff.isoformat()}
+                if keep:
+                    recent[sym] = keep
+            if not recent:
+                return
+
+            # (sym, ex_date, per_share) -> [(uid, amount, shares)] credited this cycle.
+            paid: dict[tuple[str, str, float], list[tuple[str, float, float]]] = {}
+            for h in holdings:
+                sym, uid, shares = h["ticker"], h["discord_user"], h["shares"]
+                if sym not in recent or abs(shares) <= 1e-9:
+                    continue
+                for ex_date, per_share in recent[sym].items():
+                    if await queries.dividend_paid(uid, sym, ex_date):
+                        continue
+                    amount = round(shares * per_share, 2)
+                    if amount <= 0:  # shorts owe dividends; skip rather than debit here
+                        await queries.record_dividend(uid, sym, ex_date, 0.0)
+                        continue
+                    await queries.adjust_stock_cash(uid, amount)
+                    await queries.record_dividend(uid, sym, ex_date, amount)
+                    paid.setdefault((sym, ex_date, per_share), []).append((uid, amount, shares))
+
+            if not paid:
+                return
+            await self._post_dividend_digest(paid)
+        except Exception:
+            log.exception("dividend loop failed")
+
+    @dividend_loop.before_loop
+    async def _before_dividend_loop(self) -> None:
+        await self.bot.wait_until_ready()
+
+    async def _post_dividend_digest(
+        self, paid: dict[tuple[str, str, float], list[tuple[str, float, float]]]
+    ) -> None:
+        """Post one consolidated dividend digest to the alerts channel. Every holder is
+        already credited; only opted-in holders get @-pinged (mentions must live in the
+        message CONTENT to notify — same rule as earnings)."""
+        channel = self.bot.get_channel(await self._alerts_channel_id())
+        if channel is None:
+            return
+        optin = await queries.get_stock_alert_optin_users()
+        lines: list[str] = []
+        for (sym, _ex, per_share), credits in sorted(paid.items()):
+            for uid, amount, shares in sorted(credits, key=lambda c: c[1], reverse=True):
+                who = f"<@{uid}>" if uid in optin else "a holder"
+                lines.append(
+                    f"💵 **{sym}** paid ${per_share:.2f}/sh — {who} received "
+                    f"{_fmt_money(amount)} ({shares:g} sh)"
+                )
+        if not lines:
+            return
+        # Mentions must live in message CONTENT to notify (an embed body doesn't ping).
+        # Cap to Discord's 2000-char content limit.
+        out = ["**💵 Dividends paid**"]
+        used = len(out[0])
+        for i, ln in enumerate(lines):
+            if used + len(ln) + 1 > 1990:
+                out.append(f"_…and {len(lines) - i} more_")
+                break
+            out.append(ln)
+            used += len(ln) + 1
+        content = "\n".join(out)
+        await channel.send(content=content,
+                           allowed_mentions=discord.AllowedMentions(users=True))
 
     stock = app_commands.Group(name="stock", description="Stock quotes, portfolio, and market data")
     option = app_commands.Group(
