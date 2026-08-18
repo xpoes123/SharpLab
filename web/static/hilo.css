@@ -1,0 +1,185 @@
+/* SharpLab HQ — Hi-Lo page.
+   Builds on hqstyle.css (shared vars/header/nav/.btn/.card). Only hilo-
+   specific styling here. Uses ONLY hqstyle.css CSS vars. */
+
+/* ── Page intro ── */
+.hl-head { margin: 4px 0 20px; }
+.hl-head h1 { font-size: 26px; margin: 0 0 4px; }
+.hl-head p { color: var(--muted); margin: 0; font-size: 14px; }
+
+.balancechip {
+  display: inline-flex; align-items: center; gap: 6px; margin-left: 10px;
+  font-size: 13px; font-weight: 700; color: var(--gold);
+  background: var(--panel2); border: 1px solid var(--line);
+  border-radius: var(--r-pill); padding: 3px 11px; vertical-align: middle;
+}
+
+/* ── Felt table ── */
+.hltable {
+  position: relative;
+  display: flex; flex-direction: column; gap: 16px;
+  padding: 26px 20px;
+  background:
+    radial-gradient(120% 80% at 50% 0%, rgba(46,160,67,.18), transparent 60%),
+    var(--panel);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+/* Cards laid side by side: current + next reveal */
+.hlcards {
+  display: flex; gap: 16px; align-items: center; justify-content: center;
+  min-height: 150px; flex-wrap: wrap;
+}
+.hlslot { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.hlslot .hlslotlbl {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .8px;
+  color: var(--muted); font-weight: 700;
+}
+
+/* ── Card faces (rank + suit, red for ♥♦) ── */
+.hlcard {
+  position: relative;
+  width: 96px; height: 134px; flex: 0 0 auto;
+  border-radius: 10px; background: #f6f7fb; color: #1b2430;
+  border: 1px solid rgba(0,0,0,.25);
+  box-shadow: 0 6px 16px rgba(0,0,0,.4);
+  font-weight: 800; font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.hlcard.red { color: var(--red); }
+.hlcard .corner {
+  position: absolute; display: flex; flex-direction: column; align-items: center;
+  line-height: 1; font-size: 20px;
+}
+.hlcard .corner i { font-style: normal; font-size: 17px; }
+.hlcard .corner.tl { top: 8px; left: 9px; }
+.hlcard .corner.br { bottom: 8px; right: 9px; transform: rotate(180deg); }
+.hlcard .pip {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: 50px; opacity: .9;
+}
+
+/* Empty placeholder slot before a deal */
+.hlcard.empty {
+  background: transparent; box-shadow: none;
+  border: 1px dashed var(--line-strong);
+}
+.hlcard.empty .pip, .hlcard.empty .corner { display: none; }
+
+/* Face-down card (next slot before reveal) */
+.hlcard.back {
+  background:
+    repeating-linear-gradient(45deg, var(--accent) 0 8px, var(--accent2, var(--accent)) 8px 16px);
+  border-color: rgba(0,0,0,.35);
+}
+.hlcard.back .backart {
+  position: absolute; inset: 8px; border-radius: 6px;
+  border: 2px solid rgba(255,255,255,.35);
+}
+
+/* Deal / reveal animation */
+.hlcard.deal { animation: hl-deal .28s cubic-bezier(.2,.7,.3,1) both; }
+@keyframes hl-deal {
+  from { opacity: 0; transform: translateY(-14px) rotate(-4deg) scale(.94); }
+  to   { opacity: 1; transform: none; }
+}
+
+.hlvs { font-size: 22px; font-weight: 900; color: var(--muted); }
+
+/* ── Result banner ── */
+.hlbanner {
+  display: flex; align-items: center; justify-content: center; gap: 14px;
+  min-height: 0; height: 0; overflow: hidden;
+  font-weight: 900; text-transform: uppercase; letter-spacing: 1px;
+  transition: height .2s ease;
+}
+.hlbanner.show {
+  height: auto; min-height: 40px; padding: 6px 0;
+  animation: hl-banner-in .3s ease both;
+}
+@keyframes hl-banner-in {
+  from { opacity: 0; transform: scale(.96); }
+  to   { opacity: 1; transform: none; }
+}
+.hlbannerlabel { font-size: 22px; }
+.hlbannerpay {
+  font-size: 15px; font-weight: 800; letter-spacing: normal; text-transform: none;
+  font-variant-numeric: tabular-nums; color: var(--fg);
+  background: var(--panel2); border: 1px solid var(--line);
+  border-radius: var(--r-pill); padding: 3px 12px;
+}
+.hlbanner.win  .hlbannerlabel { color: var(--green); }
+.hlbanner.lose .hlbannerlabel { color: var(--red); }
+
+/* ── Controls card ── */
+.hlcontrols {
+  display: flex; align-items: flex-end; gap: 18px; flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+/* Bet input component (copied from casino.css) */
+.betrow { display: flex; flex-direction: column; gap: 6px; }
+.betrow .betlbl { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+.betline { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.betinput {
+  font-family: inherit; font-size: 15px; font-weight: 700; color: var(--fg);
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: 8px 10px; width: 120px; font-variant-numeric: tabular-nums;
+}
+.betinput:focus { outline: none; border-color: var(--accent); }
+.chipbtns { display: inline-flex; gap: 5px; flex-wrap: wrap; }
+.chipbtn {
+  font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+  color: var(--muted); background: var(--panel2); border: 1px solid var(--line);
+  border-radius: var(--r-sm); padding: 7px 10px; transition: border-color var(--t), color var(--t);
+}
+.chipbtn:hover { border-color: var(--accent); color: var(--fg); }
+
+.hlactions { display: flex; gap: 8px; flex-wrap: wrap; }
+.hlactions .btn.big { padding: 10px 26px; font-size: 15px; }
+
+/* Higher / Lower guess buttons */
+.hlguess { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.hlguess .btn.hlhigher { --gc: var(--green); }
+.hlguess .btn.hllower  { --gc: var(--red); }
+.hlguess .btn.hlbtn {
+  min-width: 150px; padding: 12px 20px; font-size: 15px; font-weight: 800;
+}
+.hlguess .btn.hlbtn .hlmult {
+  display: block; font-size: 12px; font-weight: 700; opacity: .8; margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hlcard.deal, .hlbanner.show, .hlbanner { animation: none; transition: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Copied verbatim from casino.css so the coins hub + toasts are styled on this
+   page too (casino.css is only loaded on the Casino page).
+   ═══════════════════════════════════════════════════════════════════════════ */
+.coinschip { font-weight: 700; color: var(--gold); background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; font-size: 13px; white-space: nowrap; cursor: pointer; transition: border-color .15s, transform .15s; }
+.coinschip:hover { border-color: var(--gold); transform: translateY(-1px); }
+
+/* Coins hub modal */
+.hubov { position: fixed; inset: 0; z-index: 250; display: grid; place-items: center; padding: 20px; background: rgba(5,7,11,.6); backdrop-filter: blur(3px); animation: cd-scrim-in .18s ease both; }
+@keyframes cd-scrim-in { from { opacity: 0; } to { opacity: 1; } }
+.hubcard { width: min(460px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px 20px; box-shadow: 0 24px 60px -20px #000; }
+.hubhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.hubhead h3 { margin: 0; font-size: 17px; }
+.hubx { background: none; border: 0; color: var(--muted); font-size: 18px; cursor: pointer; line-height: 1; padding: 4px 8px; border-radius: 8px; }
+.hubx:hover { color: var(--fg); background: var(--panel2); }
+.hubrow { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
+.hubrow:first-of-type { border-top: 0; }
+.hubicon { font-size: 20px; width: 30px; text-align: center; flex: 0 0 auto; }
+.hubt { font-weight: 700; font-size: 14px; }
+.hubd { color: var(--muted); font-size: 12.5px; line-height: 1.45; margin-top: 2px; }
+.hubfoot { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; text-align: right; }
+.hubfoot b { color: var(--gold); }
+
+.cardtoast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 300;
+  background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 18px; font-size: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.5);
+}

@@ -48,15 +48,14 @@ def test_deal_debits_and_settle_is_single(monkeypatch):
         await _fund("bj", 1000)
         monkeypatch.setattr(bj.auth, "read_session", lambda r: {"id": "bj"})
         res = await bj.deal(_Req(), bj.DealBody(bet=100))
-        assert await q.get_casino_balance("bj") == 900  # bet debited at deal
-        if res.get("done"):  # natural — already settled; a stale action must be rejected
-            rid = None
+        if res.get("done"):  # dealt a natural — settled during deal: bet debited then payout credited
+            assert await q.get_casino_balance("bj") == 900 + res["payout"]
         else:
+            assert await q.get_casino_balance("bj") == 900  # bet debited, hand still live
             rid = res["round_id"]
-            # force a stand → settle
-            done = await bj.action(_Req(), bj.ActionBody(round_id=rid, action="stand"))
+            done = await bj.action(_Req(), bj.ActionBody(round_id=rid, action="stand"))  # → settle
             assert done["done"] and done["result"] in ("win", "lose", "push", "blackjack", "bust")
-            # replay the same round → rejected (round was deleted on settle)
+            # replay the same round → rejected (round was deleted on settle, so no double-pay)
             replay = await bj.action(_Req(), bj.ActionBody(round_id=rid, action="stand"))
             assert getattr(replay, "status_code", None) == 400
 

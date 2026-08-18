@@ -1,0 +1,134 @@
+/* SharpLab HQ — Connect Four page.
+   Builds on hqstyle.css (shared vars/header/nav/.btn/.card). Only page-specific
+   styling here. A free (no-coins) game that proves the web multiplayer pattern. */
+
+/* ── Page intro ── */
+.c4-head { margin: 4px 0 20px; text-align: center; }
+.c4-head h1 { font-size: 26px; margin: 0 0 4px; }
+.c4-head p { color: var(--muted); margin: 0; font-size: 14px; }
+
+.c4-wrap { max-width: 480px; margin: 0 auto; }
+
+/* ── Lobby ── */
+.c4-lobby { display: flex; flex-direction: column; gap: var(--s-4); }
+.c4-field { display: flex; flex-direction: column; gap: 6px; text-align: left; }
+.c4-field label { font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); font-weight: 700; }
+.c4-input {
+  width: 100%; box-sizing: border-box; background: var(--panel2); color: var(--fg);
+  border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; font-size: 15px;
+  transition: border-color var(--t), box-shadow var(--t);
+}
+.c4-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+.c4-input.code { text-transform: uppercase; letter-spacing: 4px; font-weight: 700; font-family: var(--font-mono); }
+.c4-actions { display: flex; gap: var(--s-2); flex-wrap: wrap; }
+.c4-actions .btn { flex: 1 1 auto; }
+.c4-sep { text-align: center; color: var(--faint); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+.c4-joinrow { display: flex; gap: var(--s-2); }
+.c4-joinrow .c4-input { flex: 1 1 auto; }
+
+/* ── Room / share ── */
+.c4-codebox { text-align: center; }
+.c4-codelabel { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+.c4-code {
+  display: inline-block; margin-top: 6px; font-family: var(--font-mono); font-weight: 800;
+  font-size: 34px; letter-spacing: 8px; color: var(--gold);
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-lg);
+  padding: 8px 20px 8px 28px; cursor: pointer; transition: border-color var(--t), transform var(--t);
+}
+.c4-code:hover { border-color: var(--gold); transform: translateY(-1px); }
+.c4-copyhint { display: block; margin-top: 6px; font-size: 11px; color: var(--faint); }
+
+/* ── Status line ── */
+.c4-status { text-align: center; font-size: 15px; font-weight: 700; min-height: 22px; }
+.c4-status.wait { color: var(--muted); font-weight: 500; }
+.c4-status.yours { color: var(--green); }
+.c4-status.theirs { color: var(--accent2); }
+.c4-status.win { color: var(--green); }
+.c4-status.lose { color: var(--red); }
+.c4-status.draw { color: var(--gold); }
+
+/* ── Player chips ── */
+.c4-players { display: flex; justify-content: center; gap: var(--s-3); flex-wrap: wrap; }
+.c4-pchip {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-pill); font-size: 13px;
+}
+.c4-pchip.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--ring); }
+.c4-disc { width: 15px; height: 15px; border-radius: 50%; flex: 0 0 auto; box-shadow: inset 0 -2px 3px rgba(0,0,0,.35); }
+.c4-disc.r { background: var(--red); }
+.c4-disc.y { background: var(--gold); }
+.c4-pname { font-weight: 700; }
+.c4-pyou { color: var(--faint); font-size: 11px; }
+.c4-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.c4-dot.on { background: var(--green); }
+
+/* ── Board ── */
+.c4-boardwrap { width: 340px; max-width: 100%; margin: 0 auto; }
+
+.c4-preview {
+  display: grid; gap: 8px; margin-bottom: 6px; padding: 0 8px;
+}
+.c4-prev { aspect-ratio: 1; display: grid; place-items: center; }
+.c4-prev::after {
+  content: ""; width: 78%; height: 78%; border-radius: 50%;
+  opacity: 0; transform: translateY(4px); transition: opacity var(--t), transform var(--t);
+}
+.c4-prev.show.r::after { opacity: .55; transform: translateY(0); background: var(--red); }
+.c4-prev.show.y::after { opacity: .55; transform: translateY(0); background: var(--gold); }
+
+.c4-board {
+  display: grid; gap: 8px;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-lg);
+  padding: 8px;
+}
+.c4-cell {
+  aspect-ratio: 1; border-radius: 50%;
+  background: var(--bg, #0b0e14); border: 1px solid var(--line);
+  box-shadow: inset 0 2px 6px rgba(0,0,0,.5);
+  cursor: default; transition: transform var(--t), box-shadow var(--t);
+}
+.c4-boardwrap:not(.locked) .c4-cell { cursor: pointer; }
+.c4-cell.r { background: var(--red); border-color: var(--red); box-shadow: inset 0 -3px 5px rgba(0,0,0,.4); }
+.c4-cell.y { background: var(--gold); border-color: var(--gold); box-shadow: inset 0 -3px 5px rgba(0,0,0,.4); }
+.c4-cell.win { box-shadow: 0 0 0 3px var(--green), inset 0 -3px 5px rgba(0,0,0,.4); }
+.c4-drop-in { animation: c4-drop .28s cubic-bezier(.34,1.56,.64,1) both; }
+@keyframes c4-drop { from { transform: translateY(-24px); opacity: .3; } to { transform: translateY(0); opacity: 1; } }
+
+/* ── Banner + rematch ── */
+.c4-banner { text-align: center; margin-top: 6px; }
+.c4-rematch { margin-top: 4px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .c4-code:hover { transform: none; }
+  .c4-drop-in { animation: none; }
+  .c4-prev::after { transition: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Copied verbatim from tictactoe.css / cards.css so the coins hub + toasts are
+   styled on this page too. This game is free, but the shared nav chip is kept.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.coinschip { font-weight: 700; color: var(--gold); background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; font-size: 13px; white-space: nowrap; cursor: pointer; transition: border-color .15s, transform .15s; }
+.coinschip:hover { border-color: var(--gold); transform: translateY(-1px); }
+
+/* Coins hub modal */
+.hubov { position: fixed; inset: 0; z-index: 250; display: grid; place-items: center; padding: 20px; background: rgba(5,7,11,.6); backdrop-filter: blur(3px); animation: cd-scrim-in .18s ease both; }
+@keyframes cd-scrim-in { from { opacity: 0; } to { opacity: 1; } }
+.hubcard { width: min(460px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px 20px; box-shadow: 0 24px 60px -20px #000; }
+.hubhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.hubhead h3 { margin: 0; font-size: 17px; }
+.hubx { background: none; border: 0; color: var(--muted); font-size: 18px; cursor: pointer; line-height: 1; padding: 4px 8px; border-radius: 8px; }
+.hubx:hover { color: var(--fg); background: var(--panel2); }
+.hubrow { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
+.hubrow:first-of-type { border-top: 0; }
+.hubicon { font-size: 20px; width: 30px; text-align: center; flex: 0 0 auto; }
+.hubt { font-weight: 700; font-size: 14px; }
+.hubd { color: var(--muted); font-size: 12.5px; line-height: 1.45; margin-top: 2px; }
+.hubfoot { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; text-align: right; }
+.hubfoot b { color: var(--gold); }
+
+.cardtoast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 300;
+  background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 18px; font-size: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.5);
+}
