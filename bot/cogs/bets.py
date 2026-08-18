@@ -435,6 +435,8 @@ class BetsCog(commands.Cog):
         except Exception:
             log.debug("bet xp award failed", exc_info=True)
         await _check_achievements(interaction)
+        _day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        _coins = await queries.grant_activity_reward(str(interaction.user.id), "bet_log", _day)
 
         line_str = f" {final_line:+.1f}" if final_line is not None else ""
 
@@ -449,7 +451,7 @@ class BetsCog(commands.Cog):
         embed.add_field(name="Pick", value=side, inline=True)
         embed.add_field(name="Odds", value=f"`{fmt_prob(american_odds)}`", inline=True)
         embed.add_field(name="Units", value=f"`{units}u`", inline=True)
-        embed.set_footer(text=f"Bet ID: {bet_id}")
+        embed.set_footer(text=f"Bet ID: {bet_id}" + (f"  ·  +{_coins} 🪙 earned" if _coins else ""))
         await interaction.followup.send(embed=embed)
 
     _LOG_DESCRIBE = dict(
@@ -538,11 +540,13 @@ class BetsCog(commands.Cog):
         except Exception:
             log.debug("prop xp failed", exc_info=True)
         await _check_achievements(interaction)
+        _day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        _coins = await queries.grant_activity_reward(str(interaction.user.id), "bet_log", _day)
         am = f"+{american_odds}" if american_odds > 0 else str(american_odds)
         await interaction.followup.send(
             f"✅ Logged prop — **{player} {side.title()} {line:g} {stat_label}** @ `{am}` · {units:g}u on `{book}`\n"
             f"*{target.away_team} @ {target.home_team}*  ·  grade it later with `/bet record` once the game's final.\n"
-            f"Bet ID: #{bet_id}")
+            f"Bet ID: #{bet_id}" + (f"  ·  +{_coins} 🪙" if _coins else ""))
 
     # ── /bet view ─────────────────────────────────────────────────────────────
 

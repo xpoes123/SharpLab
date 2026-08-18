@@ -120,12 +120,18 @@ async def _check_achievements(interaction: discord.Interaction) -> None:
 
 
 async def _award_trade_xp(interaction: discord.Interaction) -> None:
-    """Grant XP for logging a stock/option/crypto trade (best-effort)."""
+    """Grant XP + capped casino coins for logging a stock/option/crypto trade (best-effort)."""
     try:
         from bot.cogs.progression import award_xp, XP_STOCK
         await award_xp(interaction.client, str(interaction.user.id), XP_STOCK, interaction.channel)
     except Exception:
         log.debug("trade xp award failed for %s", interaction.user.id, exc_info=True)
+    try:
+        from datetime import datetime, timezone
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        await queries.grant_activity_reward(str(interaction.user.id), "trade_log", day)
+    except Exception:
+        log.debug("trade coin reward failed for %s", interaction.user.id, exc_info=True)
 
 
 # Bare crypto tickers — typed without a suffix (BTC) they map to Yahoo's BTC-USD

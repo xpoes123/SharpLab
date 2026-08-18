@@ -521,6 +521,14 @@ CREATE TABLE IF NOT EXISTS daily_message_reward (
     PRIMARY KEY (discord_user, day)
 );
 
+CREATE TABLE IF NOT EXISTS daily_coin_earn (
+    discord_user TEXT NOT NULL,
+    day          TEXT NOT NULL,
+    source       TEXT NOT NULL,   -- message / bet_log / trade_log / paper_trade / pickem_pick
+    earned       INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (discord_user, day, source)
+);
+
 CREATE TABLE IF NOT EXISTS card_trades (
     trade_id     INTEGER PRIMARY KEY AUTOINCREMENT,
     from_user    TEXT NOT NULL,

@@ -337,15 +337,11 @@ class ProgressionCog(commands.Cog):
         self._msg_cd[message.author.id] = now
         uid = str(message.author.id)
         await award_xp(self.bot, uid, XP_MESSAGE, message.channel)
-        # First chat message of the (UTC) day pays casino coins — the main earn now that games
-        # no longer top wallets up. A subtle 🪙 react signals it without spamming the channel.
+        # Small per-message coin trickle (capped per day so it can't be spam-farmed) — the main
+        # earn now that games no longer top wallets up. Silent; coins accrue to your balance.
         from datetime import datetime, timezone
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        if await queries.grant_daily_message_reward(uid, day):
-            try:
-                await message.add_reaction("🪙")
-            except discord.HTTPException:
-                pass
+        await queries.grant_activity_reward(uid, "message", day)
         # Count toward Chat achievements; only re-evaluate (heavy) at a milestone.
         count = await queries.increment_message_count(uid)
         if count in CHAT_MILESTONES:

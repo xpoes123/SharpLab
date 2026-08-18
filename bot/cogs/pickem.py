@@ -515,9 +515,12 @@ class StakeButton(ui.Button):
                 content="❌ You already locked in a bet on this game — bets are final.", view=None,
             )
             return
+        _day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        _coins = await queries.grant_activity_reward(str(interaction.user.id), "pickem_pick", _day)
         prob = game["away_prob"] if self.team == "away" else game["home_prob"]
         await interaction.response.edit_message(
-            content=f"✅ Bet **{self.n}u** on **{self.team_name}** (final) — {_potential(self.n, prob)} when it resolves.",
+            content=f"✅ Bet **{self.n}u** on **{self.team_name}** (final) — {_potential(self.n, prob)} when it resolves."
+            + (f"  ·  +{_coins} 🪙" if _coins else ""),
             view=None,
         )
 

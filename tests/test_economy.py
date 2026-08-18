@@ -41,6 +41,24 @@ def test_no_faucet_and_floor_zero():
     _run(go())
 
 
+def test_activity_rewards_per_event_and_capped():
+    _fresh_db()
+
+    async def go():
+        await sch.init_db()
+        u, d = "a", "2026-08-18"
+        # message: 5/event, cap 500 -> 100 grants then dry
+        got = [await q.grant_activity_reward(u, "message", d) for _ in range(101)]
+        assert got[0] == 5 and got[100] == 0 and sum(got) == 500
+        # bet_log: 50/event, cap 1000; independent of the message cap
+        assert await q.grant_activity_reward(u, "bet_log", d) == 50
+        assert await q.get_casino_balance(u) == 1000 + 500 + 50  # start + msg cap + one bet
+        # a new day resets every source
+        assert await q.grant_activity_reward(u, "message", "2026-08-19") == 5
+
+    _run(go())
+
+
 def test_daily_message_reward_once_per_day():
     _fresh_db()
 
