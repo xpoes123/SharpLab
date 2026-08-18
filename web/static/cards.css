@@ -220,6 +220,10 @@
 
 /* Flip card: the front is the normal .ctile (defines size); a cover overlays it and
    swings away on reveal. Simpler + more robust than a dual-face 3D flip with variable content. */
+.coinschip { font-weight: 700; color: var(--gold); background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; font-size: 13px; white-space: nowrap; }
+.dailychip { color: var(--muted); font-size: 14px; }
+.dailychip b { color: var(--fg); font-variant-numeric: tabular-nums; }
+.cd-balance { font-size: 13px; color: var(--gold); font-weight: 700; margin-top: 2px; }
 .cardtoast {
   position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 300;
   background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 10px;

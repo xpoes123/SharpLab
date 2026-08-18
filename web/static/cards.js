@@ -44,11 +44,12 @@ function renderNav(user) {
   navRight.innerHTML = `<div class="userbar">
     ${av ? `<img class="avatar" src="${av}" alt="">` : `<div class="avatar"></div>`}
     <span>${esc(user.username)}</span>
+    <span class="coinschip" title="Casino coins">🪙 ${num(state.balance)}</span>
     <a class="btn ghost" href="/api/v1/auth/logout">Sign out</a></div>`;
 }
 
 // ── State ──
-const state = { tab: "collection", mine: null, sets: null, catalog: {}, activeSet: null, me: null };
+const state = { tab: "collection", mine: null, sets: null, catalog: {}, activeSet: null, me: null, balance: 0, dailyClaimed: null };
 
 // ── Card tile ──
 function cardTile(c) {
@@ -148,10 +149,12 @@ function renderSets() {
     const pctVal = totalP ? Math.min(100, Math.round((opened / totalP) * 100)) : 0;
     const closed = s.closed || (totalP && opened >= totalP);
     const comp = setCompletion(s.set_id);
-    const compHtml = comp
+    // Always reserve the completion row when signed in (skeleton until catalogs load) so the
+    // async ensureSetCompletion redraw fills it in place instead of resizing every card.
+    const compHtml = state.me
       ? `<div class="progwrap">
-          <div class="progbar comp${comp.done ? " done" : ""}"><span style="width:${comp.pct}%"></span></div>
-          <div class="progtext">${comp.done ? "✅ " : ""}${num(comp.have)} / ${num(comp.total)} designs</div>
+          <div class="progbar comp${comp && comp.done ? " done" : ""}"><span style="width:${comp ? comp.pct : 0}%"></span></div>
+          <div class="progtext">${comp ? `${comp.done ? "✅ " : ""}${num(comp.have)} / ${num(comp.total)} designs` : "…"}</div>
         </div>`
       : "";
     return `<div class="setcard" data-setid="${esc(s.set_id)}">
@@ -173,8 +176,10 @@ function renderSets() {
     </div>`;
   }).join("");
   const daily = state.me
-    ? `<div class="dailybar"><button class="btn primary dailybtn">🎁 Free daily pack</button>
-       <span class="muted">One free pack a day — newest set.</span></div>`
+    ? (state.dailyClaimed
+        ? `<div class="dailybar"><span class="dailychip">🎁 Next free pack in <b id="dailyCountdown">${fmtDur(msToUtcMidnight())}</b></span></div>`
+        : `<div class="dailybar"><button class="btn primary dailybtn">🎁 Free daily pack</button>
+           <span class="muted">One free pack a day — newest set.</span></div>`)
     : "";
   return `${daily}<p class="muted" style="margin:0 0 14px">Tap a set to see its checklist and pull-rate odds, or open a pack.</p>
     <div class="setlist">${rows}</div>`;
@@ -215,12 +220,12 @@ function renderCatalog(setId) {
     </tr>`;
   }).join("");
 
-  return `<button class="backbtn" data-back="1">← All sets</button>
+  return `<button class="backbtn" data-back="1">← All packs</button>
     <h2 style="margin-top:0">${emoji} ${esc(set.name || "")} <span class="muted">· ${esc(set.season || "")}</span></h2>
     <div class="oddsgrid">${oddsCards.join("") || `<div class="muted">No odds published.</div>`}</div>
     <div class="collval" style="padding:12px 16px;margin-bottom:14px">
       <div><div class="lbl">Checklist</div></div>
-      <div class="sub">${num(d.total_cards != null ? d.total_cards : designs.length)} designs</div>
+      <div class="sub">${num(designs.length)} designs · ${num(d.total_cards || 0)}-card print run</div>
     </div>
     <div class="card" style="padding:0;overflow-x:auto">
       <table>
@@ -237,34 +242,49 @@ function fmtPct(p) {
 }
 
 // ── Shell + routing ──
+// Hash slugs so each view is its own URL and browser Back works:
+//   #collection · #packs · #packs/<setId> (a set's catalog)
 function tabbar() {
   const t = (id, label) => `<button class="tab${state.tab === id ? " on" : ""}" data-tab="${id}">${label}</button>`;
   return `<div class="tabbar">
-    ${t("collection", "My Collection")}${t("sets", "Sets")}${t("catalog", "Catalog")}
+    ${t("collection", "My Collection")}${t("packs", "Packs")}
   </div>`;
 }
 
 function draw() {
   let inner = "";
-  if (state.tab === "collection") inner = renderCollection();
-  else if (state.tab === "sets") inner = renderSets();
-  else if (state.tab === "catalog") {
-    inner = state.activeSet != null
-      ? renderCatalog(state.activeSet)
-      : renderSets(); // no set chosen yet — show the picker
+  if (state.tab === "packs") {
+    inner = state.activeSet != null ? renderCatalog(state.activeSet) : renderSets();
+  } else {
+    inner = renderCollection();
   }
   app.innerHTML = tabbar() + `<div id="tabbody">${inner}</div>`;
 }
 
-async function openCatalog(setId) {
-  state.tab = "catalog";
+function currentRoute() {
+  const h = (location.hash || "").replace(/^#\/?/, "");
+  const [tab, sub] = h.split("/");
+  return { tab: tab === "packs" ? "packs" : "collection", setId: sub || null };
+}
+
+// Derive state from the URL hash and render. Wired to hashchange, so Back/Forward work.
+async function render() {
+  const { tab, setId } = currentRoute();
+  state.tab = tab;
   state.activeSet = setId;
-  if (!state.catalog[setId]) {
-    draw(); // shows loading
-    state.catalog[setId] = await getJSON(`/api/v1/cards/catalog?set_id=${encodeURIComponent(setId)}`);
+  if (tab === "packs") {
+    await ensureSets();
+    await ensureDailyStatus();
+    if (setId && !state.catalog[setId]) {
+      draw(); // loading state
+      state.catalog[setId] = await getJSON(`/api/v1/cards/catalog?set_id=${encodeURIComponent(setId)}`);
+    }
   }
   draw();
+  if (tab === "packs" && !setId) ensureSetCompletion().then(draw);
 }
+
+window.addEventListener("hashchange", render);
 
 async function ensureSets() {
   if (!state.sets) state.sets = await getJSON("/api/v1/cards/sets");
@@ -284,6 +304,30 @@ async function ensureSetCompletion() {
     })
   );
 }
+
+async function ensureDailyStatus() {
+  if (!state.me || state.dailyClaimed !== null) return;
+  const s = await getJSON("/api/v1/cards/daily/status");
+  state.dailyClaimed = !!(s && s.claimed);
+}
+
+// Free daily pack resets at 00:00 UTC — the countdown is computable client-side.
+function msToUtcMidnight() {
+  const now = new Date();
+  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1) - now.getTime();
+}
+function fmtDur(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(Math.floor(s / 3600))}:${p(Math.floor((s % 3600) / 60))}:${p(s % 60)}`;
+}
+setInterval(() => {
+  const el = document.getElementById("dailyCountdown");
+  if (!el) return;
+  const ms = msToUtcMidnight();
+  if (ms <= 1000) { state.dailyClaimed = false; if (state.tab === "packs") draw(); }
+  else el.textContent = fmtDur(ms);
+}, 1000);
 
 // ── Open packs (web) ──
 async function postJSON(url, body) {
@@ -312,6 +356,7 @@ async function doOpen(sport, season, btn) {
   const res = await postJSON("/api/v1/cards/open", { sport, season, n: 1 });
   if (btn) btn.disabled = false;
   if (res.error) return toast("❌ " + res.error);
+  applyBalance(res.balance);
   startReveal(res);
 }
 
@@ -320,8 +365,19 @@ async function doDaily(btn) {
   window.CardSfx && CardSfx.primeAudio();
   const res = await postJSON("/api/v1/cards/daily", {});
   if (btn) btn.disabled = false;
-  if (res.error) return toast("🎁 " + res.error);
+  if (res.error) {
+    if (res.error.includes("claimed")) { state.dailyClaimed = true; draw(); } // show the countdown
+    return toast("🎁 " + res.error);
+  }
+  state.dailyClaimed = true;
+  applyBalance(res.balance);
   startReveal(res);
+}
+
+function applyBalance(bal) {
+  if (bal == null) return;
+  state.balance = bal;
+  renderNav(state.me && state.me.user); // refresh the coins chip
 }
 
 async function reloadAfterOpen() {
@@ -333,7 +389,7 @@ async function reloadAfterOpen() {
   state.sets = sets;
   state.catalog = {}; // minted counts changed — drop cached catalogs
   draw();
-  if (state.tab === "sets") { await ensureSetCompletion(); draw(); }
+  if (state.tab === "packs" && !state.activeSet) { await ensureSetCompletion(); draw(); }
 }
 
 // ── Reveal overlay (ported from nsba-markets) ──
@@ -394,8 +450,9 @@ function startReveal(payload) {
     const chips = RARITY_CHIP.filter((r) => counts[r])
       .map((r) => `<span class="cd-summary-chip cd-summary-${r}">${counts[r]}× ${r}</span>`)
       .join("");
+    const bal = payload.balance != null ? `<div class="cd-balance">🪙 ${num(payload.balance)} coins left</div>` : "";
     return `<div class="cd-summary-row">${chips}</div>
-      <div class="cd-summary-value">+${num(Math.round(total))} book value</div>`;
+      <div class="cd-summary-value">+${num(Math.round(total))} book value</div>${bal}`;
   }
 
   const allDone = () => revealed.every(Boolean);
@@ -515,16 +572,11 @@ app.addEventListener("click", async (e) => {
   const setCard = e.target.closest(".setcard");
   const back = e.target.closest("[data-back]");
   if (tabBtn) {
-    state.tab = tabBtn.dataset.tab;
-    if (state.tab === "sets") { await ensureSets(); draw(); await ensureSetCompletion(); }
-    if (state.tab === "catalog") { await ensureSets(); state.activeSet = null; }
-    draw();
+    location.hash = tabBtn.dataset.tab; // hashchange -> render()
   } else if (setCard) {
-    await openCatalog(setCard.dataset.setid);
+    location.hash = `packs/${setCard.dataset.setid}`;
   } else if (back) {
-    state.activeSet = null;
-    state.tab = "sets";
-    draw();
+    location.hash = "packs"; // its own slug; browser Back also works via hashchange
   }
 });
 
@@ -532,12 +584,13 @@ async function main() {
   const me = await getJSON("/api/v1/hq/me");
   const loggedIn = me && me.authenticated;
   state.me = loggedIn ? me : null;
+  state.balance = loggedIn ? (me.balance || 0) : 0;
   renderNav(loggedIn ? me.user : null);
   // Preload the two main lists in parallel.
   const [mine, sets] = await Promise.all([getJSON("/api/v1/cards/mine"), getJSON("/api/v1/cards/sets")]);
   state.mine = mine;
   state.sets = sets;
-  draw();
+  render(); // route from the URL hash (defaults to #collection)
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -564,6 +617,8 @@ function mockJSON(url) {
           is_rookie: false, headshot_url: "https://example.invalid/404.png" },
       ],
     };
+  if (url.startsWith("/api/v1/cards/daily/status"))
+    return { authenticated: true, claimed: false };
   if (url.startsWith("/api/v1/cards/sets"))
     return {
       sets: [

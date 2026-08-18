@@ -86,6 +86,15 @@ async def open_pack(request: Request, body: OpenBody):
     return await _reveal_payload(uid, cset, cards)
 
 
+@router.get("/daily/status")
+async def daily_status(request: Request):
+    sess = auth.read_session(request)
+    if not sess:
+        return {"authenticated": False, "claimed": False}
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return {"authenticated": True, "claimed": await queries.has_claimed_daily_pack(sess["id"], day)}
+
+
 @router.post("/daily")
 async def open_daily(request: Request):
     sess = auth.read_session(request)
