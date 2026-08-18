@@ -4777,6 +4777,7 @@ ACTIVITY_REWARDS = {
     "wordle_win": (25, 200),     # web arcade: solved Wordle
     "geo_guess": (15, 200),      # web arcade: correct Geography guess
     "nba_guess": (15, 200),      # web arcade: correct NBA player guess
+    "valorant_guess": (15, 200), # web arcade: correct Valorant agent guess
     "pokedle_win": (25, 200),    # web arcade: solved Pokédle
     "mastermind_win": (30, 200),  # web arcade: cracked the Mastermind code
     "mathsprint_win": (2, 200),   # web arcade: per correct Math Sprint answer
