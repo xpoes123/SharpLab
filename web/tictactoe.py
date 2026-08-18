@@ -186,6 +186,8 @@ def _attach_player(room: TicTacToeRoom, name: str, ws: WebSocket) -> WebPlayer |
         return None
     for p in room.players:
         if p.name == name:
+            if p.connected and p.ws is not None:
+                return None  # seat is live — don't let a same-name socket hijack it
             p.ws = ws
             p.connected = True
             return p

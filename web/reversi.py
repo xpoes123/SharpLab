@@ -247,6 +247,8 @@ def _attach_player(room: ReversiRoom, name: str, ws: WebSocket) -> WebPlayer | N
         return None
     for p in room.players:
         if p.name == name:
+            if p.connected and p.ws is not None:
+                return None  # seat is live — don't let a same-name socket hijack it
             p.ws = ws
             p.connected = True
             return p

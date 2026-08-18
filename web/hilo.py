@@ -74,7 +74,7 @@ async def guess(request: Request, body: GuessBody):
     uid = _uid(request)
     if not uid:
         return JSONResponse({"error": "sign in to play"}, status_code=401)
-    st = _ROUNDS.get(body.round_id)
+    st = _ROUNDS.pop(body.round_id, None)  # atomic claim → no double-settle race
     if st is None or st["uid"] != uid:
         return JSONResponse({"error": "no active round"}, status_code=400)
     direction = "lower" if body.direction == "lower" else "higher"
@@ -87,6 +87,5 @@ async def guess(request: Request, body: GuessBody):
         await queries.update_casino_balance(uid, payout)
     await queries.log_casino_result(uid, "hilo", st["bet"], payout)
     balance = await queries.get_casino_balance(uid) or 0
-    _ROUNDS.pop(body.round_id, None)
     return {"card": card, "rank": rank, "prev": cur, "won": won, "direction": direction,
             "payout": payout, "balance": balance}

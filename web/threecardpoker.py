@@ -107,13 +107,14 @@ async def play(request: Request, body: PlayBody):
     uid = _uid(request)
     if not uid:
         return JSONResponse({"error": "sign in to play"}, status_code=401)
-    st = _ROUNDS.get(body.round_id)
+    # Claim the round atomically (pop, not get) so two concurrent /play requests can't both
+    # settle it and double-pay. In asyncio the pop is synchronous → exactly one caller wins.
+    st = _ROUNDS.pop(body.round_id, None)
     if st is None or st["uid"] != uid:
         return JSONResponse({"error": "no active hand"}, status_code=400)
     ante = st["ante"]
 
     if body.action == "fold":
-        _ROUNDS.pop(body.round_id, None)
         await queries.log_casino_result(uid, "threecardpoker", ante, 0)
         bal = await queries.get_casino_balance(uid) or 0
         return {"done": True, "result": "fold", "payout": 0, "balance": bal,

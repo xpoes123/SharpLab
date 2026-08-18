@@ -15,7 +15,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel
 
 from db import queries
-from web import auth
+from web import auth, gameround
 
 router = APIRouter(prefix="/api/v1/arcade/mastermind")
 _round_signer = URLSafeTimedSerializer(auth.SESSION_SECRET, salt="arcade-mastermind")
@@ -31,10 +31,7 @@ def _uid(request: Request) -> str | None:
 
 
 def _code_from_token(token: str) -> list[str] | None:
-    try:
-        code = _round_signer.loads(token, max_age=_ROUND_TTL)
-    except (BadSignature, SignatureExpired, ValueError):
-        return None
+    code = gameround.peek(token)
     if not isinstance(code, list) or len(code) != CODE_LEN:
         return None
     if not all(c in COLORS for c in code):
@@ -61,7 +58,7 @@ async def new(request: Request):
     if not _uid(request):
         return JSONResponse({"error": "sign in to play"}, status_code=401)
     code = [secrets.choice(COLORS) for _ in range(CODE_LEN)]
-    return {"token": _round_signer.dumps(code)}
+    return {"token": gameround.stash(code)}
 
 
 class GuessBody(BaseModel):

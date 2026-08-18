@@ -43,12 +43,14 @@ from web.g_mathsprint import router as mathsprint_router
 from web.g_countdown import router as countdown_router
 from web.g_nbaguess import router as nbaguess_router
 from web.g_stockguess import router as stockguess_router
+from web.g_quizbowl import router as quizbowl_router
 from web.g_valorant import router as valorant_router
 from web.blackjack import router as blackjack_router
 from web.baccarat import router as baccarat_router
 from web.videopoker import router as videopoker_router
 from web.hilo import router as hilo_router
 from web.craps import router as craps_router
+from web.crapless import router as crapless_router
 from web.horserace import router as horserace_router
 from web.sicbo import router as sicbo_router
 from web.threecardpoker import router as threecardpoker_router
@@ -172,12 +174,14 @@ app.include_router(mathsprint_router)
 app.include_router(countdown_router)
 app.include_router(nbaguess_router)
 app.include_router(stockguess_router)
+app.include_router(quizbowl_router)
 app.include_router(valorant_router)
 app.include_router(blackjack_router)
 app.include_router(baccarat_router)
 app.include_router(videopoker_router)
 app.include_router(hilo_router)
 app.include_router(craps_router)
+app.include_router(crapless_router)
 app.include_router(horserace_router)
 app.include_router(sicbo_router)
 app.include_router(threecardpoker_router)
