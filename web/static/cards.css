@@ -88,7 +88,7 @@
 
 /* ── Holo: animated iridescent sheen over the whole tile ── */
 .ctile.holo::before {
-  content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none; border-radius: 12px;
+  content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none; border-radius: 14px;
   background: linear-gradient(115deg,
     rgba(255,0,132,.28) 0%, rgba(0,212,255,.28) 20%, rgba(120,255,140,.28) 40%,
     rgba(255,240,120,.28) 60%, rgba(190,120,255,.28) 80%, rgba(255,0,132,.28) 100%);
@@ -97,7 +97,7 @@
   animation: holoshift 5s linear infinite;
 }
 .ctile.holo::after {
-  content: ""; position: absolute; inset: 0; z-index: 3; pointer-events: none; border-radius: 12px;
+  content: ""; position: absolute; inset: 0; z-index: 3; pointer-events: none; border-radius: 14px;
   background: linear-gradient(115deg, transparent 30%, rgba(255,255,255,.35) 48%, transparent 66%);
   background-size: 260% 260%; mix-blend-mode: soft-light; opacity: .6;
   animation: holoshift 5s linear infinite reverse;

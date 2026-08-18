@@ -1,17 +1,19 @@
 /* SharpLab Leaderboard — Dark Theme */
 
 :root {
-    --bg: #0d1117;
-    --card: #161b22;
-    --border: #30363d;
-    --text: #c9d1d9;
-    --text-muted: #8b949e;
-    --accent: #f1c40f;
-    --accent-dim: #f1c40f33;
-    --green: #3fb950;
-    --red: #f85149;
-    --hover: #21262d;
-    --radius: 8px;
+    /* Unified with hqstyle.css (Tokyo Night) — was a divergent GitHub-dark palette with a
+       yellow accent that made figgie/trading-floor look like a different app. */
+    --bg: #15161e;
+    --card: #1a1b26;
+    --border: #2a2e42;
+    --text: #c0caf5;
+    --text-muted: #7884b0;
+    --accent: #7aa2f7;
+    --accent-dim: rgba(122,162,247,.2);
+    --green: #9ece6a;
+    --red: #f7768e;
+    --hover: #1f2230;
+    --radius: 10px;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
