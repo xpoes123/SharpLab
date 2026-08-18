@@ -1,0 +1,18 @@
+/* Pick'em full-slate page — leans on hqstyle.css for .gamecard/.teamrow/.stakebtns/.btn */
+.pk-wrap { max-width: 820px; margin: 0 auto; padding: 20px 16px 60px; }
+.pk-intro { color: var(--muted); margin: 4px 0 20px; font-size: 14px; }
+.pk-group { margin-bottom: 22px; }
+.pk-group > h2 {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 15px; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--muted); margin: 0 0 10px; padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+.pk-group .count { font-size: 12px; color: var(--muted); text-transform: none; letter-spacing: 0; }
+.pk-list { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 0; }
+.team { cursor: pointer; }
+.team.sel { border-color: var(--accent) !important; color: var(--text); }
+.betmsg { font-size: 13px; }
+.betmsg.neg { color: var(--red); }
+.betmsg.pos, .pos { color: var(--green); }
+.pk-empty { text-align: center; padding: 60px 16px; color: var(--muted); }
