@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from bot.cogs.stockguess import CURATED_TICKERS, fetch_ytd_change
 from db import queries
-from web import auth
+from web import auth, gameround
 
 router = APIRouter(prefix="/api/v1/arcade")
 _round_signer = URLSafeTimedSerializer(auth.SESSION_SECRET, salt="arcade-stockguess")
@@ -48,8 +48,9 @@ async def stockguess_new(request: Request):
             actual = await fetch_ytd_change(ticker)
         except Exception:
             continue
-        token = _round_signer.dumps([ticker, round(float(actual), 2)])
-        # The actual % stays server-side in the token — only the ticker leaks.
+        # Keep the actual % SERVER-SIDE (a signed token's payload is client-readable, which would
+        # leak the answer). The token is just an opaque id into gameround.
+        token = gameround.stash([ticker, round(float(actual), 2)])
         return {"token": token, "ticker": ticker, "company": CURATED_TICKERS[ticker]}
     return JSONResponse({"error": "couldn't load a stock — try again"}, status_code=503)
 
@@ -64,10 +65,10 @@ async def stockguess_guess(request: Request, body: GuessBody):
     uid = _uid(request)
     if not uid:
         return JSONResponse({"error": "sign in to play"}, status_code=401)
-    try:
-        ticker, actual = _round_signer.loads(body.token, max_age=_ROUND_TTL)
-    except (BadSignature, SignatureExpired, ValueError):
+    data = gameround.peek(body.token)
+    if data is None:
         return JSONResponse({"error": "round expired — start a new one"}, status_code=400)
+    ticker, actual = data
 
     guess = float(body.guess)
     delta = abs(guess - float(actual))

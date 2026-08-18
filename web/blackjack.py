@@ -126,27 +126,33 @@ async def action(request: Request, body: ActionBody):
     uid = _uid(request)
     if not uid:
         return JSONResponse({"error": "sign in to play"}, status_code=401)
-    st = _ROUNDS.get(body.round_id)
+    # Claim the round atomically (pop, not get) so two concurrent actions can't both settle it
+    # and double-pay. Non-terminal paths (a live hit, a retryable error) put the claim back.
+    st = _ROUNDS.pop(body.round_id, None)
     if st is None or st["uid"] != uid:
         return JSONResponse({"error": "no active hand"}, status_code=400)
     act = body.action
     if act == "hit":
         st["player"].append(st["deck"].pop())
-        if hand_total(st["player"]) >= 21:  # bust or 21 → stand automatically
+        if hand_total(st["player"]) >= 21:  # bust or 21 → stand automatically (settles)
             return await _dealer_play_and_settle(body.round_id, st)
+        _ROUNDS[body.round_id] = st  # still live — restore the claim
         return _live_state(body.round_id, st)
     if act == "double":
         if len(st["player"]) != 2:
+            _ROUNDS[body.round_id] = st
             return JSONResponse({"error": "can only double on your first two cards"}, status_code=400)
         try:
             await queries.update_casino_balance(uid, -st["bet"])  # match the bet
         except ValueError:
+            _ROUNDS[body.round_id] = st
             return JSONResponse({"error": "not enough coins to double"}, status_code=400)
         st["bet"] *= 2
         st["player"].append(st["deck"].pop())
         return await _dealer_play_and_settle(body.round_id, st)
     if act == "stand":
         return await _dealer_play_and_settle(body.round_id, st)
+    _ROUNDS[body.round_id] = st
     return JSONResponse({"error": "unknown action"}, status_code=400)
 
 

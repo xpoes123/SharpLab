@@ -113,7 +113,7 @@ async def draw(request: Request, body: DrawBody):
     uid = _uid(request)
     if not uid:
         return JSONResponse({"error": "sign in to play"}, status_code=401)
-    st = _ROUNDS.get(body.round_id)
+    st = _ROUNDS.pop(body.round_id, None)  # atomic claim → no double-settle race
     if st is None or st["uid"] != uid:
         return JSONResponse({"error": "no active hand"}, status_code=400)
     hold = (list(body.hold) + [False] * 5)[:5]
@@ -125,6 +125,5 @@ async def draw(request: Request, body: DrawBody):
         await queries.update_casino_balance(uid, payout)
     await queries.log_casino_result(uid, "videopoker", st["bet"], payout)
     balance = await queries.get_casino_balance(uid) or 0
-    _ROUNDS.pop(body.round_id, None)
     return {"hand": hand, "category": cat, "label": _LABELS[cat], "mult": mult,
             "payout": payout, "balance": balance}
