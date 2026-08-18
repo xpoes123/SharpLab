@@ -4779,6 +4779,8 @@ ACTIVITY_REWARDS = {
     "nba_guess": (15, 200),      # web arcade: correct NBA player guess
     "pokedle_win": (25, 200),    # web arcade: solved Pokédle
     "mastermind_win": (30, 200),  # web arcade: cracked the Mastermind code
+    "mathsprint_win": (2, 200),   # web arcade: per correct Math Sprint answer
+    "countdown_win": (30, 150),   # web arcade: solved a Countdown numbers round
     # (paper trades already stake coins — no reward, else you could farm the loop)
 }
 
