@@ -88,6 +88,23 @@ def _pinned_mlb(game) -> bool:
     names = f"{game.home_team} {game.away_team}".lower()
     return any(p in names for p in _PINNED_MLB)
 
+
+MIN_FAV_LEN = 3  # a favorite shorter than this would match too many teams
+
+
+def _fav_side(teams: list[str], home_team: str, away_team: str) -> str | None:
+    """Which side to auto-pick for a user's favorite teams in this game.
+    'home'/'away' if exactly one side matches a favorite, else None (skip: neither,
+    or both — an intra-favorite matchup we can't pick a side on)."""
+    h, a = home_team.lower(), away_team.lower()
+    home_fav = any(len(t) >= MIN_FAV_LEN and t in h for t in teams)
+    away_fav = any(len(t) >= MIN_FAV_LEN and t in a for t in teams)
+    if home_fav and not away_fav:
+        return "home"
+    if away_fav and not home_fav:
+        return "away"
+    return None
+
 MIN_PICKS_FOR_ACCURACY = 20
 COLOUR = 0x1ABC9C
 
@@ -500,13 +517,16 @@ class PickemCog(commands.Cog):
         self.post_loop.start()
         self.lock_loop.start()
         self.resolve_loop.start()
+        self.favorites_loop.start()
 
     async def cog_unload(self) -> None:
         self.post_loop.cancel()
         self.lock_loop.cancel()
         self.resolve_loop.cancel()
+        self.favorites_loop.cancel()
 
     pickem = app_commands.Group(name="pickem", description="Daily NBA/WNBA/MLB pick'em")
+    favorites = app_commands.Group(name="favorites", description="Auto-pick your favorite teams", parent=pickem)
 
     async def _channel(self) -> discord.TextChannel | None:
         raw = await queries.get_bot_setting(_PICKEM_CHANNEL_SETTING)
@@ -827,7 +847,83 @@ class PickemCog(commands.Cog):
     async def _before_resolve(self) -> None:
         await self.bot.wait_until_ready()
 
+    @tasks.loop(minutes=3)
+    async def favorites_loop(self) -> None:
+        """Auto-place a pick on any unlocked game a user's favorite team is playing,
+        at the user's stake. Idempotent (record_pickem_pick won't overwrite a manual
+        pick), so it also fills favorites set after the slate posted."""
+        try:
+            favs = await queries.get_all_pickem_favorites()
+            if not favs:
+                return
+            now = datetime.now(timezone.utc).isoformat()
+            games = [g for g in await queries.get_unlocked_pickem_games() if g["start_time"] > now]
+        except Exception:
+            log.exception("pickem: favorites loop query failed")
+            return
+        for g in games:
+            for uid, pref in favs.items():
+                side = _fav_side(pref["teams"], g["home_team"], g["away_team"])
+                if side is None:
+                    continue
+                try:
+                    await queries.record_pickem_pick(g["message_id"], uid, side, pref["stake"])
+                except Exception:
+                    log.debug("pickem: auto-pick failed for %s on %s", uid, g["message_id"])
+
+    @favorites_loop.before_loop
+    async def _before_favorites(self) -> None:
+        await self.bot.wait_until_ready()
+
     # ── Commands ─────────────────────────────────────────────────────────────
+
+    @favorites.command(name="add", description="Add a favorite team — auto-picks it in every pick'em game")
+    @app_commands.describe(team="Team name (e.g. Dodgers, Lakers, Eagles)")
+    async def fav_add(self, interaction: discord.Interaction, team: str) -> None:
+        team = team.strip()
+        if len(team) < MIN_FAV_LEN:
+            await interaction.response.send_message(
+                f"Team name must be at least {MIN_FAV_LEN} characters.", ephemeral=True)
+            return
+        await queries.add_pickem_favorite(str(interaction.user.id), team)
+        stake = await queries.get_pickem_fav_stake(str(interaction.user.id))
+        await interaction.response.send_message(
+            f"⭐ Added **{team}** to your favorites. I'll auto-pick them at **{stake}u** in every "
+            f"pick'em game (within a few minutes of each slate). `/pickem favorites stake` to change the stake.",
+            ephemeral=True,
+        )
+
+    @favorites.command(name="remove", description="Remove a favorite team")
+    @app_commands.describe(team="Team name to remove")
+    async def fav_remove(self, interaction: discord.Interaction, team: str) -> None:
+        removed = await queries.remove_pickem_favorite(str(interaction.user.id), team)
+        msg = f"Removed **{team.strip()}** from your favorites." if removed else \
+            f"**{team.strip()}** wasn't in your favorites."
+        await interaction.response.send_message(msg, ephemeral=True)
+
+    @favorites.command(name="list", description="Show your favorite teams")
+    async def fav_list(self, interaction: discord.Interaction) -> None:
+        favs = await queries.get_pickem_favorites(str(interaction.user.id))
+        stake = await queries.get_pickem_fav_stake(str(interaction.user.id))
+        if not favs:
+            await interaction.response.send_message(
+                "You have no favorite teams. Add one with `/pickem favorites add`.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            "⭐ **Your favorites** (auto-picked at " + f"{stake}u each):\n"
+            + "\n".join(f"• {t.title()}" for t in favs),
+            ephemeral=True,
+        )
+
+    @favorites.command(name="stake", description="Set how many units to auto-stake on your favorites (1–5)")
+    @app_commands.describe(units="Units per auto-pick (1–5)")
+    async def fav_stake(self, interaction: discord.Interaction, units: int) -> None:
+        if not (1 <= units <= 5):
+            await interaction.response.send_message("Stake must be 1–5 units.", ephemeral=True)
+            return
+        await queries.set_pickem_fav_stake(str(interaction.user.id), units)
+        await interaction.response.send_message(
+            f"Favorites auto-stake set to **{units}u**.", ephemeral=True)
 
     @pickem.command(name="leaderboard", description="Pick'em prediction leaderboard")
     async def leaderboard(self, interaction: discord.Interaction) -> None:

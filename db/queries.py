@@ -4908,3 +4908,67 @@ async def get_card_stats(uid: str) -> dict:
         "cards_has_gem": bool(r["has_gem"]),
         "cards_has_1of1": bool(r["has_1of1"]),
     }
+
+
+# ── Pick'em favorite teams (auto-pick) ───────────────────────────────────────
+async def add_pickem_favorite(discord_user: str, team: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO pickem_favorites (discord_user, team) VALUES (?, ?)",
+            (discord_user, team.strip().lower()),
+        )
+        await db.commit()
+
+
+async def remove_pickem_favorite(discord_user: str, team: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "DELETE FROM pickem_favorites WHERE discord_user = ? AND team = ?",
+            (discord_user, team.strip().lower()),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def get_pickem_favorites(discord_user: str) -> list[str]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT team FROM pickem_favorites WHERE discord_user = ? ORDER BY team", (discord_user,)
+        )
+        return [r[0] for r in await cur.fetchall()]
+
+
+async def get_all_pickem_favorites() -> dict[str, dict]:
+    """Every user's favorite teams + their auto-pick stake, for the auto-pick loop.
+    Returns {discord_user: {"teams": [..], "stake": int}}. Stake defaults to 1."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT f.discord_user, f.team, COALESCE(s.pickem_fav_stake, 1) stake "
+            "FROM pickem_favorites f LEFT JOIN user_settings s ON s.discord_user = f.discord_user"
+        )).fetchall()
+    out: dict[str, dict] = {}
+    for r in rows:
+        entry = out.setdefault(r["discord_user"], {"teams": [], "stake": r["stake"] or 1})
+        entry["teams"].append(r["team"])
+    return out
+
+
+async def get_pickem_fav_stake(discord_user: str) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT pickem_fav_stake FROM user_settings WHERE discord_user = ?", (discord_user,)
+        )
+        row = await cur.fetchone()
+    return (row[0] if row and row[0] is not None else 1)
+
+
+async def set_pickem_fav_stake(discord_user: str, stake: int) -> None:
+    stake = max(1, min(5, stake))
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO user_settings (discord_user, pickem_fav_stake) VALUES (?, ?) "
+            "ON CONFLICT(discord_user) DO UPDATE SET pickem_fav_stake = excluded.pickem_fav_stake",
+            (discord_user, stake),
+        )
+        await db.commit()

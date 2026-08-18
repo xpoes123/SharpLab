@@ -1032,6 +1032,48 @@ async def hq_pickem_bet(body: BetIn, request: Request):
     return {"ok": True, "team": body.team, "stake": body.stake}
 
 
+class FavIn(BaseModel):
+    add: str | None = None
+    remove: str | None = None
+    stake: int | None = None
+
+
+async def _fav_state(uid: str) -> dict:
+    return {
+        "favorites": await queries.get_pickem_favorites(uid),
+        "stake": await queries.get_pickem_fav_stake(uid),
+    }
+
+
+@router.get("/hq/pickem/favorites")
+async def hq_pickem_favorites(request: Request):
+    """The viewer's pick'em favorite teams + auto-pick stake."""
+    sess = auth.read_session(request)
+    if not sess:
+        return JSONResponse({"error": "not_authenticated"}, status_code=401)
+    return await _fav_state(sess["id"])
+
+
+@router.post("/hq/pickem/favorites")
+async def hq_pickem_favorites_update(body: FavIn, request: Request):
+    """Add/remove a favorite team and/or set the auto-pick stake. Returns new state."""
+    sess = auth.read_session(request)
+    if not sess:
+        return JSONResponse({"error": "not_authenticated"}, status_code=401)
+    uid = sess["id"]
+    if body.add:
+        if len(body.add.strip()) < 3:
+            return JSONResponse({"error": "too_short"}, status_code=400)
+        await queries.add_pickem_favorite(uid, body.add)
+    if body.remove:
+        await queries.remove_pickem_favorite(uid, body.remove)
+    if body.stake is not None:
+        if not (1 <= body.stake <= 5):
+            return JSONResponse({"error": "bad_stake"}, status_code=400)
+        await queries.set_pickem_fav_stake(uid, body.stake)
+    return await _fav_state(uid)
+
+
 class StockTradeIn(BaseModel):
     ticker: str
     side: str       # buy | sell

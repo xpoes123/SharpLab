@@ -111,11 +111,59 @@ function render(open) {
   app.innerHTML = `<div class="pk-wrap">
     <h1>🎯 Pick'em — full slate</h1>
     <p class="pk-intro">${note} Only the marquee games get posted to Discord; here's everything.</p>
+    ${loggedIn ? favSection(state.fav) : ""}
     ${groups}</div>`;
 }
 
-function wireBetting() {
+// ── Favorite teams (auto-pick) ──
+function favSection(fav) {
+  fav = fav || { favorites: [], stake: 1 };
+  const chips = (fav.favorites || []).map((t) =>
+    `<span class="fav-chip">${esc(t)}<button class="fav-rm" data-team="${esc(t)}" title="remove">✕</button></span>`
+  ).join("") || `<span class="muted" style="font-size:13px">No favorites yet.</span>`;
+  const opts = [1, 2, 3, 4, 5].map((n) =>
+    `<option value="${n}" ${n === fav.stake ? "selected" : ""}>${n}u</option>`).join("");
+  return `<div class="pk-favs">
+    <h2>⭐ Favorite teams <span class="count">auto-picked every game</span></h2>
+    <p class="muted" style="font-size:13px;margin:0 0 10px">
+      Any game your favorite plays gets auto-picked (their side) at
+      <select class="fav-stake">${opts}</select> per game — a few minutes after each slate posts.</p>
+    <div class="fav-chips">${chips}</div>
+    <form class="fav-add">
+      <input class="fav-input" placeholder="Add a team — e.g. Dodgers, Lakers, Eagles" maxlength="40" />
+      <button class="btn" type="submit">Add</button>
+    </form>
+    <div class="fav-msg muted"></div></div>`;
+}
+
+async function postFav(body) {
+  const r = await fetch("/api/v1/hq/pickem/favorites", {
+    method: "POST", credentials: "include",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  if (r.ok) { state.fav = await r.json(); renderAll(); return null; }
+  return (await r.json().catch(() => ({}))).error || "error";
+}
+
+function wireEvents() {
+  app.addEventListener("submit", async (e) => {
+    const form = e.target.closest(".fav-add");
+    if (!form) return;
+    e.preventDefault();
+    const input = form.querySelector(".fav-input");
+    const team = input.value.trim();
+    if (team.length < 3) { setFavMsg("Team name must be at least 3 characters."); return; }
+    const err = await postFav({ add: team });
+    if (err) setFavMsg(err === "too_short" ? "Team name too short." : "Couldn't add that.");
+  });
+  app.addEventListener("change", async (e) => {
+    if (e.target.classList.contains("fav-stake")) await postFav({ stake: Number(e.target.value) });
+  });
   app.addEventListener("click", async (e) => {
+    // favorite remove
+    const rm = e.target.closest(".fav-rm");
+    if (rm) { await postFav({ remove: rm.dataset.team }); return; }
+    // pick'em betting
     const teamBtn = e.target.closest(".team");
     const stakeBtn = e.target.closest("[data-stake]");
     if (teamBtn) {
@@ -147,12 +195,27 @@ function wireBetting() {
   });
 }
 
+function setFavMsg(t) {
+  const el = document.querySelector(".fav-msg");
+  if (el) el.textContent = t;
+}
+
+function renderAll() {
+  render(state.open);
+}
+
+const state = { open: { authenticated: false, games: [] }, fav: null };
+
 (async function init() {
-  wireBetting();
-  const [me, open] = await Promise.all([
-    getJSON("/api/v1/hq/me"),
+  wireEvents();
+  const me = await getJSON("/api/v1/hq/me");
+  const loggedIn = !!(me && me.authenticated);
+  renderNav(loggedIn ? me.user : null);
+  const [open, fav] = await Promise.all([
     getJSON("/api/v1/hq/pickem/open"),
+    loggedIn ? getJSON("/api/v1/hq/pickem/favorites") : Promise.resolve(null),
   ]);
-  renderNav(me && me.authenticated ? me.user : null);
-  render(open._status ? { authenticated: false, games: [] } : open);
+  state.open = open._status ? { authenticated: loggedIn, games: [] } : open;
+  state.fav = fav && !fav._status ? fav : { favorites: [], stake: 1 };
+  renderAll();
 })();
