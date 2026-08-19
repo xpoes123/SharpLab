@@ -518,6 +518,115 @@ def test_get_public_user_falls_back(tmp_db):
     _run(go())
 
 
+# --- Trade market: coin-sweetened trades + listings --------------------------
+
+
+async def _two_traders(tmp_db):
+    """A owns instance 1, B owns instance 2 (both 'rare'). Returns nothing; ids are 1 and 2."""
+    _sid, designs = await _make_set("nba", 2024, [("rare", 2, 30)])
+    d = _dids(designs, "rare")
+    await _give("A", d[0], 1, "rare")  # instance_id 1
+    await _give("B", d[1], 1, "rare")  # instance_id 2
+
+
+def test_accept_trade_moves_coins_positive(tmp_db):
+    async def go():
+        await _two_traders(tmp_db)
+        await _fund("A", 500)
+        await _fund("B", 500)
+        tid = await _queries.create_card_trade("A", "B", [1], [2], "t", coins=100)  # A adds 100
+        res = await _queries.accept_card_trade(tid, "B")
+        assert res["coins"] == 100
+        assert (await _queries.get_instances_public([1]))[1]["owner_id"] == "B"  # cards swapped
+        assert (await _queries.get_instances_public([2]))[2]["owner_id"] == "A"
+        assert await _queries.get_casino_balance("A") == 400  # paid 100
+        assert await _queries.get_casino_balance("B") == 600  # received 100
+
+    _run(go())
+
+
+def test_accept_trade_moves_coins_negative(tmp_db):
+    async def go():
+        await _two_traders(tmp_db)
+        await _fund("A", 500)
+        await _fund("B", 500)
+        tid = await _queries.create_card_trade("A", "B", [1], [2], "t", coins=-100)  # A requests 100
+        await _queries.accept_card_trade(tid, "B")
+        assert await _queries.get_casino_balance("A") == 600  # received 100
+        assert await _queries.get_casino_balance("B") == 400  # paid 100
+
+    _run(go())
+
+
+def test_accept_trade_insufficient_coins_rolls_back(tmp_db):
+    async def go():
+        await _two_traders(tmp_db)
+        await _fund("A", 50)  # A can't cover a 1000-coin sweetener
+        await _fund("B", 50)
+        tid = await _queries.create_card_trade("A", "B", [1], [2], "t", coins=1000)
+        with pytest.raises(ValueError):
+            await _queries.accept_card_trade(tid, "B")
+        # nothing moved — transaction rolled back
+        assert (await _queries.get_instances_public([1]))[1]["owner_id"] == "A"
+        assert await _queries.get_casino_balance("A") == 50
+        assert (await _queries.get_card_trade(tid))["status"] == "pending"
+
+    _run(go())
+
+
+def test_pure_coin_offer_transfers_card(tmp_db):
+    async def go():
+        await _two_traders(tmp_db)
+        await _fund("A", 500)
+        # A offers NO cards, just 300 coins, for B's instance 2
+        tid = await _queries.create_card_trade("A", "B", [], [2], "t", coins=300)
+        await _queries.accept_card_trade(tid, "B")
+        assert (await _queries.get_instances_public([2]))[2]["owner_id"] == "A"
+        assert await _queries.get_casino_balance("A") == 200
+
+    _run(go())
+
+
+def test_trade_listing_lifecycle_and_selfheal(tmp_db):
+    async def go():
+        await _two_traders(tmp_db)
+        await _queries.create_trade_listing(1, "A", "want rookies", "t")
+        mkt = await _queries.list_trade_market()
+        assert len(mkt) == 1 and mkt[0]["instance_id"] == 1 and mkt[0]["note"] == "want rookies"
+        with pytest.raises(ValueError):  # can't list a card you don't own
+            await _queries.create_trade_listing(1, "B", None, "t")
+        # self-heal: move the card to B; the stale listing (owner A) drops out of the market
+        async with aiosqlite.connect(_queries.DB_PATH) as db:
+            await db.execute("UPDATE card_instances SET owner_id = 'B' WHERE instance_id = 1")
+            await db.commit()
+        assert await _queries.list_trade_market() == []
+        await _queries.remove_trade_listing(1, "A")
+
+    _run(go())
+
+
+def test_accept_trade_clears_listing(tmp_db):
+    async def go():
+        await _two_traders(tmp_db)
+        await _queries.create_trade_listing(2, "B", None, "t")  # B lists their card
+        tid = await _queries.create_card_trade("A", "B", [1], [2], "t")
+        await _queries.accept_card_trade(tid, "B")
+        assert await _queries.list_trade_market() == []  # traded card left the board
+
+    _run(go())
+
+
+def test_sell_clears_listing(tmp_db):
+    async def go():
+        _sid, designs = await _make_set("nba", 2024, [("rare", 1, 30)])
+        await _give("A", _dids(designs, "rare")[0], 1, "rare")
+        await _queries.create_trade_listing(1, "A", None, "t")
+        await _queries.sell_instance("A", 1)
+        assert await _queries.list_trade_market() == []
+
+    _run(go())
+
+
 if __name__ == "__main__":
     import inspect
 
