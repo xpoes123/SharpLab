@@ -11,15 +11,12 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel
 
 from db import queries
-from web import auth
+from web import auth, gameround
 
 router = APIRouter(prefix="/api/v1/arcade/mathsprint")
-_signer = URLSafeTimedSerializer(auth.SESSION_SECRET, salt="arcade-mathsprint")
-_TOKEN_TTL = 120  # seconds a start token stays valid
 _N_PROBLEMS = 40
 
 
@@ -60,7 +57,7 @@ async def start(request: Request):
         p, ans = _make_problem()
         problems.append(p)
         answers.append(ans)
-    return {"token": _signer.dumps(answers), "problems": problems}
+    return {"token": gameround.stash(answers), "problems": problems}
 
 
 class SubmitBody(BaseModel):
@@ -73,9 +70,8 @@ async def submit(request: Request, body: SubmitBody):
     uid = _uid(request)
     if not uid:
         return JSONResponse({"error": "sign in to play"}, status_code=401)
-    try:
-        correct_answers = _signer.loads(body.token, max_age=_TOKEN_TTL)
-    except (BadSignature, SignatureExpired, ValueError):
+    correct_answers = gameround.claim(body.token)  # single-use: can't resubmit to farm
+    if not isinstance(correct_answers, list):
         return JSONResponse({"error": "run expired — start a new one"}, status_code=400)
 
     total = len(correct_answers)

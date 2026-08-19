@@ -12,16 +12,13 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel
 
 from bot.cogs.nbaguess import NBA_PLAYERS_DATA, check_nba_answer
 from db import queries
-from web import auth
+from web import auth, gameround
 
 router = APIRouter(prefix="/api/v1/arcade/nbaguess")
-_round_signer = URLSafeTimedSerializer(auth.SESSION_SECRET, salt="arcade-nbaguess")
-_ROUND_TTL = 900  # seconds a round token stays valid
 
 
 def _uid(request: Request) -> str | None:
@@ -61,9 +58,8 @@ def _clues(entry: tuple) -> list[str]:
 
 
 def _entry_from_token(token: str) -> tuple | None:
-    try:
-        idx = _round_signer.loads(token, max_age=_ROUND_TTL)
-    except (BadSignature, SignatureExpired, ValueError):
+    idx = gameround.peek(token)
+    if not isinstance(idx, int):
         return None
     return NBA_PLAYERS_DATA[idx] if 0 <= idx < len(NBA_PLAYERS_DATA) else None
 
@@ -76,7 +72,7 @@ async def nbaguess_new(request: Request):
     entry = NBA_PLAYERS_DATA[idx]
     # All clue strings are sent; the frontend reveals them one at a time. The
     # name never leaves the server until a correct guess or a reveal.
-    return {"token": _round_signer.dumps(idx), "clues": _clues(entry)}
+    return {"token": gameround.stash(idx), "clues": _clues(entry)}
 
 
 class GuessBody(BaseModel):

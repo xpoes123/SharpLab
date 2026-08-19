@@ -13,16 +13,13 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel
 
 from bot.cogs.wordle import WORDS
 from db import queries
-from web import auth
+from web import auth, gameround
 
 router = APIRouter(prefix="/api/v1/arcade/wordle")
-_round_signer = URLSafeTimedSerializer(auth.SESSION_SECRET, salt="arcade-wordle")
-_ROUND_TTL = 1800  # seconds a round token stays valid
 
 # The cog ships one curated list; use it for both answers and the valid-guess
 # set. Keep only clean ASCII 5-letter words (the cog's list carries a couple of
@@ -71,13 +68,12 @@ async def wordle_new(request: Request):
         return JSONResponse({"error": "sign in to play"}, status_code=401)
     idx = secrets.randbelow(len(ANSWERS))
     # Only the signed token leaves the server; the answer stays hidden.
-    return {"token": _round_signer.dumps(idx)}
+    return {"token": gameround.stash(idx)}
 
 
 def _answer_from_token(token: str) -> str | None:
-    try:
-        idx = _round_signer.loads(token, max_age=_ROUND_TTL)
-    except (BadSignature, SignatureExpired, ValueError):
+    idx = gameround.peek(token)
+    if not isinstance(idx, int):
         return None
     return ANSWERS[idx] if 0 <= idx < len(ANSWERS) else None
 

@@ -58,9 +58,8 @@ def test_mathsprint_submit_counts_and_pays(monkeypatch):
     async def go():
         await sch.init_db()
         monkeypatch.setattr(ms.auth, "read_session", lambda r: {"id": "ms"})
-        # forge a token with 3 known answers, submit 2 correct + 1 wrong
-        signer = getattr(ms, "_round_signer", None) or ms._signer
-        token = signer.dumps([12, 20, 30])
+        # stash 3 known answers server-side, submit 2 correct + 1 wrong
+        token = ms.gameround.stash([12, 20, 30])
         res = await ms.submit(_Req(), ms.SubmitBody(token=token, answers=[12, 20, 99]))
         assert res["correct"] == 2 and res["coins"] == 4  # 2 coins per correct
 

@@ -31,7 +31,7 @@ def test_correct_guess_pays_and_reveals(monkeypatch):
     async def go():
         await sch.init_db()
         monkeypatch.setattr(arcade.auth, "read_session", lambda r: {"id": "p"})
-        token = arcade._round_signer.dumps(0)  # POKEMON[0]
+        token = arcade.gameround.stash(0)  # POKEMON[0], server-side
         entry = POKEMON[0]
         # wrong guess → no reveal, no reward
         wrong = await arcade.pokemon_guess(_Req(), arcade.GuessBody(token=token, guess="zzzznotamon"))

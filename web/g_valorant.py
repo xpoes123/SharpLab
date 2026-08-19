@@ -11,16 +11,13 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel
 
 from bot.cogs.valorant import AGENTS, check_answer
 from db import queries
-from web import auth
+from web import auth, gameround
 
 router = APIRouter(prefix="/api/v1/arcade/valorant")
-_round_signer = URLSafeTimedSerializer(auth.SESSION_SECRET, salt="arcade-valorant")
-_ROUND_TTL = 900  # seconds a round token stays valid
 
 # AGENTS entry shape: (id, name, [alt_names], role, origin, ability_hint)
 
@@ -42,9 +39,8 @@ def _clues(entry: tuple) -> list[str]:
 
 
 def _entry_from_token(token: str) -> tuple | None:
-    try:
-        idx = _round_signer.loads(token, max_age=_ROUND_TTL)
-    except (BadSignature, SignatureExpired, ValueError):
+    idx = gameround.peek(token)
+    if not isinstance(idx, int):
         return None
     return AGENTS[idx] if 0 <= idx < len(AGENTS) else None
 
@@ -55,7 +51,7 @@ async def valorant_new(request: Request):
         return JSONResponse({"error": "sign in to play"}, status_code=401)
     idx = secrets.randbelow(len(AGENTS))
     # Only the clues leak; the name/alts stay server-side in the signed token.
-    return {"token": _round_signer.dumps(idx), "clues": _clues(AGENTS[idx])}
+    return {"token": gameround.stash(idx), "clues": _clues(AGENTS[idx])}
 
 
 class GuessBody(BaseModel):
