@@ -11,16 +11,13 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel
 
 from bot.cogs.pokemon import POKEMON, SPRITE_URL, check_pokemon_answer
 from db import queries
-from web import auth
+from web import auth, gameround
 
 router = APIRouter(prefix="/api/v1/arcade")
-_round_signer = URLSafeTimedSerializer(auth.SESSION_SECRET, salt="arcade-pokemon")
-_ROUND_TTL = 900  # seconds a round token stays valid
 
 
 def _uid(request: Request) -> str | None:
@@ -41,7 +38,7 @@ async def pokemon_new(request: Request):
     idx = secrets.randbelow(len(POKEMON))
     dex = POKEMON[idx][0]
     # Only the sprite + generation leak; the name/types stay server-side in the token.
-    return {"token": _round_signer.dumps(idx), "sprite": SPRITE_URL.format(dex), "gen": POKEMON[idx][4]}
+    return {"token": gameround.stash(idx), "sprite": SPRITE_URL.format(dex), "gen": POKEMON[idx][4]}
 
 
 class GuessBody(BaseModel):
@@ -50,9 +47,8 @@ class GuessBody(BaseModel):
 
 
 def _entry_from_token(token: str) -> tuple | None:
-    try:
-        idx = _round_signer.loads(token, max_age=_ROUND_TTL)
-    except (BadSignature, SignatureExpired, ValueError):
+    idx = gameround.peek(token)
+    if not isinstance(idx, int):
         return None
     return POKEMON[idx] if 0 <= idx < len(POKEMON) else None
 

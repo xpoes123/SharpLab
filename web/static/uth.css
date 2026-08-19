@@ -1,0 +1,227 @@
+/* SharpLab HQ — Ultimate Texas Hold'em page.
+   Builds on hqstyle.css (shared vars/header/nav/.btn/.card). Only UTH-specific
+   styling here. Uses ONLY hqstyle.css CSS vars. Card-face rendering, coins hub +
+   toast are copied from threecardpoker.css so this page is self-contained. */
+
+/* ── Page intro ── */
+.uth-head { margin: 4px 0 20px; }
+.uth-head h1 { font-size: 26px; margin: 0 0 4px; }
+.uth-head p { color: var(--muted); margin: 0; font-size: 14px; }
+
+.balancechip {
+  display: inline-flex; align-items: center; gap: 6px; margin-left: 10px;
+  font-size: 13px; font-weight: 700; color: var(--gold);
+  background: var(--panel2); border: 1px solid var(--line);
+  border-radius: var(--r-pill); padding: 3px 11px; vertical-align: middle;
+}
+
+/* ── Felt table ── */
+.uthtable {
+  position: relative;
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 22px 20px;
+  background:
+    radial-gradient(120% 80% at 50% 0%, rgba(46,160,67,.18), transparent 60%),
+    var(--panel);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.uthrow { display: flex; flex-direction: column; gap: 10px; }
+.uthboard {
+  padding: 12px 0; margin: 2px 0;
+  border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+}
+.uthrowhead {
+  display: flex; align-items: baseline; gap: 10px;
+  font-size: 12px; text-transform: uppercase; letter-spacing: .8px;
+}
+.uthwho { color: var(--muted); font-weight: 700; }
+.uthrank {
+  color: var(--fg); font-weight: 800;
+  background: var(--panel2); border: 1px solid var(--line);
+  border-radius: var(--r-pill); padding: 2px 10px; letter-spacing: normal;
+  font-size: 12px; text-transform: none;
+}
+.uthrank.hidden { display: none; }
+
+.uthcards { display: flex; gap: 8px; flex-wrap: wrap; min-height: 96px; }
+
+/* ── Card faces (copied from threecardpoker.css, uth-namespaced) ── */
+.uthcard {
+  position: relative;
+  width: 64px; height: 90px; flex: 0 0 auto;
+  border-radius: 8px; background: #f6f7fb; color: #1b2430;
+  border: 1px solid rgba(0,0,0,.25);
+  box-shadow: 0 6px 16px rgba(0,0,0,.4);
+  font-weight: 800; font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.uthcard.red { color: var(--red); }
+.uthcard .corner {
+  position: absolute; display: flex; flex-direction: column; align-items: center;
+  line-height: 1; font-size: 15px;
+}
+.uthcard .corner i { font-style: normal; font-size: 13px; }
+.uthcard .corner.tl { top: 6px; left: 7px; }
+.uthcard .corner.br { bottom: 6px; right: 7px; transform: rotate(180deg); }
+.uthcard .pip {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: 34px; opacity: .9;
+}
+
+/* Empty placeholder slot before a deal */
+.uthcard.empty {
+  background: transparent; box-shadow: none;
+  border: 1px dashed var(--line-strong);
+}
+.uthcard.empty .pip, .uthcard.empty .corner { display: none; }
+
+/* Face-down card */
+.uthcard.back {
+  background:
+    repeating-linear-gradient(45deg, var(--accent) 0 8px, var(--accent2, var(--accent)) 8px 16px);
+  border-color: rgba(0,0,0,.35);
+}
+.uthcard.back .backart {
+  position: absolute; inset: 6px; border-radius: 5px;
+  border: 2px solid rgba(255,255,255,.35);
+}
+
+/* Deal animation */
+.uthcard.deal { animation: uth-deal .28s cubic-bezier(.2,.7,.3,1) both; }
+@keyframes uth-deal {
+  from { opacity: 0; transform: translateY(-14px) rotate(-4deg) scale(.94); }
+  to   { opacity: 1; transform: none; }
+}
+/* Flip-in for revealed cards */
+.uthcard.flip { animation: uth-flip .34s cubic-bezier(.2,.7,.3,1) both; }
+@keyframes uth-flip {
+  from { opacity: 0; transform: rotateY(90deg) scale(.96); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ── Result banner ── */
+.uthbanner {
+  display: flex; align-items: center; justify-content: center; gap: 14px;
+  min-height: 0; height: 0; overflow: hidden;
+  font-weight: 900; text-transform: uppercase; letter-spacing: 1px;
+  transition: height .2s ease;
+}
+.uthbanner.show {
+  height: auto; min-height: 40px; padding: 6px 0;
+  animation: uth-banner-in .3s ease both;
+}
+@keyframes uth-banner-in {
+  from { opacity: 0; transform: scale(.96); }
+  to   { opacity: 1; transform: none; }
+}
+.uthbannerlabel { font-size: 22px; }
+.uthbannerpay {
+  font-size: 15px; font-weight: 800; letter-spacing: normal; text-transform: none;
+  font-variant-numeric: tabular-nums; color: var(--fg);
+  background: var(--panel2); border: 1px solid var(--line);
+  border-radius: var(--r-pill); padding: 3px 12px;
+}
+.uthbanner.win  .uthbannerlabel { color: var(--green); }
+.uthbanner.gold .uthbannerlabel { color: var(--gold); }
+.uthbanner.lose .uthbannerlabel { color: var(--red); }
+.uthbanner.push .uthbannerlabel { color: var(--muted); }
+
+/* Note line under the banner (hint / hand matchup / per-bet lines) */
+.uthnote {
+  text-align: center; color: var(--muted); font-size: 13px; line-height: 1.5;
+  min-height: 0;
+}
+.uthnote:empty { display: none; }
+.uthnote .bonus { color: var(--gold); font-weight: 700; }
+.uthnote .noqual { color: var(--green); font-weight: 700; }
+.uthnote .reslines {
+  display: inline-flex; flex-wrap: wrap; gap: 6px 8px; justify-content: center;
+  margin-top: 4px;
+}
+.uthnote .resline {
+  font-size: 12px; color: var(--fg);
+  background: var(--panel2); border: 1px solid var(--line);
+  border-radius: var(--r-pill); padding: 2px 9px;
+}
+
+/* ── Controls card ── */
+.uthcontrols {
+  display: flex; align-items: flex-end; gap: 18px; flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+/* Bet input component (copied from threecardpoker.css) */
+.betrow { display: flex; flex-direction: column; gap: 6px; }
+.betrow .betlbl { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+.betrow .betsub { text-transform: none; letter-spacing: normal; opacity: .8; font-weight: 400; }
+.betline { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.betinput {
+  font-family: inherit; font-size: 15px; font-weight: 700; color: var(--fg);
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: 8px 10px; width: 120px; font-variant-numeric: tabular-nums;
+}
+.betinput:focus { outline: none; border-color: var(--accent); }
+.betinput:disabled { opacity: .55; }
+.chipbtns { display: inline-flex; gap: 5px; flex-wrap: wrap; }
+.chipbtn {
+  font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+  color: var(--muted); background: var(--panel2); border: 1px solid var(--line);
+  border-radius: var(--r-sm); padding: 7px 10px; transition: border-color var(--t), color var(--t);
+}
+.chipbtn:hover { border-color: var(--accent); color: var(--fg); }
+.chipbtn:disabled { opacity: .55; cursor: default; }
+
+.uthactions { display: flex; gap: 8px; flex-wrap: wrap; }
+.uthactions .btn.big { padding: 10px 26px; font-size: 15px; }
+.uthactions .btn.danger {
+  color: var(--red); border-color: var(--red);
+}
+.uthactions .btn.danger:hover { background: var(--red); color: #fff; }
+.uthactions .btn[disabled] { opacity: .5; cursor: default; }
+
+/* ── Rules / paytable reference ── */
+.uthrules { margin-top: 16px; }
+.uthrules h3 { margin: 0 0 8px; font-size: 15px; }
+.uthrules ul { margin: 0 0 14px; padding-left: 18px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.uthrules ul li b { color: var(--fg); }
+.uthpaywrap { display: flex; gap: 24px; flex-wrap: wrap; }
+.uthpay { flex: 1 1 240px; border-collapse: collapse; font-size: 13px; }
+.uthpay caption { text-align: left; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .6px; margin-bottom: 6px; }
+.uthpay th, .uthpay td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--line); }
+.uthpay th { color: var(--muted); font-weight: 700; }
+.uthpay td.pay { text-align: right; color: var(--gold); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-motion: reduce) {
+  .uthcard.deal, .uthcard.flip, .uthbanner.show, .uthbanner { animation: none; transition: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Copied verbatim from threecardpoker.css so the coins hub + toasts are styled
+   on this page too.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.coinschip { font-weight: 700; color: var(--gold); background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; font-size: 13px; white-space: nowrap; cursor: pointer; transition: border-color .15s, transform .15s; }
+.coinschip:hover { border-color: var(--gold); transform: translateY(-1px); }
+
+/* Coins hub modal */
+.hubov { position: fixed; inset: 0; z-index: 250; display: grid; place-items: center; padding: 20px; background: rgba(5,7,11,.6); backdrop-filter: blur(3px); animation: cd-scrim-in .18s ease both; }
+@keyframes cd-scrim-in { from { opacity: 0; } to { opacity: 1; } }
+.hubcard { width: min(460px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px 20px; box-shadow: 0 24px 60px -20px #000; }
+.hubhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.hubhead h3 { margin: 0; font-size: 17px; }
+.hubx { background: none; border: 0; color: var(--muted); font-size: 18px; cursor: pointer; line-height: 1; padding: 4px 8px; border-radius: 8px; }
+.hubx:hover { color: var(--fg); background: var(--panel2); }
+.hubrow { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
+.hubrow:first-of-type { border-top: 0; }
+.hubicon { font-size: 20px; width: 30px; text-align: center; flex: 0 0 auto; }
+.hubt { font-weight: 700; font-size: 14px; }
+.hubd { color: var(--muted); font-size: 12.5px; line-height: 1.45; margin-top: 2px; }
+.hubfoot { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; text-align: right; }
+.hubfoot b { color: var(--gold); }
+
+.cardtoast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 300;
+  background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 18px; font-size: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.5);
+}

@@ -1,0 +1,238 @@
+/* SharpLab HQ — Pai Gow Poker page.
+   Builds on hqstyle.css (shared vars/header/nav/.btn/.card). Only pai-gow-
+   specific styling here. Uses ONLY hqstyle.css CSS vars. Card faces, coins hub
+   + toast are copied from threecardpoker.css so this page is self-contained. */
+
+/* ── Page intro ── */
+.pg-head { margin: 4px 0 20px; }
+.pg-head h1 { font-size: 26px; margin: 0 0 4px; }
+.pg-head p { color: var(--muted); margin: 0; font-size: 14px; }
+
+.balancechip {
+  display: inline-flex; align-items: center; gap: 6px; margin-left: 10px;
+  font-size: 13px; font-weight: 700; color: var(--gold);
+  background: var(--panel2); border: 1px solid var(--line);
+  border-radius: var(--r-pill); padding: 3px 11px; vertical-align: middle;
+}
+
+/* ── Felt table ── */
+.pgtable {
+  position: relative;
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 22px 20px;
+  background:
+    radial-gradient(120% 80% at 50% 0%, rgba(46,160,67,.18), transparent 60%),
+    var(--panel);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.pgrow { display: flex; flex-direction: column; gap: 10px; }
+.pgrowhead {
+  display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+  font-size: 12px; text-transform: uppercase; letter-spacing: .8px;
+}
+.pgwho { color: var(--muted); font-weight: 700; }
+.pgsethint {
+  color: var(--muted); font-weight: 500; text-transform: none; letter-spacing: normal;
+  font-size: 12px;
+}
+.pgsethint:empty { display: none; }
+
+.pgcards { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.selectrow { min-height: 96px; }
+
+/* The seven-card face-down / split-preview areas swap depending on state. */
+.dealerrow.empty .pgsplitpair, .dealerrow.facedown .pgsplitpair { display: none; }
+.dealerrow.empty .pgcards, .dealerrow.facedown .pgcards { display: flex; }
+.dealerrow:not(.empty):not(.facedown) #pgDealerCards { display: none; }
+
+/* ── Split preview (high / low pair of mini-hands) ── */
+.pgsplitpair {
+  display: grid; grid-template-columns: 3fr 2fr; gap: 12px; align-items: start;
+}
+.pgsplit {
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-md, 12px);
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; min-height: 60px;
+}
+.pgsplitlbl {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
+}
+.pgsplitlbl b { color: var(--fg); text-transform: none; letter-spacing: normal; font-size: 12px; }
+.pgempty { color: var(--muted); font-size: 12px; font-style: italic; }
+
+/* ── Card faces (copied from threecardpoker.css, pg-namespaced) ── */
+.pgcard {
+  position: relative;
+  width: 60px; height: 84px; flex: 0 0 auto;
+  border-radius: 8px; background: #f6f7fb; color: #1b2430;
+  border: 1px solid rgba(0,0,0,.25);
+  box-shadow: 0 6px 16px rgba(0,0,0,.4);
+  font-weight: 800; font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.pgcard.red { color: var(--red); }
+.pgcard .corner {
+  position: absolute; display: flex; flex-direction: column; align-items: center;
+  line-height: 1; font-size: 14px;
+}
+.pgcard .corner i { font-style: normal; font-size: 12px; }
+.pgcard .corner.tl { top: 6px; left: 6px; }
+.pgcard .corner.br { bottom: 6px; right: 6px; transform: rotate(180deg); }
+.pgcard .pip {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: 30px; opacity: .9;
+}
+.pgcard .pip.jk { font-size: 34px; opacity: 1; }
+.pgcard.joker { background: linear-gradient(150deg, #fff 0%, #f0e9ff 100%); color: #6d28d9; }
+
+/* Selectable (player's seven) + selected-as-low highlight */
+.pgcard.selectable { cursor: pointer; transition: transform .12s, box-shadow .12s, outline-color .12s; }
+.pgcard.selectable:hover { transform: translateY(-4px); box-shadow: 0 12px 22px rgba(0,0,0,.5); }
+.pgcard.sel {
+  outline: 3px solid var(--gold); outline-offset: 1px;
+  box-shadow: 0 0 0 1px var(--gold), 0 10px 20px rgba(0,0,0,.5);
+}
+.pgbadge {
+  position: absolute; top: -8px; left: 50%; transform: translateX(-50%);
+  background: var(--gold); color: #1b2430; font-size: 9px; font-weight: 900;
+  letter-spacing: .5px; padding: 1px 6px; border-radius: 999px; text-transform: uppercase;
+}
+
+/* Empty placeholder slot before a deal */
+.pgcard.empty {
+  background: transparent; box-shadow: none;
+  border: 1px dashed var(--line-strong);
+}
+.pgcard.empty .pip, .pgcard.empty .corner { display: none; }
+
+/* Face-down dealer card */
+.pgcard.back {
+  background:
+    repeating-linear-gradient(45deg, var(--accent) 0 8px, var(--accent2, var(--accent)) 8px 16px);
+  border-color: rgba(0,0,0,.35);
+}
+.pgcard.back .backart {
+  position: absolute; inset: 6px; border-radius: 5px;
+  border: 2px solid rgba(255,255,255,.35);
+}
+
+/* Animations */
+.pgcard.deal { animation: pg-deal .28s cubic-bezier(.2,.7,.3,1) both; }
+@keyframes pg-deal {
+  from { opacity: 0; transform: translateY(-14px) rotate(-4deg) scale(.94); }
+  to   { opacity: 1; transform: none; }
+}
+.pgcard.flip { animation: pg-flip .34s cubic-bezier(.2,.7,.3,1) both; }
+@keyframes pg-flip {
+  from { opacity: 0; transform: rotateY(90deg) scale(.96); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ── Result banner ── */
+.pgbanner {
+  display: flex; align-items: center; justify-content: center; gap: 14px;
+  min-height: 0; height: 0; overflow: hidden;
+  font-weight: 900; text-transform: uppercase; letter-spacing: 1px;
+  transition: height .2s ease;
+}
+.pgbanner.show {
+  height: auto; min-height: 40px; padding: 6px 0;
+  animation: pg-banner-in .3s ease both;
+}
+@keyframes pg-banner-in {
+  from { opacity: 0; transform: scale(.96); }
+  to   { opacity: 1; transform: none; }
+}
+.pgbannerlabel { font-size: 22px; }
+.pgbannerpay {
+  font-size: 15px; font-weight: 800; letter-spacing: normal; text-transform: none;
+  font-variant-numeric: tabular-nums; color: var(--fg);
+  background: var(--panel2); border: 1px solid var(--line);
+  border-radius: var(--r-pill); padding: 3px 12px;
+}
+.pgbanner.win  .pgbannerlabel { color: var(--green); }
+.pgbanner.lose .pgbannerlabel { color: var(--red); }
+.pgbanner.push .pgbannerlabel { color: var(--muted); }
+
+/* Note line under the banner (matchup, fortune) */
+.pgnote {
+  text-align: center; color: var(--muted); font-size: 13px; line-height: 1.6;
+}
+.pgnote:empty { display: none; }
+.pgnote b { color: var(--fg); }
+.pgnote .fortunehit { color: var(--gold); font-weight: 700; }
+.pgnote .matchup b { color: var(--fg); }
+
+/* ── Controls card ── */
+.pgcontrols {
+  display: flex; align-items: flex-end; gap: 22px; flex-wrap: wrap;
+  margin-top: 16px;
+}
+.betgroup { display: flex; gap: 22px; flex-wrap: wrap; }
+
+/* Bet inputs (copied from casino.css bet input) */
+.betrow { display: flex; flex-direction: column; gap: 6px; }
+.betrow .betlbl { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+.betrow .betlbl .opt { text-transform: none; letter-spacing: normal; font-weight: 400; opacity: .7; }
+.betline { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.betinput {
+  font-family: inherit; font-size: 15px; font-weight: 700; color: var(--fg);
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: 8px 10px; width: 120px; font-variant-numeric: tabular-nums;
+}
+.betinput:focus { outline: none; border-color: var(--accent); }
+.chipbtns { display: inline-flex; gap: 5px; flex-wrap: wrap; }
+.chipbtn {
+  font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+  color: var(--muted); background: var(--panel2); border: 1px solid var(--line);
+  border-radius: var(--r-sm); padding: 7px 10px; transition: border-color var(--t), color var(--t);
+}
+.chipbtn:hover { border-color: var(--accent); color: var(--fg); }
+
+.pgactions { display: flex; gap: 8px; flex-wrap: wrap; }
+.pgactions .btn.big { padding: 10px 26px; font-size: 15px; }
+.pgactions .btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ── Rules reference ── */
+.pgrules { margin-top: 16px; }
+.pgrules h3 { margin: 0 0 8px; font-size: 15px; }
+.pgrules ul { margin: 0 0 12px; padding-left: 18px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.pgrules ul li b { color: var(--fg); }
+.pgfortune { color: var(--muted); font-size: 13px; line-height: 1.6; margin: 0; }
+.pgfortune b { color: var(--gold); }
+
+@media (max-width: 560px) {
+  .pgsplitpair { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pgcard.deal, .pgcard.flip, .pgbanner.show, .pgbanner,
+  .pgcard.selectable { animation: none; transition: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Copied verbatim from casino.css so the coins hub + toasts are styled here too.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.coinschip { font-weight: 700; color: var(--gold); background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; font-size: 13px; white-space: nowrap; cursor: pointer; transition: border-color .15s, transform .15s; }
+.coinschip:hover { border-color: var(--gold); transform: translateY(-1px); }
+
+.hubov { position: fixed; inset: 0; z-index: 250; display: grid; place-items: center; padding: 20px; background: rgba(5,7,11,.6); backdrop-filter: blur(3px); animation: cd-scrim-in .18s ease both; }
+@keyframes cd-scrim-in { from { opacity: 0; } to { opacity: 1; } }
+.hubcard { width: min(460px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px 20px; box-shadow: 0 24px 60px -20px #000; }
+.hubhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.hubhead h3 { margin: 0; font-size: 17px; }
+.hubx { background: none; border: 0; color: var(--muted); font-size: 18px; cursor: pointer; line-height: 1; padding: 4px 8px; border-radius: 8px; }
+.hubx:hover { color: var(--fg); background: var(--panel2); }
+.hubrow { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
+.hubrow:first-of-type { border-top: 0; }
+.hubicon { font-size: 20px; width: 30px; text-align: center; flex: 0 0 auto; }
+.hubt { font-weight: 700; font-size: 14px; }
+.hubd { color: var(--muted); font-size: 12.5px; line-height: 1.45; margin-top: 2px; }
+.hubfoot { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; text-align: right; }
+.hubfoot b { color: var(--gold); }
+
+.cardtoast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 300;
+  background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 18px; font-size: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.5);
+}

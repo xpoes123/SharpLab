@@ -15,16 +15,13 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel
 
 from bot.cogs.pokemon import POKEMON, SPRITE_URL, check_pokemon_answer
 from db import queries
-from web import auth
+from web import auth, gameround
 
 router = APIRouter(prefix="/api/v1/arcade/pokedle")
-_round_signer = URLSafeTimedSerializer(auth.SESSION_SECRET, salt="arcade-pokedle")
-_ROUND_TTL = 1800  # seconds a round token stays valid
 
 # Answer pool = recognizable Pokémon (Gen 1–3). Guessing is unrestricted (any
 # Pokémon in POKEMON validates), but the mystery answer is always a famous one.
@@ -82,7 +79,7 @@ async def pokedle_new(request: Request):
     if not _uid(request):
         return JSONResponse({"error": "sign in to play"}, status_code=401)
     idx = _ANSWER_POOL[secrets.randbelow(len(_ANSWER_POOL))]
-    return {"token": _round_signer.dumps(idx)}
+    return {"token": gameround.stash(idx)}
 
 
 class GuessBody(BaseModel):
@@ -95,9 +92,8 @@ class RevealBody(BaseModel):
 
 
 def _entry_from_token(token: str) -> tuple | None:
-    try:
-        idx = _round_signer.loads(token, max_age=_ROUND_TTL)
-    except (BadSignature, SignatureExpired, ValueError):
+    idx = gameround.peek(token)
+    if not isinstance(idx, int):
         return None
     return POKEMON[idx] if 0 <= idx < len(POKEMON) else None
 

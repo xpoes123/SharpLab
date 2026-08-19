@@ -14,7 +14,6 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel
 
 from bot.cogs.geography import (
@@ -24,11 +23,9 @@ from bot.cogs.geography import (
     _normalize,
 )
 from db import queries
-from web import auth
+from web import auth, gameround
 
 router = APIRouter(prefix="/api/v1/arcade/geo")
-_round_signer = URLSafeTimedSerializer(auth.SESSION_SECRET, salt="arcade-geo")
-_ROUND_TTL = 900  # seconds a round token stays valid
 
 
 def _flag_emoji(iso2: str) -> str:
@@ -66,9 +63,8 @@ def _uid(request: Request) -> str | None:
 
 
 def _country_from_token(token: str) -> dict | None:
-    try:
-        idx = _round_signer.loads(token, max_age=_ROUND_TTL)
-    except (BadSignature, SignatureExpired, ValueError):
+    idx = gameround.peek(token)
+    if not isinstance(idx, int):
         return None
     return COUNTRIES[idx] if 0 <= idx < len(COUNTRIES) else None
 
@@ -86,7 +82,7 @@ async def geo_new(request: Request):
         return JSONResponse({"error": "sign in to play"}, status_code=401)
     idx = secrets.randbelow(len(COUNTRIES))
     # Only the flag leaks; the name/capital stay server-side in the token.
-    return {"token": _round_signer.dumps(idx), "flag": COUNTRIES[idx]["flag"]}
+    return {"token": gameround.stash(idx), "flag": COUNTRIES[idx]["flag"]}
 
 
 class GuessBody(BaseModel):
