@@ -24,3 +24,64 @@ async function main() {
     <a class="btn ghost" href="/api/v1/auth/logout">Sign out</a></div>`;
 }
 main();
+
+// ── Search + category filter + sort ───────────────────────────────────────────
+// Category is inferred from each tile's .gmeta text so we don't hand-tag 47 tiles:
+//   "🪙 table" → gambling (wager a coin table/sim) · "🪙 reward" → solo/brain · else → multiplayer
+(function gamesFilter() {
+  const grid = document.getElementById("gamegrid");
+  const search = document.getElementById("gsearch");
+  const chips = document.getElementById("gchips");
+  const sort = document.getElementById("gsort");
+  const count = document.getElementById("gcount");
+  if (!grid || !search) return;
+
+  const tiles = [...grid.querySelectorAll(".gtile")];
+  const order = new Map(tiles.map((t, i) => [t, i]));  // remember featured order
+  const catOf = (t) => {
+    const m = (t.querySelector(".gmeta")?.textContent || "").toLowerCase();
+    if (m.includes("table")) return "gambling";
+    if (m.includes("reward")) return "solo";
+    return "multi";
+  };
+  const textOf = (t) =>
+    ((t.querySelector(".gname")?.textContent || "") + " " +
+     (t.querySelector(".gblurb")?.textContent || "")).toLowerCase();
+  tiles.forEach((t) => { t.dataset.cat = catOf(t); t.dataset.text = textOf(t); });
+
+  let filter = "all";
+  const apply = () => {
+    const q = search.value.trim().toLowerCase();
+    let shown = 0;
+    tiles.forEach((t) => {
+      const ok = (filter === "all" || t.dataset.cat === filter) &&
+                 (!q || t.dataset.text.includes(q));
+      t.classList.toggle("hidden", !ok);
+      if (ok) shown++;
+    });
+    if (sort.value === "az") {
+      [...tiles].sort((a, b) => a.dataset.text.localeCompare(b.dataset.text))
+        .forEach((t) => grid.appendChild(t));
+    } else {
+      [...tiles].sort((a, b) => order.get(a) - order.get(b))
+        .forEach((t) => grid.appendChild(t));
+    }
+    let empty = grid.querySelector(".gempty");
+    if (!shown) {
+      if (!empty) { empty = document.createElement("p"); empty.className = "gempty"; grid.appendChild(empty); }
+      empty.textContent = "No games match.";
+    } else if (empty) { empty.remove(); }
+    count.textContent = `${shown} game${shown === 1 ? "" : "s"}`;
+  };
+
+  search.addEventListener("input", apply);
+  sort.addEventListener("change", apply);
+  chips.addEventListener("click", (e) => {
+    const chip = e.target.closest(".gchip");
+    if (!chip) return;
+    filter = chip.dataset.filter;
+    chips.querySelectorAll(".gchip").forEach((c) => c.classList.toggle("active", c === chip));
+    apply();
+  });
+  apply();
+})();
