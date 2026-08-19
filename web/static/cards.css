@@ -343,3 +343,75 @@
 .collectorrow .cuser { font-weight: 700; flex: 1; }
 .collectorrow .ccount { font-size: 12px; color: var(--muted); }
 .collectorrow .cval { font-weight: 800; color: var(--gold); font-variant-numeric: tabular-nums; }
+
+/* ── Tile action buttons (list / offer) ── */
+.tileactions { display: flex; flex-direction: column; gap: 6px; margin-top: 7px; }
+.tileactions .sellbtn { margin-top: 0; }
+.listbtn, .offerbtn {
+  width: 100%; font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+  color: var(--fg); background: var(--panel2); border: 1px solid var(--line);
+  border-radius: 8px; padding: 6px 8px; transition: background .12s, border-color .12s, color .12s;
+}
+.listbtn:hover { border-color: var(--accent); color: var(--accent); }
+.listbtn.on { border-color: var(--r-legendary); color: var(--r-legendary); }
+.offerbtn { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+.offerbtn:hover { filter: brightness(1.08); }
+.listed-badge {
+  position: absolute; top: 6px; right: 6px; font-size: 9px; font-weight: 800;
+  color: var(--bg); background: var(--r-legendary); padding: 2px 6px; border-radius: 6px;
+}
+.cowner { font-size: 12px; color: var(--accent); font-weight: 600; }
+.cnote { font-size: 11px; color: var(--muted); font-style: italic; margin: 2px 0; }
+
+/* ── Market tab ── */
+.markethdr { font-size: 15px; margin: 6px 0 12px; color: var(--muted); }
+.tabbadge, .badge {
+  display: inline-block; min-width: 16px; text-align: center; font-size: 11px; font-weight: 800;
+  background: var(--red); color: #fff; border-radius: 999px; padding: 0 5px; margin-left: 4px;
+}
+
+/* ── Trade offers ── */
+.offers { display: flex; flex-direction: column; gap: 18px; margin-bottom: 26px; }
+.offergroup h3 { font-size: 14px; margin: 0 0 10px; }
+.offerrow {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px;
+  margin-bottom: 8px;
+}
+.offerlegs { display: flex; align-items: center; gap: 14px; flex: 1; flex-wrap: wrap; }
+.offerleg { display: flex; flex-direction: column; gap: 5px; }
+.leglbl { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+.legcards { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+.offerarrow { font-size: 20px; color: var(--muted); }
+.tchip {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 3px 9px;
+}
+.tchip .tdot { width: 8px; height: 8px; border-radius: 50%; background: var(--r, var(--muted)); }
+.tchip.rarity-common { --r: var(--r-common); } .tchip.rarity-uncommon { --r: var(--r-uncommon); }
+.tchip.rarity-rare { --r: var(--r-rare); } .tchip.rarity-epic { --r: var(--r-epic); }
+.tchip.rarity-legendary { --r: var(--r-legendary); }
+.tnone { color: var(--muted); }
+.coindelta { font-weight: 800; font-variant-numeric: tabular-nums; }
+.coindelta.plus { color: var(--r-uncommon); }
+.coindelta.minus { color: var(--red); }
+.offeractions { display: flex; gap: 6px; }
+.offeractions .btn { font-size: 12px; padding: 6px 12px; }
+
+/* ── Make-offer modal (extends .hubov/.hubcard) ── */
+.offercard { max-width: 460px; }
+.offerhint { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+.pickgrid { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; margin-bottom: 12px; }
+.pickcard {
+  display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 13px;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 9px; padding: 8px 11px;
+}
+.pickcard.on { border-color: var(--accent); }
+.pickcard .pickname { flex: 1; font-weight: 600; }
+.coinrow { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); margin-bottom: 14px; }
+.coinrow input {
+  font-family: inherit; font-size: 14px; color: var(--fg); background: var(--panel2);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px;
+}
+.offerfoot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.offersummary { font-size: 13px; color: var(--muted); }

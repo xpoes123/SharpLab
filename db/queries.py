@@ -4644,10 +4644,11 @@ async def get_collection(user: str) -> tuple[list[dict], float]:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT i.*, d.subject_name, d.team, d.rarity, d.headshot_url, d.stats, d.total_copies, "
-            "       s.sport, s.season "
+            "       s.sport, s.season, (tl.instance_id IS NOT NULL) AS listed "
             "FROM card_instances i JOIN card_designs d ON i.design_id = d.design_id "
-            "JOIN card_sets s ON d.set_id = s.set_id WHERE i.owner_id = ? "
-            "ORDER BY i.book_value DESC",
+            "JOIN card_sets s ON d.set_id = s.set_id "
+            "LEFT JOIN card_trade_listings tl ON tl.instance_id = i.instance_id "
+            "WHERE i.owner_id = ? ORDER BY i.book_value DESC",
             (user,),
         )
         rows = await cur.fetchall()
@@ -4667,6 +4668,7 @@ async def get_collection(user: str) -> tuple[list[dict], float]:
             "book_value": r["book_value"],
             "headshot_url": r["headshot_url"],
             "stats": json.loads(r["stats"]) if r["stats"] else {},
+            "listed": bool(r["listed"]),
         }
         for r in rows
     ]
