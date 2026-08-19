@@ -377,8 +377,11 @@ class CardsCog(commands.Cog):
         await interaction.response.defer()
         uid = str(interaction.user.id)
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        if await queries.has_claimed_daily_pack(uid, day):
-            await interaction.followup.send("You already claimed your free pack today. Come back tomorrow!")
+        claimed = await queries.daily_packs_claimed(uid, day)
+        if claimed >= queries.DAILY_PACKS_PER_DAY:
+            await interaction.followup.send(
+                f"You've claimed all {queries.DAILY_PACKS_PER_DAY} free packs today. Come back tomorrow!"
+            )
             return
         sets = [s for s in await queries.list_card_sets(include_closed=False)]
         if not sets:
@@ -402,7 +405,8 @@ class CardsCog(commands.Cog):
             await interaction.followup.send(f"❌ {e}")
             return
         await queries.record_daily_pack_claim(uid, day)
-        title = f"🎁 Free daily pack — {cset['name']}"
+        left = queries.DAILY_PACKS_PER_DAY - (claimed + 1)
+        title = f"🎁 Free daily pack — {cset['name']} ({left} left today)"
         await self._send_reveal(interaction, cards_out, title, cset["set_id"],
                                 fast=await queries.get_cards_fast_open(uid))
         await self._dm_wanters(cards_out, interaction.user)
