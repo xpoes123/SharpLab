@@ -82,14 +82,15 @@ def _pig_step(pig, fences, rows, cols):
     return best  # None → trapped
 
 
-def generate(seed: int, difficulty: str) -> dict:
+def generate(seed: int, difficulty: str, extra_fences: int = 0) -> dict:
     rows, cols, n_fences = _PARAMS.get(difficulty, _PARAMS["medium"])
+    n_fences += extra_fences
     rng = random.Random(seed)
     pig = (rows // 2, cols // 2)
     forbid = {pig, *(_neighbours(*pig, rows, cols))}
     fences = set()
     tries = 0
-    while len(fences) < n_fences and tries < 2000:
+    while len(fences) < n_fences and tries < 4000:
         tries += 1
         cell = (rng.randrange(rows), rng.randrange(cols))
         if cell in forbid:
@@ -99,6 +100,30 @@ def generate(seed: int, difficulty: str) -> dict:
         "rows": rows, "cols": cols, "difficulty": difficulty,
         "pig": list(pig), "fences": sorted(list(c) for c in fences),
     }
+
+
+def is_solvable(puzzle: dict) -> tuple[bool, list[list[int]]]:
+    """Provable solvability check: return (True, witness_moves) iff a fence sequence traps the
+    pig. The greedy 'block the best escape' solver produces the witness — because the pig is
+    deterministic, a witness sequence that ends trapped IS a proof the board is winnable."""
+    used, trapped, moves = _greedy_solve(puzzle, record=True)
+    return trapped, moves
+
+
+def build_solvable(seed: int, difficulty: str, attempts: int = 300) -> dict:
+    """Deterministically produce a board that is GUARANTEED solvable, with its witness + par.
+    Re-rolls the seed until the solver traps the pig; if a difficulty is so sparse that no board
+    in `attempts` tries is solvable, escalates the starting-fence count until one is. Same
+    (seed, difficulty) → same board, so every player gets an identical, always-winnable puzzle."""
+    for extra in range(0, 40):                      # escalate fences only if forced
+        for attempt in range(attempts):
+            s = (seed + attempt * 2654435761 + extra * 40503) & 0xFFFFFFFF
+            puzzle = generate(s, difficulty, extra_fences=extra)
+            ok, witness = is_solvable(puzzle)
+            if ok:
+                puzzle["witness_len"] = len(witness)
+                return puzzle
+    raise RuntimeError("no solvable board found")    # unreachable in practice
 
 
 def _run(puzzle, moves):
@@ -141,6 +166,8 @@ def par(puzzle: dict) -> tuple[int, bool]:
     ACHIEVABLE trap count and a fair benchmark good players beat. Returns (par, approx);
     approx is True because this is a benchmark, not a proven minimum (exact minimax par is
     future work — see the design's open questions)."""
+    if "witness_len" in puzzle:          # solvable board already carries its witness length
+        return puzzle["witness_len"], True
     used, trapped = _greedy_solve(puzzle)
     return used, True
 

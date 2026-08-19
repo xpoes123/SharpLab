@@ -943,3 +943,33 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        # Migration: Daily Games platform (competitive daily puzzles). One puzzle per game/day,
+        # cached with its par; one result per user/day (the PK is the one-submit rule); streaks.
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS daily_puzzles ("
+                "game_id TEXT NOT NULL, puzzle_date TEXT NOT NULL, difficulty TEXT NOT NULL, "
+                "seed INTEGER NOT NULL, payload TEXT NOT NULL, par INTEGER, "
+                "par_approx INTEGER NOT NULL DEFAULT 0, awarded INTEGER NOT NULL DEFAULT 0, "
+                "PRIMARY KEY (game_id, puzzle_date))"
+            )
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS daily_results ("
+                "game_id TEXT NOT NULL, puzzle_date TEXT NOT NULL, discord_user TEXT NOT NULL, "
+                "solved INTEGER NOT NULL, primary_score INTEGER NOT NULL, "
+                "secondary_score INTEGER NOT NULL, submitted_at TEXT NOT NULL, "
+                "PRIMARY KEY (game_id, puzzle_date, discord_user))"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_daily_results_date "
+                "ON daily_results(puzzle_date)"
+            )
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS daily_streaks ("
+                "discord_user TEXT NOT NULL, game_id TEXT NOT NULL, "
+                "current INTEGER NOT NULL DEFAULT 0, longest INTEGER NOT NULL DEFAULT 0, "
+                "last_date TEXT, PRIMARY KEY (discord_user, game_id))"
+            )
+            await db.commit()
+        except Exception:
+            pass
