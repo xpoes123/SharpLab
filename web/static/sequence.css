@@ -1,0 +1,123 @@
+/* SharpLab HQ — Sequence (guess the next number) page.
+   Builds on hqstyle.css (shared vars/header/nav/.btn/.card). Only page-specific styling here.
+   Structured to mirror countdown.css (its numeric solo-reward sibling). */
+
+/* ── Page intro ── */
+.sq-head { margin: 4px 0 20px; text-align: center; }
+.sq-head h1 { font-size: 26px; margin: 0 0 4px; }
+.sq-head p { color: var(--muted); margin: 0 auto; font-size: 14px; max-width: 520px; }
+
+.balancechip {
+  display: inline-flex; align-items: center; gap: 6px; margin-left: 10px;
+  font-size: 13px; font-weight: 700; color: var(--gold);
+  background: var(--panel2); border: 1px solid var(--line);
+  border-radius: var(--r-pill); padding: 3px 11px; vertical-align: middle;
+}
+
+/* ── Game card ── */
+.sq-wrap { max-width: 560px; margin: 0 auto; }
+.sq-card { display: flex; flex-direction: column; gap: var(--s-4); align-items: center; text-align: center; }
+
+/* ── Sequence tiles ── */
+.sq-tiles {
+  display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; align-items: center;
+  padding: 8px 0;
+}
+.sq-tile {
+  min-width: 52px; font-family: inherit; font-size: 22px; font-weight: 800;
+  color: var(--fg); background: var(--panel2); border: 1px solid var(--line);
+  border-radius: var(--r); padding: 12px 14px;
+  font-variant-numeric: tabular-nums; display: flex; align-items: center; justify-content: center;
+}
+.sq-arrow { color: var(--muted); font-size: 16px; font-weight: 700; }
+.sq-tile.mystery {
+  color: var(--accent2); border-color: var(--accent);
+  border-style: dashed;
+  background: radial-gradient(circle at 50% 35%, var(--accent-soft), transparent 70%);
+}
+.sq-tile.revealed { border-style: solid; transition: color .2s, border-color .2s; }
+.sq-tile.revealed.hit {
+  color: var(--green, #9ece6a);
+  border-color: color-mix(in srgb, var(--green, #9ece6a) 55%, var(--line));
+}
+.sq-tile.revealed.off {
+  color: var(--gold);
+  border-color: color-mix(in srgb, var(--gold) 45%, var(--line));
+}
+
+/* ── Guess input ── */
+.sq-input {
+  width: 100%; max-width: 320px; font-family: inherit; font-size: 20px; font-weight: 700; color: var(--fg);
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 12px 14px; text-align: center; font-variant-numeric: tabular-nums;
+}
+.sq-input:focus { outline: none; border-color: var(--accent); }
+.sq-input:disabled { opacity: .55; }
+.sq-input.shake { animation: sq-shake .4s ease; border-color: var(--red); }
+@keyframes sq-shake {
+  0%,100% { transform: translateX(0); }
+  20% { transform: translateX(-8px); }
+  40% { transform: translateX(7px); }
+  60% { transform: translateX(-5px); }
+  80% { transform: translateX(4px); }
+}
+
+/* ── Result line ── */
+.sq-result { min-height: 22px; font-size: 15px; font-weight: 600; }
+.sq-result b { font-variant-numeric: tabular-nums; }
+.sq-result.hit { color: var(--green, #9ece6a); font-size: 18px; font-weight: 800; }
+.sq-result.off { color: var(--muted); }
+.sq-result.bad { color: var(--red); }
+.sq-reward { color: var(--gold); font-weight: 800; }
+.sq-cap { color: var(--muted); font-weight: 600; font-size: 14px; }
+
+/* ── Buttons ── */
+.sq-btns { display: flex; gap: 8px; width: 100%; justify-content: center; flex-wrap: wrap; }
+.sq-btns .btn { flex: 1; min-width: 130px; max-width: 220px; text-align: center; }
+.btn.big { font-size: 16px; padding: 12px 18px; }
+
+.sq-counter { font-size: 12px; color: var(--muted); }
+.sq-counter b { color: var(--fg); font-variant-numeric: tabular-nums; }
+
+/* ── Confetti burst on a correct guess ── */
+.sq-confetti { position: fixed; inset: 0; pointer-events: none; z-index: 320; overflow: hidden; }
+.sq-confetti i {
+  position: absolute; top: -12px; width: 9px; height: 14px; border-radius: 2px;
+  animation: sq-fall 1.4s ease-in forwards;
+}
+@keyframes sq-fall {
+  to { transform: translateY(105vh) rotate(540deg); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sq-input.shake { animation: none; }
+  .sq-confetti { display: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Copied verbatim from countdown.css so the coins hub + toasts are styled here too.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.coinschip { font-weight: 700; color: var(--gold); background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; font-size: 13px; white-space: nowrap; cursor: pointer; transition: border-color .15s, transform .15s; }
+.coinschip:hover { border-color: var(--gold); transform: translateY(-1px); }
+
+/* Coins hub modal */
+.hubov { position: fixed; inset: 0; z-index: 250; display: grid; place-items: center; padding: 20px; background: rgba(5,7,11,.6); backdrop-filter: blur(3px); animation: sq-scrim-in .18s ease both; }
+@keyframes sq-scrim-in { from { opacity: 0; } to { opacity: 1; } }
+.hubcard { width: min(460px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px 20px; box-shadow: 0 24px 60px -20px #000; }
+.hubhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.hubhead h3 { margin: 0; font-size: 17px; }
+.hubx { background: none; border: 0; color: var(--muted); font-size: 18px; cursor: pointer; line-height: 1; padding: 4px 8px; border-radius: 8px; }
+.hubx:hover { color: var(--fg); background: var(--panel2); }
+.hubrow { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
+.hubrow:first-of-type { border-top: 0; }
+.hubicon { font-size: 20px; width: 30px; text-align: center; flex: 0 0 auto; }
+.hubt { font-weight: 700; font-size: 14px; }
+.hubd { color: var(--muted); font-size: 12.5px; line-height: 1.45; margin-top: 2px; }
+.hubfoot { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; text-align: right; }
+.hubfoot b { color: var(--gold); }
+
+.cardtoast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 300;
+  background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 18px; font-size: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.5);
+}
