@@ -660,8 +660,11 @@ class CardsCog(commands.Cog):
         user="Who to trade with",
         give="Instance id(s) you're giving, comma-separated",
         want="Instance id(s) you want, comma-separated",
+        coins="Coins to sweeten your side (positive = you add, negative = you want coins)",
     )
-    async def trade_offer(self, interaction: discord.Interaction, user: discord.User, give: str, want: str):
+    async def trade_offer(
+        self, interaction: discord.Interaction, user: discord.User, give: str, want: str, coins: int = 0,
+    ):
         await interaction.response.defer()
         uid = str(interaction.user.id)
         if user.id == interaction.user.id:
@@ -674,20 +677,28 @@ class CardsCog(commands.Cog):
             await interaction.followup.send("Instance ids must be numbers, comma-separated.")
             return
         mine = await queries.get_owned_instances(uid, give_ids)
-        if len(mine) != len(give_ids) or not give_ids:
+        if len(mine) != len(give_ids):
             await interaction.followup.send("You must own every card you offer (check the instance ids).")
+            return
+        if not give_ids and coins <= 0:
+            await interaction.followup.send("Offer at least one card or some coins.")
             return
         theirs = await queries.get_owned_instances(str(user.id), want_ids)
         if len(theirs) != len(want_ids) or not want_ids:
             await interaction.followup.send(f"{user.display_name} must own every card you request.")
             return
-        tid = await queries.create_card_trade(uid, str(user.id), give_ids, want_ids, _now_iso())
-        give_s = ", ".join(f"{m['rarity'].title()} {m['subject_name']}" for m in mine)
+        tid = await queries.create_card_trade(uid, str(user.id), give_ids, want_ids, _now_iso(), coins=coins)
+        give_s = ", ".join(f"{m['rarity'].title()} {m['subject_name']}" for m in mine) or "—"
         want_s = ", ".join(f"{t['rarity'].title()} {t['subject_name']}" for t in theirs)
+        coin_note = ""
+        if coins > 0:
+            coin_note = f" + **{coins}🪙**"
+        elif coins < 0:
+            coin_note = f" (and wants **{-coins}🪙** back)"
         emb = discord.Embed(
             title=f"🔄 Trade offer #{tid}",
             description=(
-                f"{interaction.user.mention} offers **{give_s}**\n"
+                f"{interaction.user.mention} offers **{give_s}**{coin_note}\n"
                 f"for {user.mention}'s **{want_s}**\n\n"
                 f"{user.mention}: `/cardtrade accept {tid}` or `/cardtrade decline {tid}`"
             ),
