@@ -80,6 +80,13 @@ PLAYER_TIERS = [
     ("common", 0.62),
 ]
 
+# --- Big Moment cards (per-season biggest single games) ---------------------
+# A short-printed, all-rare-or-better slice: the very biggest games go legendary
+# (1-of-1), then epic, then rare. Fraction-based so it degrades gracefully on thin
+# seasons. MOMENT_POOL / MOMENT_CANDIDATES (the fetcher bounds) live in card_sources.
+MOMENT_TIERS = [("legendary", 0.3), ("epic", 0.3), ("rare", 0.4)]
+MOMENT_SHARE = 0.016  # moments' share of a set's print run (a moment is a rare pull)
+
 
 def build_manifest(
     subjects: list[dict], total_cards: int, tiers: list[tuple[str, float]] | None = None

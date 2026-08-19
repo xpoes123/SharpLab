@@ -484,6 +484,7 @@ CREATE TABLE IF NOT EXISTS card_designs (
     stats        TEXT,                   -- JSON display stats
     headshot_url TEXT,
     book_value   REAL NOT NULL,
+    card_type    TEXT NOT NULL DEFAULT 'player',   -- 'player' | 'moment'
     UNIQUE(set_id, subject_key)
 );
 CREATE INDEX IF NOT EXISTS idx_card_designs_set ON card_designs(set_id);
@@ -814,6 +815,14 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        # Migration: Big Moment cards — distinguish alt-art moment cards from player cards.
+        try:
+            await db.execute(
+                "ALTER TABLE card_designs ADD COLUMN card_type TEXT NOT NULL DEFAULT 'player'"
+            )
+            await db.commit()
+        except Exception:
+            pass  # column already exists
         # Migration: card set-completion claims (one reward per user per set)
         try:
             await db.execute(

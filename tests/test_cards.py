@@ -9,6 +9,9 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
+
+import json as _json
 
 from shared import cards
 
@@ -80,6 +83,24 @@ def test_build_manifest_sums_and_orders():
     by_key = {d["key"]: d for d in m}
     assert by_key["p199"]["rarity"] == "legendary"  # highest stardom
     assert by_key["p0"]["rarity"] == "common"  # lowest stardom
+
+
+def test_moment_tiers_yield_rare_or_better_split():
+    """MOMENT_TIERS on a 10-subject pool -> ~3 legendary / 3 epic / 4 rare, no commons,
+    and the manifest sums to the requested moment_cards total."""
+    subjects = [
+        {"subject_key": f"m{i}", "name": f"m{i}", "season": 2026,
+         "stardom": float(i), "card_type": "moment"}
+        for i in range(10)
+    ]
+    m = cards.build_manifest(subjects, total_cards=40, tiers=cards.MOMENT_TIERS)
+    counts = {}
+    for d in m:
+        counts[d["rarity"]] = counts.get(d["rarity"], 0) + 1
+    assert counts == {"legendary": 3, "epic": 3, "rare": 4}
+    assert sum(d["copies"] for d in m) == 40
+    assert all(d["card_type"] == "moment" for d in m)  # card_type carried through
+    assert abs(cards.MOMENT_SHARE - 0.016) < 1e-9
 
 
 def test_rarer_tiers_get_fewer_copies_per_design():
@@ -259,6 +280,95 @@ async def _count_instances(user, set_id, rarity=None):
             sql += " AND d.rarity = ?"
             args.append(rarity)
         return (await (await db.execute(sql, args)).fetchone())["c"]
+
+
+# --- Big Moment cards --------------------------------------------------------
+
+
+def test_card_designs_has_card_type_column(tmp_db):
+    async def go():
+        async with aiosqlite.connect(_queries.DB_PATH) as db:
+            cur = await db.execute("PRAGMA table_info(card_designs)")
+            return {r[1] for r in await cur.fetchall()}
+    assert "card_type" in _run(go())
+
+
+def test_card_type_round_trips_through_insert_and_read(tmp_db):
+    async def go():
+        sid = await _queries.create_card_set("nba", 2026, "NBA 2025-26", 1000, 50, "t")
+        await _queries.insert_card_designs(sid, [
+            {"subject_key": "nba|2026|star-1", "subject_name": "Star", "team": "LAL",
+             "rarity": "legendary", "is_rookie": False, "career_fame": 90.0,
+             "total_copies": 1, "stats": {"PTS": 61, "Game": "vs BOS · 2026-01-14"},
+             "headshot_url": None, "book_value": 260.0, "card_type": "moment"},
+            {"subject_key": "nba|2026|guy-2", "subject_name": "Guy", "team": "LAL",
+             "rarity": "common", "is_rookie": False, "career_fame": 5.0,
+             "total_copies": 50, "stats": {}, "headshot_url": None,
+             "book_value": 3.5},  # no card_type key -> defaults to 'player'
+        ])
+        cat = await _queries.get_catalog(sid)
+        return {d["name"]: d["card_type"] for d in cat["designs"]}
+    types = _run(go())
+    assert types["Star"] == "moment"
+    assert types["Guy"] == "player"
+
+
+def test_best_moment_ranks_top_game_and_captures_line():
+    import card_sources
+    gl = _json.load(open(os.path.join(os.path.dirname(__file__), "fixtures", "nba_gamelog_sample.json")))
+    player = {"subject_key": "nba|2025|lebron-james-1966", "name": "LeBron James",
+              "team": "Los Angeles Lakers", "career_fame": 90.0,
+              "headshot_url": "https://a.espncdn.com/i/headshots/nba/players/full/1966.png"}
+    m = card_sources._best_moment("nba", gl, player)
+    assert m is not None
+    assert m["card_type"] == "moment"
+    assert m["subject_key"] == "nba|2025|lebron-james-1966|moment"
+    assert m["stardom"] > 0
+    assert "PTS" in m["stats"] and "Game" in m["stats"]
+    best_pts = 0.0
+    for st in gl["seasonTypes"]:
+        if "Regular Season" not in (st.get("displayName") or ""):
+            continue
+        for cat in st["categories"]:
+            for ev in cat["events"]:
+                row = dict(zip(gl["names"], ev["stats"]))
+                best_pts = max(best_pts, float(row["points"]))
+    assert m["stats"]["PTS"] == int(best_pts)
+
+
+def test_build_designs_splits_players_and_moments():
+    import seed_cards
+    players = [
+        {"subject_key": f"nba|2026|p{i}-{i}", "name": f"P{i}", "team": "LAL",
+         "career_fame": float(i), "is_rookie": False}
+        for i in range(60)
+    ]
+    moments = [
+        {"subject_key": f"nba|2026|p{i}-{i}|moment", "name": f"P{i}", "team": "LAL",
+         "card_type": "moment", "is_rookie": False, "stardom": float(i),
+         "stats": {"PTS": 40 + i, "Game": "vs BOS · 2026-01-14"},
+         "headshot_url": None}
+        for i in range(10)
+    ]
+    designs = seed_cards._build_designs(players + moments)
+    total = seed_cards.TOTAL_PACKS * seed_cards.PACK_SIZE
+    assert sum(d["total_copies"] for d in designs) == total
+    moment_designs = [d for d in designs if d["card_type"] == "moment"]
+    assert len(moment_designs) == 10
+    assert all(d["total_copies"] == 1 for d in moment_designs if d["rarity"] == "legendary")
+    assert all(d["rarity"] in ("rare", "epic", "legendary") for d in moment_designs)
+
+
+def test_card_line_marks_moment():
+    from bot.cogs.cards import _card_line
+    moment = {"rarity": "legendary", "name": "LeBron James", "card_type": "moment",
+              "serial": 1, "total_copies": 1, "book_value": 260,
+              "stats": {"PTS": 61, "Game": "vs BOS · 2026-01-14"}}
+    line = _card_line(moment)
+    assert "BIG MOMENT" in line or "🔥" in line
+    player = {"rarity": "common", "name": "Bench Guy", "serial": 5, "total_copies": 900,
+              "book_value": 3.5, "stats": {}}
+    assert "BIG MOMENT" not in _card_line(player)
 
 
 # --- set completion ----------------------------------------------------------

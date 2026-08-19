@@ -4464,8 +4464,8 @@ async def insert_card_designs(set_id: int, designs: list[dict]) -> int:
         await db.executemany(
             "INSERT OR IGNORE INTO card_designs "
             "(set_id, subject_key, subject_name, team, rarity, is_rookie, career_fame, "
-            " total_copies, stats, headshot_url, book_value) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " total_copies, stats, headshot_url, book_value, card_type) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     set_id,
@@ -4479,6 +4479,7 @@ async def insert_card_designs(set_id: int, designs: list[dict]) -> int:
                     json.dumps(d.get("stats") or {}),
                     d.get("headshot_url"),
                     d["book_value"],
+                    d.get("card_type", "player"),
                 )
                 for d in designs
             ],
@@ -4541,6 +4542,7 @@ def _design_public(r: aiosqlite.Row) -> dict:
         "headshot_url": r["headshot_url"],
         "stats": json.loads(r["stats"]) if r["stats"] else {},
         "book_value": r["book_value"],
+        "card_type": r["card_type"],
     }
 
 
@@ -4625,6 +4627,7 @@ async def mint_pack(user: str, set_id: int, pack_size: int, source: str, now_iso
                     "book_value": c["book_value"],
                     "headshot_url": d["headshot_url"],
                     "stats": json.loads(d["stats"]) if d["stats"] else {},
+                    "card_type": d["card_type"],
                 })
             await db.execute(
                 "UPDATE card_sets SET packs_opened = packs_opened + 1, "
@@ -4644,7 +4647,7 @@ async def get_collection(user: str) -> tuple[list[dict], float]:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT i.*, d.subject_name, d.team, d.rarity, d.headshot_url, d.stats, d.total_copies, "
-            "       s.sport, s.season "
+            "       d.card_type, s.sport, s.season "
             "FROM card_instances i JOIN card_designs d ON i.design_id = d.design_id "
             "JOIN card_sets s ON d.set_id = s.set_id WHERE i.owner_id = ? "
             "ORDER BY i.book_value DESC",
@@ -4667,6 +4670,7 @@ async def get_collection(user: str) -> tuple[list[dict], float]:
             "book_value": r["book_value"],
             "headshot_url": r["headshot_url"],
             "stats": json.loads(r["stats"]) if r["stats"] else {},
+            "card_type": r["card_type"],
         }
         for r in rows
     ]
