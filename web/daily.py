@@ -1,17 +1,21 @@
-"""Daily Games web API — today's puzzle, submit, leaderboards.
+"""Daily Games web API — today's puzzle, start, submit, leaderboards.
 
-Server-authoritative: the board is generated + cached server-side (guaranteed solvable), and a
-submission is scored only by replaying it through the plugin's `validate` — the client is never
-trusted for the outcome. One submit per user per day (enforced in the DB). A first solve grants
-participation coins and bumps the streak; placement coins are paid later by the rollover job.
+Server-authoritative on two axes:
+  1. Outcome — a submission is scored only by replaying it through the plugin's `validate`.
+  2. Time — the board is WITHHELD until POST /start, which stamps a signed server-side start time;
+     /submit computes elapsed as (server now − start), so you can't study the puzzle before the
+     clock runs and you can't fake your time client-side.
+One submit per user per day (DB PK). A first solve grants participation coins + bumps the streak;
+placement coins are paid later by the rollover job.
 """
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel
 
 from db import queries
@@ -19,6 +23,9 @@ from shared import daily
 from web import auth
 
 router = APIRouter(prefix="/api/v1/daily")
+
+_START_TTL = 6 * 3600        # a start token is good for 6h (plenty for one sitting)
+_start_signer = URLSafeTimedSerializer(auth.SESSION_SECRET, salt="daily-start")
 
 
 def _uid(request: Request) -> str | None:
@@ -28,17 +35,17 @@ def _uid(request: Request) -> str | None:
 
 def _meta(game_id: str) -> dict:
     g = daily.DAILY_GAMES[game_id]
-    return {"id": g.ID, "name": g.NAME, "icon": g.ICON}
+    return {"id": g.ID, "name": g.NAME, "icon": g.ICON, "howto": getattr(g, "HOWTO", "")}
 
 
 @router.get("/today")
 async def today(request: Request):
+    """Meta only — NO board. The board is handed out by /start once the clock is running."""
     day = daily.puzzle_day()
     puz = await queries.get_or_create_daily_puzzle(day)
-    game = daily.DAILY_GAMES[puz["game_id"]]
     out = {
-        "day": day, "game": _meta(puz["game_id"]), "difficulty": puz["difficulty"],
-        "par": puz["par"], "par_approx": puz["par_approx"], "board": puz["payload"],
+        "day": day, "number": daily.puzzle_number(day), "game": _meta(puz["game_id"]),
+        "difficulty": puz["difficulty"], "par": puz["par"], "par_approx": puz["par_approx"],
         "played": False, "signed_in": False,
     }
     uid = _uid(request)
@@ -55,8 +62,22 @@ async def today(request: Request):
     return out
 
 
+@router.post("/start")
+async def start(request: Request):
+    """Hand over today's board + a signed start token (which carries the server start time)."""
+    uid = _uid(request)
+    if not uid:
+        return JSONResponse({"error": "sign in to play the daily"}, status_code=401)
+    day = daily.puzzle_day()
+    puz = await queries.get_or_create_daily_puzzle(day)
+    token = _start_signer.dumps({"day": day, "game": puz["game_id"], "uid": uid})
+    return {"board": puz["payload"], "difficulty": puz["difficulty"], "par": puz["par"],
+            "number": daily.puzzle_number(day), "start_token": token}
+
+
 class SubmitBody(BaseModel):
-    solution: dict   # {"moves": [[r,c],...], "elapsed_ms": int}
+    start_token: str
+    solution: dict   # {"moves": [[r,c],...]} — elapsed is measured SERVER-side, not trusted here
 
 
 @router.post("/submit")
@@ -68,14 +89,26 @@ async def submit(request: Request, body: SubmitBody):
     puz = await queries.get_or_create_daily_puzzle(day)
     game = daily.DAILY_GAMES[puz["game_id"]]
 
+    # Decode the start token → (payload, server start time). This is the authoritative clock.
+    try:
+        data, started_at = _start_signer.loads(
+            body.start_token, max_age=_START_TTL, return_timestamp=True)
+    except (BadSignature, SignatureExpired, ValueError):
+        return JSONResponse({"error": "your run expired — press Start again"}, status_code=400)
+    if data.get("day") != day or data.get("uid") != uid or data.get("game") != puz["game_id"]:
+        return JSONResponse({"error": "stale run — press Start again"}, status_code=400)
+
     if await queries.get_daily_result(puz["game_id"], day, uid):
         return JSONResponse({"error": "you already played today's daily"}, status_code=409)
 
     result = game.validate(puz["payload"], body.solution)
     if result is None:
         return JSONResponse({"error": "that didn't trap the pig — keep going"}, status_code=400)
-    # bound the client-reported time defensively
-    result["secondary"] = max(0, min(result["secondary"], 3_600_000))
+    # Server-authoritative elapsed: now − start, bounded.
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    elapsed_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
+    result["secondary"] = max(0, min(elapsed_ms, _START_TTL * 1000))
 
     recorded = await queries.record_daily_result(
         puz["game_id"], day, uid, solved=result["solved"],
@@ -93,7 +126,8 @@ async def submit(request: Request, body: SubmitBody):
     return {
         "result": result, "par": puz["par"], "rank": rank, "field": len(ranked),
         "coins": coins, "streak": streak, "balance": balance,
-        "share": game.share_grid(result, {"difficulty": puz["difficulty"], "par": puz["par"]}),
+        "share": game.share_grid(result, {"difficulty": puz["difficulty"], "par": puz["par"],
+                                           "number": daily.puzzle_number(day)}),
     }
 
 
@@ -118,7 +152,8 @@ async def leaderboard(request: Request):
         return names.get(uid) or f"user-{uid[-4:]}"
 
     return {
-        "day": day, "game": _meta(game_id), "difficulty": puz["difficulty"], "par": puz["par"],
+        "day": day, "number": daily.puzzle_number(day), "game": _meta(game_id),
+        "difficulty": puz["difficulty"], "par": puz["par"],
         "today": [{"rank": r["rank"], "name": nm(r["discord_user"]), "solved": bool(r["solved"]),
                    "primary": r["primary_score"], "secondary": r["secondary_score"],
                    "points": r["points"]} for r in ranked[:50]],
