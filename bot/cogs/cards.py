@@ -77,6 +77,10 @@ def _tradeup_dupes(collection: list[dict], sport: str, season: int, rarity: str)
     return dupes
 
 
+def _seasons_for(sets: list[dict], sport: str) -> str:
+    return ", ".join(str(s["season"]) for s in sets if s["sport"] == sport) or "none yet"
+
+
 def _card_line(c: dict) -> str:
     """One-line label for a pulled/owned card."""
     bits = [RARITY_EMOJI.get(c["rarity"], "")]
@@ -361,7 +365,15 @@ class CardsCog(commands.Cog):
         await self._grant_achievements(uid, interaction.channel)
 
     @pack.command(name="daily", description="Claim your free daily pack")
-    async def pack_daily(self, interaction: discord.Interaction):
+    @app_commands.describe(
+        sport="Which league to claim (defaults to the newest set)",
+        season="Season year — required if you pick a sport",
+    )
+    @app_commands.choices(sport=SPORT_CHOICES)
+    async def pack_daily(
+        self, interaction: discord.Interaction,
+        sport: app_commands.Choice[str] | None = None, season: int | None = None,
+    ):
         await interaction.response.defer()
         uid = str(interaction.user.id)
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -372,8 +384,18 @@ class CardsCog(commands.Cog):
         if not sets:
             await interaction.followup.send("No card sets are available yet.")
             return
-        # newest season across sports
-        cset = max(sets, key=lambda s: (s["season"], s["set_id"]))
+        if sport is not None:
+            if season is None:
+                await interaction.followup.send(f"Pick a season too — available: {_seasons_for(sets, sport.value)}")
+                return
+            cset = next((s for s in sets if s["sport"] == sport.value and s["season"] == season), None)
+            if not cset:
+                await interaction.followup.send(
+                    f"No **{sport.name} {season}** pack. Available {sport.name} seasons: {_seasons_for(sets, sport.value)}"
+                )
+                return
+        else:
+            cset = max(sets, key=lambda s: (s["season"], s["set_id"]))  # newest season across sports
         try:
             cards_out = await queries.mint_pack(uid, cset["set_id"], 5, "daily", _now_iso())
         except ValueError as e:
