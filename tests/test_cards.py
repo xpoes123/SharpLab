@@ -627,6 +627,51 @@ def test_sell_clears_listing(tmp_db):
     _run(go())
 
 
+def test_web_list_offer_accept_roundtrip(tmp_db, monkeypatch):
+    async def go():
+        await _two_traders(tmp_db)  # A owns 1, B owns 2
+        await _fund("A", 500)
+        monkeypatch.setattr(_webcards.auth, "read_session", lambda req: {"id": "B"})
+        assert await _webcards.list_for_trade(_FakeReq(), _webcards.ListBody(instance_id=2, note="open")) == {"ok": True}
+        # A offers card 1 + 50 coins for B's listed card 2
+        monkeypatch.setattr(_webcards.auth, "read_session", lambda req: {"id": "A"})
+        r = await _webcards.make_offer(_FakeReq(), _webcards.TradeBody(want_ids=[2], offer_ids=[1], coins=50))
+        tid = r["trade_id"]
+        # B sees it incoming (with previews) and accepts
+        monkeypatch.setattr(_webcards.auth, "read_session", lambda req: {"id": "B"})
+        tr = await _webcards.my_trades(_FakeReq())
+        assert len(tr["incoming"]) == 1
+        assert tr["incoming"][0]["want_cards"][0]["instance_id"] == 2
+        assert tr["incoming"][0]["coins"] == 50
+        res = await _webcards.accept_offer(tid, _FakeReq())
+        assert res["ok"]
+        assert (await _queries.get_instances_public([2]))[2]["owner_id"] == "A"  # card moved to A
+        assert await _queries.list_trade_market() == []                          # listing cleared
+        assert await _queries.get_casino_balance("A") == 450                     # A paid 50
+
+    _run(go())
+
+
+def test_web_list_rejects_unowned(tmp_db, monkeypatch):
+    async def go():
+        await _two_traders(tmp_db)
+        monkeypatch.setattr(_webcards.auth, "read_session", lambda req: {"id": "A"})
+        res = await _webcards.list_for_trade(_FakeReq(), _webcards.ListBody(instance_id=2))  # A doesn't own 2
+        assert getattr(res, "status_code", None) == 400
+
+    _run(go())
+
+
+def test_web_offer_on_unlisted_rejected(tmp_db, monkeypatch):
+    async def go():
+        await _two_traders(tmp_db)
+        monkeypatch.setattr(_webcards.auth, "read_session", lambda req: {"id": "A"})
+        res = await _webcards.make_offer(_FakeReq(), _webcards.TradeBody(want_ids=[2], offer_ids=[1]))
+        assert getattr(res, "status_code", None) == 400  # card 2 isn't listed
+
+    _run(go())
+
+
 if __name__ == "__main__":
     import inspect
 

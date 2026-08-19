@@ -1,6 +1,6 @@
-"""Read-only web API for the sports-card collection page (web/static/cards.*).
-Buying/opening happens in Discord; this just serves browse views. Mounted under
-/api/v1/cards (Caddy only proxies /api/* to uvicorn). See db/queries.py for storage."""
+"""Web API for the sports-card page (web/static/cards.*): browse, open packs, quick-sell,
+and the trade market (list cards, make coin-sweetened offers, accept/decline). Mounted
+under /api/v1/cards. See db/queries.py for storage."""
 
 from __future__ import annotations
 
@@ -145,3 +145,149 @@ async def open_daily(request: Request):
         return JSONResponse({"error": str(e)}, status_code=400)
     await queries.record_daily_pack_claim(uid, day)
     return await _reveal_payload(uid, cset, cards)
+
+
+# ── Trade market ────────────────────────────────────────────────────────────
+
+
+class ListBody(BaseModel):
+    instance_id: int
+    note: str | None = None
+
+
+class UnlistBody(BaseModel):
+    instance_id: int
+
+
+class TradeBody(BaseModel):
+    want_ids: list[int]           # the listed card(s) being offered on (one owner)
+    offer_ids: list[int] = []     # the caller's cards offered (may be empty)
+    coins: int = 0                # signed sweetener: >0 caller adds coins, <0 caller wants coins
+
+
+@router.get("/market")
+async def market(request: Request):
+    """Public trade board: all cards listed as open to offers."""
+    return {"listings": await queries.list_trade_market()}
+
+
+@router.post("/list")
+async def list_for_trade(request: Request, body: ListBody):
+    sess = auth.read_session(request)
+    if not sess:
+        return JSONResponse({"error": "sign in to list cards"}, status_code=401)
+    try:
+        await queries.create_trade_listing(body.instance_id, sess["id"], body.note, _now_iso())
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True}
+
+
+@router.post("/unlist")
+async def unlist(request: Request, body: UnlistBody):
+    sess = auth.read_session(request)
+    if not sess:
+        return JSONResponse({"error": "sign in"}, status_code=401)
+    await queries.remove_trade_listing(body.instance_id, sess["id"])
+    return {"ok": True}
+
+
+@router.post("/trade")
+async def make_offer(request: Request, body: TradeBody):
+    """Offer on listed card(s). Resolves the target owner from the listing, validates the
+    caller owns their offered cards, then creates a pending directed trade."""
+    sess = auth.read_session(request)
+    if not sess:
+        return JSONResponse({"error": "sign in to make an offer"}, status_code=401)
+    uid = sess["id"]
+    if not body.want_ids:
+        return JSONResponse({"error": "pick a card to offer on"}, status_code=400)
+    # Every wanted card must currently be listed, and all owned by the same person (≠ you).
+    market_by_id = {m["instance_id"]: m for m in await queries.list_trade_market()}
+    owners = set()
+    for iid in body.want_ids:
+        m = market_by_id.get(iid)
+        if not m:
+            return JSONResponse({"error": "that card is no longer listed for trade"}, status_code=400)
+        owners.add(m["owner_id"])
+    if len(owners) != 1:
+        return JSONResponse({"error": "all cards must come from the same collector"}, status_code=400)
+    owner = owners.pop()
+    if owner == uid:
+        return JSONResponse({"error": "that's your own card"}, status_code=400)
+    if body.offer_ids:
+        owned = await queries.get_owned_instances(uid, body.offer_ids)
+        if len(owned) != len(set(body.offer_ids)):
+            return JSONResponse({"error": "you must own every card you offer"}, status_code=400)
+    if not body.offer_ids and body.coins <= 0:
+        return JSONResponse({"error": "offer at least a card or some coins"}, status_code=400)
+    if body.coins > 0 and (await queries.get_casino_balance(uid) or 0) < body.coins:
+        return JSONResponse({"error": "you don't have that many coins"}, status_code=400)
+    tid = await queries.create_card_trade(
+        uid, owner, body.offer_ids, body.want_ids, _now_iso(), coins=body.coins
+    )
+    return {"trade_id": tid}
+
+
+async def _decorate_trades(trades: list[dict]) -> list[dict]:
+    """Attach card previews to each trade's offer_ids/want_ids in one query."""
+    ids = [i for t in trades for i in (t["offer_ids"] + t["want_ids"])]
+    prev = await queries.get_instances_public(ids)
+    out = []
+    for t in trades:
+        out.append({
+            **t,
+            "offer_cards": [prev[i] for i in t["offer_ids"] if i in prev],
+            "want_cards": [prev[i] for i in t["want_ids"] if i in prev],
+        })
+    return out
+
+
+@router.get("/trades")
+async def my_trades(request: Request):
+    sess = auth.read_session(request)
+    if not sess:
+        return JSONResponse({"incoming": [], "outgoing": [], "authenticated": False}, status_code=401)
+    uid = sess["id"]
+    incoming = await _decorate_trades(await queries.list_incoming_card_trades(uid))
+    outgoing = await _decorate_trades(await queries.list_outgoing_card_trades(uid))
+    return {"incoming": incoming, "outgoing": outgoing}
+
+
+@router.post("/trades/{trade_id}/accept")
+async def accept_offer(trade_id: int, request: Request):
+    sess = auth.read_session(request)
+    if not sess:
+        return JSONResponse({"error": "sign in"}, status_code=401)
+    try:
+        await queries.accept_card_trade(trade_id, sess["id"])
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    balance = await queries.get_casino_balance(sess["id"]) or 0
+    return {"ok": True, "balance": balance}
+
+
+@router.post("/trades/{trade_id}/decline")
+async def decline_offer(trade_id: int, request: Request):
+    sess = auth.read_session(request)
+    if not sess:
+        return JSONResponse({"error": "sign in"}, status_code=401)
+    t = await queries.get_card_trade(trade_id)
+    if not t or t["to_user"] != sess["id"]:
+        return JSONResponse({"error": "that offer isn't addressed to you"}, status_code=400)
+    if t["status"] == "pending":
+        await queries.set_card_trade_status(trade_id, "declined")
+    return {"ok": True}
+
+
+@router.post("/trades/{trade_id}/cancel")
+async def cancel_offer(trade_id: int, request: Request):
+    sess = auth.read_session(request)
+    if not sess:
+        return JSONResponse({"error": "sign in"}, status_code=401)
+    t = await queries.get_card_trade(trade_id)
+    if not t or t["from_user"] != sess["id"]:
+        return JSONResponse({"error": "that isn't your offer"}, status_code=400)
+    if t["status"] == "pending":
+        await queries.set_card_trade_status(trade_id, "cancelled")
+    return {"ok": True}
