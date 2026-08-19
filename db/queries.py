@@ -5381,3 +5381,17 @@ async def mark_daily_awarded(game_id: str, day: str) -> None:
             "UPDATE daily_puzzles SET awarded = 1 WHERE game_id = ? AND puzzle_date = ?",
             (game_id, day))
         await db.commit()
+
+
+async def get_display_names(uids: list[str]) -> dict[str, str]:
+    """Map discord_user id → username (best effort; missing ids just won't appear)."""
+    uids = list({u for u in uids if u})
+    if not uids:
+        return {}
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        marks = ",".join("?" * len(uids))
+        cur = await db.execute(
+            f"SELECT discord_user, username FROM discord_users WHERE discord_user IN ({marks})",
+            uids)
+        return {r["discord_user"]: r["username"] for r in await cur.fetchall()}

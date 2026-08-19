@@ -55,6 +55,7 @@ from web.horserace import router as horserace_router
 from web.sicbo import router as sicbo_router
 from web.threecardpoker import router as threecardpoker_router
 from web.sim import router as sim_router
+from web.daily import router as daily_router
 from web.uth import router as uth_router
 from web.paigow import router as paigow_router
 
@@ -186,6 +187,7 @@ app.include_router(horserace_router)
 app.include_router(sicbo_router)
 app.include_router(threecardpoker_router)
 app.include_router(sim_router)
+app.include_router(daily_router)
 app.include_router(uth_router)
 app.include_router(paigow_router)
 app.include_router(tictactoe_router)
