@@ -62,12 +62,26 @@ def _set_name(sport: str, season: int) -> str:
 
 
 def _build_designs(subjects: list[dict]) -> list[dict]:
-    """subjects -> manifest designs with rarity/copies/book_value, legendaries 1-of-1."""
-    for s in subjects:
+    """subjects (players + moments) -> manifest designs with rarity/copies/book_value.
+
+    Players and moments are ranked in SEPARATE manifests: players by career-fame
+    stardom (PLAYER_TIERS), moments by game-score stardom (MOMENT_TIERS, all-rare+).
+    Moments take MOMENT_SHARE of the print run. Legendaries collapse to 1-of-1;
+    freed copies flow to player commons so the run still totals total_cards.
+    """
+    players = [s for s in subjects if s.get("card_type") != "moment"]
+    moments = [s for s in subjects if s.get("card_type") == "moment"]
+    for s in players:
         fame = s.get("career_fame") or 0.0
         s["stardom"] = fame * (engine.ROOKIE_MULT if s.get("is_rookie") else 1.0)
+    # moments already carry stardom (= game score) from the fetcher
+
     total_cards = TOTAL_PACKS * PACK_SIZE
-    manifest = engine.build_manifest(subjects, total_cards)
+    moment_cards = round(total_cards * engine.MOMENT_SHARE) if moments else 0
+    manifest = engine.build_manifest(players, total_cards - moment_cards)
+    if moments:
+        manifest += engine.build_manifest(moments, moment_cards, tiers=engine.MOMENT_TIERS)
+
     # Legendaries are 1-of-1 grails; freed copies flow to commons so the run still totals total_cards.
     commons = [d for d in manifest if d["rarity"] == "common"] or manifest
     freed = 0
@@ -94,6 +108,7 @@ def _build_designs(subjects: list[dict]) -> list[dict]:
             "stats": d.get("stats") or {},
             "headshot_url": d.get("headshot_url"),
             "book_value": d["book_value"],
+            "card_type": d.get("card_type", "player"),
         })
     return out
 
@@ -117,7 +132,14 @@ async def seed_one(sport: str, season: int) -> bool:
     if len(uniq) < MIN_PLAYERS:
         log.info("  %s %s: only %d players — skipping", sport.upper(), season, len(uniq))
         return False
-    designs = _build_designs(uniq)
+    try:
+        moments = await card_sources.fetch_moments(sport, season, uniq)
+    except Exception:
+        log.exception("  moment fetch failed for %s %s", sport, season)
+        moments = []
+    if moments:
+        log.info("  %s %s: +%d Big Moment cards", sport.upper(), season, len(moments))
+    designs = _build_designs(uniq + moments)
     base_cost = engine.pack_cost(season, CURRENT.get(sport, season))
     now = datetime.now(timezone.utc).isoformat()
     set_id = await queries.create_card_set(

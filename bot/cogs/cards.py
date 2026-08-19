@@ -80,6 +80,8 @@ def _tradeup_dupes(collection: list[dict], sport: str, season: int, rarity: str)
 def _card_line(c: dict) -> str:
     """One-line label for a pulled/owned card."""
     bits = [RARITY_EMOJI.get(c["rarity"], "")]
+    if c.get("card_type") == "moment":
+        bits.append("🔥")
     if c.get("is_rookie"):
         bits.append("🌟RC")
     if c.get("gem"):
@@ -94,6 +96,8 @@ def _card_line(c: dict) -> str:
 
 def _badges(c: dict) -> str:
     bits = []
+    if c.get("card_type") == "moment":
+        bits.append("🔥 BIG MOMENT")
     if c.get("is_rookie"):
         bits.append("🌟 RC")
     if c.get("gem"):
@@ -141,6 +145,8 @@ class PackRevealView(discord.ui.View):
         emb.add_field(name="Price (EV)", value=f"{round(c['book_value'])} 🪙")
         if c.get("serial"):
             emb.add_field(name="Serial", value=f"#{c['serial']}/{c['total_copies']}")
+        if c.get("card_type") == "moment" and c.get("stats", {}).get("Game"):
+            emb.add_field(name="🔥 Big Moment", value=c["stats"]["Game"], inline=False)
         if c.get("headshot_url"):
             emb.set_thumbnail(url=c["headshot_url"])
         emb.set_footer(text=f"{self.title} · card {i + 1}/{len(self.cards)} · opened by {self.opener.display_name}")
