@@ -4702,6 +4702,45 @@ async def sell_instance(user: str, instance_id: int) -> tuple[dict, int]:
             raise
 
 
+async def list_collectors(limit: int = 100) -> list[dict]:
+    """Everyone who owns >=1 card, ranked by collection book value. Public — powers the
+    web 'Collectors' directory. Joins the cached discord_users name/avatar."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT i.owner_id, COUNT(*) AS cards, ROUND(SUM(i.book_value)) AS value, "
+            "       u.username, u.avatar_url "
+            "FROM card_instances i LEFT JOIN discord_users u ON u.discord_user = i.owner_id "
+            "GROUP BY i.owner_id ORDER BY value DESC LIMIT ?",
+            (limit,),
+        )
+        rows = await cur.fetchall()
+    return [
+        {
+            "user_id": r["owner_id"],
+            "username": r["username"] or f"Player {str(r['owner_id'])[:6]}",
+            "avatar_url": r["avatar_url"],
+            "cards": r["cards"],
+            "value": r["value"] or 0,
+        }
+        for r in rows
+    ]
+
+
+async def get_public_user(uid: str) -> dict:
+    """Display name/avatar for a viewed collection. Falls back to a short id when uncached."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        r = await (await db.execute(
+            "SELECT username, avatar_url FROM discord_users WHERE discord_user = ?", (uid,)
+        )).fetchone()
+    return {
+        "user_id": uid,
+        "username": (r["username"] if r else None) or f"Player {str(uid)[:6]}",
+        "avatar_url": r["avatar_url"] if r else None,
+    }
+
+
 async def get_catalog(set_id: int) -> dict | None:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row

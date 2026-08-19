@@ -300,3 +300,46 @@
   .cd-reveal, .cd-summary, .cd-pack, .cd-pack-foil, .cd-pack-shine, .flipcard-back, .flipcard.is-revealed .ctile { animation: none; }
   .flipcard-back { transition: opacity .2s ease; }
 }
+
+/* ── Sell button (own collection) ── */
+.sellbtn {
+  margin-top: 7px; width: 100%; font-family: inherit; font-size: 12px; font-weight: 700;
+  cursor: pointer; color: var(--fg); background: var(--panel2);
+  border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px;
+  transition: background .12s, border-color .12s, color .12s;
+}
+.sellbtn:hover { border-color: var(--red); color: var(--red); }
+.sellbtn:disabled { opacity: .5; cursor: default; }
+
+/* ── Collection filter/sort bar ── */
+.collfilters {
+  display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 16px;
+}
+.collfilters input, .collfilters select {
+  font-family: inherit; font-size: 13px; color: var(--fg);
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 999px;
+  padding: 7px 13px; outline: none;
+}
+.collfilters input.collsearch { flex: 1 1 180px; min-width: 140px; }
+.collfilters input:focus, .collfilters select:focus { border-color: var(--accent); }
+.collfilters select { cursor: pointer; }
+
+/* ── Collectors directory ── */
+.collectorlist { display: flex; flex-direction: column; gap: 8px; }
+.collectorrow {
+  display: flex; align-items: center; gap: 12px; cursor: pointer;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 11px 14px; transition: border-color .12s, transform .12s;
+}
+.collectorrow:hover { border-color: var(--accent); transform: translateX(2px); }
+.collectorrow .crank {
+  font-size: 13px; font-weight: 800; color: var(--muted); width: 24px; text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.collectorrow .cavatar {
+  width: 34px; height: 34px; border-radius: 50%; object-fit: cover;
+  background: var(--panel2); display: flex; align-items: center; justify-content: center; font-size: 18px;
+}
+.collectorrow .cuser { font-weight: 700; flex: 1; }
+.collectorrow .ccount { font-size: 12px; color: var(--muted); }
+.collectorrow .cval { font-weight: 800; color: var(--gold); font-variant-numeric: tabular-nums; }

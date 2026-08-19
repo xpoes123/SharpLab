@@ -464,6 +464,60 @@ def test_web_open_insufficient_coins_400(tmp_db, monkeypatch):
     _run(go())
 
 
+def test_web_sell_credits_and_removes(tmp_db, monkeypatch):
+    async def go():
+        sid, designs = await _make_set("nba", 2024, [("rare", 1, 30)])
+        did = designs[0]["design_id"]
+        u = "seller"
+        await _give(u, did, 1, "rare")  # book = BOOK["rare"] = 35
+        monkeypatch.setattr(_webcards.auth, "read_session", lambda req: {"id": u})
+        res = await _webcards.sell_card(_FakeReq(), _webcards.SellBody(instance_id=1))
+        assert res["coins"] == round(cards.BOOK["rare"] * _queries.QUICK_SELL_FRACTION)  # 26
+        # first wallet credit seeds the starting balance, then adds the sale (existing sell_instance behavior)
+        assert res["balance"] == _queries.CASINO_STARTING_COINS + res["coins"]
+        # card is gone — collection now empty
+        left, _ = await _queries.get_collection(u)
+        assert left == []
+
+    _run(go())
+
+
+def test_web_sell_rejects_unowned_400(tmp_db, monkeypatch):
+    async def go():
+        monkeypatch.setattr(_webcards.auth, "read_session", lambda req: {"id": "nobody"})
+        res = await _webcards.sell_card(_FakeReq(), _webcards.SellBody(instance_id=999))
+        assert getattr(res, "status_code", None) == 400
+
+    _run(go())
+
+
+def test_list_collectors_ranks_by_value(tmp_db):
+    async def go():
+        sid, designs = await _make_set("nba", 2024, [("rare", 1, 30), ("common", 1, 50)])
+        rare_did = _dids(designs, "rare")[0]
+        common_did = _dids(designs, "common")[0]
+        await _give("rich", rare_did, 1, "rare")      # 35
+        await _give("rich", rare_did, 2, "rare")      # +35 = 70
+        await _give("poor", common_did, 1, "common")  # 3.5
+        await _queries.upsert_discord_user("rich", "RichUser", None)
+        collectors = await _queries.list_collectors()
+        assert [c["user_id"] for c in collectors] == ["rich", "poor"]  # ranked by value desc
+        assert collectors[0]["username"] == "RichUser"       # cached name resolved
+        assert collectors[0]["cards"] == 2
+        assert collectors[1]["username"].startswith("Player ")  # uncached -> id fallback
+
+    _run(go())
+
+
+def test_get_public_user_falls_back(tmp_db):
+    async def go():
+        await _queries.upsert_discord_user("known", "KnownUser", "http://a/x.png")
+        assert (await _queries.get_public_user("known"))["username"] == "KnownUser"
+        assert (await _queries.get_public_user("ghost"))["username"].startswith("Player ")
+
+    _run(go())
+
+
 if __name__ == "__main__":
     import inspect
 

@@ -12,6 +12,7 @@ const esc = (s) =>
 
 const SPORT_EMOJI = { nba: "🏀", nfl: "🏈", mlb: "⚾" };
 const RARITY_ORDER = ["common", "uncommon", "rare", "epic", "legendary"];
+const SELL_FRACTION = 0.75; // quick-sell returns 75% of book value (matches QUICK_SELL_FRACTION)
 const GEM_EMOJI = { sapphire: "🔵", ruby: "🔴", emerald: "🟢", amethyst: "🟣", diamond: "💎", gold: "🟡" };
 
 // Neutral silhouette placeholder (data URI) — swapped in via onerror so the grid never breaks.
@@ -49,10 +50,17 @@ function renderNav(user) {
 }
 
 // ── State ──
-const state = { tab: "collection", mine: null, sets: null, catalog: {}, activeSet: null, me: null, balance: 0, dailyClaimed: null };
+const state = {
+  tab: "collection", mine: null, sets: null, catalog: {}, activeSet: null, me: null,
+  balance: 0, dailyClaimed: null,
+  filter: { sport: "", rarity: "", sort: "rarity", q: "" }, // collection filter/sort
+  collectors: null,        // Collectors directory (list)
+  viewing: null,           // user_id whose collection is open (null = my own)
+  viewMine: {},            // cache of other users' collections by user_id
+};
 
 // ── Card tile ──
-function cardTile(c) {
+function cardTile(c, sellable) {
   const rarity = (c.rarity || "common").toLowerCase();
   const holo = c.is_holo ? " holo" : "";
   const sport = (c.sport || "").toLowerCase();
@@ -81,8 +89,18 @@ function cardTile(c) {
         ${serial}
       </div>
       <div class="cvalue">${coins(c.book_value)}</div>
+      ${sellable && c.instance_id != null ? sellButton(c) : ""}
     </div>
   </div>`;
+}
+
+// Quick-sell button for an owned card (75% of book). Grails get a confirm.
+function sellButton(c) {
+  const price = Math.round((c.book_value || 0) * SELL_FRACTION);
+  const grail = ["epic", "legendary"].includes((c.rarity || "").toLowerCase())
+    || Number(c.total_copies) === 1;
+  return `<button class="sellbtn" data-iid="${c.instance_id}" data-price="${price}"
+    data-name="${esc(c.name)}" data-grail="${grail ? "1" : "0"}">Sell ${coins(price)}</button>`;
 }
 
 function emptyBox(icon, msg) {
@@ -90,28 +108,97 @@ function emptyBox(icon, msg) {
 }
 
 // ── Views ──
+// The collection data currently on screen: someone else's when viewing, else mine.
+function activeCollection() {
+  return state.viewing ? state.viewMine[state.viewing] : state.mine;
+}
+
+// Filtered + sorted cards for the active collection (drives the grid only).
+function filteredCollectionCards() {
+  const d = activeCollection();
+  const cards = (d && d.cards) || [];
+  const f = state.filter;
+  const byRarity = (a, b) =>
+    (RARITY_ORDER.indexOf((b.rarity || "").toLowerCase()) - RARITY_ORDER.indexOf((a.rarity || "").toLowerCase()))
+    || (b.book_value || 0) - (a.book_value || 0);
+  const sorts = {
+    rarity: byRarity,
+    value: (a, b) => (b.book_value || 0) - (a.book_value || 0),
+    name: (a, b) => (a.name || "").localeCompare(b.name || ""),
+  };
+  return cards
+    .filter((c) =>
+      (!f.sport || (c.sport || "").toLowerCase() === f.sport) &&
+      (!f.rarity || (c.rarity || "").toLowerCase() === f.rarity) &&
+      (!f.q || (c.name || "").toLowerCase().includes(f.q.toLowerCase())))
+    .sort(sorts[f.sort] || byRarity);
+}
+
+// Filter/sort controls — options built from what the collection actually contains.
+function collectionControls() {
+  const cards = (activeCollection() && activeCollection().cards) || [];
+  const sports = [...new Set(cards.map((c) => (c.sport || "").toLowerCase()).filter(Boolean))];
+  const rarities = RARITY_ORDER.filter((r) => cards.some((c) => (c.rarity || "").toLowerCase() === r));
+  const f = state.filter;
+  const opt = (v, label, sel) => `<option value="${esc(v)}"${sel === v ? " selected" : ""}>${esc(label)}</option>`;
+  return `<div class="collfilters">
+    <input class="collsearch" type="search" placeholder="🔍 Search name…" value="${esc(f.q)}">
+    <select class="collsport">${opt("", "All sports", f.sport)}${sports.map((s) => opt(s, `${SPORT_EMOJI[s] || ""} ${s.toUpperCase()}`, f.sport)).join("")}</select>
+    <select class="collrarity">${opt("", "All rarities", f.rarity)}${rarities.map((r) => opt(r, r[0].toUpperCase() + r.slice(1), f.rarity)).join("")}</select>
+    <select class="collsort">${opt("rarity", "Sort: Rarity", f.sort)}${opt("value", "Sort: Value", f.sort)}${opt("name", "Sort: Name", f.sort)}</select>
+  </div>`;
+}
+
+// Just the tiles (re-rendered on filter change without touching the controls, to keep focus).
+function collectionGrid() {
+  const cards = filteredCollectionCards();
+  const sellable = !state.viewing; // only my own cards can be sold
+  if (!cards.length) {
+    return `<div class="emptybox" style="grid-column:1/-1"><div class="big">🔍</div>No cards match your filters.</div>`;
+  }
+  return cards.map((c) => cardTile(c, sellable)).join("");
+}
+
 function renderCollection() {
-  const d = state.mine;
-  if (d && d._status === 401) {
+  const d = activeCollection();
+  if (!state.viewing && d && d._status === 401) {
     return emptyBox("🔒", "<strong>Sign in to see your cards.</strong><br>Then open a pack in Discord with <code>/pack open</code>.");
   }
   const cards = (d && d.cards) || [];
+  const owner = state.viewing ? (d && d.owner) : null;
+  const back = state.viewing
+    ? `<button class="backbtn" data-back-collectors>← Collectors</button>` : "";
   if (!cards.length) {
+    if (state.viewing) {
+      return back + emptyBox("🃏", `<strong>${esc((owner && owner.username) || "This collector")} has no cards yet.</strong>`);
+    }
     return emptyBox("🃏", "<strong>No cards yet.</strong><br>Open a pack in Discord with <code>/pack open &lt;sport&gt; &lt;season&gt;</code>.");
   }
-  // Sort rarest → most common, then by book value.
-  const sorted = [...cards].sort((a, b) => {
-    const ra = RARITY_ORDER.indexOf((b.rarity || "").toLowerCase()) - RARITY_ORDER.indexOf((a.rarity || "").toLowerCase());
-    return ra !== 0 ? ra : (b.book_value || 0) - (a.book_value || 0);
-  });
   const total = d.collection_value != null
     ? d.collection_value
     : cards.reduce((s, c) => s + (c.book_value || 0), 0);
+  const title = state.viewing
+    ? `${esc((owner && owner.username) || "Collector")}'s collection` : "Collection book value";
   const hero = `<div class="collval">
-    <div><div class="lbl">Collection book value</div><div class="bigval">${coins(total)}</div></div>
+    <div><div class="lbl">${title}</div><div class="bigval">${coins(total)}</div></div>
     <div class="sub">${cards.length} card${cards.length === 1 ? "" : "s"}</div>
   </div>`;
-  return hero + `<div class="cardgrid">${sorted.map(cardTile).join("")}</div>`;
+  return back + hero + collectionControls() + `<div class="cardgrid" id="collgrid">${collectionGrid()}</div>`;
+}
+
+// ── Collectors directory ──
+function renderCollectors() {
+  const list = (state.collectors && state.collectors.collectors) || [];
+  if (!list.length) return emptyBox("👥", "<strong>No collectors yet.</strong>");
+  const rows = list.map((c, i) => `
+    <div class="collectorrow" data-uid="${esc(c.user_id)}">
+      <span class="crank">${i + 1}</span>
+      ${c.avatar_url ? `<img class="cavatar" src="${esc(c.avatar_url)}" alt="" loading="lazy">` : `<span class="cavatar noimg">👤</span>`}
+      <span class="cuser">${esc(c.username)}</span>
+      <span class="ccount">${c.cards} card${c.cards === 1 ? "" : "s"}</span>
+      <span class="cval">${coins(c.value)}</span>
+    </div>`).join("");
+  return `<div class="collectorlist">${rows}</div>`;
 }
 
 // Distinct design_ids the logged-in user owns (from /api/v1/cards/mine).
@@ -247,7 +334,7 @@ function fmtPct(p) {
 function tabbar() {
   const t = (id, label) => `<button class="tab${state.tab === id ? " on" : ""}" data-tab="${id}">${label}</button>`;
   return `<div class="tabbar">
-    ${t("collection", "My Collection")}${t("packs", "Packs")}
+    ${t("collection", "My Collection")}${t("packs", "Packs")}${t("collectors", "Collectors")}
   </div>`;
 }
 
@@ -255,6 +342,8 @@ function draw() {
   let inner = "";
   if (state.tab === "packs") {
     inner = state.activeSet != null ? renderCatalog(state.activeSet) : renderSets();
+  } else if (state.tab === "collectors") {
+    inner = state.viewing != null ? renderCollection() : renderCollectors();
   } else {
     inner = renderCollection();
   }
@@ -264,20 +353,34 @@ function draw() {
 function currentRoute() {
   const h = (location.hash || "").replace(/^#\/?/, "");
   const [tab, sub] = h.split("/");
-  return { tab: tab === "packs" ? "packs" : "collection", setId: sub || null };
+  if (tab === "packs") return { tab: "packs", setId: sub || null, userId: null };
+  if (tab === "collectors") return { tab: "collectors", setId: null, userId: sub || null };
+  return { tab: "collection", setId: null, userId: null };
 }
 
 // Derive state from the URL hash and render. Wired to hashchange, so Back/Forward work.
 async function render() {
-  const { tab, setId } = currentRoute();
+  const { tab, setId, userId } = currentRoute();
   state.tab = tab;
   state.activeSet = setId;
+  state.viewing = tab === "collectors" ? userId : null;
   if (tab === "packs") {
     await ensureSets();
     await ensureDailyStatus();
     if (setId && !state.catalog[setId]) {
       draw(); // loading state
       state.catalog[setId] = await getJSON(`/api/v1/cards/catalog?set_id=${encodeURIComponent(setId)}`);
+    }
+  } else if (tab === "collectors") {
+    state.filter = { sport: "", rarity: "", sort: "rarity", q: "" }; // fresh filters per view
+    if (userId) {
+      draw(); // loading state
+      if (!state.viewMine[userId]) {
+        state.viewMine[userId] = await getJSON(`/api/v1/cards/collection/${encodeURIComponent(userId)}`);
+      }
+    } else if (!state.collectors) {
+      draw();
+      state.collectors = await getJSON("/api/v1/cards/collectors");
     }
   }
   draw();
@@ -407,6 +510,24 @@ function applyBalance(bal) {
   if (bal == null) return;
   state.balance = bal;
   renderNav(state.me && state.me.user); // refresh the coins chip
+}
+
+async function doSell(btn) {
+  const iid = Number(btn.dataset.iid);
+  const price = Number(btn.dataset.price);
+  if (btn.dataset.grail === "1" &&
+      !confirm(`Sell ${btn.dataset.name} for 🪙${num(price)}? This can't be undone.`)) return;
+  btn.disabled = true;
+  const res = await postJSON("/api/v1/cards/sell", { instance_id: iid });
+  if (res.error) { btn.disabled = false; return toast("❌ " + res.error); }
+  applyBalance(res.balance);
+  // Drop the sold card locally and let renderCollection recompute the total from what's left.
+  if (state.mine && state.mine.cards) {
+    state.mine.cards = state.mine.cards.filter((c) => c.instance_id !== iid);
+    state.mine.collection_value = null;
+  }
+  toast(`♻️ Sold ${(res.card && res.card.name) || "card"} · +🪙${num(res.coins)}`);
+  draw();
 }
 
 async function reloadAfterOpen() {
@@ -597,16 +718,47 @@ app.addEventListener("click", async (e) => {
     await doDaily(dailyBtn);
     return;
   }
+  const sellBtn = e.target.closest(".sellbtn");
+  if (sellBtn) {
+    e.stopPropagation();
+    await doSell(sellBtn);
+    return;
+  }
+  const collectorRow = e.target.closest(".collectorrow");
+  if (collectorRow) {
+    location.hash = `collectors/${collectorRow.dataset.uid}`;
+    return;
+  }
   const tabBtn = e.target.closest(".tab");
   const setCard = e.target.closest(".setcard");
   const back = e.target.closest("[data-back]");
-  if (tabBtn) {
+  if (e.target.closest("[data-back-collectors]")) {
+    location.hash = "collectors"; // back to the collectors directory
+  } else if (tabBtn) {
     location.hash = tabBtn.dataset.tab; // hashchange -> render()
   } else if (setCard) {
     location.hash = `packs/${setCard.dataset.setid}`;
   } else if (back) {
     location.hash = "packs"; // its own slug; browser Back also works via hashchange
   }
+});
+
+// Filter/sort controls live inside the collection view — update state and re-render
+// only the grid (keeps the search box focused while typing).
+function refreshGrid() {
+  const g = document.getElementById("collgrid");
+  if (g) g.innerHTML = collectionGrid();
+}
+app.addEventListener("input", (e) => {
+  if (e.target.classList.contains("collsearch")) { state.filter.q = e.target.value; refreshGrid(); }
+});
+app.addEventListener("change", (e) => {
+  const t = e.target;
+  if (t.classList.contains("collsport")) state.filter.sport = t.value;
+  else if (t.classList.contains("collrarity")) state.filter.rarity = t.value;
+  else if (t.classList.contains("collsort")) state.filter.sort = t.value;
+  else return;
+  refreshGrid();
 });
 
 async function main() {
@@ -646,6 +798,27 @@ function mockJSON(url) {
           is_rookie: false, headshot_url: "https://example.invalid/404.png" },
       ],
     };
+  if (url.startsWith("/api/v1/cards/collectors"))
+    return {
+      collectors: [
+        { user_id: "1", username: "davidj", avatar_url: null, cards: 3, value: 1730 },
+        { user_id: "2", username: "steph", avatar_url: null, cards: 5, value: 940 },
+        { user_id: "3", username: "Player a1b2c3", avatar_url: null, cards: 1, value: 35 },
+      ],
+    };
+  if (url.startsWith("/api/v1/cards/collection/"))
+    return {
+      owner: { user_id: "2", username: "steph", avatar_url: null },
+      collection_value: 940,
+      cards: [
+        { instance_id: 21, name: "Stephen Curry", rarity: "epic", sport: "nba", season: "2010",
+          team: "GSW", is_holo: false, gem: null, serial: 3, total_copies: 25, book_value: 420,
+          is_rookie: true, headshot_url: "" },
+        { instance_id: 22, name: "Mike Trout", rarity: "rare", sport: "mlb", season: "2012",
+          team: "LAA", is_holo: false, gem: null, serial: 15, total_copies: 80, book_value: 60,
+          is_rookie: true, headshot_url: "" },
+      ],
+    };
   if (url.startsWith("/api/v1/cards/daily/status"))
     return { authenticated: true, claimed: false };
   if (url.startsWith("/api/v1/cards/sets"))
@@ -678,7 +851,9 @@ function mockJSON(url) {
   return {};
 }
 
-function mockOpen() {
+function mockOpen(url, body) {
+  if (url && url.includes("/sell"))
+    return { card: { name: "Sold Card", rarity: "rare", serial: 1 }, coins: 26, balance: 5026 };
   const odds = {
     holo_pct: 20,
     pull_rates: { common: 62, uncommon: 24, rare: 10, epic: 3, legendary: 1 },
