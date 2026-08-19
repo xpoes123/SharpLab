@@ -65,16 +65,21 @@ function cardTile(c) {
     ? `<span class="gem-badge">${GEM_EMOJI[String(c.gem).toLowerCase()] || "💠"} ${esc(c.gem)}</span>`
     : "";
   const rookie = c.is_rookie ? `<span class="rookie-badge">RC</span>` : "";
+  const moment = c.card_type === "moment"
+    ? `<span class="moment-badge">🔥 BIG MOMENT</span>` : "";
+  const game = (c.card_type === "moment" && c.stats && c.stats.Game)
+    ? `<div class="cgame">${esc(c.stats.Game)}</div>` : "";
   const src = c.headshot_url || SILHOUETTE;
-  return `<div class="ctile rarity-${rarity}${holo}">
+  return `<div class="ctile rarity-${rarity}${holo}${moment ? " moment" : ""}">
     <div class="cimg">
       <img src="${esc(src)}" alt="${esc(c.name)}" loading="lazy"
            onerror="this.onerror=null;this.src=window.__cardSilh;this.classList.add('silh');">
       <span class="sport-badge" title="${esc(sport.toUpperCase())}">${emoji}</span>
-      ${gem}${rookie}
+      ${gem}${rookie}${moment}
     </div>
     <div class="cbody">
       <div class="cname">${esc(c.name)}</div>
+      ${game}
       <div class="cteam">${esc(c.team || "")}</div>
       <div class="cmeta">
         <span class="rarity-label">${esc(rarity)}</span>
@@ -644,6 +649,11 @@ function mockJSON(url) {
         { instance_id: 3, name: "Random Bench Guy", rarity: "common", sport: "mlb", season: "2011",
           team: "KC", is_holo: false, gem: null, serial: 412, total_copies: 900, book_value: 8,
           is_rookie: false, headshot_url: "https://example.invalid/404.png" },
+        { instance_id: 4, name: "Nikola Jokić", rarity: "legendary", sport: "nba", season: "2025",
+          team: "DEN", is_holo: false, gem: null, serial: 1, total_copies: 1, book_value: 260,
+          is_rookie: false, card_type: "moment",
+          stats: { PTS: 61, REB: 10, AST: 10, Game: "vs MIN · 2025-04-02" },
+          headshot_url: "https://a.espncdn.com/i/headshots/nba/players/full/3112335.png" },
       ],
     };
   if (url.startsWith("/api/v1/cards/daily/status"))
