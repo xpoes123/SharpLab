@@ -45,6 +45,11 @@ def day_index(day: str) -> int:
     return (date.fromisoformat(day) - EPOCH).days
 
 
+def puzzle_number(day: str) -> int:
+    """Human-facing puzzle number: launch day = #1, counting up (for 'Daily #N' + sharing)."""
+    return day_index(day) - day_index(LAUNCH_DAY) + 1
+
+
 # Ease players in: the first few days after launch are all easy, then the normal cycle kicks in.
 LAUNCH_DAY = "2026-08-18"
 RAMP_EASY_DAYS = 5

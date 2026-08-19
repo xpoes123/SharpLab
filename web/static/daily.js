@@ -1,12 +1,16 @@
-// SharpLab HQ — Daily Game page. Everyone gets today's server-generated board
-// (GET /api/v1/daily/today); you fence the pig in as few moves as possible and
-// POST /api/v1/daily/submit to rank. The board engine + pig AI live in
-// trappig_board.js and are byte-identical to the server (shared/daily_games/
-// trappig.py), so a trap computed here replays to a trap on the server.
+// SharpLab HQ — Daily Game page. START-GATED flow: GET /api/v1/daily/today no
+// longer ships the board — it returns puzzle metadata (number, game rules, par,
+// difficulty). The player reads the how-to card, presses Start, and only then
+// does POST /api/v1/daily/start hand back the board + a start_token and begin
+// the clock SERVER-SIDE. This means the board can't be pre-solved before the
+// timer runs. The board engine + pig AI live in trappig_board.js and are
+// byte-identical to the server (shared/daily_games/trappig.py), so a trap
+// computed here replays to a trap on the server.
 //
-// One-submit rule: only a genuine WIN is posted, and it posts exactly once. If
-// the pig escapes, we never submit — the player resets to the original server
-// board and retries freely until they trap it.
+// One-submit rule: only a genuine WIN is posted, and it posts exactly once. The
+// server times the solve from the start_token (no client elapsed is trusted).
+// If the pig escapes, we never submit — the player presses Reset, which fetches
+// a FRESH board + token via /start and retries freely until they trap it.
 
 const B = window.TrapPigBoard;
 const app = document.getElementById("app");
@@ -17,6 +21,14 @@ const num = (n) => (n == null ? "—" : Number(n).toLocaleString());
 const esc = (s) =>
   String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// Render the plain-text how-to string: escape it, turn **bold** into <b>, and
+// keep line breaks. Safe because we escape BEFORE injecting the <b> tags.
+const renderHowto = (text) =>
+  String(text == null ? "" : text)
+    .split("\n")
+    .map((line) => esc(line).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>"))
+    .join("<br>");
 
 async function getJSON(url) {
   try {
@@ -36,11 +48,12 @@ const fmtTime = (ms) => {
 // ── App state ──
 const state = { me: null, balance: 0 };
 const D = {
-  today: null, // /today payload
+  today: null, // /today payload (metadata only — no board)
+  board: null, // board from /start {rows, cols, pig, fences}
+  startToken: null, // opaque token from /start; identifies the timed session
   work: null, // live board {rows, cols, pig:[r,c], fences:Set}
   moves: [], // ordered [[r,c], ...] the player has fenced
-  started: false,
-  t0: 0,
+  t0: 0, // client display-clock origin (visual only; server is authoritative)
   timer: null,
   over: false,
   submitting: false,
@@ -70,9 +83,9 @@ function applyBalance(bal) {
 }
 const myName = () => (state.me && state.me.user && state.me.user.username) || null;
 
-// ── Build a fresh working board from the server puzzle (deep-copied) ──
+// ── Build a fresh working board from the /start board (deep-copied) ──
 function freshWork() {
-  const bd = D.today.board;
+  const bd = D.board;
   return {
     rows: bd.rows,
     cols: bd.cols,
@@ -81,19 +94,20 @@ function freshWork() {
   };
 }
 
-// ── Header + skeleton ──
+// ── Header (shown in every mode; carries the puzzle number) ──
 function headerHTML() {
   const t = D.today;
   const g = t.game || {};
-  const diff = String(t.difficulty || t.board.difficulty || "").toLowerCase();
+  const diff = String(t.difficulty || "").toLowerCase();
   const parNum = t.par != null ? `${t.par_approx ? "~" : ""}${t.par}` : "—";
+  const numStr = t.number != null ? ` #${esc(t.number)}` : "";
   const streak = t.streak != null
     ? `<span class="streakbadge" title="Your daily streak">🔥 ${num(t.streak)}</span>`
     : "";
   return `<div class="daily-head">
     <div class="daily-title">
       <span class="icon">${esc(g.icon || "🐷")}</span>
-      <h1>${esc(g.name || "Daily Game")}</h1>
+      <h1>${esc(g.name || "Daily Game")}${numStr}</h1>
       <span class="daily-badges">
         ${diff ? `<span class="diffbadge ${esc(diff)}">${esc(diff)}</span>` : ""}
         <span class="parbadge">Par ${esc(parNum)}</span>
@@ -104,6 +118,19 @@ function headerHTML() {
   </div>`;
 }
 
+// ── Info shell (tutorial / signed-out / already-played) — header + body slot ──
+function buildInfoShell() {
+  app.innerHTML = `<div class="wrap">
+    ${headerHTML()}
+    <div id="body"></div>
+    <div id="notice"></div>
+    <div id="resultArea"></div>
+    <h2>Leaderboard</h2>
+    <div id="lbArea"><p class="muted">Loading…</p></div>
+  </div>`;
+}
+
+// ── Play shell — the board only ever appears here, after /start ──
 function buildSkeleton(opts) {
   const t = D.today;
   const parNum = t.par != null ? `${t.par_approx ? "~" : ""}${t.par}` : "—";
@@ -114,7 +141,7 @@ function buildSkeleton(opts) {
       <div class="stat-box"><div class="k">Time</div><div class="v" id="time">0:00</div></div>
       <div class="stat-box par"><div class="k">Par</div><div class="v">${esc(parNum)}</div></div>
     </div>
-    <div class="stage${opts.preview ? " preview" : ""}" id="stage"><svg id="board"></svg></div>
+    <div class="stage" id="stage"><svg id="board"></svg></div>
     <div id="notice"></div>
     ${opts.showReset ? `<div class="actions"><button class="btn ghost" id="resetBtn" style="flex:1">Reset board</button></div>` : ""}
     <div id="resultArea"></div>
@@ -132,19 +159,29 @@ function showNotice(kind, html) {
   if (n) n.innerHTML = html ? `<div class="notice ${kind}">${html}</div>` : "";
 }
 
+// ── Display clock (purely visual — the server times the real solve) ──
+function startTimer() {
+  stopTimer();
+  D.t0 = Date.now();
+  const el = $("time");
+  if (el) el.textContent = "0:00";
+  D.timer = setInterval(() => {
+    const e = $("time");
+    if (e) e.textContent = fmtTime(Date.now() - D.t0);
+  }, 250);
+}
+function stopTimer() {
+  if (D.timer) {
+    clearInterval(D.timer);
+    D.timer = null;
+  }
+}
+
 // ── Play flow ──
 function onPlace(r, c) {
   if (D.over || D.submitted) return;
   const k = B.key(r, c);
   if (D.work.fences.has(k) || (D.work.pig[0] === r && D.work.pig[1] === c)) return;
-  if (!D.started) {
-    D.started = true;
-    D.t0 = Date.now();
-    D.timer = setInterval(() => {
-      const el = $("time");
-      if (el) el.textContent = fmtTime(Date.now() - D.t0);
-    }, 250);
-  }
   D.work.fences.add(k);
   D.moves.push([r, c]);
   const el = $("fences");
@@ -155,13 +192,6 @@ function onPlace(r, c) {
   D.work.pig = nxt;
   drawBoard(true);
   if (B.isBorder(D.work.pig[0], D.work.pig[1], D.work.rows, D.work.cols)) return onEscaped();
-}
-
-function stopTimer() {
-  if (D.timer) {
-    clearInterval(D.timer);
-    D.timer = null;
-  }
 }
 
 function onEscaped() {
@@ -182,28 +212,69 @@ function onTrapped() {
   submit();
 }
 
-function resetPlay() {
-  D.work = freshWork();
+// ── Start / Reset: fetch a fresh board + token and begin the timed session ──
+async function startGame() {
+  const btn = $("startBtn");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Starting…";
+  }
+  let r, j;
+  try {
+    r = await fetch("/api/v1/daily/start", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    j = await r.json().catch(() => ({}));
+  } catch (_) {
+    return failStart("Network error starting the puzzle — try again.");
+  }
+  if (r.status === 401) return failStart(`Your session expired. <a href="/api/v1/auth/discord/login">Sign in</a> to play.`);
+  if (r.status === 409) {
+    // Already played today — bounce to the played view.
+    D.today.played = true;
+    return renderAlreadyPlayed();
+  }
+  if (!r.ok || !j || !j.board) return failStart("Couldn't start the puzzle — try again shortly.");
+
+  // Board is here for the first time. Sync any metadata the server refreshed.
+  D.board = j.board;
+  D.startToken = j.start_token;
+  if (j.par != null) D.today.par = j.par;
+  if (j.difficulty != null) D.today.difficulty = j.difficulty;
+  if (j.number != null) D.today.number = j.number;
+
   D.moves = [];
-  D.started = false;
   D.over = false;
-  D.t0 = 0;
-  stopTimer();
-  const f = $("fences"), tm = $("time");
-  if (f) f.textContent = "0";
-  if (tm) tm.textContent = "0:00";
-  showNotice("", "");
-  const ra = $("resultArea");
-  if (ra) ra.innerHTML = "";
+  D.submitting = false;
+  D.submitted = false;
+  D.work = freshWork();
+
+  buildSkeleton({ showReset: true });
   drawBoard(true);
+  startTimer();
+  const rb = $("resetBtn");
+  if (rb) rb.onclick = startGame; // Reset = fresh board + token + timer.
+  loadLeaderboard();
+}
+
+function failStart(html) {
+  stopTimer();
+  const btn = $("startBtn");
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = "▶ Start";
+  }
+  showNotice("warn", html);
 }
 
 // ── Submit (debounced to exactly one successful post) ──
 async function submit() {
   if (D.submitting || D.submitted) return;
   D.submitting = true;
-  const elapsed_ms = D.started ? Math.max(0, Date.now() - D.t0) : 0;
-  const body = { solution: { moves: D.moves, elapsed_ms: Math.round(elapsed_ms) } };
+  const body = { start_token: D.startToken, solution: { moves: D.moves } };
   let r, j;
   try {
     r = await fetch("/api/v1/daily/submit", {
@@ -231,8 +302,16 @@ async function submit() {
     return;
   }
   if (r.status === 400 || !r.ok) {
+    // Didn't register as a trap, or the token expired / was forged. The server
+    // message explains which; either way the fix is to press Start again.
     D.submitting = false;
-    showNotice("warn", "That didn't register as a trap — reset and try again.");
+    const msg = (j && (j.detail || j.error || j.message)) || "That didn't register — press Start to play a fresh board.";
+    showNotice(
+      "warn",
+      `${esc(msg)}<div class="signin"><button class="btn" id="startBtn">▶ Start again</button></div>`
+    );
+    const sb = $("startBtn");
+    if (sb) sb.onclick = startGame;
     return;
   }
   // 200 — genuine trap accepted.
@@ -304,11 +383,13 @@ function renderResult(payload, opts) {
 }
 
 function defaultShare(primary, par, secondary) {
-  const g = (D.today && D.today.game) || {};
-  const diff = (D.today && D.today.difficulty) || "";
+  const t = D.today || {};
+  const g = t.game || {};
+  const numStr = t.number != null ? ` #${t.number}` : "";
+  const diff = t.difficulty || "";
   const parStr = par != null ? ` (par ${par})` : "";
   const blocks = "🟩".repeat(Math.min(Number(primary) || 0, 12));
-  return `${g.icon || "🐷"} ${g.name || "Trap the Pig"} · ${diff} · ${primary} fences${parStr} · ${fmtTime(secondary)}\n${blocks}`;
+  return `${g.icon || "🐷"} ${g.name || "Trap the Pig"}${numStr} · ${diff} · ${primary} fences${parStr} · ${fmtTime(secondary)}\n${blocks}`;
 }
 
 // ── Leaderboard ──
@@ -327,7 +408,11 @@ function renderLeaderboard(data) {
   const area = $("lbArea");
   const today = (data && data.today) || [];
   const season = (data && data.season) || [];
-  area.innerHTML = `<div class="lb-tabs">
+  const number = data && data.number != null ? data.number : D.today && D.today.number;
+  const heading = number != null
+    ? `<div class="lb-heading">Daily #${esc(number)}</div>`
+    : "";
+  area.innerHTML = `${heading}<div class="lb-tabs">
       <button class="lb-tab${D.lbTab === "today" ? " on" : ""}" data-tab="today">Today</button>
       <button class="lb-tab${D.lbTab === "season" ? " on" : ""}" data-tab="season">Season</button>
     </div>
@@ -384,41 +469,55 @@ function renderLeaderboard(data) {
   }
 }
 
+// ── Tutorial card (the how-to shown before the board is revealed) ──
+function tutorialCardHTML(footerHTML) {
+  const t = D.today;
+  const g = t.game || {};
+  const diff = String(t.difficulty || "").toLowerCase();
+  const parNum = t.par != null ? `${t.par_approx ? "~" : ""}${t.par}` : "—";
+  const howto = g.howto ? `<div class="howto">${renderHowto(g.howto)}</div>` : "";
+  return `<div class="tutorial">
+    <div class="tut-meta">
+      ${diff ? `<span class="diffbadge ${esc(diff)}">${esc(diff)}</span>` : ""}
+      <span class="parbadge">Par ${esc(parNum)}</span>
+    </div>
+    ${howto}
+    <p class="locked">🔒 The board stays hidden until you press Start — then the clock runs.</p>
+    ${footerHTML || ""}
+  </div>`;
+}
+
 // ── Top-level render by mode ──
+function renderTutorial() {
+  buildInfoShell();
+  $("body").innerHTML = tutorialCardHTML(
+    `<button class="btn big" id="startBtn">▶ Start</button>`
+  );
+  const sb = $("startBtn");
+  if (sb) sb.onclick = startGame;
+  loadLeaderboard();
+}
+
 function renderSignedOut() {
-  D.work = freshWork();
-  buildSkeleton({ preview: true, showReset: false });
-  drawBoard(false);
-  showNotice(
-    "info",
-    `<b>Sign in to play & rank.</b> This is today's board — everyone gets the same one.
-     <div class="signin"><a class="btn" href="/api/v1/auth/discord/login">Sign in with Discord</a></div>`
+  buildInfoShell();
+  $("body").innerHTML = tutorialCardHTML(
+    `<div class="signin"><a class="btn" href="/api/v1/auth/discord/login">Sign in with Discord to play &amp; rank</a></div>`
   );
   loadLeaderboard();
 }
 
 function renderAlreadyPlayed() {
-  D.work = freshWork();
   D.submitted = true;
-  buildSkeleton({ preview: true, showReset: false });
-  drawBoard(false);
+  stopTimer();
+  buildInfoShell();
+  $("body").innerHTML = "";
   showNotice("info", "You already played today — come back after 4am ET for a new puzzle.");
   if (D.today.your_result) {
-    renderResult({ result: D.today.your_result, par: D.today.par, streak: D.today.streak }, { title: "Today's result" });
+    renderResult(
+      { result: D.today.your_result, par: D.today.par, streak: D.today.streak },
+      { title: "Today's result" }
+    );
   }
-  loadLeaderboard();
-}
-
-function renderPlay() {
-  D.work = freshWork();
-  D.moves = [];
-  D.started = false;
-  D.over = false;
-  D.submitted = false;
-  buildSkeleton({ preview: false, showReset: true });
-  drawBoard(true);
-  const rb = $("resetBtn");
-  if (rb) rb.onclick = resetPlay;
   loadLeaderboard();
 }
 
@@ -432,7 +531,7 @@ async function main() {
   state.balance = loggedIn ? me.balance || 0 : 0;
   renderNav(loggedIn ? me.user : null);
 
-  if (!today || today._status || !today.board) {
+  if (!today || today._status || !today.game) {
     app.innerHTML = `<div class="hero"><h1>Daily Game</h1><p class="muted">Couldn't load today's puzzle. Try again shortly.</p></div>`;
     return;
   }
@@ -440,7 +539,7 @@ async function main() {
 
   if (today.signed_in === false || !loggedIn) return renderSignedOut();
   if (today.played) return renderAlreadyPlayed();
-  return renderPlay();
+  return renderTutorial();
 }
 
 main();
