@@ -57,6 +57,8 @@ from web.threecardpoker import router as threecardpoker_router
 from web.nbasim_web import router as nbasim_router
 from web.nflsim_web import router as nflsim_router
 from web.mlbsim_web import router as mlbsim_router
+from web.tennissim_web import router as tennissim_router
+from web.soccersim_web import router as soccersim_router
 from web.uth import router as uth_router
 from web.paigow import router as paigow_router
 
@@ -191,6 +193,8 @@ app.include_router(threecardpoker_router)
 app.include_router(nbasim_router)
 app.include_router(nflsim_router)
 app.include_router(mlbsim_router)
+app.include_router(tennissim_router)
+app.include_router(soccersim_router)
 app.include_router(uth_router)
 app.include_router(paigow_router)
 app.include_router(tictactoe_router)
