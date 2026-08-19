@@ -20,6 +20,9 @@ NAME = "Trap the Pig"
 ICON = "🐷"
 SURFACE = "web"
 DIFFICULTIES = ["easy", "medium", "hard"]
+# Rank by TIME first (secondary_score = elapsed ms), then fences (primary_score). With unlimited
+# retries everyone can grind to par fences, so speed is what separates the leaderboard.
+RANK_ORDER = ("secondary_score", "primary_score")
 
 # difficulty → (rows, cols, starting fences). Bigger + sparser = harder.
 _PARAMS = {

@@ -30,6 +30,16 @@ def test_schedule_cycles_difficulty():
     assert daily.schedule("2026-01-01")[0] == "trappig"
 
 
+def test_launch_ramp_is_easy_then_cycles():
+    # first RAMP_EASY_DAYS from launch are easy; then the normal cycle resumes
+    assert daily.schedule("2026-08-18")[1] == "easy"   # launch day
+    assert daily.schedule("2026-08-22")[1] == "easy"   # still in ramp (day 5)
+    after = daily.schedule("2026-08-23")[1]            # ramp over → normal cycle
+    assert after in ("easy", "medium", "hard")
+    # the ramp only affects the launch window, not arbitrary past/future dates
+    assert daily.schedule("2026-01-02")[1] == "medium"
+
+
 def test_seed_is_deterministic_and_day_specific():
     assert daily.seed_for("trappig", "2026-05-05") == daily.seed_for("trappig", "2026-05-05")
     assert daily.seed_for("trappig", "2026-05-05") != daily.seed_for("trappig", "2026-05-06")
@@ -65,7 +75,8 @@ def test_rank_results_orders_and_scores():
     ]
     ranked = daily.rank_results(rows, "trappig")
     order = [r["discord_user"] for r in ranked]
-    assert order == ["b", "d", "a", "c"]   # fewer fences first; time breaks the 5-fence tie; loser last
+    # Trap the Pig ranks by TIME first: d(8000) < a(9000) < b(12000); non-solver c last.
+    assert order == ["d", "a", "b", "c"]
     assert ranked[0]["points"] == 100 and ranked[-1]["points"] == 3
 
 
