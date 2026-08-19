@@ -4784,6 +4784,7 @@ ACTIVITY_REWARDS = {
     "countdown_win": (30, 150),   # web arcade: solved a Countdown numbers round
     "stockguess_win": (20, 200),  # web arcade: guessed a stock YTD move within tolerance
     "quizbowl_win": (20, 200),    # web arcade: correct quiz bowl answer
+    "sequence_win": (20, 200),    # web arcade: guessed the next term in a number sequence
     # (paper trades already stake coins — no reward, else you could farm the loop)
 }
 
