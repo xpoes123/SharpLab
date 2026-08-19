@@ -92,7 +92,12 @@ async def daily_status(request: Request):
     if not sess:
         return {"authenticated": False, "claimed": False}
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    return {"authenticated": True, "claimed": await queries.has_claimed_daily_pack(sess["id"], day)}
+    claimed = await queries.daily_packs_claimed(sess["id"], day)
+    return {
+        "authenticated": True,
+        "claimed": claimed >= queries.DAILY_PACKS_PER_DAY,
+        "packs_left": max(0, queries.DAILY_PACKS_PER_DAY - claimed),
+    }
 
 
 @router.post("/daily")
@@ -102,8 +107,8 @@ async def open_daily(request: Request):
         return JSONResponse({"error": "sign in to open packs"}, status_code=401)
     uid = sess["id"]
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if await queries.has_claimed_daily_pack(uid, day):
-        return JSONResponse({"error": "already claimed today"}, status_code=409)
+    if await queries.daily_packs_claimed(uid, day) >= queries.DAILY_PACKS_PER_DAY:
+        return JSONResponse({"error": "all free packs claimed today"}, status_code=409)
     sets = await queries.list_card_sets(include_closed=False)
     if not sets:
         return JSONResponse({"error": "no sets available"}, status_code=404)

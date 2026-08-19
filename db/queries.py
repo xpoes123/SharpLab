@@ -4747,19 +4747,25 @@ async def get_design_owners(design_id: int) -> tuple[dict | None, list[dict]]:
     return {**_design_public(d), "sport": d["sport"], "season": d["season"]}, owners
 
 
-# --- daily free pack ---
-async def has_claimed_daily_pack(user: str, day: str) -> bool:
+# --- daily free packs ---
+DAILY_PACKS_PER_DAY = 3
+
+
+async def daily_packs_claimed(user: str, day: str) -> int:
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "SELECT 1 FROM card_pack_claims WHERE discord_user = ? AND day = ?", (user, day)
+            "SELECT claims FROM card_pack_claims WHERE discord_user = ? AND day = ?", (user, day)
         )
-        return await cur.fetchone() is not None
+        row = await cur.fetchone()
+        return row[0] if row else 0
 
 
 async def record_daily_pack_claim(user: str, day: str) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT OR IGNORE INTO card_pack_claims (discord_user, day) VALUES (?, ?)", (user, day)
+            "INSERT INTO card_pack_claims (discord_user, day, claims) VALUES (?, ?, 1) "
+            "ON CONFLICT(discord_user, day) DO UPDATE SET claims = claims + 1",
+            (user, day),
         )
         await db.commit()
 

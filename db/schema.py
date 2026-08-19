@@ -512,6 +512,7 @@ CREATE TABLE IF NOT EXISTS card_wants (
 CREATE TABLE IF NOT EXISTS card_pack_claims (
     discord_user TEXT NOT NULL,
     day          TEXT NOT NULL,
+    claims       INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (discord_user, day)
 );
 
@@ -548,6 +549,12 @@ async def init_db() -> None:
         # Migration: add clv_posted if DB predates this column
         try:
             await db.execute("ALTER TABLE games ADD COLUMN clv_posted INTEGER DEFAULT 0")
+            await db.commit()
+        except Exception:
+            pass  # column already exists
+        # Migration: multi-claim daily packs — existing rows counted as 1 claim used
+        try:
+            await db.execute("ALTER TABLE card_pack_claims ADD COLUMN claims INTEGER NOT NULL DEFAULT 1")
             await db.commit()
         except Exception:
             pass  # column already exists
