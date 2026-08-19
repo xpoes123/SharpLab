@@ -88,7 +88,23 @@ Registered in a `DAILY_GAMES: dict[str, DailyGame]` registry (mirrors the casino
 - **Streak multiplier**: `points *= 1 + min(0.30, 0.02 * current_overall_streak)` — showing up
   daily compounds your standing, tying retention and competition together.
 
-### 4.1 Integrity (light-touch)
+### 4.1 Coin rewards
+
+Daily play pays into the same `casino_wallets` balance used across the arcade
+(`queries.update_casino_balance`), so the daily habit feeds the whole economy.
+
+- **Participation** (immediate, on first valid solve): a flat grant, capped once per day via the
+  existing `ACTIVITY_REWARDS`/`daily_coin_earn` mechanism (source `"daily_play"`). Starting value
+  **25🪙**. You get it just for solving today's puzzle — the reliable check-in incentive.
+- **Placement** (paid at day close, i.e. the 4am-ET rollover job for the *previous* day, once
+  standings are final): **1st 500🪙 · 2nd 300 · 3rd 200 · 4th–10th 100 · any other solver 25**
+  (tunable). Paid on top of participation.
+- **Idempotency**: `daily_puzzles.awarded` flag is set when a day's placement payouts complete, so
+  the rollover job never double-pays (safe across restarts).
+- **Streak milestone** coins (optional, small): a one-time bonus at 7/30/100-day overall streaks;
+  can land in phase 1 or 2. The streak's main effect stays the season-points multiplier (§4).
+
+### 4.2 Integrity (light-touch)
 
 - Server is authoritative: it regenerates the board from the seed and **replays the submitted
   solution** via `validate()`; only a real solve is scored.
@@ -126,6 +142,7 @@ same board UI, added to the `/games` grid.
 CREATE TABLE daily_puzzles (
   game_id TEXT, puzzle_date TEXT, difficulty TEXT, seed INTEGER,
   payload TEXT, par INTEGER, par_approx INTEGER DEFAULT 0,
+  awarded INTEGER DEFAULT 0,     -- placement payouts done for this day (idempotent rollover)
   PRIMARY KEY (game_id, puzzle_date)
 );
 CREATE TABLE daily_results (
@@ -177,16 +194,18 @@ read-time.
 
 ## 10. Phasing
 
-1. **Engine + Trap the Pig + web**: `shared/daily.py`, tables, Trap the Pig plugin + board UI
-   (free-play + daily), `/daily` page, submit, per-day + season leaderboard, `/games` daily strip.
-2. **Discord surface**: morning post + `@Daily`, `/daily` command, evening results, streak flex,
-   share-to-channel.
-3. **Scale**: `/new-daily-game` scaffold skill + a second game; optional coin rewards for daily
-   participation (capped, via existing `ACTIVITY_REWARDS`).
+1. **Engine + Trap the Pig + web + rewards**: `shared/daily.py`, tables, Trap the Pig plugin +
+   board UI (free-play + daily), `/daily` page, submit, per-day + season leaderboard, participation
+   coins on solve, and the `/games` daily strip.
+2. **Discord surface + placement payouts**: morning post + `@Daily`, `/daily` command, evening
+   results, streak flex, share-to-channel, and the 4am rollover job that finalizes standings and
+   pays placement bonuses (idempotent via `daily_puzzles.awarded`).
+3. **Scale**: `/new-daily-game` scaffold skill + a second game; streak-milestone coins.
 
 ## 11. Open questions
 
-- Coin rewards for daily play? (Leaning yes but capped, phase 3 — keep competition, not grinding,
-  the point.)
-- Exact placement-points curve and streak-multiplier cap are first guesses; tune after launch.
+- Reward amounts (participation 25🪙; placement 500/300/200/100/25) and the placement-points curve
+  / streak cap are first guesses; tune after launch once real fields exist.
 - Par search bound for hard boards — measure; approximate-par fallback is acceptable.
+- Placement rewards create a coin *faucet* — watch total daily issuance vs. the rest of the
+  economy and adjust amounts if it inflates.
