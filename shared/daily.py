@@ -45,12 +45,19 @@ def day_index(day: str) -> int:
     return (date.fromisoformat(day) - EPOCH).days
 
 
+# Ease players in: the first few days after launch are all easy, then the normal cycle kicks in.
+LAUNCH_DAY = "2026-08-18"
+RAMP_EASY_DAYS = 5
+
+
 def schedule(day: str) -> tuple[str, str]:
     """(game_id, difficulty) for a puzzle-day. Game rotates through DAILY_POOL; difficulty
-    cycles through that game's difficulties (easy→medium→hard→…)."""
+    cycles easy→medium→hard, except the first RAMP_EASY_DAYS from launch are pinned to easy."""
     i = day_index(day)
     game_id = DAILY_POOL[i % len(DAILY_POOL)]
     diffs = DAILY_GAMES[game_id].DIFFICULTIES
+    if 0 <= i - day_index(LAUNCH_DAY) < RAMP_EASY_DAYS and "easy" in diffs:
+        return game_id, "easy"
     return game_id, diffs[i % len(diffs)]
 
 
@@ -101,11 +108,14 @@ def streak_multiplier(overall_streak: int) -> float:
 def rank_results(results: list[dict], game_id: str) -> list[dict]:
     """Order a day's results best→worst and attach rank + placement points.
 
-    `results` rows: {discord_user, solved, primary_score, secondary_score}. Lower primary
-    then lower secondary is better; solvers always rank above non-solvers."""
+    `results` rows: {discord_user, solved, primary_score, secondary_score}. Solvers always rank
+    above non-solvers; among solvers, the plugin's RANK_ORDER decides which score dominates
+    (lower is better). Trap the Pig ranks by TIME first (unlimited retries mean everyone can grind
+    down to par fences, so speed is the real differentiator), fences as the tiebreak."""
+    order = getattr(DAILY_GAMES.get(game_id), "RANK_ORDER", ("primary_score", "secondary_score"))
     ordered = sorted(
         results,
-        key=lambda r: (0 if r["solved"] else 1, r["primary_score"], r["secondary_score"]),
+        key=lambda r: (0 if r["solved"] else 1, *(r[k] for k in order)),
     )
     out = []
     for i, r in enumerate(ordered, start=1):
