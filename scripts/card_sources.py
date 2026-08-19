@@ -458,6 +458,152 @@ async def fetch_mlb_season(year: int) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Big Moment cards — per-game logs (biggest single game of the season)
+# ---------------------------------------------------------------------------
+# Reuses the SAME ESPN athlete ids the season fetchers already have, via one
+# uniform gamelog endpoint across all three leagues:
+#   {_WEB}/{sport}/{league}/athletes/{id}/gamelog?season={year}
+# Each event carries a `stats` array aligned to the top-level `names` list (same
+# shape _rows_by_year parses). `events` (dict, keyed by eventId) gives opponent +
+# date for the game line.
+
+MOMENT_POOL = 10          # top-N single games kept per set
+MOMENT_CANDIDATES = 40    # only the top-N players by fame get a gamelog fetch (bounds calls)
+# ponytail: game-score is a simple per-sport weighted sum, and only the top-40
+# famous players' logs are fetched — a monster game from an obscure player is
+# missed. Swap the metric / raise MOMENT_CANDIDATES only if the ranking looks wrong.
+
+
+def _game_score(sport_key: str, row: dict, names: list) -> float:
+    """Per-sport single-game score. `row` = dict(zip(names, event_stats))."""
+    if sport_key == "nba":
+        return _num(row.get("points")) + 0.4 * _num(row.get("totalRebounds")) + 0.7 * _num(row.get("assists"))
+    if sport_key == "nfl":
+        return max(0.0, (
+            _num(row.get("passingYards")) / 25.0
+            + _num(row.get("passingTouchdowns")) * 4.0
+            - _num(row.get("interceptions")) * 2.0
+            + _num(row.get("rushingYards")) / 10.0
+            + _num(row.get("rushingTouchdowns")) * 6.0
+            + _num(row.get("receivingYards")) / 10.0
+            + _num(row.get("receivingTouchdowns")) * 6.0
+        ))
+    # mlb: hitter gamelogs carry 'atBats'; pitcher gamelogs don't.
+    if "atBats" in names:
+        return _num(row.get("homeRuns")) * 4.0 + _num(row.get("hits")) + _num(row.get("RBIs"))
+    return _num(row.get("strikeouts")) + _num(row.get("innings")) * 0.5
+
+
+def _moment_stats(sport_key: str, row: dict, names: list) -> dict:
+    """Display box score for the moment card."""
+    if sport_key == "nba":
+        return {
+            "PTS": int(_num(row.get("points"))),
+            "REB": int(_num(row.get("totalRebounds"))),
+            "AST": int(_num(row.get("assists"))),
+        }
+    if sport_key == "nfl":
+        s: dict = {}
+        if _num(row.get("passingYards")):
+            s["PassYds"] = int(_num(row.get("passingYards")))
+            s["PassTD"] = int(_num(row.get("passingTouchdowns")))
+        if _num(row.get("rushingYards")):
+            s["RushYds"] = int(_num(row.get("rushingYards")))
+            s["RushTD"] = int(_num(row.get("rushingTouchdowns")))
+        if _num(row.get("receivingYards")):
+            s["Rec"] = int(_num(row.get("receptions")))
+            s["RecYds"] = int(_num(row.get("receivingYards")))
+            s["RecTD"] = int(_num(row.get("receivingTouchdowns")))
+        return s
+    if "atBats" in names:
+        return {
+            "HR": int(_num(row.get("homeRuns"))),
+            "H": int(_num(row.get("hits"))),
+            "RBI": int(_num(row.get("RBIs"))),
+        }
+    return {"K": int(_num(row.get("strikeouts"))), "IP": _num(row.get("innings"))}
+
+
+def _game_line(meta: dict) -> str:
+    """'vs MIN · 2025-05-01' from a gamelog `events[eventId]` metadata dict."""
+    opp = (meta.get("opponent") or {}).get("abbreviation") or "?"
+    atvs = meta.get("atVs") or "vs"
+    date = (meta.get("gameDate") or "")[:10]
+    return f"{atvs} {opp}" + (f" · {date}" if date else "")
+
+
+def _best_moment(sport_key: str, gamelog: dict, player: dict) -> dict | None:
+    """Pure: the player's single biggest regular-season game -> a moment subject dict,
+    or None if they have no scoring game in the log."""
+    names = gamelog.get("names") or []
+    meta = gamelog.get("events") or {}
+    best = None  # (score, eventId, row)
+    for st in gamelog.get("seasonTypes") or []:
+        if "Regular Season" not in (st.get("displayName") or ""):
+            continue  # skip preseason / postseason
+        for cat in st.get("categories") or []:
+            for ev in cat.get("events") or []:
+                row = dict(zip(names, ev.get("stats") or []))
+                score = _game_score(sport_key, row, names)
+                if best is None or score > best[0]:
+                    best = (score, str(ev.get("eventId") or ""), row)
+    if not best or best[0] <= 0:
+        return None
+    score, eid, row = best
+    stats = _moment_stats(sport_key, row, names)
+    stats["Game"] = _game_line(meta.get(eid) or {})
+    return {
+        "subject_key": f"{player['subject_key']}|moment",
+        "name": player["name"],
+        "team": player.get("team"),
+        "card_type": "moment",
+        "is_rookie": False,
+        "stardom": round(score, 1),
+        "stats": stats,
+        "headshot_url": player.get("headshot_url"),
+    }
+
+
+async def fetch_moments(sport_key: str, year: int, players: list[dict]) -> list[dict]:
+    """Top <=MOMENT_POOL biggest single games of the season, as moment subjects.
+
+    Reuses the ESPN athlete ids embedded in each player's subject_key (`...-{id}`).
+    Only fetches game logs for the top MOMENT_CANDIDATES players by career_fame.
+    Never raises; returns [] on total failure or empty input.
+    """
+    if not players:
+        return []
+    sport, league = _LEAGUES[sport_key]
+    cands = sorted(players, key=lambda p: p.get("career_fame") or 0.0, reverse=True)[:MOMENT_CANDIDATES]
+    out: list[dict] = []
+    try:
+        async with httpx.AsyncClient(
+            timeout=_TIMEOUT, headers=_HEADERS, follow_redirects=True
+        ) as client:
+            sem = asyncio.Semaphore(_CONCURRENCY)
+
+            async def _one(p: dict):
+                pid = p["subject_key"].rsplit("-", 1)[-1]
+                async with sem:
+                    gl = await _get_json(
+                        client, f"{_WEB}/{sport}/{league}/athletes/{pid}/gamelog?season={year}"
+                    )
+                if not gl:
+                    return None
+                try:
+                    return _best_moment(sport_key, gl, p)
+                except Exception:
+                    return None
+
+            res = await asyncio.gather(*(_one(p) for p in cands), return_exceptions=True)
+            out = [r for r in res if isinstance(r, dict)]
+    except Exception:
+        return out
+    out.sort(key=lambda m: m["stardom"], reverse=True)
+    return out[:MOMENT_POOL]
+
+
+# ---------------------------------------------------------------------------
 # manual smoke test
 # ---------------------------------------------------------------------------
 
