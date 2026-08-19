@@ -1,0 +1,46 @@
+/* SharpLab HQ — Trap the Pig (free-play arcade). Reuses hqstyle.css tokens;
+   adds the board-specific hex palette the shared renderer references inline. */
+:root {
+  --open: #3b4261;
+  --openhi: #414a6b;
+  --fence: #7a5030;
+  --fence2: #5a3a22;
+}
+
+/* nav coin chip (mirrors casino/threecardpoker) */
+.userbar { display: flex; align-items: center; gap: 12px; }
+.coinschip { cursor: pointer; font-weight: 700; font-variant-numeric: tabular-nums;
+  padding: 4px 11px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--panel2); color: var(--gold); }
+.coinschip:hover { border-color: var(--accent); }
+
+.pig-head { text-align: center; margin-bottom: 6px; }
+.pig-head .eyebrow { font-family: var(--font-mono); font-size: 11px; letter-spacing: .18em;
+  text-transform: uppercase; color: var(--accent2); font-weight: 600; }
+.pig-head h1 { margin: 6px 0 0; font-size: 30px; font-weight: 800; letter-spacing: -.02em; }
+.pig-head p { color: var(--muted); margin: 8px auto 0; max-width: 460px; font-size: 14px; line-height: 1.5; }
+
+.wrap { max-width: 520px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+
+.stats { display: flex; gap: 10px; }
+.stat-box { flex: 1; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.stat-box .k { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.stat-box .v { font-family: var(--font-mono); font-size: 22px; font-weight: 700; margin-top: 3px; font-variant-numeric: tabular-nums; }
+
+.stage { background: var(--panel2); border: 1px solid var(--line); border-radius: 18px;
+  padding: 14px; display: flex; justify-content: center; }
+.stage svg { max-width: 100%; height: auto; touch-action: manipulation; }
+.hex { cursor: pointer; transition: fill .12s, stroke .12s; }
+.hex.open:hover { fill: var(--openhi); stroke: var(--accent); }
+@media (prefers-reduced-motion: reduce) { .hex { transition: none; } }
+
+.actions { display: flex; gap: 10px; }
+
+.banner { border-radius: 14px; padding: 16px; text-align: center; display: none; }
+.banner.show { display: block; }
+.banner.win { background: linear-gradient(180deg, var(--green-soft), transparent); border: 1px solid var(--green); }
+.banner.lose { background: linear-gradient(180deg, var(--red-soft), transparent); border: 1px solid var(--red); }
+.banner h2 { margin: 0 0 6px; font-size: 20px; text-transform: none; letter-spacing: 0; }
+.banner.win h2 { color: var(--green); } .banner.lose h2 { color: var(--red); }
+.banner .grid2 { font-family: var(--font-mono); font-size: 18px; margin: 8px 0; letter-spacing: 1px; }
+.banner .line { color: var(--muted); font-size: 13px; }

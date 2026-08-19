@@ -25,6 +25,25 @@ async function main() {
 }
 main();
 
+// ── Daily strip: show today's puzzle + the player's streak ────────────────────
+(async function dailyStrip() {
+  try {
+    const r = await fetch("/api/v1/daily/today", { credentials: "include" });
+    if (!r.ok) return;
+    const d = await r.json();
+    const icon = document.getElementById("dailyIcon");
+    const name = document.getElementById("dailyName");
+    const meta = document.getElementById("dailyMeta");
+    if (icon && d.game) icon.textContent = d.game.icon || "🗓️";
+    if (name && d.game) name.textContent = `${d.game.name} · ${d.difficulty}`;
+    if (meta) {
+      const played = d.played ? "✅ played today" : "not played yet";
+      const streak = d.signed_in && d.streak ? ` · 🔥 ${d.streak}-day streak` : "";
+      meta.textContent = `Par ${d.par}${d.par_approx ? "~" : ""} · ${played}${streak}`;
+    }
+  } catch { /* strip stays on its static default */ }
+})();
+
 // ── Search + category filter + sort ───────────────────────────────────────────
 // Category is inferred from each tile's .gmeta text so we don't hand-tag 47 tiles:
 //   "🪙 table" → gambling (wager a coin table/sim) · "🪙 reward" → solo/brain · else → multiplayer
@@ -40,8 +59,8 @@ main();
   const order = new Map(tiles.map((t, i) => [t, i]));  // remember featured order
   const catOf = (t) => {
     const m = (t.querySelector(".gmeta")?.textContent || "").toLowerCase();
-    if (m.includes("table")) return "gambling";
-    if (m.includes("reward")) return "solo";
+    if (m.includes("table")) return "gambling";           // wagers coins → gambling (even if solo)
+    if (m.includes("reward") || m.includes("puzzle") || m.includes("brain")) return "solo";
     return "multi";
   };
   const textOf = (t) =>
