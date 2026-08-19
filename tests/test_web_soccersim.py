@@ -1,0 +1,146 @@
+"""Web Soccer Sim settlement — money paths. Forces a deterministic winner by
+monkeypatching the module's CSPRNG draw (secrets.randbelow), and asserts the
+server always recomputes the payout multiplier from the signed token. Ties are
+broken in-sim, so every match has a home or away winner — no draw."""
+import asyncio
+import json
+
+from db import queries
+from db import schema as sch
+from web import soccersim_web
+
+
+class _Req:
+    cookies: dict = {}
+    headers: dict = {}
+
+
+def _run(c):
+    return asyncio.run(c)
+
+
+def _force_winner(monkeypatch, side):
+    # /bet draws: secrets.randbelow(1e9)/1e9 < home_prob → "home".
+    # randbelow→0 makes 0 < prob → home; randbelow→n-1 makes ~1.0 → away.
+    # _final_score also calls secrets.randbelow(2) for the flavor margin, so use
+    # a callable that keys off the argument: n==2 → 0 margin bump, else winner draw.
+    if side == "home":
+        monkeypatch.setattr(soccersim_web.secrets, "randbelow", lambda n: 0)
+    else:
+        monkeypatch.setattr(soccersim_web.secrets, "randbelow", lambda n: 0 if n == 2 else n - 1)
+
+
+def test_winning_bet_credits_stake_times_mult_and_logs(monkeypatch, tmp_path):
+    sch.DB_PATH = str(tmp_path / "t.db"); queries.DB_PATH = sch.DB_PATH
+
+    async def go():
+        await sch.init_db()
+        monkeypatch.setattr(soccersim_web.auth, "read_session", lambda r: {"id": "u1"})
+        await queries.get_or_create_casino_wallet("u1")
+        await queries.update_casino_balance("u1", 100_000)  # ensure funds
+        start = await queries.get_casino_balance("u1")
+
+        new = await soccersim_web.new_game(_Req())
+        token, home_prob = new["token"], new["home_prob"]
+        mult = 1 / home_prob  # server multiplier for the home side
+
+        _force_winner(monkeypatch, "home")
+        stake = 500
+        res = await soccersim_web.place_bet(
+            _Req(), soccersim_web.BetBody(token=token, side="home", stake=stake),
+        )
+        assert isinstance(res, dict)
+        assert res["won"] is True
+        assert res["winner"] == "home"
+        assert res["winner_abbr"] == new["home"]["abbr"]
+        expected_payout = int(stake * mult)
+        assert res["payout"] == expected_payout
+        # Balance conserved: start - stake + payout.
+        assert res["balance"] == start - stake + expected_payout
+        assert await queries.get_casino_balance("u1") == res["balance"]
+        # Score is consistent with the winner.
+        assert res["home_score"] > res["away_score"]
+
+        # Logged exactly one soccersim round.
+        stats = await queries.get_casino_stats("u1")
+        assert stats["total_wagered"] == stake
+
+    _run(go())
+
+
+def test_losing_bet_pays_zero(monkeypatch, tmp_path):
+    sch.DB_PATH = str(tmp_path / "t2.db"); queries.DB_PATH = sch.DB_PATH
+
+    async def go():
+        await sch.init_db()
+        monkeypatch.setattr(soccersim_web.auth, "read_session", lambda r: {"id": "u2"})
+        await queries.get_or_create_casino_wallet("u2")
+        await queries.update_casino_balance("u2", 100_000)
+        start = await queries.get_casino_balance("u2")
+
+        new = await soccersim_web.new_game(_Req())
+        _force_winner(monkeypatch, "away")
+        stake = 750
+        res = await soccersim_web.place_bet(
+            _Req(), soccersim_web.BetBody(token=new["token"], side="home", stake=stake),
+        )
+        assert res["won"] is False
+        assert res["winner"] == "away"
+        assert res["payout"] == 0
+        assert res["balance"] == start - stake
+        assert res["away_score"] > res["home_score"]
+
+    _run(go())
+
+
+def test_payout_recomputed_server_side_and_forged_token_rejected(monkeypatch, tmp_path):
+    sch.DB_PATH = str(tmp_path / "t3.db"); queries.DB_PATH = sch.DB_PATH
+
+    async def go():
+        await sch.init_db()
+        monkeypatch.setattr(soccersim_web.auth, "read_session", lambda r: {"id": "u3"})
+        await queries.get_or_create_casino_wallet("u3")
+        await queries.update_casino_balance("u3", 100_000)
+
+        new = await soccersim_web.new_game(_Req())
+        home_prob = new["home_prob"]
+
+        # The client body carries only token/side/stake — no odds. Payout on a win
+        # is ALWAYS int(stake * 1/prob) from the signed token, whatever the client does.
+        _force_winner(monkeypatch, "home")
+        stake = 300
+        res = await soccersim_web.place_bet(
+            _Req(), soccersim_web.BetBody(token=new["token"], side="home", stake=stake),
+        )
+        assert res["payout"] == int(stake * (1 / home_prob))
+
+        # A tampered token can't be decoded → rejected (no payout math runs).
+        forged = new["token"][:-3] + "zzz"
+        bad = await soccersim_web.place_bet(
+            _Req(), soccersim_web.BetBody(token=forged, side="home", stake=stake),
+        )
+        assert getattr(bad, "status_code", None) == 400
+        assert "expired" in json.loads(bad.body)["error"]
+
+    _run(go())
+
+
+def test_overdraw_rejected(monkeypatch, tmp_path):
+    sch.DB_PATH = str(tmp_path / "t4.db"); queries.DB_PATH = sch.DB_PATH
+
+    async def go():
+        await sch.init_db()
+        monkeypatch.setattr(soccersim_web.auth, "read_session", lambda r: {"id": "u4"})
+        await queries.get_or_create_casino_wallet("u4")
+        bal = await queries.get_casino_balance("u4")
+
+        new = await soccersim_web.new_game(_Req())
+        res = await soccersim_web.place_bet(
+            _Req(), soccersim_web.BetBody(token=new["token"], side="home", stake=bal + 1),
+        )
+        assert getattr(res, "status_code", None) == 400
+        assert "not enough coins" in json.loads(res.body)["error"]
+        # Balance untouched.
+        assert await queries.get_casino_balance("u4") == bal
+
+    _run(go())
