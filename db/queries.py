@@ -4785,6 +4785,7 @@ ACTIVITY_REWARDS = {
     "stockguess_win": (20, 200),  # web arcade: guessed a stock YTD move within tolerance
     "quizbowl_win": (20, 200),    # web arcade: correct quiz bowl answer
     "sequence_win": (20, 200),    # web arcade: guessed the next term in a number sequence
+    "daily_play": (25, 25),       # daily games: participation, once/day on solving the daily
     # (paper trades already stake coins — no reward, else you could farm the loop)
 }
 
@@ -5256,3 +5257,141 @@ async def mint_tradeup_card(discord_user: str, set_id: int, target_rarity: str, 
         except Exception:
             await db.execute("ROLLBACK")
             raise
+
+
+# ── Daily Games ───────────────────────────────────────────────────────────────
+# One puzzle per game/day (cached with par); one result per user/day (PK = one submit); streaks.
+
+async def get_or_create_daily_puzzle(day: str) -> dict:
+    """Return the cached puzzle for `day`'s scheduled game, building + caching it on first use."""
+    from shared import daily as _daily
+    game_id, _difficulty = _daily.schedule(day)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM daily_puzzles WHERE game_id = ? AND puzzle_date = ?", (game_id, day))
+        row = await cur.fetchone()
+        if row is None:
+            p = _daily.build_puzzle(day)
+            await db.execute(
+                "INSERT OR IGNORE INTO daily_puzzles "
+                "(game_id, puzzle_date, difficulty, seed, payload, par, par_approx) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (p["game_id"], day, p["difficulty"], p["seed"], json.dumps(p["payload"]),
+                 p["par"], 1 if p["par_approx"] else 0))
+            await db.commit()
+            cur = await db.execute(
+                "SELECT * FROM daily_puzzles WHERE game_id = ? AND puzzle_date = ?", (game_id, day))
+            row = await cur.fetchone()
+        return {"game_id": row["game_id"], "puzzle_date": row["puzzle_date"],
+                "difficulty": row["difficulty"], "seed": row["seed"],
+                "payload": json.loads(row["payload"]), "par": row["par"],
+                "par_approx": bool(row["par_approx"]), "awarded": bool(row["awarded"])}
+
+
+async def get_daily_result(game_id: str, day: str, discord_user: str) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM daily_results WHERE game_id = ? AND puzzle_date = ? AND discord_user = ?",
+            (game_id, day, discord_user))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def record_daily_result(game_id: str, day: str, discord_user: str, *, solved: bool,
+                              primary: int, secondary: int) -> bool:
+    """Insert a result. Returns True if newly recorded, False if the user already submitted today
+    (one-submit; the PK enforces it)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT OR IGNORE INTO daily_results "
+            "(game_id, puzzle_date, discord_user, solved, primary_score, secondary_score, submitted_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (game_id, day, discord_user, 1 if solved else 0, primary, secondary,
+             datetime.now(timezone.utc).isoformat()))
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def get_daily_results(game_id: str, day: str) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM daily_results WHERE game_id = ? AND puzzle_date = ?", (game_id, day))
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_daily_results_range(start_day: str, end_day: str) -> list[dict]:
+    """All results with start_day <= puzzle_date <= end_day (for season standings)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM daily_results WHERE puzzle_date >= ? AND puzzle_date <= ?",
+            (start_day, end_day))
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def update_daily_streak(discord_user: str, game_id: str, day: str) -> int:
+    """Bump a streak on a solve: +1 if the last solve was the previous puzzle-day, else reset to 1.
+    Updates `longest`. Call with game_id='__overall__' for the all-games streak. Returns current."""
+    prev = (datetime.fromisoformat(day) - timedelta(days=1)).date().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT current, longest, last_date FROM daily_streaks "
+            "WHERE discord_user = ? AND game_id = ?", (discord_user, game_id))
+        row = await cur.fetchone()
+        if row and row["last_date"] == day:
+            return row["current"]  # already counted today
+        current = (row["current"] + 1) if (row and row["last_date"] == prev) else 1
+        longest = max(current, row["longest"] if row else 0)
+        await db.execute(
+            "INSERT INTO daily_streaks (discord_user, game_id, current, longest, last_date) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(discord_user, game_id) DO UPDATE SET "
+            "current = excluded.current, longest = excluded.longest, last_date = excluded.last_date",
+            (discord_user, game_id, current, longest, day))
+        await db.commit()
+        return current
+
+
+async def get_daily_streak(discord_user: str, game_id: str = "__overall__") -> dict:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT current, longest, last_date FROM daily_streaks "
+            "WHERE discord_user = ? AND game_id = ?", (discord_user, game_id))
+        row = await cur.fetchone()
+        return dict(row) if row else {"current": 0, "longest": 0, "last_date": None}
+
+
+async def get_unawarded_daily_days(before_day: str) -> list[dict]:
+    """Cached puzzles with puzzle_date < before_day that haven't paid placement coins yet."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT game_id, puzzle_date FROM daily_puzzles WHERE awarded = 0 AND puzzle_date < ?",
+            (before_day,))
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def mark_daily_awarded(game_id: str, day: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE daily_puzzles SET awarded = 1 WHERE game_id = ? AND puzzle_date = ?",
+            (game_id, day))
+        await db.commit()
+
+
+async def get_display_names(uids: list[str]) -> dict[str, str]:
+    """Map discord_user id → username (best effort; missing ids just won't appear)."""
+    uids = list({u for u in uids if u})
+    if not uids:
+        return {}
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        marks = ",".join("?" * len(uids))
+        cur = await db.execute(
+            f"SELECT discord_user, username FROM discord_users WHERE discord_user IN ({marks})",
+            uids)
+        return {r["discord_user"]: r["username"] for r in await cur.fetchall()}

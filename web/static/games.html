@@ -31,6 +31,19 @@
   .gcount { color: var(--muted); font-size: 12px; font-family: var(--font-mono); margin: 0 0 12px; }
   .gtile.hidden { display: none; }
   .gempty { color: var(--muted); padding: 40px 0; text-align: center; }
+  .dailystrip { display: flex; align-items: center; gap: 18px; margin: 0 0 22px; padding: 18px 22px;
+    background: linear-gradient(100deg, color-mix(in srgb, var(--accent) 18%, var(--panel)), var(--panel));
+    border: 1px solid var(--accent); border-radius: var(--r-lg); text-decoration: none;
+    box-shadow: var(--shadow-sm); transition: transform var(--t), box-shadow var(--t); }
+  .dailystrip:hover { transform: translateY(-2px); box-shadow: var(--shadow); text-decoration: none; }
+  .dailystrip .dicon { font-size: 34px; line-height: 1; }
+  .dailystrip .dmain { flex: 1; }
+  .dailystrip .dlabel { font-family: var(--font-mono); font-size: 11px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent2); font-weight: 700; }
+  .dailystrip .dname { font-weight: 800; font-size: 19px; color: var(--fg); margin-top: 2px; }
+  .dailystrip .dmeta { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .dailystrip .dcta { font-weight: 800; color: var(--accent); white-space: nowrap; }
+  .dailystrip .dstreak { color: var(--warn); font-weight: 700; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -42,6 +55,15 @@
 <main>
   <h1 style="font-size:28px;margin:8px 0 6px">🎲 Games</h1>
   <p class="pagesub">Casino tables, brain games, and multiplayer — play on your coins or grab a room code and pull people in.</p>
+  <a class="dailystrip" href="/daily" id="dailystrip">
+    <div class="dicon" id="dailyIcon">🗓️</div>
+    <div class="dmain">
+      <div class="dlabel">Daily Puzzle · new every 4am ET</div>
+      <div class="dname" id="dailyName">Today's Daily</div>
+      <div class="dmeta" id="dailyMeta">One shared puzzle, ranked leaderboard, coins for the podium.</div>
+    </div>
+    <div class="dcta">Play →</div>
+  </a>
   <div class="gtoolbar">
     <input class="gsearch" id="gsearch" type="search" placeholder="Search games…" autocomplete="off" />
     <div class="gchips" id="gchips">
@@ -218,6 +240,12 @@
       <div class="gname">Guess the Flag</div>
       <div class="gblurb">Name the country from its flag. Correct guesses pay coins.</div>
       <div class="gmeta">Solo · 🪙 reward</div>
+    </a>
+    <a class="gtile" href="/trappig">
+      <div class="gicon">🐷</div>
+      <div class="gname">Trap the Pig</div>
+      <div class="gblurb">Fence in the fleeing pig in the fewest moves. Free play — or take the ranked Daily.</div>
+      <div class="gmeta">Solo · 🧠 puzzle</div>
     </a>
     <a class="gtile" href="/sequence">
       <div class="gicon">🔢</div>

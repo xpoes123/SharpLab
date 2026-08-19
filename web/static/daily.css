@@ -1,0 +1,87 @@
+/* SharpLab HQ — Daily Game page. Reuses hqstyle.css tokens; adds the board hex
+   palette (same as trappig.css) plus daily-specific header/result/leaderboard. */
+:root {
+  --open: #3b4261;
+  --openhi: #414a6b;
+  --fence: #7a5030;
+  --fence2: #5a3a22;
+}
+
+.userbar { display: flex; align-items: center; gap: 12px; }
+.coinschip { cursor: pointer; font-weight: 700; font-variant-numeric: tabular-nums;
+  padding: 4px 11px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--panel2); color: var(--gold); }
+.coinschip:hover { border-color: var(--accent); }
+
+.wrap { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+
+/* header */
+.daily-head { display: flex; flex-direction: column; gap: 8px; }
+.daily-title { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.daily-title .icon { font-size: 30px; line-height: 1; }
+.daily-title h1 { margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -.02em; }
+.daily-badges { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-left: auto; }
+.diffbadge { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+  padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel2); }
+.diffbadge.easy { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, var(--line)); }
+.diffbadge.medium { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 40%, var(--line)); }
+.diffbadge.hard { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, var(--line)); }
+.parbadge { font-size: 12px; font-weight: 700; color: var(--accent2); padding: 3px 10px;
+  border-radius: 999px; background: var(--panel2); border: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.streakbadge { font-size: 12px; font-weight: 700; color: var(--gold); padding: 3px 10px;
+  border-radius: 999px; background: var(--panel2); border: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.rule { color: var(--muted); font-size: 13px; line-height: 1.5; margin: 0; }
+
+/* live stats */
+.stats { display: flex; gap: 10px; }
+.stat-box { flex: 1; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.stat-box .k { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.stat-box .v { font-family: var(--font-mono); font-size: 22px; font-weight: 700; margin-top: 3px; font-variant-numeric: tabular-nums; }
+.stat-box.par .v { color: var(--accent2); }
+
+/* board */
+.stage { background: var(--panel2); border: 1px solid var(--line); border-radius: 18px;
+  padding: 14px; display: flex; justify-content: center; position: relative; }
+.stage svg { max-width: 100%; height: auto; touch-action: manipulation; }
+.stage.preview svg { opacity: .55; pointer-events: none; }
+.hex { cursor: pointer; transition: fill .12s, stroke .12s; }
+.hex.open:hover { fill: var(--openhi); stroke: var(--accent); }
+@media (prefers-reduced-motion: reduce) { .hex { transition: none; } }
+
+.actions { display: flex; gap: 10px; }
+
+/* inline notices */
+.notice { border-radius: 14px; padding: 14px 16px; font-size: 14px; line-height: 1.5; }
+.notice.warn { background: var(--red-soft); border: 1px solid var(--red); color: var(--fg); }
+.notice.info { background: var(--accent-soft); border: 1px solid var(--line-strong); color: var(--fg-2); }
+.notice .signin { margin-top: 10px; }
+
+/* result panel */
+.result { border-radius: 16px; padding: 18px; border: 1px solid var(--green);
+  background: linear-gradient(180deg, var(--green-soft), transparent); }
+.result h2 { margin: 0 0 6px; font-size: 20px; color: var(--green); text-transform: none; letter-spacing: 0; }
+.result .sub { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+.result .grid2 { font-family: var(--font-mono); font-size: 18px; letter-spacing: 1px; margin: 4px 0 12px; }
+.result .metrics { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.result .metric { flex: 1; min-width: 120px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: 10px 12px; }
+.result .metric .k { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.result .metric .v { font-family: var(--font-mono); font-size: 18px; font-weight: 700; margin-top: 2px; }
+.sharebox { display: flex; gap: 8px; align-items: stretch; margin-top: 4px; }
+.sharebox pre { flex: 1; margin: 0; background: var(--panel2); border: 1px solid var(--line);
+  border-radius: 10px; padding: 10px 12px; font-family: var(--font-mono); font-size: 12px;
+  white-space: pre-wrap; color: var(--fg-2); overflow-x: auto; }
+
+/* leaderboard */
+.lb-tabs { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.lb-tab { background: transparent; color: var(--muted); border: 0; padding: 8px 18px; cursor: pointer;
+  font-family: inherit; font-size: 13px; font-weight: 600; }
+.lb-tab.on { background: var(--accent); color: var(--accent-ink); }
+.lb-card { margin-top: 12px; }
+.lb-card table { width: 100%; border-collapse: collapse; }
+.lb-card th, .lb-card td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); font-size: 14px; }
+.lb-card th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+.lb-card td.num, .lb-card th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.lb-card tr.me { background: rgba(122, 162, 247, .1); }
+.lb-card tr.me td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.lb-rank { color: var(--muted); width: 34px; }
