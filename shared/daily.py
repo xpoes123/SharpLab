@@ -62,11 +62,18 @@ def seed_for(game_id: str, day: str) -> int:
 
 
 def build_puzzle(day: str) -> dict:
-    """Generate today's puzzle payload + par for the scheduled game/difficulty."""
+    """Generate today's puzzle payload + par for the scheduled game/difficulty.
+
+    Prefers the plugin's `build_solvable` so the daily is GUARANTEED to have an answer (the
+    generator only ships a board once it has computed a witness solution); falls back to plain
+    `generate` for games that are solvable by construction."""
     game_id, difficulty = schedule(day)
     game = DAILY_GAMES[game_id]
     seed = seed_for(game_id, day)
-    payload = game.generate(seed, difficulty)
+    if hasattr(game, "build_solvable"):
+        payload = game.build_solvable(seed, difficulty)
+    else:
+        payload = game.generate(seed, difficulty)
     par_v, approx = game.par(payload)
     return {"game_id": game_id, "difficulty": difficulty, "seed": seed,
             "payload": payload, "par": par_v, "par_approx": approx}

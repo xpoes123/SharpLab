@@ -72,3 +72,23 @@ def test_share_grid():
     g = tp.share_grid({"solved": True, "primary": 5, "secondary": 48000},
                       {"difficulty": "medium", "par": 4})
     assert "Trap the Pig" in g and "5 fences" in g and "par 4" in g and "0:48" in g
+
+
+def test_build_solvable_always_has_a_witness():
+    from shared import daily
+    # every scheduled daily over 60 days must be provably solvable, and the witness must trap
+    for offset in range(60):
+        day = f"2026-{7 + offset // 30:02d}-{(offset % 30) + 1:02d}"
+        seed = daily.seed_for("trappig", day)
+        _, difficulty = daily.schedule(day)
+        puz = tp.build_solvable(seed, difficulty)
+        ok, witness = tp.is_solvable(puz)
+        assert ok, f"{day} board not solvable"
+        res = tp.validate(puz, {"moves": witness, "elapsed_ms": 1})
+        assert res and res["solved"], f"{day} witness didn't trap"
+
+
+def test_build_solvable_is_deterministic():
+    from shared import daily
+    seed = daily.seed_for("trappig", "2026-09-09")
+    assert tp.build_solvable(seed, "hard") == tp.build_solvable(seed, "hard")
