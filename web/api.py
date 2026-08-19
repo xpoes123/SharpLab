@@ -28,7 +28,6 @@ from web.connect4 import router as connect4_router, connect4_websocket, cleanup_
 from web.rps import router as rps_router, rps_websocket, cleanup_stale_rps_rooms
 from web.battleship import router as battleship_router, battleship_websocket, cleanup_stale_battleship_rooms
 from web.reversi import router as reversi_router, reversi_websocket, cleanup_stale_reversi_rooms
-from web.prisoner import router as prisoner_router, prisoner_websocket, cleanup_stale_prisoner_rooms
 from web.liarsdice import router as liarsdice_router, liarsdice_websocket, cleanup_stale_liarsdice_rooms
 from web.penalties import router as penalties_router, penalties_websocket, cleanup_stale_penalties_rooms
 from web.hq import router as hq_router, quote_refresh_loop
@@ -128,7 +127,6 @@ async def lifespan(app: FastAPI):
     rps_cleanup_task = asyncio.create_task(cleanup_stale_rps_rooms())
     bs_cleanup_task = asyncio.create_task(cleanup_stale_battleship_rooms())
     rev_cleanup_task = asyncio.create_task(cleanup_stale_reversi_rooms())
-    pd_cleanup_task = asyncio.create_task(cleanup_stale_prisoner_rooms())
     ld_cleanup_task = asyncio.create_task(cleanup_stale_liarsdice_rooms())
     pen_cleanup_task = asyncio.create_task(cleanup_stale_penalties_rooms())
     quote_task = asyncio.create_task(quote_refresh_loop())   # keep HQ stock prices warm
@@ -146,7 +144,6 @@ async def lifespan(app: FastAPI):
     rps_cleanup_task.cancel()
     bs_cleanup_task.cancel()
     rev_cleanup_task.cancel()
-    pd_cleanup_task.cancel()
     ld_cleanup_task.cancel()
     pen_cleanup_task.cancel()
 
@@ -204,7 +201,6 @@ app.include_router(connect4_router)
 app.include_router(rps_router)
 app.include_router(battleship_router)
 app.include_router(reversi_router)
-app.include_router(prisoner_router)
 app.include_router(liarsdice_router)
 app.include_router(penalties_router)
 
@@ -270,9 +266,6 @@ async def ws_reversi(websocket: WebSocket, room_id: str):
     await reversi_websocket(websocket, room_id)
 
 
-@app.websocket("/ws/prisoner/{room_id}")
-async def ws_prisoner(websocket: WebSocket, room_id: str):
-    await prisoner_websocket(websocket, room_id)
 
 
 @app.websocket("/ws/liarsdice/{room_id}")
