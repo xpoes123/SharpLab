@@ -30,6 +30,37 @@ async def my_cards(request: Request):
     return {"cards": cards_out, "collection_value": total}
 
 
+class SellBody(BaseModel):
+    instance_id: int
+
+
+@router.post("/sell")
+async def sell_card(request: Request, body: SellBody):
+    sess = auth.read_session(request)
+    if not sess:
+        return JSONResponse({"error": "sign in to sell cards"}, status_code=401)
+    try:
+        card, coins = await queries.sell_instance(sess["id"], body.instance_id)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    balance = await queries.get_casino_balance(sess["id"]) or 0
+    return {"card": card, "coins": coins, "balance": balance}
+
+
+@router.get("/collectors")
+async def collectors(request: Request):
+    """Public directory of everyone who owns cards, ranked by collection value."""
+    return {"collectors": await queries.list_collectors()}
+
+
+@router.get("/collection/{user_id}")
+async def user_collection(request: Request, user_id: str):
+    """Read-only view of anyone's collection (public)."""
+    cards_out, total = await queries.get_collection(user_id)
+    owner = await queries.get_public_user(user_id)
+    return {"owner": owner, "cards": cards_out, "collection_value": total}
+
+
 @router.get("/sets")
 async def sets(request: Request):
     return {"sets": await queries.list_card_sets()}
