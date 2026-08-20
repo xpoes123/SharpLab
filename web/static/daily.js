@@ -160,11 +160,13 @@ function showNotice(kind, html) {
 }
 
 // ── Display clock (purely visual — the server times the real solve) ──
-function startTimer() {
+function startTimer(elapsedMs) {
   stopTimer();
-  D.t0 = Date.now();
+  // Anchor to the server's continuous clock: elapsedMs already includes earlier attempts, so a
+  // Reset resumes the running total instead of zeroing it. Grinding retries costs you time.
+  D.t0 = Date.now() - (elapsedMs || 0);
   const el = $("time");
-  if (el) el.textContent = "0:00";
+  if (el) el.textContent = fmtTime(elapsedMs || 0);
   D.timer = setInterval(() => {
     const e = $("time");
     if (e) e.textContent = fmtTime(Date.now() - D.t0);
@@ -254,9 +256,9 @@ async function startGame() {
 
   buildSkeleton({ showReset: true });
   drawBoard(true);
-  startTimer();
+  startTimer(j.elapsed_ms);   // continuous clock — includes time from earlier attempts
   const rb = $("resetBtn");
-  if (rb) rb.onclick = startGame; // Reset = fresh board + token + timer.
+  if (rb) rb.onclick = startGame; // Reset = same board, but the clock keeps running.
   loadLeaderboard();
 }
 

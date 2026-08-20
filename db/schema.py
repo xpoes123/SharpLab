@@ -978,3 +978,13 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        try:  # daily: the FIRST Start per user/day — the clock runs continuously from here
+              # across retries, so grinding attempts costs time instead of resetting it.
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS daily_starts ("
+                "discord_user TEXT NOT NULL, game_id TEXT NOT NULL, puzzle_date TEXT NOT NULL, "
+                "started_at TEXT NOT NULL, PRIMARY KEY (discord_user, game_id, puzzle_date))"
+            )
+            await db.commit()
+        except Exception:
+            pass
