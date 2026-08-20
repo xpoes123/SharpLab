@@ -5707,3 +5707,55 @@ async def clear_inflight_rounds() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM inflight_rounds")
         await db.commit()
+
+
+# ── Skill-game leaderboards (best timed run per game) ───────────────────────────
+
+async def record_skill_best(game_id: str, discord_user: str, elapsed_ms: int) -> tuple[int, bool]:
+    """Record a completed timed run. Keeps the player's BEST (lowest) time per game and counts
+    runs. Returns (best_ms_after, is_new_best)."""
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT best_ms, runs FROM skill_scores WHERE game_id=? AND discord_user=?",
+            (game_id, discord_user))
+        row = await cur.fetchone()
+        if row is None:
+            await db.execute(
+                "INSERT INTO skill_scores (game_id, discord_user, best_ms, runs, updated_at) "
+                "VALUES (?, ?, ?, 1, ?)", (game_id, discord_user, elapsed_ms, now))
+            await db.commit()
+            return elapsed_ms, True
+        is_new = elapsed_ms < row["best_ms"]
+        best = min(elapsed_ms, row["best_ms"])
+        await db.execute(
+            "UPDATE skill_scores SET best_ms=?, runs=runs+1, updated_at=? "
+            "WHERE game_id=? AND discord_user=?", (best, now, game_id, discord_user))
+        await db.commit()
+        return best, is_new
+
+
+async def get_skill_leaderboard(game_id: str, limit: int = 50) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT discord_user, best_ms, runs FROM skill_scores WHERE game_id=? "
+            "ORDER BY best_ms ASC LIMIT ?", (game_id, limit))
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_skill_rank(game_id: str, discord_user: str) -> int | None:
+    """1-based rank of a player on a game's best-time board (None if no score)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT best_ms FROM skill_scores WHERE game_id=? AND discord_user=?",
+            (game_id, discord_user))
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        cur = await db.execute(
+            "SELECT COUNT(*) AS n FROM skill_scores WHERE game_id=? AND best_ms < ?",
+            (game_id, row["best_ms"]))
+        return (await cur.fetchone())["n"] + 1
