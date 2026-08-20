@@ -1568,7 +1568,7 @@ class CasinoCog(commands.Cog):
             else:
                 msg = f"**{target.display_name}** has **{bal}** casino coins."
 
-        await interaction.response.send_message(msg)
+        await interaction.response.send_message(msg, ephemeral=True)
 
     @coins_group.command(name="give", description="Give casino coins to a user (admin)")
     @app_commands.describe(user="User to give coins to", amount="Number of coins to give")
