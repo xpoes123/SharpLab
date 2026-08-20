@@ -22,52 +22,59 @@ def _fresh():
     sch.DB_PATH = q.DB_PATH = os.path.join(tempfile.mkdtemp(), "t.db")
 
 
-def test_today_shape(monkeypatch):
+def test_today_shape_has_no_board(monkeypatch):
     _fresh()
 
     async def go():
         await sch.init_db()
         monkeypatch.setattr(web_daily.auth, "read_session", lambda r: None)  # signed out
         t = await web_daily.today(_Req())
-        assert t["game"]["id"] == "trappig" and t["board"]["pig"]
-        assert t["par"] >= 1 and t["signed_in"] is False
+        assert t["game"]["id"] == "trappig" and t["game"]["howto"]
+        assert "board" not in t                      # board is withheld until /start
+        assert t["number"] >= 1 and t["par"] >= 1 and t["signed_in"] is False
 
     _run(go())
 
 
-def test_submit_witness_solves_pays_and_ranks(monkeypatch):
+def test_start_then_submit_witness_solves_and_server_times(monkeypatch):
     _fresh()
 
     async def go():
         await sch.init_db()
         monkeypatch.setattr(web_daily.auth, "read_session", lambda r: {"id": "p1"})
         await q.get_or_create_casino_wallet("p1")
-        t = await web_daily.today(_Req())
-        _, witness = trappig.is_solvable(t["board"])
+        s = await web_daily.start(_Req())
+        assert s["board"]["pig"] and s["start_token"]
+        _, witness = trappig.is_solvable(s["board"])
         res = await web_daily.submit(_Req(), web_daily.SubmitBody(
-            solution={"moves": witness, "elapsed_ms": 12000}))
+            start_token=s["start_token"], solution={"moves": witness}))
         assert res["result"]["solved"] and res["rank"] == 1
-        assert res["coins"] == 25 and res["streak"] == 1
-        assert "Trap the Pig" in res["share"]
-        # one-submit: second attempt 409s
+        assert res["result"]["secondary"] >= 0        # server-timed, near-zero here
+        assert res["coins"] == 25 and res["streak"] == 1 and "Trap the Pig #" in res["share"]
+        # one-submit: a fresh start + resubmit 409s
+        s2 = await web_daily.start(_Req())
         again = await web_daily.submit(_Req(), web_daily.SubmitBody(
-            solution={"moves": witness, "elapsed_ms": 1}))
+            start_token=s2["start_token"], solution={"moves": witness}))
         assert again.status_code == 409
 
     _run(go())
 
 
-def test_submit_rejects_non_solution(monkeypatch):
+def test_submit_rejects_non_solution_and_bad_token(monkeypatch):
     _fresh()
 
     async def go():
         await sch.init_db()
         monkeypatch.setattr(web_daily.auth, "read_session", lambda r: {"id": "p2"})
         await q.get_or_create_casino_wallet("p2")
-        await web_daily.today(_Req())
+        s = await web_daily.start(_Req())
         bad = await web_daily.submit(_Req(), web_daily.SubmitBody(
-            solution={"moves": [[0, 0]], "elapsed_ms": 100}))
+            start_token=s["start_token"], solution={"moves": [[0, 0]]}))
         assert bad.status_code == 400
+        # forged/garbage token rejected
+        forged = await web_daily.submit(_Req(), web_daily.SubmitBody(
+            start_token="garbage", solution={"moves": []}))
+        assert forged.status_code == 400
         # a rejected attempt is not recorded → they can still play
         assert await q.get_daily_result("trappig", web_daily.daily.puzzle_day(), "p2") is None
 

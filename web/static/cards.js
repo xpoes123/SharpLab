@@ -561,30 +561,60 @@ function toast(msg) {
 
 // ── Coins hub: click the nav coins chip to see every way to earn ──
 const EARN_WAYS = [
+  ["⬆️", "Level up", "100 coins for every level you reach"],
+  ["🏅", "Unlock achievements", "150 coins per achievement"],
+  ["🎮", "Win multiplayer games", "50 coins for winning a /play multiplayer game"],
   ["💬", "Chat in the server", "5 coins per message, up to 500 a day"],
   ["🎯", "Log a bet", "50 coins for logging a sports bet with /bet log"],
   ["📈", "Log a trade", "50 coins for recording a stock or option trade"],
   ["🏀", "Daily pick'em", "25 coins per pick — plus a coin payout when your pick wins"],
   ["🎁", "Free daily pack", "Open one free card pack every day — pure upside"],
   ["🃏", "Complete a set", "One-time coin bonus for owning every card in a set"],
-  ["♻️", "Quick-sell dupes", "Sell duplicate cards back for coins in Discord"],
-  ["🎮", "Win in the casino", "Win at /casino or /play — playing no longer hands out free coins"],
+  ["♻️", "Quick-sell cards", "Sell cards back for 75% of book value"],
 ];
-function showCoinsHub() {
+
+// Relative time like "3m ago" / "2d ago" from an ISO timestamp.
+function agoLabel(iso) {
+  const t = Date.parse(iso);
+  if (!t) return "";
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+async function showCoinsHub() {
   if (document.querySelector(".hubov")) return;
-  const rows = EARN_WAYS.map(
+  const ov = document.createElement("div");
+  ov.className = "hubov";
+  const earnRows = EARN_WAYS.map(
     ([i, t, d]) => `<div class="hubrow"><div class="hubicon">${i}</div>
       <div><div class="hubt">${esc(t)}</div><div class="hubd">${esc(d)}</div></div></div>`
   ).join("");
-  const ov = document.createElement("div");
-  ov.className = "hubov";
-  ov.innerHTML = `<div class="hubcard">
-    <div class="hubhead"><h3>Ways to earn 🪙</h3><button class="hubx" aria-label="Close">✕</button></div>
-    ${rows}
-    <div class="hubfoot">Your balance: <b>🪙 ${num(state.balance)}</b></div>
-  </div>`;
+  const render = (ledger) => {
+    const recent = ledger && ledger.length
+      ? `<div class="hubledger">${ledger.map((e) => `<div class="ledrow">
+          <span class="ledamt">+🪙${num(e.amount)}</span>
+          <span class="ledreason">${esc(e.reason)}</span>
+          <span class="ledtime">${agoLabel(e.created_at)}</span></div>`).join("")}</div>`
+      : `<div class="hubempty">No coins earned yet — here's how 👇</div>`;
+    ov.innerHTML = `<div class="hubcard">
+      <div class="hubhead"><h3>Your coins 🪙</h3><button class="hubx" aria-label="Close">✕</button></div>
+      <div class="hubsub">Recent earnings</div>
+      ${recent}
+      <div class="hubsub">Ways to earn</div>
+      ${earnRows}
+      <div class="hubfoot">Your balance: <b>🪙 ${num(state.balance)}</b></div>
+    </div>`;
+  };
+  render(null); // instant open with a loading-ish empty; then fill
   ov.addEventListener("click", (e) => { if (e.target === ov || e.target.closest(".hubx")) ov.remove(); });
   document.body.appendChild(ov);
+  const res = await getJSON("/api/v1/cards/coins");
+  if (!document.body.contains(ov)) return; // closed while loading
+  if (res && res.balance != null) state.balance = res.balance;
+  render((res && res.ledger) || []);
 }
 document.addEventListener("click", (e) => { if (e.target.closest(".coinschip")) showCoinsHub(); });
 
@@ -992,6 +1022,17 @@ const MOCK = new URLSearchParams(location.search).get("mock") === "1";
 function mockJSON(url) {
   if (url.startsWith("/api/v1/hq/me"))
     return { authenticated: true, user: { id: "1", username: "davidj", avatar: null }, balance: 5000 };
+  if (url.startsWith("/api/v1/cards/coins"))
+    return {
+      balance: 5000,
+      ledger: [
+        { amount: 50, reason: "Won bingo", created_at: new Date(Date.now() - 3 * 60000).toISOString() },
+        { amount: 150, reason: "Achievement: High Roller", created_at: new Date(Date.now() - 40 * 60000).toISOString() },
+        { amount: 300, reason: "Reached level 8", created_at: new Date(Date.now() - 5 * 3600000).toISOString() },
+        { amount: 900, reason: "Sold Nikola Jokić", created_at: new Date(Date.now() - 26 * 3600000).toISOString() },
+        { amount: 25, reason: "Pick'em win", created_at: new Date(Date.now() - 2 * 86400000).toISOString() },
+      ],
+    };
   if (url.startsWith("/api/v1/cards/mine"))
     return {
       collection_value: 1730,

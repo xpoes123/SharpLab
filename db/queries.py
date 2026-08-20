@@ -1339,6 +1339,49 @@ async def give_casino_coins(discord_user: str, amount: int) -> int:
         return new_balance
 
 
+async def credit_coins(discord_user: str, amount: int, reason: str, now_iso: str) -> int:
+    """Grant coins AND log the source to coin_ledger (the 'where did my coins come from'
+    history). Gains only — `amount` must be > 0. Creates the wallet (seeding starting coins)
+    if new, matching sell_instance. Returns the new balance."""
+    if amount <= 0:
+        return await get_casino_balance(discord_user) or 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        row = await (await db.execute(
+            "SELECT balance FROM casino_wallets WHERE discord_user = ?", (discord_user,)
+        )).fetchone()
+        if row is None:
+            new_balance = CASINO_STARTING_COINS + amount
+            await db.execute(
+                "INSERT INTO casino_wallets (discord_user, balance) VALUES (?, ?)",
+                (discord_user, new_balance),
+            )
+        else:
+            new_balance = row["balance"] + amount
+            await db.execute(
+                "UPDATE casino_wallets SET balance = ? WHERE discord_user = ?",
+                (new_balance, discord_user),
+            )
+        await db.execute(
+            "INSERT INTO coin_ledger (discord_user, amount, reason, created_at) VALUES (?, ?, ?, ?)",
+            (discord_user, amount, reason, now_iso),
+        )
+        await db.commit()
+        return new_balance
+
+
+async def get_coin_ledger(discord_user: str, limit: int = 25) -> list[dict]:
+    """Recent coin gains for a user (newest first) — powers the coin-history hub."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT amount, reason, created_at FROM coin_ledger WHERE discord_user = ? "
+            "ORDER BY id DESC LIMIT ?",
+            (discord_user, limit),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
 async def tip_casino_coins(from_user: str, to_user: str, amount: int) -> tuple[int, int]:
     """Transfer casino coins from one user to another atomically.
 
@@ -1942,11 +1985,21 @@ async def add_xp(discord_user: str, amount: int) -> dict:
             (new_xp, new_level, discord_user),
         )
         await db.commit()
+    # Level-up coin reward (100 per level gained), logged to the ledger. Central here so
+    # EVERY xp source (chat, casino, achievements, duels, tournaments) rewards a level-up.
+    coins_awarded = 0
+    if new_level > old_level:
+        coins_awarded = 100 * (new_level - old_level)
+        await credit_coins(
+            discord_user, coins_awarded, f"Reached level {new_level}",
+            datetime.now(timezone.utc).isoformat(),
+        )
     return {
         "total_xp": new_xp,
         "level": new_level,
         "leveled_up": new_level > old_level,
         "old_level": old_level,
+        "coins_awarded": coins_awarded,
     }
 
 
@@ -4691,6 +4744,10 @@ async def sell_instance(user: str, instance_id: int) -> tuple[dict, int]:
             if r is None:
                 raise ValueError("you don't own that card")
             coins = max(1, round(r["book_value"] * QUICK_SELL_FRACTION))
+            await db.execute(
+                "INSERT INTO coin_ledger (discord_user, amount, reason, created_at) VALUES (?, ?, ?, ?)",
+                (user, coins, f"Sold {r['subject_name']}", datetime.now(timezone.utc).isoformat()),
+            )
             await db.execute("DELETE FROM card_instances WHERE instance_id = ?", (instance_id,))
             await db.execute("DELETE FROM card_trade_listings WHERE instance_id = ?", (instance_id,))
             await db.execute(
@@ -5564,3 +5621,49 @@ async def get_display_names(uids: list[str]) -> dict[str, str]:
             f"SELECT discord_user, username FROM discord_users WHERE discord_user IN ({marks})",
             uids)
         return {r["discord_user"]: r["username"] for r in await cur.fetchall()}
+
+
+async def get_unposted_daily_results(day: str) -> list[dict]:
+    """Results for `day` not yet announced to Discord (posted=0)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM daily_results WHERE puzzle_date = ? AND COALESCE(posted, 0) = 0 "
+            "ORDER BY submitted_at", (day,))
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def mark_daily_result_posted(game_id: str, day: str, discord_user: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE daily_results SET posted = 1 "
+            "WHERE game_id = ? AND puzzle_date = ? AND discord_user = ?",
+            (game_id, day, discord_user))
+        await db.commit()
+
+
+async def get_or_create_daily_start(discord_user: str, game_id: str, day: str) -> str:
+    """The user's FIRST Start time for this puzzle-day (ISO). Idempotent — retries reuse it, so
+    the clock runs continuously across attempts instead of resetting each try."""
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute(
+            "INSERT OR IGNORE INTO daily_starts (discord_user, game_id, puzzle_date, started_at) "
+            "VALUES (?, ?, ?, ?)", (discord_user, game_id, day, now))
+        await db.commit()
+        cur = await db.execute(
+            "SELECT started_at FROM daily_starts WHERE discord_user=? AND game_id=? AND puzzle_date=?",
+            (discord_user, game_id, day))
+        row = await cur.fetchone()
+        return row["started_at"]
+
+
+async def get_daily_start(discord_user: str, game_id: str, day: str) -> str | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT started_at FROM daily_starts WHERE discord_user=? AND game_id=? AND puzzle_date=?",
+            (discord_user, game_id, day))
+        row = await cur.fetchone()
+        return row["started_at"] if row else None

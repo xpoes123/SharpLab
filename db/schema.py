@@ -86,6 +86,16 @@ CREATE TABLE IF NOT EXISTS casino_history (
 );
 CREATE INDEX IF NOT EXISTS idx_casino_history_user ON casino_history(discord_user);
 
+-- "Where did my coins come from" — a log of coin GAINS (never spends).
+CREATE TABLE IF NOT EXISTS coin_ledger (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    discord_user  TEXT NOT NULL,
+    amount        INTEGER NOT NULL,      -- always > 0 (gains only)
+    reason        TEXT NOT NULL,         -- human label, e.g. "Reached level 5"
+    created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_coin_ledger_user ON coin_ledger(discord_user, id);
+
 CREATE TABLE IF NOT EXISTS user_xp (
     discord_user  TEXT PRIMARY KEY,
     total_xp      INTEGER NOT NULL DEFAULT 0,
@@ -985,6 +995,21 @@ async def init_db() -> None:
                 "discord_user TEXT NOT NULL, game_id TEXT NOT NULL, "
                 "current INTEGER NOT NULL DEFAULT 0, longest INTEGER NOT NULL DEFAULT 0, "
                 "last_date TEXT, PRIMARY KEY (discord_user, game_id))"
+            )
+            await db.commit()
+        except Exception:
+            pass
+        try:  # daily results: track which have been announced to the Discord thread
+            await db.execute("ALTER TABLE daily_results ADD COLUMN posted INTEGER NOT NULL DEFAULT 0")
+            await db.commit()
+        except Exception:
+            pass
+        try:  # daily: the FIRST Start per user/day — the clock runs continuously from here
+              # across retries, so grinding attempts costs time instead of resetting it.
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS daily_starts ("
+                "discord_user TEXT NOT NULL, game_id TEXT NOT NULL, puzzle_date TEXT NOT NULL, "
+                "started_at TEXT NOT NULL, PRIMARY KEY (discord_user, game_id, puzzle_date))"
             )
             await db.commit()
         except Exception:

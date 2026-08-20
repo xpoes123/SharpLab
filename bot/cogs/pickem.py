@@ -901,7 +901,11 @@ class PickemCog(commands.Cog):
                 coins = _pickem_win_coins(potential_units(p["stake"], prob))
                 if coins > 0:
                     try:
-                        await queries.update_casino_balance(p["discord_user"], coins)
+                        from datetime import datetime, timezone
+                        await queries.credit_coins(
+                            p["discord_user"], coins, "Pick'em win",
+                            datetime.now(timezone.utc).isoformat(),
+                        )
                     except Exception:
                         log.debug("pickem win payout failed for %s", p["discord_user"], exc_info=True)
             if channel is not None and _is_posted(g["message_id"]):

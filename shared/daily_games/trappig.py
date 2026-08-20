@@ -23,6 +23,13 @@ DIFFICULTIES = ["easy", "medium", "hard"]
 # Rank by TIME first (secondary_score = elapsed ms), then fences (primary_score). With unlimited
 # retries everyone can grind to par fences, so speed is what separates the leaderboard.
 RANK_ORDER = ("secondary_score", "primary_score")
+HOWTO = (
+    "A pig sits in the middle of a hex grid. Each turn you click one hex to drop a **fence**; "
+    "then the pig bolts one hex along its shortest path to the edge. **Wall it in completely to "
+    "win.** Your rank is your **time** — the faster you trap it, the higher you place; fences "
+    "break ties. You can reset and retry, but **the clock keeps running across retries** — so "
+    "solve it in as few tries as you can. Only a win counts. The clock starts when you hit Start."
+)
 
 # difficulty → (rows, cols, starting fences). Bigger + sparser = harder.
 _PARAMS = {
@@ -220,8 +227,10 @@ def _greedy_solve(puzzle, record=False):
 def share_grid(result: dict, meta: dict) -> str:
     diff = meta.get("difficulty", "")
     par_v = meta.get("par")
+    num = meta.get("number")
     secs = result["secondary"] // 1000
     t = f"{secs // 60}:{secs % 60:02d}"
     par_str = f" (par {par_v})" if par_v is not None else ""
+    head = f"🐷 Trap the Pig #{num}" if num else "🐷 Trap the Pig"
     blocks = "🟩" * min(result["primary"], 12)
-    return f"🐷 Trap the Pig · {diff} · {result['primary']} fences{par_str} · {t}\n{blocks}"
+    return f"{head} · {diff} · {t} · {result['primary']} fences{par_str}\n{blocks}"

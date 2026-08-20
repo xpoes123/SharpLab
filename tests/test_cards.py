@@ -518,6 +518,64 @@ def test_get_public_user_falls_back(tmp_db):
     _run(go())
 
 
+# --- Coin ledger + new coin sources ------------------------------------------
+
+
+def test_credit_coins_logs_and_balances(tmp_db):
+    async def go():
+        bal = await _queries.credit_coins("u1", 150, "Achievement: Test", "t")
+        assert bal == _queries.CASINO_STARTING_COINS + 150  # new wallet seeded + reward
+        led = await _queries.get_coin_ledger("u1")
+        assert len(led) == 1 and led[0]["amount"] == 150 and led[0]["reason"] == "Achievement: Test"
+        # non-positive is a no-op (no ledger spam)
+        await _queries.credit_coins("u1", 0, "nope", "t")
+        assert len(await _queries.get_coin_ledger("u1")) == 1
+
+    _run(go())
+
+
+def test_add_xp_level_up_awards_coins(tmp_db):
+    async def go():
+        res = await _queries.add_xp("lvl", 1_000_000)  # guaranteed multi-level jump from 1
+        gained = res["level"] - res["old_level"]
+        assert gained > 0
+        assert res["coins_awarded"] == 100 * gained
+        assert await _queries.get_casino_balance("lvl") == _queries.CASINO_STARTING_COINS + 100 * gained
+        led = await _queries.get_coin_ledger("lvl")
+        assert led and led[0]["reason"] == f"Reached level {res['level']}"
+        # more XP that doesn't cross a level → no coins, no new ledger row
+        res2 = await _queries.add_xp("lvl", 1)
+        assert res2["coins_awarded"] == 0
+        assert len(await _queries.get_coin_ledger("lvl")) == 1
+
+    _run(go())
+
+
+def test_multiplayer_winner_only_gets_coins(tmp_db):
+    async def go():
+        from bot.cogs._elo_helpers import update_elo_multiplayer
+        # 3 players, distinct scores → single winner (100)
+        await update_elo_multiplayer([10, 20, 30], "bingo", "test",
+                                     scores={10: 100.0, 20: 50.0, 30: 10.0})
+        assert (await _queries.get_coin_ledger("10"))[0]["reason"] == "Won bingo"
+        assert await _queries.get_casino_balance("10") == _queries.CASINO_STARTING_COINS + 50
+        assert await _queries.get_coin_ledger("20") == []  # losers earn nothing
+        assert await _queries.get_coin_ledger("30") == []
+
+    _run(go())
+
+
+def test_web_coins_endpoint(tmp_db, monkeypatch):
+    async def go():
+        await _queries.credit_coins("web", 40, "Won bingo", "t")
+        monkeypatch.setattr(_webcards.auth, "read_session", lambda req: {"id": "web"})
+        res = await _webcards.coin_history(_FakeReq())
+        assert res["balance"] == _queries.CASINO_STARTING_COINS + 40
+        assert res["ledger"][0]["reason"] == "Won bingo"
+
+    _run(go())
+
+
 # --- Trade market: coin-sweetened trades + listings --------------------------
 
 

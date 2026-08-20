@@ -119,6 +119,7 @@ COGS = [
     "bot.cogs.pokedle",
     "bot.cogs.ratings",
     "bot.cogs.pickem",
+    "bot.cogs.daily",
     "bot.cogs.weeklyrecap",
     "bot.cogs.signals",
     "bot.cogs.rohan_nlp",
