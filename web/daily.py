@@ -64,15 +64,26 @@ async def today(request: Request):
 
 @router.post("/start")
 async def start(request: Request):
-    """Hand over today's board + a signed start token (which carries the server start time)."""
+    """Hand over today's board. The clock is anchored to the user's FIRST Start of the day and
+    runs continuously — retries reuse that anchor (see get_or_create_daily_start), so the returned
+    `elapsed_ms` already includes time spent on earlier attempts. Grinding costs time."""
     uid = _uid(request)
     if not uid:
         return JSONResponse({"error": "sign in to play the daily"}, status_code=401)
     day = daily.puzzle_day()
     puz = await queries.get_or_create_daily_puzzle(day)
+    started_at = await queries.get_or_create_daily_start(uid, puz["game_id"], day)
+    elapsed_ms = _elapsed_ms(started_at)
     token = _start_signer.dumps({"day": day, "game": puz["game_id"], "uid": uid})
     return {"board": puz["payload"], "difficulty": puz["difficulty"], "par": puz["par"],
-            "number": daily.puzzle_number(day), "start_token": token}
+            "number": daily.puzzle_number(day), "start_token": token, "elapsed_ms": elapsed_ms}
+
+
+def _elapsed_ms(started_at_iso: str) -> int:
+    started = datetime.fromisoformat(started_at_iso)
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    return max(0, int((datetime.now(timezone.utc) - started).total_seconds() * 1000))
 
 
 class SubmitBody(BaseModel):
@@ -89,14 +100,18 @@ async def submit(request: Request, body: SubmitBody):
     puz = await queries.get_or_create_daily_puzzle(day)
     game = daily.DAILY_GAMES[puz["game_id"]]
 
-    # Decode the start token → (payload, server start time). This is the authoritative clock.
+    # Auth the token (this run belongs to this user + today's game). The CLOCK, though, comes from
+    # the persisted first-Start anchor, not the token — so retries accumulate time.
     try:
-        data, started_at = _start_signer.loads(
-            body.start_token, max_age=_START_TTL, return_timestamp=True)
+        data = _start_signer.loads(body.start_token, max_age=_START_TTL)
     except (BadSignature, SignatureExpired, ValueError):
         return JSONResponse({"error": "your run expired — press Start again"}, status_code=400)
     if data.get("day") != day or data.get("uid") != uid or data.get("game") != puz["game_id"]:
         return JSONResponse({"error": "stale run — press Start again"}, status_code=400)
+
+    started_at = await queries.get_daily_start(uid, puz["game_id"], day)
+    if started_at is None:
+        return JSONResponse({"error": "press Start first"}, status_code=400)
 
     if await queries.get_daily_result(puz["game_id"], day, uid):
         return JSONResponse({"error": "you already played today's daily"}, status_code=409)
@@ -104,11 +119,8 @@ async def submit(request: Request, body: SubmitBody):
     result = game.validate(puz["payload"], body.solution)
     if result is None:
         return JSONResponse({"error": "that didn't trap the pig — keep going"}, status_code=400)
-    # Server-authoritative elapsed: now − start, bounded.
-    if started_at.tzinfo is None:
-        started_at = started_at.replace(tzinfo=timezone.utc)
-    elapsed_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
-    result["secondary"] = max(0, min(elapsed_ms, _START_TTL * 1000))
+    # Continuous clock from the first Start across all retries.
+    result["secondary"] = min(_elapsed_ms(started_at), _START_TTL * 1000)
 
     recorded = await queries.record_daily_result(
         puz["game_id"], day, uid, solved=result["solved"],

@@ -27,7 +27,8 @@ HOWTO = (
     "A pig sits in the middle of a hex grid. Each turn you click one hex to drop a **fence**; "
     "then the pig bolts one hex along its shortest path to the edge. **Wall it in completely to "
     "win.** Your rank is your **time** — the faster you trap it, the higher you place; fences "
-    "break ties. Unlimited resets, only a win counts. The clock starts when you hit Start."
+    "break ties. You can reset and retry, but **the clock keeps running across retries** — so "
+    "solve it in as few tries as you can. Only a win counts. The clock starts when you hit Start."
 )
 
 # difficulty → (rows, cols, starting fences). Bigger + sparser = harder.

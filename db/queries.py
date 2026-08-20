@@ -5453,3 +5453,30 @@ async def mark_daily_result_posted(game_id: str, day: str, discord_user: str) ->
             "WHERE game_id = ? AND puzzle_date = ? AND discord_user = ?",
             (game_id, day, discord_user))
         await db.commit()
+
+
+async def get_or_create_daily_start(discord_user: str, game_id: str, day: str) -> str:
+    """The user's FIRST Start time for this puzzle-day (ISO). Idempotent — retries reuse it, so
+    the clock runs continuously across attempts instead of resetting each try."""
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute(
+            "INSERT OR IGNORE INTO daily_starts (discord_user, game_id, puzzle_date, started_at) "
+            "VALUES (?, ?, ?, ?)", (discord_user, game_id, day, now))
+        await db.commit()
+        cur = await db.execute(
+            "SELECT started_at FROM daily_starts WHERE discord_user=? AND game_id=? AND puzzle_date=?",
+            (discord_user, game_id, day))
+        row = await cur.fetchone()
+        return row["started_at"]
+
+
+async def get_daily_start(discord_user: str, game_id: str, day: str) -> str | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT started_at FROM daily_starts WHERE discord_user=? AND game_id=? AND puzzle_date=?",
+            (discord_user, game_id, day))
+        row = await cur.fetchone()
+        return row["started_at"] if row else None
