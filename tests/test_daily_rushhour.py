@@ -61,3 +61,22 @@ def test_easy_par_in_range():
         board = rh.build_solvable(daily.seed_for("rushhour", f"2026-09-1{off}"), "easy")
         p, _ = rh.par(board)
         assert 3 <= p <= 13    # easy stays gentle
+
+
+def test_preview_caches_board_within_ttl():
+    """The free-play /preview board is cached per (game, difficulty) for a short TTL and
+    generated off the event loop — so a client hammering it can't regenerate (and once
+    hung the whole app). Two rapid calls return the identical cached board."""
+    import asyncio
+    import web.daily as wd
+
+    async def go():
+        wd._preview_cache.clear()
+        r1 = await wd.preview("rushhour", "easy")
+        r2 = await wd.preview("rushhour", "easy")  # within TTL → cache hit
+        return r1, r2
+
+    r1, r2 = asyncio.run(go())
+    assert "error" not in r1 and r1["board"] == r2["board"] and "par" in r1
+    # cache is populated for that difficulty
+    assert ("rushhour", "easy") in wd._preview_cache

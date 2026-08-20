@@ -11,7 +11,9 @@ placement coins are paid later by the rollover job.
 
 from __future__ import annotations
 
+import asyncio
 import secrets
+import time
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Request
@@ -144,19 +146,47 @@ async def submit(request: Request, body: SubmitBody):
     }
 
 
+# Board generation (rushhour build_solvable, etc.) is CPU-heavy BFS search — a single "hard"
+# board can take 20+s. This endpoint is unauthenticated free-play, so a client hammering it once
+# hung the ENTIRE async app (gambling included) because generation ran on the event loop.
+# Fix, in layers:
+#   1. Run generation OFF the loop (asyncio.to_thread) so it never blocks other requests.
+#   2. Cache a recent board per (game, difficulty) for a short TTL — repeated/flooded previews
+#      serve instantly from cache instead of regenerating, so a flood can't saturate the CPU.
+#   3. A semaphore bounds concurrent generation to 1 (leaves a core free on the small VPS).
+# ponytail: build_solvable's own slowness for "hard" is a separate perf bug (too-narrow accept
+# range → thousands of BFS retries); the cache makes it operationally harmless.
+_PREVIEW_SEM = asyncio.Semaphore(1)
+_PREVIEW_TTL = 30.0  # seconds a generated free-play board is reused before regenerating
+_preview_cache: dict[tuple[str, str], tuple[dict, int, float]] = {}
+
+
 @router.get("/preview/{game_id}")
 async def preview(game_id: str, difficulty: str = "easy"):
     """A fresh, randomly-seeded solvable board for FREE PLAY — no auth, no ranking, no submit.
-    Powers the standalone practice pages (e.g. /rushhour)."""
+    Powers the standalone practice pages (e.g. /rushhour). Board is cached per difficulty for a
+    short TTL and generated off the event loop so this endpoint can't stall the app."""
     game = daily.DAILY_GAMES.get(game_id)
     if game is None:
         return JSONResponse({"error": "unknown game"}, status_code=404)
     diff = difficulty if difficulty in game.DIFFICULTIES else game.DIFFICULTIES[0]
-    seed = secrets.randbelow(2 ** 32)
-    board = game.build_solvable(seed, diff) if hasattr(game, "build_solvable") \
-        else game.generate(seed, diff)
-    par_v, _ = game.par(board)
-    return {"game": _meta(game_id), "board": board, "par": par_v, "difficulty": diff}
+    key = (game_id, diff)
+
+    def _fresh(entry):
+        return entry and (time.monotonic() - entry[2]) < _PREVIEW_TTL
+
+    entry = _preview_cache.get(key)
+    if not _fresh(entry):
+        async with _PREVIEW_SEM:
+            entry = _preview_cache.get(key)  # another request may have refreshed while we waited
+            if not _fresh(entry):
+                seed = secrets.randbelow(2 ** 32)
+                gen = game.build_solvable if hasattr(game, "build_solvable") else game.generate
+                board = await asyncio.to_thread(gen, seed, diff)
+                par_v, _ = await asyncio.to_thread(game.par, board)
+                entry = (board, par_v, time.monotonic())
+                _preview_cache[key] = entry
+    return {"game": _meta(game_id), "board": entry[0], "par": entry[1], "difficulty": diff}
 
 
 @router.get("/leaderboard")
