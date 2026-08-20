@@ -13,15 +13,17 @@ import hashlib
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from shared.daily_games import trappig
+from shared.daily_games import rushhour, trappig
 
 ET = ZoneInfo("America/New_York")
 ROLLOVER_HOUR = 4                # a puzzle-day runs 4am ET → 4am ET
 EPOCH = date(2026, 1, 1)         # day_index origin
 
-# Registry + rotation order. Add plugins here; the daily rotates through DAILY_POOL.
-DAILY_GAMES = {trappig.ID: trappig}
-DAILY_POOL = [trappig.ID]
+# Registry + rotation. Add plugins to DAILY_GAMES; DAILY_POOL is the rotation order, and it only
+# takes effect from POOL_START_DAY so introducing a game never changes already-cached past days.
+DAILY_GAMES = {trappig.ID: trappig, rushhour.ID: rushhour}
+DAILY_POOL = [rushhour.ID, trappig.ID]
+POOL_START_DAY = "2026-08-21"   # multi-game rotation begins here; before it, Trap the Pig only
 
 
 # ── puzzle-day & rotation ─────────────────────────────────────────────────────
@@ -56,10 +58,14 @@ RAMP_EASY_DAYS = 5
 
 
 def schedule(day: str) -> tuple[str, str]:
-    """(game_id, difficulty) for a puzzle-day. Game rotates through DAILY_POOL; difficulty
-    cycles easy→medium→hard, except the first RAMP_EASY_DAYS from launch are pinned to easy."""
+    """(game_id, difficulty) for a puzzle-day. Before POOL_START_DAY only Trap the Pig runs; from
+    there the game rotates through DAILY_POOL (so adding a game never disturbs cached past days).
+    Difficulty cycles easy→medium→hard, except the first RAMP_EASY_DAYS from launch are all easy."""
     i = day_index(day)
-    game_id = DAILY_POOL[i % len(DAILY_POOL)]
+    if i < day_index(POOL_START_DAY):
+        game_id = trappig.ID
+    else:
+        game_id = DAILY_POOL[(i - day_index(POOL_START_DAY)) % len(DAILY_POOL)]
     diffs = DAILY_GAMES[game_id].DIFFICULTIES
     if 0 <= i - day_index(LAUNCH_DAY) < RAMP_EASY_DAYS and "easy" in diffs:
         return game_id, "easy"
