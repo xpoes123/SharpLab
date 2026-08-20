@@ -4889,13 +4889,20 @@ ACTIVITY_REWARDS = {
 }
 
 
-async def grant_activity_reward(discord_user: str, source: str, day: str) -> int:
+async def grant_activity_reward(
+    discord_user: str, source: str, day: str,
+    amount_override: int | None = None, reason: str | None = None,
+) -> int:
     """Credit the per-event coin reward for `source`, up to that source's daily cap. Returns the
     coins actually granted (0 once capped). Atomic in one connection — the cap read + write + wallet
-    credit can't race."""
+    credit can't race. `amount_override` sets the per-event amount (e.g. an earliness bonus), still
+    capped; `reason` is the coin-history label."""
     amount, cap = ACTIVITY_REWARDS.get(source, (0, 0))
-    if amount <= 0:
+    if amount_override is not None:
+        amount = amount_override
+    if amount <= 0 or cap <= 0:
         return 0
+    label = reason or source.replace("_", " ").title()
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         await db.execute("BEGIN IMMEDIATE")
@@ -4918,6 +4925,10 @@ async def grant_activity_reward(discord_user: str, source: str, day: str) -> int
                 "INSERT INTO casino_wallets (discord_user, balance) VALUES (?, ?) "
                 "ON CONFLICT(discord_user) DO UPDATE SET balance = balance + ?",
                 (discord_user, CASINO_STARTING_COINS + grant, grant),
+            )
+            await db.execute(
+                "INSERT INTO coin_ledger (discord_user, amount, reason, created_at) VALUES (?, ?, ?, ?)",
+                (discord_user, grant, label, datetime.now(timezone.utc).isoformat()),
             )
             await db.commit()
             return grant

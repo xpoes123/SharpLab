@@ -20,7 +20,7 @@ async function main() {
   navRight.innerHTML = `<div class="userbar">
     ${av ? `<img class="avatar" src="${av}" alt="">` : `<div class="avatar"></div>`}
     <span>${esc(u.username)}</span>
-    <span class="pill" style="color:var(--gold)">🪙 ${num(me.balance)}</span>
+    <span class="coinschip" title="Casino coins" style="color:var(--gold);cursor:pointer">🪙 ${num(me.balance)}</span>
     <a class="btn ghost" href="/api/v1/auth/logout">Sign out</a></div>`;
 }
 main();
@@ -101,6 +101,15 @@ main();
     filter = chip.dataset.filter;
     chips.querySelectorAll(".gchip").forEach((c) => c.classList.toggle("active", c === chip));
     apply();
+  });
+  // 🎲 Random — jump to a random game among those currently visible (respects search/filter).
+  const random = document.getElementById("grandom");
+  if (random) random.addEventListener("click", () => {
+    const visible = tiles.filter((t) => t.style.display !== "none" && t.getAttribute("href"));
+    const pool = visible.length ? visible : tiles;
+    if (!pool.length) return;
+    const pick = pool[Math.floor(Math.random() * pool.length)];
+    window.location.href = pick.getAttribute("href");
   });
   apply();
 })();

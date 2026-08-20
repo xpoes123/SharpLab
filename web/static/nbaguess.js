@@ -194,7 +194,7 @@ async function submitGuess() {
   const guess = (input && input.value || "").trim();
   if (!guess) { if (input) input.focus(); return; }
   setBusy(true);
-  const res = await postNba("/guess", { token: round.token, guess });
+  const res = await postNba("/guess", { token: round.token, guess, shown: round.shown });
   setBusy(false);
   if (res.error || res._status) {
     return toast("❌ " + (res.error || "something went wrong"));
