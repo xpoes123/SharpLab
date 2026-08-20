@@ -1,18 +1,19 @@
-"""Daily Games — Discord surface.
+"""Daily Games — Discord surface (channel feed, no threads).
 
-Posts the daily rally once a day (default 7pm ET) to the daily channel, pings the @Daily role,
-and opens a discussion thread. A poller announces each player's result into that day's thread as
-they finish on the web. A 4am job settles the previous day's placement coins.
+- **4am ET** (rollover): post "today's puzzle is live" to the daily channel — NO ping.
+- **7pm ET**: ping the @Daily role with a reminder + current standings.
+- **Per play**: every solve posts a new message in the channel, so the channel itself reads like a
+  live leaderboard.
+- **After 4am**: settle the previous day's placement coins and post the final standings.
 
-The post uses a "catch-up" loop (not a fixed-time task) so it survives restarts and fires
-immediately if the bot comes up after post-time with today's post still owed. All scheduling is in
-America/New_York to match pick'em.
+All posts go straight to the channel (no discussion thread). Catch-up loops (not fixed-time tasks)
+so a restart never misses the 4am post or 7pm ping. Times are America/New_York (matches pick'em).
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import discord
@@ -28,12 +29,13 @@ SITE = "https://sharplab.djiang.xyz/daily"
 
 CHANNEL_DEFAULT = "1539498305162051654"
 ROLE_DEFAULT = "1539504644697493524"
-POST_HOUR = 19          # 7pm ET rally
+PING_HOUR = 19          # 7pm ET — the @Daily reminder ping
 PAYOUT_HOUR = 4         # settle yesterday's coins after the 4am rollover
 
 _CHANNEL_KEY = "daily_channel"
 _ROLE_KEY = "daily_role"
-_LAST_POST_KEY = "daily_last_post"
+_LAST_POST_KEY = "daily_last_post"   # date we've announced "live"
+_LAST_PING_KEY = "daily_last_ping"   # date we've pinged @Daily
 
 
 def _now_et() -> datetime:
@@ -44,17 +46,24 @@ async def _setting(key: str, default: str) -> str:
     return (await queries.get_bot_setting(key)) or default
 
 
+def _fmt_ms(ms: int) -> str:
+    s = ms // 1000
+    return f"{s // 60}:{s % 60:02d}"
+
+
 class Daily(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
     async def cog_load(self) -> None:
-        self.post_loop.start()
+        self.announce_loop.start()
+        self.ping_loop.start()
         self.results_loop.start()
         self.payout_loop.start()
 
     async def cog_unload(self) -> None:
-        self.post_loop.cancel()
+        self.announce_loop.cancel()
+        self.ping_loop.cancel()
         self.results_loop.cancel()
         self.payout_loop.cancel()
 
@@ -64,105 +73,106 @@ class Daily(commands.Cog):
         ch = self.bot.get_channel(int(cid))
         return ch if isinstance(ch, discord.TextChannel) else None
 
-    async def _thread(self, day: str) -> discord.Thread | None:
-        raw = await queries.get_bot_setting(f"daily_thread:{day}")
-        if not raw:
-            return None
-        ch = self.bot.get_channel(int(raw))
-        if ch is None:
-            try:
-                ch = await self.bot.fetch_channel(int(raw))
-            except discord.HTTPException:
-                return None
-        return ch if isinstance(ch, discord.Thread) else None
-
     async def _name(self, uid: str) -> str:
         try:
             return (await self.bot.fetch_user(int(uid))).display_name
         except (discord.HTTPException, ValueError):
             return f"Player {uid[:6]}"
 
-    def _post_embed(self, puz: dict, number: int, winner: str | None) -> discord.Embed:
-        game = daily.DAILY_GAMES[puz["game_id"]]
-        e = discord.Embed(
-            title=f"🧩 Daily #{number} — {game.NAME}",
-            description=(f"Today's **{puz['difficulty']}** puzzle is live — same board for "
-                        f"everyone, fastest solve wins.\n\n**[▶ Play today's daily]({SITE})**"),
-            colour=0xBB9AF7,
-        )
-        e.add_field(name="Par", value=f"~{puz['par']}", inline=True)
-        e.add_field(name="Difficulty", value=puz["difficulty"].title(), inline=True)
-        if winner:
-            e.add_field(name="Yesterday's winner", value=winner, inline=False)
-        e.set_footer(text="🔥 Keep your streak • coins for playing + the podium")
-        return e
+    @staticmethod
+    def _prev_day(day: str) -> str:
+        return (date.fromisoformat(day) - timedelta(days=1)).isoformat()
 
-    # ── daily rally post (catch-up loop) ─────────────────────────────────────
+    async def _standings(self, game_id: str, day: str, n: int = 3) -> list[str]:
+        ranked = daily.rank_results(await queries.get_daily_results(game_id, day), game_id)
+        medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+        out = []
+        for r in ranked[:n]:
+            if not r["solved"]:
+                break
+            medal = medals.get(r["rank"], f"#{r['rank']}")
+            name = await self._name(r["discord_user"])
+            out.append(f"{medal} **{name}** — {_fmt_ms(r['secondary_score'])}")
+        return out
+
+    # ── 4am: "today's puzzle is live" (no ping) ──────────────────────────────
     @tasks.loop(minutes=5)
-    async def post_loop(self) -> None:
-        now = _now_et()
+    async def announce_loop(self) -> None:
         day = daily.puzzle_day()
-        if now.hour < POST_HOUR:                       # not time yet today
+        if await queries.get_bot_setting(_LAST_POST_KEY) == day:
             return
-        if await queries.get_bot_setting(_LAST_POST_KEY) == day:   # already posted today
-            return
-        await self._post_rally(day)
-
-    async def _post_rally(self, day: str) -> bool:
-        """Do the actual rally post. Returns True on success. Callable by the admin command to
-        force a post outside the scheduled window."""
         channel = await self._channel()
         if channel is None:
             log.warning("daily: channel not found")
-            return False
+            return
         try:
             puz = await queries.get_or_create_daily_puzzle(day)
+            game = daily.DAILY_GAMES[puz["game_id"]]
             number = daily.puzzle_number(day)
-            winner = await self._winner_line(daily.schedule(day)[0],
-                                             self._prev_day(day))
-            role_id = await _setting(_ROLE_KEY, ROLE_DEFAULT)
-            msg = await channel.send(content=f"<@&{role_id}>",
-                                     embed=self._post_embed(puz, number, winner),
-                                     allowed_mentions=discord.AllowedMentions(roles=True))
-            try:
-                thread = await msg.create_thread(name=f"Daily #{number} · {daily.DAILY_GAMES[puz['game_id']].NAME}")
-                await queries.set_bot_setting(f"daily_thread:{day}", str(thread.id))
-            except discord.HTTPException:
-                log.exception("daily: could not create thread")
+            win = await self._standings(daily.schedule(self._prev_day(day))[0], self._prev_day(day), 1)
+            e = discord.Embed(
+                title=f"🧩 Daily #{number} — {game.NAME} is live",
+                description=(f"Today's **{puz['difficulty']}** puzzle — same board for everyone, "
+                            f"fastest solve wins.\n\n**[▶ Play]({SITE})**"),
+                colour=0xBB9AF7)
+            if win:
+                e.add_field(name="Yesterday's winner", value=win[0], inline=False)
+            e.set_footer(text="🔔 grab the @Daily role in #roles to get pinged at 7pm")
+            await channel.send(embed=e)   # no ping, no thread
             await queries.set_bot_setting(_LAST_POST_KEY, day)
-            log.info("daily: posted rally for %s (#%s)", day, number)
-            return True
+            log.info("daily: announced #%s for %s", number, day)
         except Exception:
-            log.exception("daily: rally post failed")
-            return False
+            log.exception("daily: announce failed")
 
-    @post_loop.before_loop
-    async def _before_post(self) -> None:
+    @announce_loop.before_loop
+    async def _b1(self) -> None:
         await self.bot.wait_until_ready()
 
-    @staticmethod
-    def _prev_day(day: str) -> str:
-        from datetime import date, timedelta
-        return (date.fromisoformat(day) - timedelta(days=1)).isoformat()
+    # ── 7pm: ping @Daily with current standings ──────────────────────────────
+    @tasks.loop(minutes=5)
+    async def ping_loop(self) -> None:
+        if _now_et().hour < PING_HOUR:
+            return
+        day = daily.puzzle_day()
+        if await queries.get_bot_setting(_LAST_PING_KEY) == day:
+            return
+        channel = await self._channel()
+        if channel is None:
+            return
+        try:
+            puz = await queries.get_or_create_daily_puzzle(day)
+            game = daily.DAILY_GAMES[puz["game_id"]]
+            number = daily.puzzle_number(day)
+            role_id = await _setting(_ROLE_KEY, ROLE_DEFAULT)
+            standings = await self._standings(puz["game_id"], day, 3)
+            e = discord.Embed(
+                title=f"🔔 Last call — Daily #{number} ({game.NAME})",
+                description=(f"Rolls over at 4am ET. Beat the board 👉 **[Play]({SITE})**"),
+                colour=0xE0AF68)
+            e.add_field(name="Current standings",
+                        value="\n".join(standings) if standings else "_nobody's solved it yet — go!_",
+                        inline=False)
+            await channel.send(content=f"<@&{role_id}>", embed=e,
+                               allowed_mentions=discord.AllowedMentions(roles=True))
+            await queries.set_bot_setting(_LAST_PING_KEY, day)
+            log.info("daily: pinged @Daily for #%s", number)
+        except Exception:
+            log.exception("daily: ping failed")
 
-    async def _winner_line(self, game_id: str, day: str) -> str | None:
-        rows = await queries.get_daily_results(game_id, day)
-        ranked = daily.rank_results(rows, game_id)
-        if not ranked or not ranked[0]["solved"]:
-            return None
-        top = ranked[0]
-        secs = top["secondary_score"] // 1000
-        return f"🏆 **{await self._name(top['discord_user'])}** — {secs // 60}:{secs % 60:02d} · {top['primary_score']} fences"
+    @ping_loop.before_loop
+    async def _b2(self) -> None:
+        await self.bot.wait_until_ready()
 
-    # ── results poller ───────────────────────────────────────────────────────
-    @tasks.loop(seconds=10)   # snappy — a solve shows in the thread within ~10s
+    # ── per-play results, posted to the CHANNEL (running leaderboard) ─────────
+    @tasks.loop(seconds=10)
     async def results_loop(self) -> None:
         day = daily.puzzle_day()
-        thread = await self._thread(day)
-        if thread is None:
+        channel = await self._channel()
+        if channel is None:
             return
         try:
             game_id = daily.schedule(day)[0]
+            number = daily.puzzle_number(day)
             fresh = await queries.get_unposted_daily_results(day)
             if not fresh:
                 return
@@ -172,26 +182,23 @@ class Daily(commands.Cog):
                 if not r["solved"]:
                     await queries.mark_daily_result_posted(r["game_id"], day, r["discord_user"])
                     continue
-                # Announce the SOLVE (+ lead changes) rather than an absolute rank — a "#3" that
-                # later becomes "#5" as faster people finish just reads as stale/contradictory.
                 rk = ranked.get(r["discord_user"], {}).get("rank")
-                secs = r["secondary_score"] // 1000
-                t = f"{secs // 60}:{secs % 60:02d}"
                 name = await self._name(r["discord_user"])
+                t = _fmt_ms(r["secondary_score"])
                 if rk == 1:
-                    body = f"🏆 **{name}** took the lead — {t} · {r['primary_score']} fences!"
+                    body = f"🏆 **{name}** took the lead on Daily #{number} — {t}!"
                 else:
-                    body = f"🎉 **{name}** solved it — {t} · {r['primary_score']} fences"
-                await thread.send(body)
+                    body = f"🎉 **{name}** solved Daily #{number} — {t} · rank #{rk}"
+                await channel.send(body)
                 await queries.mark_daily_result_posted(r["game_id"], day, r["discord_user"])
         except Exception:
             log.exception("daily: results poller failed")
 
     @results_loop.before_loop
-    async def _before_results(self) -> None:
+    async def _b3(self) -> None:
         await self.bot.wait_until_ready()
 
-    # ── placement payout (runs after the 4am rollover) ───────────────────────
+    # ── placement payout after 4am ───────────────────────────────────────────
     @tasks.loop(minutes=30)
     async def payout_loop(self) -> None:
         if _now_et().hour < PAYOUT_HOUR:
@@ -204,7 +211,7 @@ class Daily(commands.Cog):
             log.exception("daily: payout loop failed")
 
     @payout_loop.before_loop
-    async def _before_payout(self) -> None:
+    async def _b4(self) -> None:
         await self.bot.wait_until_ready()
 
     async def _settle_day(self, game_id: str, day: str) -> None:
@@ -218,12 +225,12 @@ class Daily(commands.Cog):
                 medal = {1: "🥇", 2: "🥈", 3: "🥉"}[r["rank"]]
                 lines.append(f"{medal} **{await self._name(r['discord_user'])}** +🪙{coins}")
         await queries.mark_daily_awarded(game_id, day)
-        thread = await self._thread(day)
-        if thread and lines:
-            e = discord.Embed(title=f"🏁 Daily #{daily.puzzle_number(day)} — final",
+        channel = await self._channel()
+        if channel and lines:
+            e = discord.Embed(title=f"🏁 Daily #{daily.puzzle_number(day)} — final results",
                               description="\n".join(lines), colour=0x9ECE6A)
             try:
-                await thread.send(embed=e)
+                await channel.send(embed=e)
             except discord.HTTPException:
                 pass
         log.info("daily: settled %s (%d players)", day, len(ranked))
@@ -245,7 +252,7 @@ class Daily(commands.Cog):
                 await interaction.response.send_message("🔕 You'll no longer be pinged for the daily.", ephemeral=True)
             else:
                 await member.add_roles(role, reason="daily notify toggle")
-                await interaction.response.send_message("🔔 You'll be pinged when each daily drops.", ephemeral=True)
+                await interaction.response.send_message("🔔 You'll be pinged when the daily's up.", ephemeral=True)
         except discord.Forbidden:
             await interaction.response.send_message("I can't manage that role (permission/hierarchy).", ephemeral=True)
 
@@ -258,25 +265,21 @@ class Daily(commands.Cog):
         if not ranked:
             await interaction.followup.send("No one's played today's daily yet — be the first! " + SITE, ephemeral=True)
             return
-        lines = []
-        for r in ranked[:15]:
-            secs = r["secondary_score"] // 1000
-            tag = "✅" if r["solved"] else "❌"
-            lines.append(f"`#{r['rank']}` {tag} **{await self._name(r['discord_user'])}** — "
-                         f"{secs // 60}:{secs % 60:02d} · {r['primary_score']} fences")
+        lines = [f"`#{r['rank']}` {'✅' if r['solved'] else '❌'} **{await self._name(r['discord_user'])}** "
+                 f"— {_fmt_ms(r['secondary_score'])}" for r in ranked[:15]]
         e = discord.Embed(title=f"🧩 Daily #{daily.puzzle_number(day)} — today",
                           description="\n".join(lines), colour=0xBB9AF7)
         await interaction.followup.send(embed=e, ephemeral=True)
 
-    @group.command(name="post", description="Force today's daily rally now (admin)")
+    @group.command(name="post", description="Force the 'daily is live' post now (admin)")
     async def post_now(self, interaction: discord.Interaction) -> None:
         if not interaction.user.guild_permissions.manage_guild:
             await interaction.response.send_message("You need **Manage Server**.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
-        ok = await self._post_rally(daily.puzzle_day())   # force, ignores the 7pm guard
-        await interaction.followup.send("✅ Posted." if ok else "❌ Couldn't post — check the channel/perms.",
-                                        ephemeral=True)
+        await queries.set_bot_setting(_LAST_POST_KEY, "")   # force re-announce
+        await self.announce_loop()
+        await interaction.followup.send("Posted (if a channel is set).", ephemeral=True)
 
     @group.command(name="channel", description="Set the daily channel (admin)")
     async def set_channel(self, interaction: discord.Interaction, channel: discord.TextChannel) -> None:
