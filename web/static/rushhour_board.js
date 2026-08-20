@@ -106,37 +106,56 @@
     svgEl.setAttribute("xmlns", "http://www.w3.org/2000/svg");
 
     let s = "";
-    // Board backing + grid lines.
-    s += `<rect x="0" y="0" width="${boardW()}" height="${H}" rx="12" fill="var(--panel2)" stroke="var(--line)" stroke-width="1.5"/>`;
+    // Filters + the exit-row highlight lane, for depth.
+    s += `<defs>` +
+      `<filter id="rhsh" x="-20%" y="-20%" width="140%" height="150%">` +
+      `<feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="#000" flood-opacity="0.45"/></filter>` +
+      `<filter id="rhglow" x="-40%" y="-40%" width="180%" height="180%">` +
+      `<feDropShadow dx="0" dy="2" stdDeviation="1.5" flood-color="#000" flood-opacity="0.5"/>` +
+      `<feDropShadow dx="0" dy="0" stdDeviation="5" flood-color="#f7768e" flood-opacity="0.85"/></filter>` +
+      `</defs>`;
+    // Board backing (parking lot) + subtle inset + grid.
+    s += `<rect x="0" y="0" width="${boardW()}" height="${H}" rx="14" fill="#20232f" stroke="var(--line)" stroke-width="2"/>`;
+    const ey = exitRow * CELL;
+    s += `<rect x="2" y="${ey + 2}" width="${boardW() - 4}" height="${CELL - 4}" rx="6" fill="rgba(158,206,106,.06)"/>`;
     for (let i = 1; i < size; i++) {
       const p = i * CELL;
-      s += `<line x1="${p}" y1="0" x2="${p}" y2="${H}" stroke="var(--line)" stroke-width="1" opacity="0.5"/>`;
-      s += `<line x1="0" y1="${p}" x2="${boardW()}" y2="${p}" stroke="var(--line)" stroke-width="1" opacity="0.5"/>`;
+      s += `<line x1="${p}" y1="6" x2="${p}" y2="${H - 6}" stroke="var(--line)" stroke-width="1" opacity="0.45"/>`;
+      s += `<line x1="6" y1="${p}" x2="${boardW() - 6}" y2="${p}" stroke="var(--line)" stroke-width="1" opacity="0.45"/>`;
     }
     // Exit gap + arrow on the right edge of exit_row.
-    const ey = exitRow * CELL;
-    s += `<rect x="${boardW() - 2}" y="${ey + 3}" width="4" height="${CELL - 6}" fill="var(--panel2)"/>`;
-    s += `<text x="${boardW() + ARROW / 2}" y="${ey + CELL * 0.66}" font-size="${CELL * 0.6}" text-anchor="middle" fill="var(--green)">▶</text>`;
+    s += `<text x="${boardW() + ARROW / 2}" y="${ey + CELL * 0.66}" font-size="${CELL * 0.62}" text-anchor="middle" fill="var(--green)">▶</text>`;
 
-    // Cars.
+    // Cars — each a group (body + gloss + tinted windows) with a drop shadow, so they read as
+    // physical pieces. The group is translated; the drag moves that transform.
     for (const car of cars) {
-      const { x, y, w, h } = carRectAttrs(car);
+      const bx = car.c * CELL, by = car.r * CELL;
+      const w = (car.orient === "h" ? car.len : 1) * CELL - 2 * PAD;
+      const h = (car.orient === "v" ? car.len : 1) * CELL - 2 * PAD;
       const fill = colorOf[car.id];
       const isTarget = car.id === target;
-      const rad = Math.min(w, h) * 0.28;
-      s += `<rect class="rh-car${isTarget ? " target" : ""}" data-id="${escAttr(car.id)}" ` +
-        `x="${x}" y="${y}" width="${w}" height="${h}" rx="${rad}" ry="${rad}" ` +
-        `fill="${fill}" stroke="rgba(0,0,0,.35)" stroke-width="1.5"/>`;
+      const rad = Math.min(w, h) * 0.3;
+      // tinted "windows" inset toward the middle
+      const wx = PAD + (car.orient === "h" ? w * 0.2 : w * 0.24);
+      const wy = PAD + (car.orient === "h" ? h * 0.24 : h * 0.2);
+      const ww = w - (wx - PAD) * 2, wh = h - (wy - PAD) * 2;
+      s += `<g class="rh-car${isTarget ? " target" : ""}" data-id="${escAttr(car.id)}" ` +
+        `transform="translate(${bx},${by})" filter="url(#${isTarget ? "rhglow" : "rhsh"})">` +
+        `<rect x="${PAD}" y="${PAD}" width="${w}" height="${h}" rx="${rad}" fill="${fill}" stroke="rgba(0,0,0,.28)" stroke-width="1"/>` +
+        `<rect x="${PAD + 1}" y="${PAD + 1}" width="${w - 2}" height="${h * 0.42}" rx="${rad}" fill="rgba(255,255,255,.20)"/>` +
+        `<rect x="${wx}" y="${wy}" width="${ww}" height="${wh}" rx="5" fill="rgba(12,14,22,.42)"/>` +
+        (isTarget ? `<rect x="${PAD}" y="${PAD}" width="${w}" height="${h}" rx="${rad}" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="1.5"/>` : ``) +
+        `</g>`;
     }
     svgEl.innerHTML = s;
   }
 
-  // Move only the active car's rect during a drag (no full redraw).
+  // Move the active car's GROUP during a drag (translate along its axis; no full redraw).
   function moveDragRect(px) {
-    const rect = drag && drag.rect;
-    if (!rect) return;
-    if (drag.car.orient === "h") rect.setAttribute("x", px + PAD);
-    else rect.setAttribute("y", px + PAD);
+    const g = drag && drag.rect;
+    if (!g) return;
+    if (drag.car.orient === "h") g.setAttribute("transform", `translate(${px},${drag.baseCross})`);
+    else g.setAttribute("transform", `translate(${drag.baseCross},${px})`);
   }
 
   // ── Pointer drag ──
@@ -152,7 +171,7 @@
 
   function onPointerDown(e) {
     if (done) return;
-    const t = e.target.closest("rect[data-id]");
+    const t = e.target.closest("[data-id]");
     if (!t) return;
     const id = t.getAttribute("data-id");
     const car = cars.find((c) => c.id === id);
@@ -162,6 +181,7 @@
       car,
       rect: t,
       startVar: carVar(car), // axis coord before this gesture (for delta)
+      baseCross: car.orient === "h" ? car.r * CELL : car.c * CELL, // fixed cross-axis origin
       minPx: lo * CELL,
       maxPx: hi * CELL,
       curPx: carVar(car) * CELL,
