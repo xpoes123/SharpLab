@@ -172,11 +172,17 @@ class Daily(commands.Cog):
                 if not r["solved"]:
                     await queries.mark_daily_result_posted(r["game_id"], day, r["discord_user"])
                     continue
-                rk = ranked.get(r["discord_user"], {}).get("rank", "?")
+                # Announce the SOLVE (+ lead changes) rather than an absolute rank — a "#3" that
+                # later becomes "#5" as faster people finish just reads as stale/contradictory.
+                rk = ranked.get(r["discord_user"], {}).get("rank")
                 secs = r["secondary_score"] // 1000
-                await thread.send(
-                    f"🎉 **{await self._name(r['discord_user'])}** trapped it in "
-                    f"{secs // 60}:{secs % 60:02d} · {r['primary_score']} fences · rank #{rk}")
+                t = f"{secs // 60}:{secs % 60:02d}"
+                name = await self._name(r["discord_user"])
+                if rk == 1:
+                    body = f"🏆 **{name}** took the lead — {t} · {r['primary_score']} fences!"
+                else:
+                    body = f"🎉 **{name}** solved it — {t} · {r['primary_score']} fences"
+                await thread.send(body)
                 await queries.mark_daily_result_posted(r["game_id"], day, r["discord_user"])
         except Exception:
             log.exception("daily: results poller failed")
