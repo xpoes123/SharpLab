@@ -179,8 +179,11 @@ class Daily(commands.Cog):
             ranked = {r["discord_user"]: r for r in daily.rank_results(
                 await queries.get_daily_results(game_id, day), game_id)}
             for r in fresh:
+                # Claim BEFORE sending — atomically flip posted 0→1. If a second (overlapping)
+                # instance already claimed it, we skip, so it's never posted twice.
+                if not await queries.claim_daily_result_post(r["game_id"], day, r["discord_user"]):
+                    continue
                 if not r["solved"]:
-                    await queries.mark_daily_result_posted(r["game_id"], day, r["discord_user"])
                     continue
                 rk = ranked.get(r["discord_user"], {}).get("rank")
                 name = await self._name(r["discord_user"])
@@ -190,7 +193,6 @@ class Daily(commands.Cog):
                 else:
                     body = f"🎉 **{name}** solved Daily #{number} — {t} · rank #{rk}"
                 await channel.send(body)
-                await queries.mark_daily_result_posted(r["game_id"], day, r["discord_user"])
         except Exception:
             log.exception("daily: results poller failed")
 

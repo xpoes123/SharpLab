@@ -5759,3 +5759,15 @@ async def get_skill_rank(game_id: str, discord_user: str) -> int | None:
             "SELECT COUNT(*) AS n FROM skill_scores WHERE game_id=? AND best_ms < ?",
             (game_id, row["best_ms"]))
         return (await cur.fetchone())["n"] + 1
+
+
+async def claim_daily_result_post(game_id: str, day: str, discord_user: str) -> bool:
+    """Atomically claim a result for announcing: flip posted 0→1 and report whether THIS caller
+    won the claim. Prevents a double-post if two bot instances briefly overlap (only one wins)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "UPDATE daily_results SET posted=1 "
+            "WHERE game_id=? AND puzzle_date=? AND discord_user=? AND COALESCE(posted,0)=0",
+            (game_id, day, discord_user))
+        await db.commit()
+        return cur.rowcount > 0
