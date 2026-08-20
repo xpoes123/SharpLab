@@ -109,14 +109,16 @@ class Daily(commands.Cog):
             puz = await queries.get_or_create_daily_puzzle(day)
             game = daily.DAILY_GAMES[puz["game_id"]]
             number = daily.puzzle_number(day)
-            win = await self._standings(daily.schedule(self._prev_day(day))[0], self._prev_day(day), 1)
+            prev = self._prev_day(day)
+            board = await self._standings(daily.schedule(prev)[0], prev, 20)   # full board
             e = discord.Embed(
                 title=f"🧩 Daily #{number} — {game.NAME} is live",
                 description=(f"Today's **{puz['difficulty']}** puzzle — same board for everyone, "
                             f"fastest solve wins.\n\n**[▶ Play]({SITE})**"),
                 colour=0xBB9AF7)
-            if win:
-                e.add_field(name="Yesterday's winner", value=win[0], inline=False)
+            if board:
+                e.add_field(name=f"Yesterday's final standings — Daily #{daily.puzzle_number(prev)}",
+                            value="\n".join(board)[:1024], inline=False)
             e.set_footer(text="🔔 grab the @Daily role in #roles to get pinged at 7pm")
             await channel.send(embed=e)   # no ping, no thread
             await queries.set_bot_setting(_LAST_POST_KEY, day)
@@ -144,7 +146,7 @@ class Daily(commands.Cog):
             game = daily.DAILY_GAMES[puz["game_id"]]
             number = daily.puzzle_number(day)
             role_id = await _setting(_ROLE_KEY, ROLE_DEFAULT)
-            standings = await self._standings(puz["game_id"], day, 3)
+            standings = await self._standings(puz["game_id"], day, 15)
             e = discord.Embed(
                 title=f"🔔 Last call — Daily #{number} ({game.NAME})",
                 description=(f"Rolls over at 4am ET. Beat the board 👉 **[Play]({SITE})**"),
