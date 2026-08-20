@@ -151,4 +151,4 @@ async def play(request: Request, body: PlayBody):
 
 # Refund the up-front bet if the process restarts mid-hand (see web/inflight.py).
 from web import inflight as _inflight  # noqa: E402
-_inflight.register("threecardpoker", _ROUNDS, lambda st: st.get("ante", 0))
+_inflight.register("threecardpoker", _ROUNDS)

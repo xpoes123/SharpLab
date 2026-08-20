@@ -190,4 +190,4 @@ async def _settle(uid: str, st: dict, folded: bool = False) -> dict:
 
 # Refund the up-front bet if the process restarts mid-hand (see web/inflight.py).
 from web import inflight as _inflight  # noqa: E402
-_inflight.register("uth", _ROUNDS, lambda st: st.get("ante", 0) + st.get("blind", 0) + st.get("trips", 0) + st.get("play", 0))
+_inflight.register("uth", _ROUNDS)

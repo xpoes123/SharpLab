@@ -1004,6 +1004,15 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        try:  # in-flight casino rounds persisted across restarts (so a deploy resumes the hand)
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS inflight_rounds ("
+                "game_id TEXT NOT NULL, round_id TEXT NOT NULL, discord_user TEXT, "
+                "state TEXT NOT NULL, PRIMARY KEY (game_id, round_id))"
+            )
+            await db.commit()
+        except Exception:
+            pass
         try:  # daily: the FIRST Start per user/day — the clock runs continuously from here
               # across retries, so grinding attempts costs time instead of resetting it.
             await db.execute(

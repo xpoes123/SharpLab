@@ -87,4 +87,4 @@ async def roll(request: Request, body: RollBody):
 
 # Refund the up-front bet if the process restarts mid-hand (see web/inflight.py).
 from web import inflight as _inflight  # noqa: E402
-_inflight.register("crapless", _ROUNDS, lambda st: st.get("bet", 0))
+_inflight.register("crapless", _ROUNDS)

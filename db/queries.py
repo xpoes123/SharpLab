@@ -5680,3 +5680,30 @@ async def get_daily_start(discord_user: str, game_id: str, day: str) -> str | No
             (discord_user, game_id, day))
         row = await cur.fetchone()
         return row["started_at"] if row else None
+
+
+# ── In-flight round persistence (resume open casino hands across restarts) ──────
+
+async def save_inflight_rounds(rows: list[tuple]) -> None:
+    """Replace the persisted snapshot with `rows` = [(game_id, round_id, discord_user, state), …]."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM inflight_rounds")
+        if rows:
+            await db.executemany(
+                "INSERT OR REPLACE INTO inflight_rounds (game_id, round_id, discord_user, state) "
+                "VALUES (?, ?, ?, ?)", rows)
+        await db.commit()
+
+
+async def load_inflight_rounds() -> list[tuple]:
+    """Return [(game_id, round_id, state), …] of persisted open rounds."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT game_id, round_id, state FROM inflight_rounds")
+        return [(r["game_id"], r["round_id"], r["state"]) for r in await cur.fetchall()]
+
+
+async def clear_inflight_rounds() -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM inflight_rounds")
+        await db.commit()

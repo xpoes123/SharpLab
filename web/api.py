@@ -113,6 +113,10 @@ def _is_pregame(captured_at: str | None, start_time: str | None) -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    try:
+        await inflight.restore_all()   # bring back any hands persisted at the last shutdown
+    except Exception:
+        pass
     cleanup_task = asyncio.create_task(cleanup_stale_rooms())
     figgie_cleanup_task = asyncio.create_task(cleanup_stale_figgie_rooms())
     bingo_cleanup_task = asyncio.create_task(cleanup_stale_bingo_rooms())
@@ -129,9 +133,9 @@ async def lifespan(app: FastAPI):
     pen_cleanup_task = asyncio.create_task(cleanup_stale_penalties_rooms())
     quote_task = asyncio.create_task(quote_refresh_loop())   # keep HQ stock prices warm
     yield
-    # Refund any in-flight bets before we exit so a deploy/restart never eats a player's ante.
+    # Snapshot open hands so a deploy/restart resumes them instead of dropping the player mid-game.
     try:
-        await inflight.refund_all()
+        await inflight.persist_all()
     except Exception:
         pass
     quote_task.cancel()
