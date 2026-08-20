@@ -106,10 +106,15 @@ class Daily(commands.Cog):
             return
         if await queries.get_bot_setting(_LAST_POST_KEY) == day:   # already posted today
             return
+        await self._post_rally(day)
+
+    async def _post_rally(self, day: str) -> bool:
+        """Do the actual rally post. Returns True on success. Callable by the admin command to
+        force a post outside the scheduled window."""
         channel = await self._channel()
         if channel is None:
             log.warning("daily: channel not found")
-            return
+            return False
         try:
             puz = await queries.get_or_create_daily_puzzle(day)
             number = daily.puzzle_number(day)
@@ -126,8 +131,10 @@ class Daily(commands.Cog):
                 log.exception("daily: could not create thread")
             await queries.set_bot_setting(_LAST_POST_KEY, day)
             log.info("daily: posted rally for %s (#%s)", day, number)
+            return True
         except Exception:
             log.exception("daily: rally post failed")
+            return False
 
     @post_loop.before_loop
     async def _before_post(self) -> None:
@@ -256,14 +263,15 @@ class Daily(commands.Cog):
                           description="\n".join(lines), colour=0xBB9AF7)
         await interaction.followup.send(embed=e, ephemeral=True)
 
-    @group.command(name="post", description="Post today's daily rally now (admin)")
+    @group.command(name="post", description="Force today's daily rally now (admin)")
     async def post_now(self, interaction: discord.Interaction) -> None:
         if not interaction.user.guild_permissions.manage_guild:
             await interaction.response.send_message("You need **Manage Server**.", ephemeral=True)
             return
-        await queries.set_bot_setting(_LAST_POST_KEY, "")     # force a re-post
-        await self.post_loop()
-        await interaction.response.send_message("Posted (if it was due).", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        ok = await self._post_rally(daily.puzzle_day())   # force, ignores the 7pm guard
+        await interaction.followup.send("✅ Posted." if ok else "❌ Couldn't post — check the channel/perms.",
+                                        ephemeral=True)
 
     @group.command(name="channel", description="Set the daily channel (admin)")
     async def set_channel(self, interaction: discord.Interaction, channel: discord.TextChannel) -> None:
