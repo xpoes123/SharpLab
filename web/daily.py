@@ -11,6 +11,7 @@ placement coins are paid later by the rollover job.
 
 from __future__ import annotations
 
+import secrets
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Request
@@ -141,6 +142,21 @@ async def submit(request: Request, body: SubmitBody):
         "share": game.share_grid(result, {"difficulty": puz["difficulty"], "par": puz["par"],
                                            "number": daily.puzzle_number(day)}),
     }
+
+
+@router.get("/preview/{game_id}")
+async def preview(game_id: str, difficulty: str = "easy"):
+    """A fresh, randomly-seeded solvable board for FREE PLAY — no auth, no ranking, no submit.
+    Powers the standalone practice pages (e.g. /rushhour)."""
+    game = daily.DAILY_GAMES.get(game_id)
+    if game is None:
+        return JSONResponse({"error": "unknown game"}, status_code=404)
+    diff = difficulty if difficulty in game.DIFFICULTIES else game.DIFFICULTIES[0]
+    seed = secrets.randbelow(2 ** 32)
+    board = game.build_solvable(seed, diff) if hasattr(game, "build_solvable") \
+        else game.generate(seed, diff)
+    par_v, _ = game.par(board)
+    return {"game": _meta(game_id), "board": board, "par": par_v, "difficulty": diff}
 
 
 @router.get("/leaderboard")

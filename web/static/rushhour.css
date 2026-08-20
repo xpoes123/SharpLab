@@ -1,0 +1,32 @@
+#app { max-width: 560px; margin: 0 auto; padding: 24px 16px 56px; display: flex; flex-direction: column; gap: 16px; }
+.eyebrow { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; letter-spacing: .18em;
+  text-transform: uppercase; color: var(--accent2); font-weight: 700; }
+#app .sub { color: var(--muted); font-size: 14px; margin: 4px 0 0; }
+#app .sub a { color: var(--accent); }
+
+.diffrow { display: flex; gap: 8px; }
+.diff { border: 1px solid var(--line); background: var(--panel); color: var(--muted); font: inherit;
+  font-weight: 700; font-size: 13px; text-transform: capitalize; padding: 8px 18px; border-radius: 999px; cursor: pointer; }
+.diff:hover { color: var(--fg); border-color: var(--accent2); }
+.diff.on { color: #0b0e1a; background: var(--accent); border-color: var(--accent); }
+
+.stats { display: flex; gap: 10px; }
+.stat { flex: 1; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.stat .k { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.stat .v { font-family: var(--font-mono, ui-monospace, monospace); font-size: 22px; font-weight: 700; margin-top: 3px;
+  font-variant-numeric: tabular-nums; }
+.stat.par .v { color: var(--accent2); }
+
+.stage { background: var(--panel2, #1f2335); border: 1px solid var(--line); border-radius: 18px; padding: 16px;
+  display: flex; justify-content: center; }
+
+.actions { display: flex; gap: 10px; }
+#app .btn { flex: 1; }
+
+.banner { display: none; border-radius: 14px; padding: 16px; text-align: center; }
+.banner.show { display: block; animation: pop .35s ease; }
+.banner.win { background: linear-gradient(180deg, rgba(158,206,106,.14), transparent); border: 1px solid var(--green, #9ece6a); }
+.banner h2 { margin: 0 0 6px; color: var(--green, #9ece6a); font-size: 20px; }
+.banner .line { color: var(--muted); font-size: 13px; }
+@keyframes pop { from { transform: scale(.97); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
