@@ -216,7 +216,8 @@ class Daily(commands.Cog):
         log.info("daily: settled %s (%d players)", day, len(ranked))
 
     # ── commands ─────────────────────────────────────────────────────────────
-    group = app_commands.Group(name="daily", description="Daily puzzle")
+    # NB: /daily is taken by the challenges cog, so the daily-puzzle group is /puzzle.
+    group = app_commands.Group(name="puzzle", description="Daily puzzle — play, rank, get pinged")
 
     @group.command(name="notify", description="Toggle the @Daily ping role for yourself")
     async def notify(self, interaction: discord.Interaction) -> None:
