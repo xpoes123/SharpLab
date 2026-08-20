@@ -224,26 +224,31 @@ class CardsCog(commands.Cog):
                 # First run: start at the newest card so we don't replay the whole backlog.
                 await queries.set_bot_setting(CURSOR_KEY, str(await queries.get_max_card_instance_id()))
                 return
+            # Don't consume the mint log until we have a channel to post to — otherwise
+            # pulls during an unconfigured window (e.g. before /cards alertchannel is ever
+            # run) are silently lost forever. Leave the cursor put; flush once configured.
+            chan_id = await queries.get_bot_setting(ALERT_CHANNEL_KEY)
+            channel = self.bot.get_channel(int(chan_id)) if chan_id else None
+            if channel is None:
+                return
             rows = await queries.get_card_instances_after(int(raw))
             if not rows:
                 return
-            chan_id = await queries.get_bot_setting(ALERT_CHANNEL_KEY)
-            channel = self.bot.get_channel(int(chan_id)) if chan_id else None
-            if channel:
-                for c in rows:
-                    if not engine.is_rare_pull(c):
-                        continue
-                    emb = discord.Embed(
-                        title=f"{SPORT_EMOJI.get(c['sport'], '🎴')} Rare pull!",
-                        description=f"<@{c['owner_id']}> pulled {_card_line(c)}\n*{c['set_name']}*",
-                        color=RARITY_COLOR.get(c["rarity"], 0xE0AF68),
-                    )
-                    if c.get("headshot_url"):
-                        emb.set_thumbnail(url=c["headshot_url"])
-                    try:
-                        await channel.send(embed=emb)
-                    except Exception:
-                        log.debug("rare-pull post failed for %s", c.get("instance_id"), exc_info=True)
+            for c in rows:
+                if not engine.is_rare_pull(c):
+                    continue
+                emb = discord.Embed(
+                    title=f"{SPORT_EMOJI.get(c['sport'], '🎴')} Rare pull!",
+                    description=f"<@{c['owner_id']}> pulled {_card_line(c)}\n*{c['set_name']}*",
+                    color=RARITY_COLOR.get(c["rarity"], 0xE0AF68),
+                )
+                if c.get("headshot_url"):
+                    emb.set_thumbnail(url=c["headshot_url"])
+                try:
+                    await channel.send(embed=emb)
+                except Exception:
+                    log.debug("rare-pull post failed for %s", c.get("instance_id"), exc_info=True)
+            # Advance only after we've had a channel and processed the batch.
             await queries.set_bot_setting(CURSOR_KEY, str(rows[-1]["instance_id"]))
         except Exception:
             log.exception("rare-pull watcher tick failed")
