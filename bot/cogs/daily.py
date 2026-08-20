@@ -155,7 +155,7 @@ class Daily(commands.Cog):
         return f"🏆 **{await self._name(top['discord_user'])}** — {secs // 60}:{secs % 60:02d} · {top['primary_score']} fences"
 
     # ── results poller ───────────────────────────────────────────────────────
-    @tasks.loop(seconds=30)
+    @tasks.loop(seconds=10)   # snappy — a solve shows in the thread within ~10s
     async def results_loop(self) -> None:
         day = daily.puzzle_day()
         thread = await self._thread(day)
