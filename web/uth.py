@@ -187,3 +187,7 @@ async def _settle(uid: str, st: dict, folded: bool = False) -> dict:
             "hole": st["hole"], "dealer": st["dealer"], "community": st["community"],
             "player_hand": _hand_name(player_score), "dealer_hand": _hand_name(dealer_score),
             "dealer_qualifies": dealer_qualifies, "folded": folded}
+
+# Refund the up-front bet if the process restarts mid-hand (see web/inflight.py).
+from web import inflight as _inflight  # noqa: E402
+_inflight.register("uth", _ROUNDS, lambda st: st.get("ante", 0) + st.get("blind", 0) + st.get("trips", 0) + st.get("play", 0))

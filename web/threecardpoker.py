@@ -148,3 +148,7 @@ async def play(request: Request, body: PlayBody):
             "dealer": st["dealer"], "dealer_qualifies": qualifies,
             "player": st["player"], "player_rank": _cat_name(pr),
             "dealer_rank": _cat_name(dr), "ante_bonus": bonus}
+
+# Refund the up-front bet if the process restarts mid-hand (see web/inflight.py).
+from web import inflight as _inflight  # noqa: E402
+_inflight.register("threecardpoker", _ROUNDS, lambda st: st.get("ante", 0))

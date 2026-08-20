@@ -89,3 +89,7 @@ async def guess(request: Request, body: GuessBody):
     balance = await queries.get_casino_balance(uid) or 0
     return {"card": card, "rank": rank, "prev": cur, "won": won, "direction": direction,
             "payout": payout, "balance": balance}
+
+# Refund the up-front bet if the process restarts mid-hand (see web/inflight.py).
+from web import inflight as _inflight  # noqa: E402
+_inflight.register("hilo", _ROUNDS, lambda st: st.get("bet", 0))

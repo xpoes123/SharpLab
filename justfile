@@ -87,30 +87,11 @@ deploy:
     set -euo pipefail
     echo "▶ Pushing to GitHub..."
     git push
-    echo "▶ Deploying to VPS..."
-    ssh {{VPS}} bash -s <<'REMOTE'
-    set -euo pipefail
-    cd {{DEPLOY_PATH}}
-    # Always deploy from main, regardless of current branch state
-    git fetch origin main
-    git checkout main --force
-    git reset --hard origin/main
-    echo "▶ On commit: $(git log --oneline -1)"
-    echo "▶ Installing dependencies..."
-    source venv/bin/activate
-    pip install -e . -q
-    echo "▶ Restarting services..."
-    for svc in {{SERVICES}}; do
-        systemctl restart "$svc" && echo "  ✓ $svc restarted" || echo "  ✗ $svc failed"
-    done
-    sleep 2
-    echo "▶ Service status:"
-    for svc in {{SERVICES}}; do
-        status=$(systemctl is-active "$svc")
-        echo "  $svc: $status"
-    done
-    REMOTE
-    echo "✓ Deploy complete"
+    echo "▶ Safe deploy on VPS (pre-flight import check → restart → /health gate → auto-rollback)..."
+    # Fetch the latest deploy script first (self-updating), then run it. It does the pull, the
+    # pre-flight, the health-gated web restart with rollback, then the worker/bot. In-flight bets
+    # are refunded on the graceful shutdown (web/inflight.py), so no one loses an ante.
+    ssh {{VPS}} 'cd {{DEPLOY_PATH}} && git fetch origin main -q && git checkout origin/main -- scripts/vps_web_deploy.sh && bash scripts/vps_web_deploy.sh'
 
 # Deploy bot only (no worker/web restart)
 deploy-bot:

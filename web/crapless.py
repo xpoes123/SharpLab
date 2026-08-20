@@ -84,3 +84,7 @@ async def roll(request: Request, body: RollBody):
         return {"done": True, "dice": d, "total": total, "point": st["point"], "result": "seven-out", "payout": payout, "balance": balance}
     _ROUNDS[body.round_id] = st  # not resolved this roll — restore the claim
     return {"done": False, "dice": d, "total": total, "point": st["point"]}
+
+# Refund the up-front bet if the process restarts mid-hand (see web/inflight.py).
+from web import inflight as _inflight  # noqa: E402
+_inflight.register("crapless", _ROUNDS, lambda st: st.get("bet", 0))
