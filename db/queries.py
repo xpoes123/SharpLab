@@ -5434,3 +5434,22 @@ async def get_display_names(uids: list[str]) -> dict[str, str]:
             f"SELECT discord_user, username FROM discord_users WHERE discord_user IN ({marks})",
             uids)
         return {r["discord_user"]: r["username"] for r in await cur.fetchall()}
+
+
+async def get_unposted_daily_results(day: str) -> list[dict]:
+    """Results for `day` not yet announced to Discord (posted=0)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM daily_results WHERE puzzle_date = ? AND COALESCE(posted, 0) = 0 "
+            "ORDER BY submitted_at", (day,))
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def mark_daily_result_posted(game_id: str, day: str, discord_user: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE daily_results SET posted = 1 "
+            "WHERE game_id = ? AND puzzle_date = ? AND discord_user = ?",
+            (game_id, day, discord_user))
+        await db.commit()

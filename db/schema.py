@@ -973,3 +973,8 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        try:  # daily results: track which have been announced to the Discord thread
+            await db.execute("ALTER TABLE daily_results ADD COLUMN posted INTEGER NOT NULL DEFAULT 0")
+            await db.commit()
+        except Exception:
+            pass
