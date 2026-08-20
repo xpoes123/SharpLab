@@ -545,10 +545,20 @@ CREATE TABLE IF NOT EXISTS card_trades (
     to_user      TEXT NOT NULL,
     offer_ids    TEXT NOT NULL,          -- JSON list of instance_ids offered
     want_ids     TEXT NOT NULL,          -- JSON list of instance_ids requested
+    coins        INTEGER NOT NULL DEFAULT 0,  -- signed sweetener: >0 from_user pays to_user, <0 requests
     status       TEXT NOT NULL DEFAULT 'pending',  -- pending/accepted/declined/cancelled
     created_at   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_card_trades_to ON card_trades(to_user, status);
+
+-- Public trade board: a card its owner has opted onto the market (open to offers).
+CREATE TABLE IF NOT EXISTS card_trade_listings (
+    instance_id  INTEGER PRIMARY KEY REFERENCES card_instances(instance_id),
+    owner_id     TEXT NOT NULL,
+    note         TEXT,
+    created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_card_trade_listings_owner ON card_trade_listings(owner_id);
 """
 
 
@@ -824,6 +834,12 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        # Migration: coin sweetener on card trades (signed; >0 from_user pays to_user)
+        try:
+            await db.execute("ALTER TABLE card_trades ADD COLUMN coins INTEGER NOT NULL DEFAULT 0")
+            await db.commit()
+        except Exception:
+            pass  # column already exists
         # Migration: card set-completion claims (one reward per user per set)
         try:
             await db.execute(

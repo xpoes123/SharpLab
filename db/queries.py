@@ -4697,10 +4697,11 @@ async def get_collection(user: str) -> tuple[list[dict], float]:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT i.*, d.subject_name, d.team, d.rarity, d.headshot_url, d.stats, d.total_copies, "
-            "       s.sport, s.season "
+            "       s.sport, s.season, (tl.instance_id IS NOT NULL) AS listed "
             "FROM card_instances i JOIN card_designs d ON i.design_id = d.design_id "
-            "JOIN card_sets s ON d.set_id = s.set_id WHERE i.owner_id = ? "
-            "ORDER BY i.book_value DESC",
+            "JOIN card_sets s ON d.set_id = s.set_id "
+            "LEFT JOIN card_trade_listings tl ON tl.instance_id = i.instance_id "
+            "WHERE i.owner_id = ? ORDER BY i.book_value DESC",
             (user,),
         )
         rows = await cur.fetchall()
@@ -4720,6 +4721,7 @@ async def get_collection(user: str) -> tuple[list[dict], float]:
             "book_value": r["book_value"],
             "headshot_url": r["headshot_url"],
             "stats": json.loads(r["stats"]) if r["stats"] else {},
+            "listed": bool(r["listed"]),
         }
         for r in rows
     ]
@@ -4747,6 +4749,7 @@ async def sell_instance(user: str, instance_id: int) -> tuple[dict, int]:
                 (user, coins, f"Sold {r['subject_name']}", datetime.now(timezone.utc).isoformat()),
             )
             await db.execute("DELETE FROM card_instances WHERE instance_id = ?", (instance_id,))
+            await db.execute("DELETE FROM card_trade_listings WHERE instance_id = ?", (instance_id,))
             await db.execute(
                 "INSERT INTO casino_wallets (discord_user, balance) VALUES (?, ?) "
                 "ON CONFLICT(discord_user) DO UPDATE SET balance = balance + ?",
@@ -5003,13 +5006,16 @@ async def get_card_wanters(design_id: int) -> list[str]:
 
 # --- trading (card-for-card) ---
 async def create_card_trade(
-    from_user: str, to_user: str, offer_ids: list[int], want_ids: list[int], now_iso: str
+    from_user: str, to_user: str, offer_ids: list[int], want_ids: list[int], now_iso: str,
+    coins: int = 0,
 ) -> int:
+    """Create a pending trade. `coins` is a signed sweetener: >0 = from_user adds coins to
+    their side (paid to to_user on accept); <0 = from_user requests coins from to_user."""
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "INSERT INTO card_trades (from_user, to_user, offer_ids, want_ids, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (from_user, to_user, json.dumps(offer_ids), json.dumps(want_ids), now_iso),
+            "INSERT INTO card_trades (from_user, to_user, offer_ids, want_ids, coins, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (from_user, to_user, json.dumps(offer_ids), json.dumps(want_ids), coins, now_iso),
         )
         await db.commit()
         return cur.lastrowid
@@ -5021,11 +5027,15 @@ async def get_card_trade(trade_id: int) -> dict | None:
         r = await (await db.execute("SELECT * FROM card_trades WHERE trade_id = ?", (trade_id,))).fetchone()
         if r is None:
             return None
-        return {
-            "trade_id": r["trade_id"], "from_user": r["from_user"], "to_user": r["to_user"],
-            "offer_ids": json.loads(r["offer_ids"]), "want_ids": json.loads(r["want_ids"]),
-            "status": r["status"], "created_at": r["created_at"],
-        }
+        return _trade_row(r)
+
+
+def _trade_row(r) -> dict:
+    return {
+        "trade_id": r["trade_id"], "from_user": r["from_user"], "to_user": r["to_user"],
+        "offer_ids": json.loads(r["offer_ids"]), "want_ids": json.loads(r["want_ids"]),
+        "coins": r["coins"], "status": r["status"], "created_at": r["created_at"],
+    }
 
 
 async def list_incoming_card_trades(user: str) -> list[dict]:
@@ -5035,14 +5045,17 @@ async def list_incoming_card_trades(user: str) -> list[dict]:
             "SELECT * FROM card_trades WHERE to_user = ? AND status = 'pending' ORDER BY trade_id DESC",
             (user,),
         )
-        return [
-            {
-                "trade_id": r["trade_id"], "from_user": r["from_user"], "to_user": r["to_user"],
-                "offer_ids": json.loads(r["offer_ids"]), "want_ids": json.loads(r["want_ids"]),
-                "status": r["status"], "created_at": r["created_at"],
-            }
-            for r in await cur.fetchall()
-        ]
+        return [_trade_row(r) for r in await cur.fetchall()]
+
+
+async def list_outgoing_card_trades(user: str) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM card_trades WHERE from_user = ? AND status = 'pending' ORDER BY trade_id DESC",
+            (user,),
+        )
+        return [_trade_row(r) for r in await cur.fetchall()]
 
 
 async def set_card_trade_status(trade_id: int, status: str) -> None:
@@ -5080,6 +5093,27 @@ async def accept_card_trade(trade_id: int, accepting_user: str) -> dict:
                 raise ValueError("the offering player no longer owns those cards")
             if not await _owned_by(want_ids, to_user):
                 raise ValueError("you no longer own the requested cards")
+            # Coin sweetener: >0 from_user pays to_user, <0 to_user pays from_user. Verify the
+            # payer's balance NOW (no escrow) and move coins inside this same transaction.
+            coins = t["coins"] or 0
+            if coins != 0:
+                amt = abs(coins)
+                payer, payee = (from_user, to_user) if coins > 0 else (to_user, from_user)
+                bal = await (await db.execute(
+                    "SELECT balance FROM casino_wallets WHERE discord_user = ?", (payer,)
+                )).fetchone()
+                have = bal["balance"] if bal else 0
+                if have < amt:
+                    who = "you don't" if payer == accepting_user else "the offering player doesn't"
+                    raise ValueError(f"{who} have enough coins for this trade ({have}/{amt})")
+                await db.execute(
+                    "UPDATE casino_wallets SET balance = balance - ? WHERE discord_user = ?", (amt, payer)
+                )
+                await db.execute(
+                    "INSERT INTO casino_wallets (discord_user, balance) VALUES (?, ?) "
+                    "ON CONFLICT(discord_user) DO UPDATE SET balance = balance + ?",
+                    (payee, CASINO_STARTING_COINS + amt, amt),
+                )
             for iid in offer_ids:
                 await db.execute(
                     "UPDATE card_instances SET owner_id = ?, source = 'trade' WHERE instance_id = ?",
@@ -5090,12 +5124,108 @@ async def accept_card_trade(trade_id: int, accepting_user: str) -> dict:
                     "UPDATE card_instances SET owner_id = ?, source = 'trade' WHERE instance_id = ?",
                     (from_user, iid),
                 )
+            # Traded cards leave the public board.
+            swapped = offer_ids + want_ids
+            if swapped:
+                await db.execute(
+                    f"DELETE FROM card_trade_listings WHERE instance_id IN ({','.join('?' * len(swapped))})",
+                    tuple(swapped),
+                )
             await db.execute("UPDATE card_trades SET status = 'accepted' WHERE trade_id = ?", (trade_id,))
             await db.commit()
-            return {"offer_ids": offer_ids, "want_ids": want_ids, "from_user": from_user, "to_user": to_user}
+            return {
+                "offer_ids": offer_ids, "want_ids": want_ids, "coins": coins,
+                "from_user": from_user, "to_user": to_user,
+            }
         except Exception:
             await db.execute("ROLLBACK")
             raise
+
+
+async def get_instances_public(instance_ids: list[int]) -> dict[int, dict]:
+    """Card preview (name/rarity/headshot/serial/owner) for a set of instance ids, keyed by
+    instance_id. Used to render trade-offer and market rows without per-card round-trips."""
+    if not instance_ids:
+        return {}
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        q = (
+            "SELECT i.instance_id, i.owner_id, i.serial, i.is_holo, i.gem, i.book_value, "
+            "d.subject_name, d.team, d.rarity, d.headshot_url, d.total_copies, s.sport, s.season "
+            "FROM card_instances i JOIN card_designs d ON i.design_id = d.design_id "
+            "JOIN card_sets s ON d.set_id = s.set_id "
+            f"WHERE i.instance_id IN ({','.join('?' * len(instance_ids))})"
+        )
+        rows = await (await db.execute(q, tuple(instance_ids))).fetchall()
+    return {
+        r["instance_id"]: {
+            "instance_id": r["instance_id"], "owner_id": r["owner_id"], "name": r["subject_name"],
+            "team": r["team"], "rarity": r["rarity"], "headshot_url": r["headshot_url"],
+            "serial": r["serial"], "total_copies": r["total_copies"], "is_holo": bool(r["is_holo"]),
+            "gem": r["gem"], "book_value": r["book_value"], "sport": r["sport"], "season": r["season"],
+        }
+        for r in rows
+    }
+
+
+async def create_trade_listing(instance_id: int, owner_id: str, note: str | None, now_iso: str) -> None:
+    """List a card on the public trade board (open to offers). Verifies ownership; upsert so
+    re-listing just refreshes the note. Raises ValueError if the caller doesn't own it."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        owns = await (await db.execute(
+            "SELECT 1 FROM card_instances WHERE instance_id = ? AND owner_id = ?", (instance_id, owner_id)
+        )).fetchone()
+        if owns is None:
+            raise ValueError("you don't own that card")
+        await db.execute(
+            "INSERT INTO card_trade_listings (instance_id, owner_id, note, created_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(instance_id) DO UPDATE SET owner_id = excluded.owner_id, note = excluded.note",
+            (instance_id, owner_id, (note or "").strip()[:120] or None, now_iso),
+        )
+        await db.commit()
+
+
+async def remove_trade_listing(instance_id: int, owner_id: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "DELETE FROM card_trade_listings WHERE instance_id = ? AND owner_id = ?", (instance_id, owner_id)
+        )
+        await db.commit()
+
+
+async def list_trade_market(limit: int = 200) -> list[dict]:
+    """Active listings for the public Market: card preview + owner name/avatar + note. Skips any
+    listing whose card has since changed hands (self-heals stale rows)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT l.instance_id, l.note, l.created_at, l.owner_id, "
+            "       i.serial, i.is_holo, i.gem, i.book_value, i.owner_id AS cur_owner, "
+            "       d.subject_name, d.team, d.rarity, d.headshot_url, d.total_copies, s.sport, s.season, "
+            "       u.username, u.avatar_url "
+            "FROM card_trade_listings l "
+            "JOIN card_instances i ON i.instance_id = l.instance_id "
+            "JOIN card_designs d ON i.design_id = d.design_id "
+            "JOIN card_sets s ON d.set_id = s.set_id "
+            "LEFT JOIN discord_users u ON u.discord_user = l.owner_id "
+            "WHERE i.owner_id = l.owner_id "  # self-heal: skip listings whose card moved
+            "ORDER BY l.created_at DESC LIMIT ?",
+            (limit,),
+        )
+        rows = await cur.fetchall()
+    return [
+        {
+            "instance_id": r["instance_id"], "note": r["note"], "owner_id": r["owner_id"],
+            "owner_name": r["username"] or f"Player {str(r['owner_id'])[:6]}",
+            "owner_avatar": r["avatar_url"],
+            "name": r["subject_name"], "team": r["team"], "rarity": r["rarity"],
+            "headshot_url": r["headshot_url"], "serial": r["serial"], "total_copies": r["total_copies"],
+            "is_holo": bool(r["is_holo"]), "gem": r["gem"], "book_value": r["book_value"],
+            "sport": r["sport"], "season": r["season"],
+        }
+        for r in rows
+    ]
 
 
 async def get_owned_instances(user: str, instance_ids: list[int]) -> list[dict]:

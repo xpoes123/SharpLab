@@ -57,10 +57,15 @@ const state = {
   collectors: null,        // Collectors directory (list)
   viewing: null,           // user_id whose collection is open (null = my own)
   viewMine: {},            // cache of other users' collections by user_id
+  market: null,            // trade board listings
+  trades: null,            // { incoming, outgoing }
 };
 
 // ── Card tile ──
-function cardTile(c, sellable) {
+// opts: { sellable, listable, offerable } — which action buttons to show. `c.listed`
+// (from /mine) toggles the List/Unlist button + badge. Market tiles pass ownerName/note.
+function cardTile(c, opts) {
+  opts = opts || {};
   const rarity = (c.rarity || "common").toLowerCase();
   const holo = c.is_holo ? " holo" : "";
   const sport = (c.sport || "").toLowerCase();
@@ -73,25 +78,42 @@ function cardTile(c, sellable) {
     ? `<span class="gem-badge">${GEM_EMOJI[String(c.gem).toLowerCase()] || "💠"} ${esc(c.gem)}</span>`
     : "";
   const rookie = c.is_rookie ? `<span class="rookie-badge">RC</span>` : "";
+  const listed = c.listed ? `<span class="listed-badge">🔖 Listed</span>` : "";
+  const owner = opts.ownerName ? `<div class="cowner">${esc(opts.ownerName)}</div>` : "";
+  const note = opts.note ? `<div class="cnote">“${esc(opts.note)}”</div>` : "";
   const src = c.headshot_url || SILHOUETTE;
   return `<div class="ctile rarity-${rarity}${holo}">
     <div class="cimg">
       <img src="${esc(src)}" alt="${esc(c.name)}" loading="lazy"
            onerror="this.onerror=null;this.src=window.__cardSilh;this.classList.add('silh');">
       <span class="sport-badge" title="${esc(sport.toUpperCase())}">${emoji}</span>
-      ${gem}${rookie}
+      ${gem}${rookie}${listed}
     </div>
     <div class="cbody">
       <div class="cname">${esc(c.name)}</div>
       <div class="cteam">${esc(c.team || "")}</div>
+      ${owner}
       <div class="cmeta">
         <span class="rarity-label">${esc(rarity)}</span>
         ${serial}
       </div>
       <div class="cvalue">${coins(c.book_value)}</div>
-      ${sellable && c.instance_id != null ? sellButton(c) : ""}
+      ${note}
+      ${tileActions(c, opts)}
     </div>
   </div>`;
+}
+
+function tileActions(c, opts) {
+  if (c.instance_id == null) return "";
+  const bits = [];
+  if (opts.sellable) bits.push(sellButton(c));
+  if (opts.listable) bits.push(c.listed
+    ? `<button class="listbtn on" data-unlist="${c.instance_id}">🔖 Unlist</button>`
+    : `<button class="listbtn" data-list="${c.instance_id}" data-name="${esc(c.name)}">🔖 List for trade</button>`);
+  if (opts.offerable) bits.push(
+    `<button class="offerbtn" data-offer="${c.instance_id}" data-name="${esc(c.name)}" data-owner="${esc(opts.ownerName || "")}">Make offer</button>`);
+  return bits.length ? `<div class="tileactions">${bits.join("")}</div>` : "";
 }
 
 // Quick-sell button for an owned card (75% of book). Grails get a confirm.
@@ -152,11 +174,11 @@ function collectionControls() {
 // Just the tiles (re-rendered on filter change without touching the controls, to keep focus).
 function collectionGrid() {
   const cards = filteredCollectionCards();
-  const sellable = !state.viewing; // only my own cards can be sold
+  const mine = !state.viewing; // only my own cards can be sold / listed
   if (!cards.length) {
     return `<div class="emptybox" style="grid-column:1/-1"><div class="big">🔍</div>No cards match your filters.</div>`;
   }
-  return cards.map((c) => cardTile(c, sellable)).join("");
+  return cards.map((c) => cardTile(c, { sellable: mine, listable: mine })).join("");
 }
 
 function renderCollection() {
@@ -199,6 +221,73 @@ function renderCollectors() {
       <span class="cval">${coins(c.value)}</span>
     </div>`).join("");
   return `<div class="collectorlist">${rows}</div>`;
+}
+
+// ── Trade market ──
+function coinDelta(n) {
+  n = Number(n) || 0;
+  if (!n) return "";
+  return n > 0 ? `<span class="coindelta plus">+🪙${num(n)}</span>`
+               : `<span class="coindelta minus">🪙${num(-n)} back</span>`;
+}
+
+// One offered/wanted card as a compact chip (name + rarity dot).
+function tradeChip(c) {
+  const r = (c.rarity || "common").toLowerCase();
+  return `<span class="tchip rarity-${r}"><span class="tdot"></span>${esc(c.name)}</span>`;
+}
+
+function offerRow(t, kind) {
+  // kind: "incoming" (I decide) or "outgoing" (I sent it)
+  const give = kind === "incoming" ? t.want_cards : t.offer_cards; // what *I* give up
+  const get = kind === "incoming" ? t.offer_cards : t.want_cards;  // what *I* receive
+  // Coins are signed from the sender's side. For me:
+  //   incoming: sender pays me when coins>0  -> I receive +coins
+  //   outgoing: I'm the sender               -> coins>0 means I pay
+  const myCoins = kind === "incoming" ? t.coins : -t.coins;
+  const giveHtml = (give.length ? give.map(tradeChip).join("") : `<span class="tnone">—</span>`)
+    + (myCoins < 0 ? ` ${coinDelta(myCoins)}` : "");
+  const getHtml = (get.length ? get.map(tradeChip).join("") : `<span class="tnone">—</span>`)
+    + (myCoins > 0 ? ` ${coinDelta(myCoins)}` : "");
+  const actions = kind === "incoming"
+    ? `<button class="btn primary tradeaccept" data-tid="${t.trade_id}">Accept</button>
+       <button class="btn tradedecline" data-tid="${t.trade_id}">Decline</button>`
+    : `<button class="btn tradecancel" data-tid="${t.trade_id}">Cancel</button>`;
+  return `<div class="offerrow">
+    <div class="offerlegs">
+      <div class="offerleg"><div class="leglbl">You give</div><div class="legcards">${giveHtml}</div></div>
+      <div class="offerarrow">⇄</div>
+      <div class="offerleg"><div class="leglbl">You get</div><div class="legcards">${getHtml}</div></div>
+    </div>
+    <div class="offeractions">${actions}</div>
+  </div>`;
+}
+
+function renderMarket() {
+  if (state.me === null) {
+    return emptyBox("🔒", "<strong>Sign in to trade.</strong><br>Then list cards from your collection and make offers here.");
+  }
+  const t = state.trades || { incoming: [], outgoing: [] };
+  let offers = "";
+  if (t.incoming.length || t.outgoing.length) {
+    const inc = t.incoming.length
+      ? `<div class="offergroup"><h3>Offers to you <span class="badge">${t.incoming.length}</span></h3>${t.incoming.map((x) => offerRow(x, "incoming")).join("")}</div>` : "";
+    const out = t.outgoing.length
+      ? `<div class="offergroup"><h3>Your sent offers</h3>${t.outgoing.map((x) => offerRow(x, "outgoing")).join("")}</div>` : "";
+    offers = `<div class="offers">${inc}${out}</div>`;
+  }
+  const listings = (state.market && state.market.listings) || [];
+  let board;
+  if (!listings.length) {
+    board = emptyBox("🏪", "<strong>No cards listed yet.</strong><br>List one from your collection to open it up for offers.");
+  } else {
+    const tiles = listings.map((c) => cardTile(c, {
+      offerable: c.owner_id !== (state.me.user && state.me.user.id),
+      ownerName: c.owner_name, note: c.note,
+    })).join("");
+    board = `<h3 class="markethdr">On the block</h3><div class="cardgrid">${tiles}</div>`;
+  }
+  return offers + board;
 }
 
 // Distinct design_ids the logged-in user owns (from /api/v1/cards/mine).
@@ -333,8 +422,10 @@ function fmtPct(p) {
 //   #collection · #packs · #packs/<setId> (a set's catalog)
 function tabbar() {
   const t = (id, label) => `<button class="tab${state.tab === id ? " on" : ""}" data-tab="${id}">${label}</button>`;
+  const nInc = state.trades && state.trades.incoming ? state.trades.incoming.length : 0;
+  const marketLabel = nInc ? `Market <span class="tabbadge">${nInc}</span>` : "Market";
   return `<div class="tabbar">
-    ${t("collection", "My Collection")}${t("packs", "Packs")}${t("collectors", "Collectors")}
+    ${t("collection", "My Collection")}${t("packs", "Packs")}${t("market", marketLabel)}${t("collectors", "Collectors")}
   </div>`;
 }
 
@@ -342,6 +433,8 @@ function draw() {
   let inner = "";
   if (state.tab === "packs") {
     inner = state.activeSet != null ? renderCatalog(state.activeSet) : renderSets();
+  } else if (state.tab === "market") {
+    inner = renderMarket();
   } else if (state.tab === "collectors") {
     inner = state.viewing != null ? renderCollection() : renderCollectors();
   } else {
@@ -354,8 +447,18 @@ function currentRoute() {
   const h = (location.hash || "").replace(/^#\/?/, "");
   const [tab, sub] = h.split("/");
   if (tab === "packs") return { tab: "packs", setId: sub || null, userId: null };
+  if (tab === "market") return { tab: "market", setId: null, userId: null };
   if (tab === "collectors") return { tab: "collectors", setId: null, userId: sub || null };
   return { tab: "collection", setId: null, userId: null };
+}
+
+// Load the market board + my trade offers (used by the Market tab).
+async function ensureMarket(force) {
+  if (force || !state.market) state.market = await getJSON("/api/v1/cards/market");
+  if (force || !state.trades) {
+    const t = await getJSON("/api/v1/cards/trades");
+    state.trades = t && t.incoming ? t : { incoming: [], outgoing: [] };
+  }
 }
 
 // Derive state from the URL hash and render. Wired to hashchange, so Back/Forward work.
@@ -371,6 +474,9 @@ async function render() {
       draw(); // loading state
       state.catalog[setId] = await getJSON(`/api/v1/cards/catalog?set_id=${encodeURIComponent(setId)}`);
     }
+  } else if (tab === "market") {
+    draw(); // loading state
+    await ensureMarket();
   } else if (tab === "collectors") {
     state.filter = { sport: "", rarity: "", sort: "rarity", q: "" }; // fresh filters per view
     if (userId) {
@@ -558,6 +664,97 @@ async function doSell(btn) {
   }
   toast(`♻️ Sold ${(res.card && res.card.name) || "card"} · +🪙${num(res.coins)}`);
   draw();
+}
+
+// ── Trade actions ──
+// Reload /mine (listed flags), market, and trades, then redraw whatever tab is open.
+async function reloadTrading() {
+  const [mine] = await Promise.all([getJSON("/api/v1/cards/mine"), ensureMarket(true)]);
+  state.mine = mine;
+  draw();
+}
+
+async function doList(iid, name) {
+  const note = prompt(`List "${name}" for trade. Add a note (what you're after)? Optional:`, "");
+  if (note === null) return; // cancelled
+  const res = await postJSON("/api/v1/cards/list", { instance_id: iid, note: note || null });
+  if (res.error) return toast("❌ " + res.error);
+  toast(`🔖 Listed ${name} for trade`);
+  await reloadTrading();
+}
+
+async function doUnlist(iid) {
+  const res = await postJSON("/api/v1/cards/unlist", { instance_id: iid });
+  if (res.error) return toast("❌ " + res.error);
+  toast("Removed from the market");
+  await reloadTrading();
+}
+
+async function doTradeAction(tid, action) {
+  const res = await postJSON(`/api/v1/cards/trades/${tid}/${action}`, {});
+  if (res.error) return toast("❌ " + res.error);
+  if (action === "accept") { applyBalance(res.balance); toast("✅ Trade complete!"); }
+  else toast(action === "decline" ? "Declined" : "Cancelled");
+  await reloadTrading();
+}
+
+// Make-offer modal: choose which of my cards to give + a coin sweetener, for a listed card.
+function openOfferModal(wantId, wantName, ownerName) {
+  if (document.querySelector(".offerov")) return;
+  const mine = (state.mine && state.mine.cards) || [];
+  const picks = new Set();
+  const ov = document.createElement("div");
+  ov.className = "hubov offerov";
+  const myTiles = mine.length
+    ? mine.map((c) => `<label class="pickcard" data-iid="${c.instance_id}">
+        <input type="checkbox" value="${c.instance_id}">
+        <span class="pickname">${esc(c.name)}</span>
+        <span class="pickrar rarity-label" style="--r:var(--r-${(c.rarity || "common").toLowerCase()})">${esc((c.rarity || "").toLowerCase())}</span>
+      </label>`).join("")
+    : `<div class="tnone">You have no cards to give — offer coins instead.</div>`;
+  ov.innerHTML = `<div class="hubcard offercard">
+    <div class="hubhead"><h3>Offer on ${esc(wantName)}</h3><button class="hubx" aria-label="Close">✕</button></div>
+    <div class="offerhint">Trading with <b>${esc(ownerName || "collector")}</b>. Pick your card(s) to give and/or add coins.</div>
+    <div class="pickgrid">${myTiles}</div>
+    <label class="coinrow">Coins to add (or negative to request):
+      <input type="number" class="offercoins" value="0" step="10"></label>
+    <div class="offerfoot">
+      <span class="offersummary"></span>
+      <button class="btn primary offersend" data-want="${wantId}">Send offer</button>
+    </div>
+  </div>`;
+  const summ = ov.querySelector(".offersummary");
+  const coinsIn = ov.querySelector(".offercoins");
+  const update = () => {
+    const n = Number(coinsIn.value) || 0;
+    summ.innerHTML = `${picks.size} card${picks.size === 1 ? "" : "s"} ${n ? coinDelta(n) : ""}`;
+  };
+  ov.addEventListener("change", (e) => {
+    if (e.target.matches(".pickcard input")) {
+      const id = Number(e.target.value);
+      e.target.checked ? picks.add(id) : picks.delete(id);
+      e.target.closest(".pickcard").classList.toggle("on", e.target.checked);
+    }
+    update();
+  });
+  ov.addEventListener("input", (e) => { if (e.target.classList.contains("offercoins")) update(); });
+  ov.addEventListener("click", async (e) => {
+    if (e.target === ov || e.target.closest(".hubx")) return ov.remove();
+    const send = e.target.closest(".offersend");
+    if (!send) return;
+    const coinsVal = Number(coinsIn.value) || 0;
+    if (!picks.size && coinsVal <= 0) return toast("Offer at least a card or some coins");
+    send.disabled = true;
+    const res = await postJSON("/api/v1/cards/trade", {
+      want_ids: [wantId], offer_ids: [...picks], coins: coinsVal,
+    });
+    if (res.error) { send.disabled = false; return toast("❌ " + res.error); }
+    ov.remove();
+    toast("📨 Offer sent!");
+    await reloadTrading();
+  });
+  update();
+  document.body.appendChild(ov);
 }
 
 async function reloadAfterOpen() {
@@ -754,6 +951,18 @@ app.addEventListener("click", async (e) => {
     await doSell(sellBtn);
     return;
   }
+  const listBtn = e.target.closest("[data-list]");
+  if (listBtn) { e.stopPropagation(); await doList(Number(listBtn.dataset.list), listBtn.dataset.name); return; }
+  const unlistBtn = e.target.closest("[data-unlist]");
+  if (unlistBtn) { e.stopPropagation(); await doUnlist(Number(unlistBtn.dataset.unlist)); return; }
+  const offerBtn = e.target.closest("[data-offer]");
+  if (offerBtn) { e.stopPropagation(); openOfferModal(Number(offerBtn.dataset.offer), offerBtn.dataset.name, offerBtn.dataset.owner); return; }
+  const accept = e.target.closest(".tradeaccept");
+  if (accept) { e.stopPropagation(); await doTradeAction(Number(accept.dataset.tid), "accept"); return; }
+  const decline = e.target.closest(".tradedecline");
+  if (decline) { e.stopPropagation(); await doTradeAction(Number(decline.dataset.tid), "decline"); return; }
+  const cancel = e.target.closest(".tradecancel");
+  if (cancel) { e.stopPropagation(); await doTradeAction(Number(cancel.dataset.tid), "cancel"); return; }
   const collectorRow = e.target.closest(".collectorrow");
   if (collectorRow) {
     location.hash = `collectors/${collectorRow.dataset.uid}`;
@@ -860,6 +1069,33 @@ function mockJSON(url) {
           is_rookie: true, headshot_url: "" },
       ],
     };
+  if (url.startsWith("/api/v1/cards/market"))
+    return {
+      listings: [
+        { instance_id: 21, owner_id: "2", owner_name: "steph", owner_avatar: null,
+          name: "Stephen Curry", team: "GSW", rarity: "epic", sport: "nba", season: "2010",
+          serial: 3, total_copies: 25, is_holo: false, gem: null, book_value: 420,
+          note: "looking for a LeBron rookie" },
+        { instance_id: 22, owner_id: "2", owner_name: "steph", owner_avatar: null,
+          name: "Mike Trout", team: "LAA", rarity: "rare", sport: "mlb", season: "2012",
+          serial: 15, total_copies: 80, is_holo: false, gem: null, book_value: 60, note: null },
+      ],
+    };
+  if (url.startsWith("/api/v1/cards/trades"))
+    return {
+      incoming: [
+        { trade_id: 5, from_user: "3", to_user: "1", coins: 150,
+          offer_ids: [301], want_ids: [1],
+          offer_cards: [{ instance_id: 301, name: "Luka Dončić", rarity: "epic" }],
+          want_cards: [{ instance_id: 1, name: "LeBron James", rarity: "legendary" }] },
+      ],
+      outgoing: [
+        { trade_id: 6, from_user: "1", to_user: "2", coins: -50,
+          offer_ids: [2], want_ids: [21],
+          offer_cards: [{ instance_id: 2, name: "Dwyane Wade", rarity: "epic" }],
+          want_cards: [{ instance_id: 21, name: "Stephen Curry", rarity: "epic" }] },
+      ],
+    };
   if (url.startsWith("/api/v1/cards/daily/status"))
     return { authenticated: true, claimed: false };
   if (url.startsWith("/api/v1/cards/sets"))
@@ -895,6 +1131,9 @@ function mockJSON(url) {
 function mockOpen(url, body) {
   if (url && url.includes("/sell"))
     return { card: { name: "Sold Card", rarity: "rare", serial: 1 }, coins: 26, balance: 5026 };
+  if (url && (url.endsWith("/list") || url.endsWith("/unlist"))) return { ok: true };
+  if (url && url.endsWith("/cards/trade")) return { trade_id: 99 };
+  if (url && url.includes("/trades/")) return { ok: true, balance: 5150 };
   const odds = {
     holo_pct: 20,
     pull_rates: { common: 62, uncommon: 24, rare: 10, epic: 3, legendary: 1 },
