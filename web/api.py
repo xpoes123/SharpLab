@@ -56,6 +56,7 @@ from web.sicbo import router as sicbo_router
 from web.threecardpoker import router as threecardpoker_router
 from web.sim import router as sim_router
 from web.daily import router as daily_router
+from web import inflight
 from web.uth import router as uth_router
 from web.paigow import router as paigow_router
 
@@ -128,6 +129,11 @@ async def lifespan(app: FastAPI):
     pen_cleanup_task = asyncio.create_task(cleanup_stale_penalties_rooms())
     quote_task = asyncio.create_task(quote_refresh_loop())   # keep HQ stock prices warm
     yield
+    # Refund any in-flight bets before we exit so a deploy/restart never eats a player's ante.
+    try:
+        await inflight.refund_all()
+    except Exception:
+        pass
     quote_task.cancel()
     cleanup_task.cancel()
     figgie_cleanup_task.cancel()

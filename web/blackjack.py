@@ -161,3 +161,7 @@ async def _dealer_play_and_settle(rid: str, st: dict) -> dict:
         while hand_total(st["dealer"]) < 17:  # dealer hits to 17 (stands on all 17s)
             st["dealer"].append(st["deck"].pop())
     return await _settle(rid, st)
+
+# Refund the up-front bet if the process restarts mid-hand (see web/inflight.py).
+from web import inflight as _inflight  # noqa: E402
+_inflight.register("blackjack", _ROUNDS, lambda st: st.get("bet", 0))

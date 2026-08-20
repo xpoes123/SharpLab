@@ -157,3 +157,7 @@ def _remove(whole: list[str], sub: list[str]) -> list[str]:
     for c in sub:
         rest.remove(c)
     return rest
+
+# Refund the up-front bet if the process restarts mid-hand (see web/inflight.py).
+from web import inflight as _inflight  # noqa: E402
+_inflight.register("paigow", _ROUNDS, lambda st: st.get("bet", 0) + st.get("fortune", 0))

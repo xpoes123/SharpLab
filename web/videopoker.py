@@ -127,3 +127,7 @@ async def draw(request: Request, body: DrawBody):
     balance = await queries.get_casino_balance(uid) or 0
     return {"hand": hand, "category": cat, "label": _LABELS[cat], "mult": mult,
             "payout": payout, "balance": balance}
+
+# Refund the up-front bet if the process restarts mid-hand (see web/inflight.py).
+from web import inflight as _inflight  # noqa: E402
+_inflight.register("videopoker", _ROUNDS, lambda st: st.get("bet", 0))
