@@ -1004,6 +1004,18 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        try:  # skill-game leaderboards: each player's best timed run per game
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS skill_scores ("
+                "game_id TEXT NOT NULL, discord_user TEXT NOT NULL, best_ms INTEGER NOT NULL, "
+                "runs INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, "
+                "PRIMARY KEY (game_id, discord_user))"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_skill_scores_game ON skill_scores(game_id, best_ms)")
+            await db.commit()
+        except Exception:
+            pass
         try:  # in-flight casino rounds persisted across restarts (so a deploy resumes the hand)
             await db.execute(
                 "CREATE TABLE IF NOT EXISTS inflight_rounds ("
