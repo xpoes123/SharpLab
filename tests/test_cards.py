@@ -730,6 +730,22 @@ def test_web_offer_on_unlisted_rejected(tmp_db, monkeypatch):
     _run(go())
 
 
+def test_activity_reward_override_scales_caps_and_logs(tmp_db):
+    async def go():
+        # amount_override sets the per-event amount (the NBA-guess earliness bonus), still
+        # capped at the source's daily cap, and logged to the coin ledger.
+        r = await _queries.grant_activity_reward("g1", "nba_guess", "d1", amount_override=55, reason="NBA player guess")
+        assert r == 55
+        led = await _queries.get_coin_ledger("g1")
+        assert led[0]["amount"] == 55 and led[0]["reason"] == "NBA player guess"
+        # nba_guess daily cap is 200 → further grants clip to it
+        for _ in range(4):
+            await _queries.grant_activity_reward("g1", "nba_guess", "d1", amount_override=55, reason="NBA player guess")
+        assert sum(e["amount"] for e in await _queries.get_coin_ledger("g1")) == 200
+
+    _run(go())
+
+
 if __name__ == "__main__":
     import inspect
 

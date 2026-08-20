@@ -78,6 +78,7 @@ async def nbaguess_new(request: Request):
 class GuessBody(BaseModel):
     token: str
     guess: str = ""
+    shown: int = 0  # clues the player had revealed when guessing (for the earliness bonus)
 
 
 @router.post("/guess")
@@ -91,7 +92,16 @@ async def nbaguess_guess(request: Request, body: GuessBody):
     if not check_nba_answer(body.guess, entry):
         return {"correct": False}
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    reward = await queries.grant_activity_reward(uid, "nba_guess", day)
+    # Earliness bonus: base 15 + 10 for every clue the player did NOT need. Guessing on the
+    # first clue pays the most; using all clues pays the base. Client reports clues shown —
+    # ponytail: the 200/day cap bounds any gaming of the self-reported count.
+    total = len(_clues(entry))
+    shown = max(1, min(body.shown or total, total))
+    base = queries.ACTIVITY_REWARDS["nba_guess"][0]
+    amount = base + 10 * (total - shown)
+    reward = await queries.grant_activity_reward(
+        uid, "nba_guess", day, amount_override=amount, reason="NBA player guess"
+    )
     balance = await queries.get_casino_balance(uid) or 0
     return {"correct": True, "name": entry[1], "reward": reward, "balance": balance}
 
