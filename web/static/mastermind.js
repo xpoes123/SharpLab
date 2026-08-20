@@ -81,18 +81,44 @@ const CODE_LEN = 4;
 const MAX_GUESSES = 10;
 
 // ── State ──
-const state = { me: null, balance: 0, wins: 0 };
+// mode: "timed" (5-code server-timed gauntlet + leaderboard) or "zen" (the
+// original untimed single-code play). Timed is the default.
+const state = { me: null, balance: 0, wins: 0, mode: "timed" };
 const round = {
   token: null,
-  guesses: [],       // [{guess:[...], black, white}]
+  guesses: [],       // [{guess:[...], black, white}]  — history for the CURRENT code
   current: [null, null, null, null],
   selColor: 0,       // palette selection index
   selSlot: 0,        // active slot for cycling
   over: false,
   busy: false,
 };
+// Timed-run state (parallel to `round`, which still holds the per-code board).
+const run = { token: null, index: 0, target: 5, timer: null, startWall: 0 };
 
 const $ = (id) => document.getElementById(id);
+
+// mm:ss from milliseconds.
+function fmtTime(ms) {
+  const s = Math.max(0, Math.round((ms || 0) / 1000));
+  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+}
+
+// Client-side visual timer (server time is authoritative on `done`).
+function startTimer() {
+  stopTimer();
+  run.startWall = Date.now();
+  const t = $("mTimer");
+  if (t) { t.hidden = false; t.textContent = "0:00"; }
+  run.timer = setInterval(() => {
+    const el = $("mTimer");
+    if (el) el.textContent = fmtTime(Date.now() - run.startWall);
+  }, 250);
+}
+function stopTimer() {
+  if (run.timer) { clearInterval(run.timer); run.timer = null; }
+}
+function setStatus(text) { const s = $("mStatus"); if (s) s.textContent = text; }
 
 function applyBalance(bal) {
   if (bal == null) return;
@@ -241,6 +267,7 @@ function finishWin(res) {
   const w = $("mWins");
   if (w) w.textContent = num(state.wins);
   renderBoard();
+  setStatus("Round over");
   setMsg(`🎉 Cracked it in ${round.guesses.length}!`, "win");
   const reward = res.reward || 0;
   showEndPanel(reward
@@ -257,15 +284,14 @@ async function finishLose() {
     ? `<div class="mrow"><span class="mrownum">✔</span><div class="mrowpegs">${res.code.map(pegHTML).join("")}</div></div>`
     : "";
   renderBoard();
+  setStatus("Round over");
   setMsg("Out of guesses — the code was:", "lose");
   showEndPanel(codeHTML);
 }
 
-function showEndPanel(extraHTML) {
-  const status = $("mStatus");
-  if (status) status.textContent = round.over ? "Round over" : "";
+function showEndPanel(extraHTML, btnLabel) {
   const btns = $("mBtns");
-  if (btns) btns.innerHTML = `<button class="btn primary big" id="mNew">New game</button>`;
+  if (btns) btns.innerHTML = `<button class="btn primary big" id="mNew">${esc(btnLabel || "New game")}</button>`;
   const end = $("mEnd");
   if (end) end.innerHTML = extraHTML || "";
   // hide the input controls
@@ -302,20 +328,217 @@ async function newRound() {
   renderCurrent();
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Timed mode — a server-timed 5-code gauntlet. Reuses the same board/guess
+// rendering as Zen; only the request flow and end panels differ.
+// ═══════════════════════════════════════════════════════════════════════════
+
+function resetBoardControls() {
+  round.guesses = [];
+  round.current = [null, null, null, null];
+  round.selColor = 0;
+  round.selSlot = 0;
+  round.over = false;
+  const end = $("mEnd");
+  if (end) end.innerHTML = "";
+  const cur = $("mCurrent");
+  if (cur) cur.style.display = "";
+  const btns = $("mBtns");
+  if (btns) btns.innerHTML =
+    `<button class="btn primary big" id="mSubmit">Submit</button>
+     <button class="btn ghost" id="mClear">Clear</button>`;
+}
+
+// 401 on a timed endpoint → prompt the player to sign in.
+function timedSignInPrompt() {
+  stopTimer();
+  round.over = true;
+  setStatus("Timed mode");
+  setMsg("Sign in with Discord to play Timed mode.", "lose");
+  const cur = $("mCurrent");
+  if (cur) cur.style.display = "none";
+  const end = $("mEnd");
+  if (end) end.innerHTML = "";
+  const btns = $("mBtns");
+  if (btns) btns.innerHTML =
+    `<a class="btn primary big" href="/api/v1/auth/discord/login">Sign in with Discord</a>`;
+}
+
+async function startRun() {
+  resetBoardControls();
+  setMsg("Pick 4 colors, then Submit — go fast!", "idle");
+  setStatus("Starting…");
+  setBusy(true);
+  const res = await postMM("/run/start", {});
+  setBusy(false);
+  if (res._status === 401 || /sign in/i.test(res.error || "")) return timedSignInPrompt();
+  if (res.error || res._status) return toast("❌ " + (res.error || "couldn't start a run"));
+  run.token = res.run_token;
+  run.index = res.index || 0;
+  run.target = res.target || 5;
+  setStatus(`Code ${run.index + 1} of ${run.target}`);
+  startTimer();
+  renderBoard();
+  renderCurrent();
+}
+
+async function submitGuessTimed() {
+  if (round.busy || round.over) return;
+  if (round.current.some((c) => c == null)) {
+    setMsg("Fill all 4 slots first", "lose");
+    return;
+  }
+  const guess = round.current.slice();
+  setBusy(true);
+  const res = await postMM("/run/guess", { run_token: run.token, guess });
+  if (res._status === 401 || /sign in/i.test(res.error || "")) { setBusy(false); return timedSignInPrompt(); }
+  if (res.error || res._status) { setBusy(false); return toast("❌ " + (res.error || "something went wrong")); }
+
+  round.guesses.push({ guess, black: res.black, white: res.white });
+  clearGuess();
+  renderBoard();
+
+  // Blew the guess budget on this code — run ends with no time.
+  if (res.done && res.dnf) { setBusy(false); return finishRunDNF(res); }
+
+  // Cracked the current code.
+  if (res.code_solved) {
+    if (res.done) { setBusy(false); return finishRun(res); }
+    // More codes remain — briefly show the solve, then advance to a fresh grid.
+    setMsg("Code cracked! On to the next…", "win");
+    setTimeout(() => {
+      round.guesses = [];
+      round.current = [null, null, null, null];
+      round.selSlot = 0;
+      run.index = res.index;
+      setStatus(`Code ${run.index + 1} of ${run.target}`);
+      setMsg("Next code — keep going!", "idle");
+      renderBoard();
+      renderCurrent();
+      setBusy(false);
+    }, REDUCE ? 250 : 850);
+    return;
+  }
+
+  // Wrong guess, still going.
+  setBusy(false);
+  const left = res.guesses_left != null ? res.guesses_left : (MAX_GUESSES - round.guesses.length);
+  setMsg(`${res.black}● exact · ${res.white}○ misplaced — ${left} left`, "idle");
+}
+
+function finishRun(res) {
+  round.over = true;
+  stopTimer();
+  applyBalance(res.balance);
+  renderBoard();
+  const t = $("mTimer");
+  if (t && res.elapsed_ms != null) t.textContent = fmtTime(res.elapsed_ms);
+  setStatus("Run complete");
+  setMsg(`🎉 Solved all ${run.target} codes!`, "win");
+  const timeStr = fmtTime(res.elapsed_ms);
+  const rankLine = res.rank != null ? `<div class="mrank">#${num(res.rank)} on the board</div>` : "";
+  const bestLine = res.is_new_best
+    ? `<div class="mbest">🏆 new best!</div>`
+    : (res.best_ms != null ? `<div class="mcounter">Your best: ${fmtTime(res.best_ms)}</div>` : "");
+  const reward = res.reward || 0;
+  const rewardLine = reward ? `<div class="mreward${REDUCE ? "" : " pop"}">+${num(reward)} 🪙</div>` : "";
+  showEndPanel(
+    `<div class="mrunresult">
+      <div class="mruntime">Solved ${run.target} in ${timeStr}!</div>
+      ${rankLine}${bestLine}${rewardLine}
+    </div>`,
+    "New run");
+  loadLeaderboard();
+}
+
+function finishRunDNF(res) {
+  round.over = true;
+  stopTimer();
+  renderBoard();
+  setStatus("Run over");
+  setMsg("Out of guesses — the code was:", "lose");
+  const codeHTML = res.code
+    ? `<div class="mrow"><span class="mrownum">✔</span><div class="mrowpegs">${res.code.map(pegHTML).join("")}</div></div>`
+    : "";
+  showEndPanel(
+    `<div class="mrunresult">${codeHTML}<div class="mcounter">No time recorded — start a fresh run.</div></div>`,
+    "New run");
+}
+
+// ── Leaderboard (timed only) ──
+async function loadLeaderboard() {
+  const sec = $("mLeaderboard");
+  if (!sec) return;
+  const res = await getJSON("/api/v1/arcade/mastermind/leaderboard");
+  if (!res || res._status || !res.top) { sec.innerHTML = ""; return; }
+  renderLeaderboard(res);
+}
+
+function renderLeaderboard(res) {
+  const sec = $("mLeaderboard");
+  if (!sec) return;
+  const top = res.top || [];
+  if (!top.length) {
+    sec.innerHTML = `<div class="mlbhead">🏁 Fastest 5-code runs</div>
+      <div class="mlbempty">No runs yet — be the first!</div>`;
+    return;
+  }
+  const rows = top.map((r) => {
+    const time = r.time != null ? esc(r.time) : fmtTime(r.best_ms);
+    const runs = r.runs != null ? `<span class="mlbruns">${num(r.runs)} run${r.runs === 1 ? "" : "s"}</span>` : "";
+    return `<div class="mlbrow${r.me ? " me" : ""}">
+      <span class="mlbrank">#${num(r.rank)}</span>
+      <span class="mlbname">${esc(r.name)}</span>
+      ${runs}
+      <span class="mlbtime">${time}</span>
+    </div>`;
+  }).join("");
+  sec.innerHTML = `<div class="mlbhead">🏁 Fastest 5-code runs</div>
+    <div class="mlblist">${rows}</div>`;
+}
+
+// ── Mode dispatch ──
+function doSubmit() { return state.mode === "timed" ? submitGuessTimed() : submitGuess(); }
+function doNew() { return state.mode === "timed" ? startRun() : newRound(); }
+
+function applyModeChrome() {
+  const t = $("mTimer");
+  if (t) { t.hidden = state.mode !== "timed"; t.textContent = "0:00"; }
+  const lb = $("mLeaderboard");
+  if (lb) lb.hidden = state.mode !== "timed";
+  document.querySelectorAll(".mmode").forEach((b) =>
+    b.classList.toggle("sel", b.dataset.mode === state.mode));
+}
+
+function startMode() {
+  stopTimer();
+  applyModeChrome();
+  if (state.mode === "timed") { startRun(); loadLeaderboard(); }
+  else { newRound(); }
+}
+
+function setMode(mode) {
+  if (mode === state.mode || round.busy) return;
+  state.mode = mode;
+  startMode();
+}
+
 // ── Delegated events ──
 app.addEventListener("click", (e) => {
+  const mp = e.target.closest(".mmode");
+  if (mp) return setMode(mp.dataset.mode);
   if (round.busy) return;
   const sw = e.target.closest(".mswatch");
   if (sw) return pickColor(Number(sw.dataset.color));
   const sl = e.target.closest(".mslot");
   if (sl) return pickSlot(Number(sl.dataset.slot));
-  if (e.target.closest("#mSubmit")) return submitGuess();
+  if (e.target.closest("#mSubmit")) return doSubmit();
   if (e.target.closest("#mClear")) return clearGuess();
-  if (e.target.closest("#mNew")) return newRound();
+  if (e.target.closest("#mNew")) return doNew();
 });
 document.addEventListener("keydown", (e) => {
   if (round.over || round.busy) return;
-  if (e.key === "Enter") { e.preventDefault(); return submitGuess(); }
+  if (e.key === "Enter") { e.preventDefault(); return doSubmit(); }
   const n = Number(e.key);
   if (n >= 1 && n <= COLORS.length) { e.preventDefault(); return pickColor(n - 1); }
   if (e.key === "Backspace") { e.preventDefault(); return clearGuess(); }
@@ -333,10 +556,17 @@ function buildPage() {
       <p>Crack the secret code — 4 pegs, 6 colors, repeats allowed. 10 guesses.
       ● = right color &amp; spot · ○ = right color, wrong spot.</p>
     </div>
+    <div class="mmodes" id="mModes">
+      <button class="mmode${state.mode === "timed" ? " sel" : ""}" data-mode="timed">⏱ Timed</button>
+      <button class="mmode${state.mode === "zen" ? " sel" : ""}" data-mode="zen">🧘 Zen</button>
+    </div>
     ${signedOut}
     <div class="mm-wrap">
       <div class="card mcard">
-        <div class="mstatus" id="mStatus">10 guesses</div>
+        <div class="mtopbar">
+          <div class="mstatus" id="mStatus">10 guesses</div>
+          <div class="mtimer" id="mTimer" hidden>0:00</div>
+        </div>
         <div class="mboard" id="mBoard"></div>
         <div class="mmsg idle" id="mMsg">Pick 4 colors, then Submit</div>
         <div class="mcurrent" id="mCurrent">
@@ -350,8 +580,9 @@ function buildPage() {
         </div>
         <div class="mcounter">Solved this session: <b id="mWins">0</b></div>
       </div>
-    </div>`;
-  newRound();
+    </div>
+    <div class="mleaderboard" id="mLeaderboard" hidden></div>`;
+  startMode();
 }
 
 async function main() {
@@ -370,6 +601,7 @@ async function main() {
 // ─────────────────────────────────────────────────────────────
 const MOCK = new URLSearchParams(location.search).get("mock") === "1";
 let MOCK_CODE = null;
+let MOCK_RUN = null;
 
 function mockScore(secret, guess) {
   let black = 0;
@@ -389,16 +621,50 @@ function mockScore(secret, guess) {
 function mockJSON(url) {
   if (url.startsWith("/api/v1/hq/me"))
     return { authenticated: true, user: { id: "1", username: "davidj", avatar: null }, balance: 12500 };
+  if (url.includes("/leaderboard"))
+    return { game: "mastermind", target: 5, top: [
+      { rank: 1, name: "davidj", time: "1:42", best_ms: 102000, runs: 4, me: true },
+      { rank: 2, name: "steph", time: "2:05", best_ms: 125000, runs: 2 },
+      { rank: 3, name: "nova", time: "2:38", best_ms: 158000, runs: 1 },
+    ] };
   return {};
+}
+
+function randomCode() {
+  return Array.from({ length: CODE_LEN }, () => COLORS[Math.floor(Math.random() * COLORS.length)]);
 }
 
 function mockMM(path, body) {
   if (path === "/new") {
-    MOCK_CODE = Array.from({ length: CODE_LEN }, () => COLORS[Math.floor(Math.random() * COLORS.length)]);
+    MOCK_CODE = randomCode();
     return { token: "mock-token" };
   }
   if (path === "/reveal") return { code: MOCK_CODE || COLORS.slice(0, CODE_LEN) };
-  // /guess
+  if (path === "/run/start") {
+    MOCK_RUN = { codes: Array.from({ length: 5 }, randomCode), index: 0, guesses: 0, start: Date.now() };
+    return { run_token: "mock-run", target: 5, index: 0, max_guesses: MAX_GUESSES };
+  }
+  if (path === "/run/guess") {
+    const r = MOCK_RUN;
+    const secret = r.codes[r.index];
+    const { black, white } = mockScore(secret, body.guess);
+    r.guesses += 1;
+    if (black === CODE_LEN) {
+      if (r.index >= 4) {
+        const elapsed = Date.now() - r.start;
+        const reward = 300;
+        state.balance += reward;
+        return { black, white, code_solved: true, done: true, elapsed_ms: elapsed,
+          best_ms: elapsed, is_new_best: true, rank: 1, reward, balance: state.balance,
+          index: r.index, target: 5 };
+      }
+      r.index += 1; r.guesses = 0;
+      return { black, white, code_solved: true, index: r.index, target: 5 };
+    }
+    if (r.guesses >= MAX_GUESSES) return { black, white, done: true, dnf: true, code: secret };
+    return { black, white, guesses_left: MAX_GUESSES - r.guesses };
+  }
+  // /guess (Zen)
   const { black, white } = mockScore(MOCK_CODE, body.guess);
   const solved = black === CODE_LEN;
   if (solved) {

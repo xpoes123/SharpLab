@@ -103,9 +103,52 @@
 .mreward.pop { animation: mm-pop .5s ease; }
 
 @media (prefers-reduced-motion: reduce) {
-  .mslot, .mswatch { transition: none; }
+  .mslot, .mswatch, .mmode { transition: none; }
   .mreward.pop { animation: none; }
 }
+
+/* ── Mode toggle pills (⏱ Timed / 🧘 Zen) ── */
+.mmodes { display: flex; gap: 8px; justify-content: center; margin: 0 auto 18px; }
+.mmode {
+  cursor: pointer; font-size: 14px; font-weight: 700; padding: 7px 16px;
+  border-radius: var(--r-pill); border: 1px solid var(--line);
+  background: var(--panel2); color: var(--muted); transition: transform .12s, border-color .15s, color .15s;
+}
+.mmode:hover { border-color: var(--accent); color: var(--fg); transform: translateY(-1px); }
+.mmode.sel { background: var(--accent); color: #0b0d12; border-color: var(--accent); }
+
+/* ── Status + timer bar ── */
+.mtopbar { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
+.mtimer {
+  font-size: 12px; font-weight: 800; color: var(--gold);
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-pill);
+  padding: 3px 12px; font-variant-numeric: tabular-nums;
+}
+
+/* ── Timed run result panel ── */
+.mrunresult { display: flex; flex-direction: column; gap: 6px; align-items: center; }
+.mruntime { font-size: 18px; font-weight: 800; color: var(--fg); }
+.mrank { font-size: 13px; color: var(--accent2); font-weight: 700; }
+.mbest { font-size: 15px; font-weight: 800; color: var(--gold); }
+
+/* ── Leaderboard (fastest 5-code runs) ── */
+.mleaderboard { max-width: 460px; margin: 22px auto 0; }
+.mlbhead {
+  font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px;
+  color: var(--accent2); text-align: center; margin-bottom: 12px;
+}
+.mlbempty { text-align: center; color: var(--muted); font-size: 13px; }
+.mlblist { display: flex; flex-direction: column; gap: 6px; }
+.mlbrow {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 8px 12px; font-size: 14px;
+}
+.mlbrow.me { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold); }
+.mlbrank { font-size: 12px; color: var(--muted); width: 32px; font-variant-numeric: tabular-nums; }
+.mlbname { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mlbruns { font-size: 12px; color: var(--muted); }
+.mlbtime { font-weight: 800; color: var(--gold); font-variant-numeric: tabular-nums; }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Copied verbatim from cards.css so the coins hub + toasts are styled on this
