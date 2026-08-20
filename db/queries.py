@@ -4885,6 +4885,7 @@ ACTIVITY_REWARDS = {
     "quizbowl_win": (20, 200),    # web arcade: correct quiz bowl answer
     "sequence_win": (20, 200),    # web arcade: guessed the next term in a number sequence
     "daily_play": (25, 25),       # daily games: participation, once/day on solving the daily
+    "practice_solve": (10, 100),  # daily games: free-play solve (capped so it's not a coin farm)
     # (paper trades already stake coins — no reward, else you could farm the loop)
 }
 
@@ -5509,7 +5510,8 @@ async def get_or_create_daily_puzzle(day: str) -> dict:
             "SELECT * FROM daily_puzzles WHERE game_id = ? AND puzzle_date = ?", (game_id, day))
         row = await cur.fetchone()
         if row is None:
-            p = _daily.build_puzzle(day)
+            import asyncio
+            p = await asyncio.to_thread(_daily.build_puzzle, day)   # CPU-bound BFS — off the loop
             await db.execute(
                 "INSERT OR IGNORE INTO daily_puzzles "
                 "(game_id, puzzle_date, difficulty, seed, payload, par, par_approx) "

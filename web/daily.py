@@ -11,6 +11,7 @@ placement coins are paid later by the rollover job.
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 from datetime import date, datetime, timezone
 
@@ -153,9 +154,11 @@ async def preview(game_id: str, difficulty: str = "easy"):
         return JSONResponse({"error": "unknown game"}, status_code=404)
     diff = difficulty if difficulty in game.DIFFICULTIES else game.DIFFICULTIES[0]
     seed = secrets.randbelow(2 ** 32)
-    board = game.build_solvable(seed, diff) if hasattr(game, "build_solvable") \
-        else game.generate(seed, diff)
-    par_v, _ = game.par(board)
+    # Board generation is CPU-bound (BFS) — run it in a thread so it NEVER blocks the event loop
+    # (a synchronous hard-board generation used to stall the whole site).
+    gen = game.build_solvable if hasattr(game, "build_solvable") else game.generate
+    board = await asyncio.to_thread(gen, seed, diff)
+    par_v, _ = await asyncio.to_thread(game.par, board)
     return {"game": _meta(game_id), "board": board, "par": par_v, "difficulty": diff}
 
 
