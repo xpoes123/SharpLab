@@ -343,3 +343,19 @@
 .collectorrow .cuser { font-weight: 700; flex: 1; }
 .collectorrow .ccount { font-size: 12px; color: var(--muted); }
 .collectorrow .cval { font-weight: 800; color: var(--gold); font-variant-numeric: tabular-nums; }
+
+/* ── Coins hub: recent earnings ledger ── */
+.hubsub {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
+  margin: 14px 4px 8px; font-weight: 700;
+}
+.hubsub:first-of-type { margin-top: 4px; }
+.hubledger { display: flex; flex-direction: column; gap: 6px; }
+.ledrow {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 9px; padding: 8px 11px;
+}
+.ledamt { font-weight: 800; color: var(--r-uncommon); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ledreason { flex: 1; font-size: 13px; font-weight: 600; }
+.ledtime { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.hubempty { color: var(--muted); text-align: center; padding: 14px; font-size: 13px; }

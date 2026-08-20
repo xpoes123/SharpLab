@@ -47,6 +47,18 @@ async def sell_card(request: Request, body: SellBody):
     return {"card": card, "coins": coins, "balance": balance}
 
 
+@router.get("/coins")
+async def coin_history(request: Request):
+    """Balance + recent coin gains (the 'where did my coins come from' history)."""
+    sess = auth.read_session(request)
+    if not sess:
+        return JSONResponse({"authenticated": False, "balance": 0, "ledger": []}, status_code=401)
+    return {
+        "balance": await queries.get_casino_balance(sess["id"]) or 0,
+        "ledger": await queries.get_coin_ledger(sess["id"]),
+    }
+
+
 @router.get("/collectors")
 async def collectors(request: Request):
     """Public directory of everyone who owns cards, ranked by collection value."""

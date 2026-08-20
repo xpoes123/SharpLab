@@ -219,10 +219,15 @@ async def evaluate_user_achievements(uid: str) -> list[str]:
     existing = {a["achievement_id"] for a in await queries.get_user_achievements(uid)}
     stats = await gather_achievement_stats(uid)
     newly_unlocked: list[str] = []
+    from datetime import datetime, timezone
     for aid, condition in _achievement_checks(stats):
         if condition and aid not in existing:
             if await queries.unlock_achievement(uid, aid):
                 await queries.add_xp(uid, ACHIEVEMENTS_BY_ID[aid].xp_reward)
+                await queries.credit_coins(
+                    uid, 150, f"Achievement: {ACHIEVEMENTS_BY_ID[aid].name}",
+                    datetime.now(timezone.utc).isoformat(),
+                )
                 newly_unlocked.append(aid)
     return newly_unlocked
 
@@ -239,11 +244,11 @@ async def announce_achievements(bot, uid: str, newly: list[str], channel=None) -
     if len(achs) == 1:
         a = achs[0]
         title = "\U0001f3c6 Achievement Unlocked!"
-        desc = f"{a.emoji} **{a.name}** — {a.description}\n`+{a.xp_reward} XP`"
+        desc = f"{a.emoji} **{a.name}** — {a.description}\n`+{a.xp_reward} XP · +150 🪙`"
     else:
         title = f"\U0001f3c6 {len(achs)} Achievements Unlocked!"
         desc = "\n".join(
-            f"{a.emoji} **{a.name}** — {a.description} `+{a.xp_reward} XP`" for a in achs
+            f"{a.emoji} **{a.name}** — {a.description} `+{a.xp_reward} XP · +150 🪙`" for a in achs
         )
     embed = discord.Embed(title=title, description=desc, colour=0xF1C40F)
     embed.set_author(name="Achievement")
@@ -301,7 +306,10 @@ async def _announce_levelup(bot, uid: str, level: int, channel) -> None:
     next_xp = queries.xp_for_level(level + 1)
     embed = discord.Embed(
         title="\U0001f389 Level Up!",
-        description=f"<@{uid}> just reached **Level {level}**! \U0001f680\nNext level at **{next_xp:,} XP**.",
+        description=(
+            f"<@{uid}> just reached **Level {level}**! \U0001f680\n"
+            f"Earned **+100 🪙 per level**. Next level at **{next_xp:,} XP**."
+        ),
         colour=_level_color(level),
     )
     try:
