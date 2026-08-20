@@ -86,6 +86,16 @@ CREATE TABLE IF NOT EXISTS casino_history (
 );
 CREATE INDEX IF NOT EXISTS idx_casino_history_user ON casino_history(discord_user);
 
+-- "Where did my coins come from" — a log of coin GAINS (never spends).
+CREATE TABLE IF NOT EXISTS coin_ledger (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    discord_user  TEXT NOT NULL,
+    amount        INTEGER NOT NULL,      -- always > 0 (gains only)
+    reason        TEXT NOT NULL,         -- human label, e.g. "Reached level 5"
+    created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_coin_ledger_user ON coin_ledger(discord_user, id);
+
 CREATE TABLE IF NOT EXISTS user_xp (
     discord_user  TEXT PRIMARY KEY,
     total_xp      INTEGER NOT NULL DEFAULT 0,

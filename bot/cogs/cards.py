@@ -281,9 +281,9 @@ class CardsCog(commands.Cog):
             if not await queries.mark_set_completion(uid, set_id):
                 return  # already claimed
             reward = await self._completion_reward(set_id)
-            await queries.update_casino_balance(uid, reward)
             cset = await queries.get_card_set_by_id(set_id)
             name = cset["name"] if cset else "the set"
+            await queries.credit_coins(uid, reward, f"Completed {name}", _now_iso())
             emb = discord.Embed(
                 title="🎉 Set complete!",
                 description=(
@@ -465,7 +465,7 @@ class CardsCog(commands.Cog):
                 continue
             if await queries.mark_set_completion(uid, s["set_id"]):
                 reward = await self._completion_reward(s["set_id"])
-                await queries.update_casino_balance(uid, reward)
+                await queries.credit_coins(uid, reward, f"Completed {s['name']}", _now_iso())
                 paid.append((s["name"], reward))
         if not paid:
             await interaction.followup.send(

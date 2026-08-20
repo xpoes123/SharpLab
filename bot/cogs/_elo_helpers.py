@@ -187,6 +187,16 @@ async def update_elo_multiplayer(
             1.0 if is_win else 0.0,
             old_r, new_r, context,
         )
+        # Winner-only coin reward for playing a real multiplayer game (guarded by the
+        # len<2 early return above, so solo play never earns). Best-effort.
+        if is_win:
+            try:
+                from datetime import datetime, timezone
+                await queries.credit_coins(
+                    str(uid), 50, f"Won {game_key}", datetime.now(timezone.utc).isoformat()
+                )
+            except Exception:
+                pass
 
     return changes
 
