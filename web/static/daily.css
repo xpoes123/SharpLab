@@ -50,10 +50,12 @@
 
 /* rush hour cars */
 .stage svg.rh-board { touch-action: none; }
+/* base drop-shadow / target glow come from the inline SVG filters (url(#rhsh)/#rhglow);
+   hover chains a brightness on top so the shadow+glow are preserved. */
 .rh-car { cursor: grab; transition: filter .12s; }
-.rh-car:hover { filter: brightness(1.12); }
 .rh-car:active { cursor: grabbing; }
-.rh-car.target { filter: drop-shadow(0 0 3px color-mix(in srgb, var(--red) 60%, transparent)); }
+.rh-car:hover { filter: url(#rhsh) brightness(1.12); }
+.rh-car.target:hover { filter: url(#rhglow) brightness(1.08); }
 @media (prefers-reduced-motion: reduce) { .rh-car { transition: none; } }
 
 .actions { display: flex; gap: 10px; }
