@@ -23,7 +23,7 @@ from pydantic import BaseModel
 
 from db import queries
 from shared import daily
-from web import auth
+from web import auth, gameround
 
 router = APIRouter(prefix="/api/v1/daily")
 
@@ -186,7 +186,38 @@ async def preview(game_id: str, difficulty: str = "easy"):
                 par_v, _ = await asyncio.to_thread(game.par, board)
                 entry = (board, par_v, time.monotonic())
                 _preview_cache[key] = entry
-    return {"game": _meta(game_id), "board": entry[0], "par": entry[1], "difficulty": diff}
+    board, par_v = entry[0], entry[1]
+    # Stash the (cached) board so a later solve can be validated server-side for a capped coin
+    # reward — a fresh single-use token per request even when the board is reused from cache.
+    token = gameround.stash({"game": game_id, "board": board})
+    return {"game": _meta(game_id), "board": board, "par": par_v, "difficulty": diff,
+            "board_token": token}
+
+
+class PracticeBody(BaseModel):
+    board_token: str
+    solution: dict
+
+
+@router.post("/practice-solve")
+async def practice_solve(request: Request, body: PracticeBody):
+    """Validate a free-play solve and grant a small, per-day-capped coin reward. Server-authoritative
+    (replays the solution against the stashed board) so coins can't be faked; capped so free play
+    isn't a coin farm. No auth → still validates, just no coins."""
+    data = gameround.peek(body.board_token)
+    if not isinstance(data, dict):
+        return JSONResponse({"error": "board expired — start a new one"}, status_code=400)
+    game = daily.DAILY_GAMES.get(data["game"])
+    result = game.validate(data["board"], body.solution) if game else None
+    if result is None:
+        return {"solved": False}
+    out = {"solved": True, "moves": result["primary"], "coins": 0}
+    uid = _uid(request)
+    if uid:
+        out["coins"] = await queries.grant_activity_reward(uid, "practice_solve", daily.puzzle_day())
+        out["balance"] = await queries.get_casino_balance(uid) or 0
+    gameround.claim(body.board_token)   # single-use: one reward per board
+    return out
 
 
 @router.get("/leaderboard")
