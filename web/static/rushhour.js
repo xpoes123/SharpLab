@@ -61,7 +61,7 @@
       const r = await fetch(`/api/v1/daily/preview/rushhour?difficulty=${S.difficulty}`, { credentials: "include" });
       j = await r.json();
     } catch { return; }
-    S.board = j.board; S.par = j.par;
+    S.board = j.board; S.par = j.par; S.boardToken = j.board_token;
     document.getElementById("par").textContent = j.par;
     if (R() && R().teardown) R().teardown();
     R().mount(document.getElementById("stage"), j.board, { onSolved, onMove });
@@ -73,7 +73,7 @@
     document.getElementById("moves").textContent = S.moves;
   }
 
-  function onSolved() {
+  async function onSolved() {
     if (S.done) return;
     S.done = true; stopTimer();
     const t = fmt(S.started ? Date.now() - S.t0 : 0);
@@ -82,6 +82,19 @@
     const b = document.getElementById("banner");
     b.className = "banner show win";
     b.innerHTML = `<h2>🎉 Solved!</h2><div class="line">Freed the car in <b>${S.moves}</b> moves (par ${par}) · ${t} ${good ? `· <b>${good}</b>` : ""}</div>`;
+    // server-validate for a small capped coin reward
+    try {
+      const r = await fetch("/api/v1/daily/practice-solve", {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ board_token: S.boardToken, solution: { moves: R().getMoves() } }),
+      });
+      const j = await r.json();
+      if (j && j.coins) {
+        b.innerHTML += `<div class="line" style="color:var(--gold);margin-top:4px">+🪙 ${j.coins}</div>`;
+        const chip = navRight.querySelector(".pill");
+        if (chip && j.balance != null) chip.textContent = `🪙 ${num(j.balance)}`;
+      }
+    } catch { /* practice coins are best-effort */ }
   }
 
   shell(); nav(); newBoard();
