@@ -32,11 +32,13 @@ HOWTO = (
 SIZE = 6
 EXIT_ROW = 2
 TARGET = "X"
-# difficulty → (num cars incl. target, optimal-move range to accept)
+# difficulty → (num cars incl. target, optimal-move range to accept). Ranges are kept reachable so
+# generation converges fast — an over-ambitious range makes build_solvable churn (and it used to
+# block the web event loop). Tune ceilings up only with generation running OFF the request thread.
 _PARAMS = {
     "easy":   (7, (4, 9)),
-    "medium": (9, (10, 18)),
-    "hard":   (11, (19, 40)),
+    "medium": (9, (8, 16)),
+    "hard":   (10, (13, 26)),
 }
 
 
@@ -96,7 +98,7 @@ def solve(board: dict, want_path: bool = False):
     seen = {start}
     q = deque([start])
     parent = {start: None}
-    bound = 400_000
+    bound = 50_000    # cap the search so a pathological board is rejected fast, not explored forever
     while q and len(seen) < bound:
         state = q.popleft()
         for ns, mv in _neighbors(cars, state, target):
@@ -154,19 +156,35 @@ def _try_board(rng: random.Random, n_cars: int) -> dict | None:
 
 
 def build_solvable(seed: int, difficulty: str) -> dict:
-    """Deterministically produce a GUARANTEED-solvable board whose optimal move count lands in the
-    difficulty's range. Re-rolls the seed until the BFS solver approves; widens the range if a
-    difficulty is stubborn so it always returns something."""
+    """Deterministically produce a GUARANTEED-solvable board whose optimal move count is in the
+    difficulty's range. Bounded work: a fixed number of BFS-checked rerolls; if none lands in range
+    it returns the best solvable board found (closest to the range), and — as a last resort — a
+    hand-built trivially-solvable board. NEVER raises and never runs unbounded (this used to block
+    the web event loop). Still deterministic: same (seed, difficulty) → same board."""
     n_cars, (lo, hi) = _PARAMS.get(difficulty, _PARAMS["medium"])
-    for relax in range(0, 6):
-        for attempt in range(400):
-            rng = random.Random((seed + attempt * 2654435761 + relax * 40503) & 0xFFFFFFFF)
-            board = _try_board(rng, n_cars)
-            opt = solve(board)
-            if opt is not None and (lo - relax) <= opt <= (hi + relax * 4):
-                board["_par"] = opt
-                return board
-    raise RuntimeError("no solvable rush hour board found")
+    best = None
+    best_opt = -1
+    for attempt in range(150):
+        rng = random.Random((seed + attempt * 2654435761) & 0xFFFFFFFF)
+        board = _try_board(rng, n_cars)
+        opt = solve(board)
+        if opt is None:
+            continue
+        if lo <= opt <= hi:
+            board["_par"] = opt
+            return board
+        # keep the hardest solvable board seen (but not past the ceiling) as a fallback
+        if best is None or (best_opt < lo and opt > best_opt) or (opt <= hi and opt > best_opt):
+            best, best_opt = board, opt
+    if best is not None:
+        best["_par"] = best_opt
+        return best
+    # ultimate fallback — a minimal solvable board (target + one blocker). Never raise.
+    fb = {"size": SIZE, "exit_row": EXIT_ROW, "target": TARGET, "cars": [
+        {"id": TARGET, "r": EXIT_ROW, "c": 0, "len": 2, "orient": "h"},
+        {"id": "A", "r": 1, "c": 5, "len": 3, "orient": "v"}]}
+    fb["_par"] = solve(fb) or 1
+    return fb
 
 
 def par(puzzle: dict) -> tuple[int, bool]:
