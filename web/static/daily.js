@@ -3,16 +3,25 @@
 // difficulty). The player reads the how-to card, presses Start, and only then
 // does POST /api/v1/daily/start hand back the board + a start_token and begin
 // the clock SERVER-SIDE. This means the board can't be pre-solved before the
-// timer runs. The board engine + pig AI live in trappig_board.js and are
-// byte-identical to the server (shared/daily_games/trappig.py), so a trap
-// computed here replays to a trap on the server.
+// timer runs.
+//
+// GAME-AWARE: the page renders whatever game the server serves today. Each game
+// ships a renderer registered on window.DailyRenderers[gameId], and this page
+// dispatches on `today.game.id`. A renderer implements:
+//   mount(boardEl, board, { onSolved, onEscaped, onMove })
+//   getMoves()   -> the ordered moves in the game's solution format
+//   teardown()   -> drop listeners/timers (optional)
+// onSolved() = the puzzle is solved → we POST submit with {moves:getMoves()}.
+// onEscaped() = a loss (pig-only: the pig reached the edge) → we show the
+// "it escaped, Reset" notice and never submit. Rush Hour never calls onEscaped.
+// The trappig renderer lives at the bottom of this file (it reuses TrapPigBoard
+// from trappig_board.js); Rush Hour's renderer lives in rushhour_board.js.
 //
 // One-submit rule: only a genuine WIN is posted, and it posts exactly once. The
 // server times the solve from the start_token (no client elapsed is trusted).
-// If the pig escapes, we never submit — the player presses Reset, which fetches
-// a FRESH board + token via /start and retries freely until they trap it.
 
-const B = window.TrapPigBoard;
+window.DailyRenderers = window.DailyRenderers || {};
+
 const app = document.getElementById("app");
 const navRight = document.getElementById("navRight");
 
@@ -49,10 +58,9 @@ const fmtTime = (ms) => {
 const state = { me: null, balance: 0 };
 const D = {
   today: null, // /today payload (metadata only — no board)
-  board: null, // board from /start {rows, cols, pig, fences}
+  board: null, // board from /start (shape depends on the game)
   startToken: null, // opaque token from /start; identifies the timed session
-  work: null, // live board {rows, cols, pig:[r,c], fences:Set}
-  moves: [], // ordered [[r,c], ...] the player has fenced
+  renderer: null, // the active game renderer (from window.DailyRenderers)
   t0: 0, // client display-clock origin (visual only; server is authoritative)
   timer: null,
   over: false,
@@ -62,6 +70,21 @@ const D = {
 };
 
 const $ = (id) => document.getElementById(id);
+
+// ── Game-aware bits ──
+function gameId() {
+  return (D.today && D.today.game && D.today.game.id) || "trappig";
+}
+const isRush = () => gameId() === "rushhour";
+const unitWord = () => (isRush() ? "moves" : "fences"); // lowercase, for prose
+const unitLabel = () => (isRush() ? "Moves" : "Fences"); // Titlecase, for headers
+const solvedTitle = () => (isRush() ? "🎉 Solved!" : "🎉 Trapped!");
+const solvedVerb = () => (isRush() ? "Solved" : "Trapped");
+function ruleText() {
+  return isRush()
+    ? "Slide the red car out through the exit in as few moves as you can — everyone gets today's board; time breaks ties."
+    : "Fence the pig in as few moves as you can — everyone gets today's board; time breaks ties.";
+}
 
 // ── Nav (mirrors threecardpoker.js) ──
 function renderNav(user) {
@@ -83,17 +106,6 @@ function applyBalance(bal) {
 }
 const myName = () => (state.me && state.me.user && state.me.user.username) || null;
 
-// ── Build a fresh working board from the /start board (deep-copied) ──
-function freshWork() {
-  const bd = D.board;
-  return {
-    rows: bd.rows,
-    cols: bd.cols,
-    pig: [bd.pig[0], bd.pig[1]],
-    fences: B.toKeySet(bd.fences ? bd.fences.map((f) => [f[0], f[1]]) : []),
-  };
-}
-
 // ── Header (shown in every mode; carries the puzzle number) ──
 function headerHTML() {
   const t = D.today;
@@ -114,7 +126,7 @@ function headerHTML() {
         ${streak}
       </span>
     </div>
-    <p class="rule">Fence the pig in as few moves as you can — everyone gets today's board; time breaks ties.</p>
+    <p class="rule">${esc(ruleText())}</p>
   </div>`;
 }
 
@@ -137,11 +149,11 @@ function buildSkeleton(opts) {
   app.innerHTML = `<div class="wrap">
     ${headerHTML()}
     <div class="stats">
-      <div class="stat-box"><div class="k">Fences</div><div class="v" id="fences">0</div></div>
+      <div class="stat-box"><div class="k">${esc(unitLabel())}</div><div class="v" id="fences">0</div></div>
       <div class="stat-box"><div class="k">Time</div><div class="v" id="time">0:00</div></div>
       <div class="stat-box par"><div class="k">Par</div><div class="v">${esc(parNum)}</div></div>
     </div>
-    <div class="stage" id="stage"><svg id="board"></svg></div>
+    <div class="stage" id="stage"></div>
     <div id="notice"></div>
     ${opts.showReset ? `<div class="actions"><button class="btn ghost" id="resetBtn" style="flex:1">Reset board</button></div>` : ""}
     <div id="resultArea"></div>
@@ -150,13 +162,15 @@ function buildSkeleton(opts) {
   </div>`;
 }
 
-function drawBoard(interactive) {
-  B.renderInto($("board"), D.work, interactive ? onPlace : null);
-}
-
 function showNotice(kind, html) {
   const n = $("notice");
   if (n) n.innerHTML = html ? `<div class="notice ${kind}">${html}</div>` : "";
+}
+
+// Live move/fence counter — the renderer calls this after each recorded move.
+function updateMoveCount(n) {
+  const el = $("fences");
+  if (el) el.textContent = String(n);
 }
 
 // ── Display clock (purely visual — the server times the real solve) ──
@@ -179,39 +193,23 @@ function stopTimer() {
   }
 }
 
-// ── Play flow ──
-function onPlace(r, c) {
+// ── Solve / loss handlers passed to the renderer ──
+function onSolvedFlow() {
   if (D.over || D.submitted) return;
-  const k = B.key(r, c);
-  if (D.work.fences.has(k) || (D.work.pig[0] === r && D.work.pig[1] === c)) return;
-  D.work.fences.add(k);
-  D.moves.push([r, c]);
-  const el = $("fences");
-  if (el) el.textContent = String(D.moves.length);
-  // Move the pig with the shared (server-identical) AI.
-  const nxt = B.pigStep(D.work.pig, D.work.fences, D.work.rows, D.work.cols);
-  if (nxt === null) return onTrapped();
-  D.work.pig = nxt;
-  drawBoard(true);
-  if (B.isBorder(D.work.pig[0], D.work.pig[1], D.work.rows, D.work.cols)) return onEscaped();
-}
-
-function onEscaped() {
   D.over = true;
   stopTimer();
-  drawBoard(false);
+  const n = D.renderer ? D.renderer.getMoves().length : 0;
+  showNotice("info", `🎉 ${esc(solvedVerb())} in ${n} ${esc(unitWord())} — submitting your result…`);
+  submit();
+}
+
+function onEscapedNotice() {
+  D.over = true;
+  stopTimer();
   showNotice(
     "warn",
     `🐷 It escaped — the daily wants a <b>WIN</b>. Reset and try again; only a trap counts, and you can retry as many times as you need.`
   );
-}
-
-function onTrapped() {
-  D.over = true;
-  stopTimer();
-  drawBoard(false);
-  showNotice("info", `🎉 Trapped in ${D.moves.length} fences — submitting your result…`);
-  submit();
 }
 
 // ── Start / Reset: fetch a fresh board + token and begin the timed session ──
@@ -244,21 +242,32 @@ async function startGame() {
   // Board is here for the first time. Sync any metadata the server refreshed.
   D.board = j.board;
   D.startToken = j.start_token;
+  if (j.game && j.game.id) D.today.game = Object.assign({}, D.today.game, j.game);
   if (j.par != null) D.today.par = j.par;
   if (j.difficulty != null) D.today.difficulty = j.difficulty;
   if (j.number != null) D.today.number = j.number;
 
-  D.moves = [];
+  const R = window.DailyRenderers[gameId()];
+  if (!R) return failStart("This game isn't supported in your browser yet — refresh and try again.");
+
   D.over = false;
   D.submitting = false;
   D.submitted = false;
-  D.work = freshWork();
 
   buildSkeleton({ showReset: true });
-  drawBoard(true);
-  startTimer(j.elapsed_ms);   // continuous clock — includes time from earlier attempts
+  // Tear down any previous renderer before mounting the fresh board.
+  if (D.renderer && D.renderer.teardown) {
+    try { D.renderer.teardown(); } catch (_) {}
+  }
+  D.renderer = R;
+  R.mount($("stage"), D.board, {
+    onSolved: onSolvedFlow,
+    onEscaped: onEscapedNotice,
+    onMove: updateMoveCount,
+  });
+  startTimer(j.elapsed_ms); // continuous clock — includes time from earlier attempts
   const rb = $("resetBtn");
-  if (rb) rb.onclick = startGame; // Reset = same board, but the clock keeps running.
+  if (rb) rb.onclick = startGame; // Reset = fresh board, but the clock keeps running.
   loadLeaderboard();
 }
 
@@ -276,7 +285,8 @@ function failStart(html) {
 async function submit() {
   if (D.submitting || D.submitted) return;
   D.submitting = true;
-  const body = { start_token: D.startToken, solution: { moves: D.moves } };
+  const moves = D.renderer ? D.renderer.getMoves() : [];
+  const body = { start_token: D.startToken, solution: { moves } };
   let r, j;
   try {
     r = await fetch("/api/v1/daily/submit", {
@@ -304,7 +314,7 @@ async function submit() {
     return;
   }
   if (r.status === 400 || !r.ok) {
-    // Didn't register as a trap, or the token expired / was forged. The server
+    // Didn't register as a win, or the token expired / was forged. The server
     // message explains which; either way the fix is to press Start again.
     D.submitting = false;
     const msg = (j && (j.detail || j.error || j.message)) || "That didn't register — press Start to play a fresh board.";
@@ -316,7 +326,7 @@ async function submit() {
     if (sb) sb.onclick = startGame;
     return;
   }
-  // 200 — genuine trap accepted.
+  // 200 — genuine win accepted.
   D.submitted = true;
   D.submitting = false;
   if (j.balance != null) applyBalance(j.balance);
@@ -361,10 +371,10 @@ function renderResult(payload, opts) {
       <button class="btn" id="copyShare">Copy result</button>
     </div>`;
 
-  const title = opts.title || "🎉 Trapped!";
+  const title = opts.title || solvedTitle();
   $("resultArea").innerHTML = `<div class="result">
     <h2>${esc(title)}</h2>
-    <p class="sub">Trapped in <b>${esc(primary)}</b> fences${parStr} · ${esc(fmtTime(secondary))}</p>
+    <p class="sub">${esc(solvedVerb())} in <b>${esc(primary)}</b> ${esc(unitWord())}${parStr} · ${esc(fmtTime(secondary))}</p>
     <div class="grid2">${grid}</div>
     ${metrics.length ? `<div class="metrics">${metrics.join("")}</div>` : ""}
     ${shareBox}
@@ -391,7 +401,7 @@ function defaultShare(primary, par, secondary) {
   const diff = t.difficulty || "";
   const parStr = par != null ? ` (par ${par})` : "";
   const blocks = "🟩".repeat(Math.min(Number(primary) || 0, 12));
-  return `${g.icon || "🐷"} ${g.name || "Trap the Pig"}${numStr} · ${diff} · ${primary} fences${parStr} · ${fmtTime(secondary)}\n${blocks}`;
+  return `${g.icon || "🐷"} ${g.name || "Daily Game"}${numStr} · ${diff} · ${primary} ${unitWord()}${parStr} · ${fmtTime(secondary)}\n${blocks}`;
 }
 
 // ── Leaderboard ──
@@ -438,7 +448,7 @@ function renderLeaderboard(data) {
         return `<tr class="${mine.trim()}">
           <td class="lb-rank">${num(r.rank)}</td>
           <td>${esc(r.name)}</td>
-          <td class="num">${esc(r.primary)} fences</td>
+          <td class="num">${esc(r.primary)} ${esc(unitWord())}</td>
           <td class="num">${esc(fmtTime(r.secondary))}</td>
           <td class="num">+${num(r.points)} pts</td>
         </tr>`;
@@ -446,7 +456,7 @@ function renderLeaderboard(data) {
       .join("");
     table.innerHTML = `<table><thead><tr>
         <th class="lb-rank">#</th><th>Player</th>
-        <th class="num">Fences</th><th class="num">Time</th><th class="num">Points</th>
+        <th class="num">${esc(unitLabel())}</th><th class="num">Time</th><th class="num">Points</th>
       </tr></thead><tbody>${rows}</tbody></table>`;
   } else {
     if (!season.length) {
@@ -545,3 +555,77 @@ async function main() {
 }
 
 main();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap the Pig renderer — the original pig play logic, now behind the daily
+// renderer interface. Behaviour is UNCHANGED: same board (TrapPigBoard), same
+// hex-click fencing, same server-identical pig AI, same reset-on-escape, and
+// getMoves() returns the fence list [[r,c], ...] exactly as submit sends today.
+// ─────────────────────────────────────────────────────────────────────────────
+(function () {
+  const B = window.TrapPigBoard;
+  let svgEl = null;
+  let work = null; // live board {rows, cols, pig:[r,c], fences:Set}
+  let moves = []; // ordered [[r,c], ...] the player has fenced
+  let cbs = {};
+  let done = false;
+
+  // Build a fresh working board from the /start board (deep-copied).
+  function freshWork(board) {
+    return {
+      rows: board.rows,
+      cols: board.cols,
+      pig: [board.pig[0], board.pig[1]],
+      fences: B.toKeySet(board.fences ? board.fences.map((f) => [f[0], f[1]]) : []),
+    };
+  }
+
+  function draw(interactive) {
+    B.renderInto(svgEl, work, interactive ? onPlace : null);
+  }
+
+  function onPlace(r, c) {
+    if (done) return;
+    const k = B.key(r, c);
+    if (work.fences.has(k) || (work.pig[0] === r && work.pig[1] === c)) return;
+    work.fences.add(k);
+    moves.push([r, c]);
+    if (cbs.onMove) cbs.onMove(moves.length);
+    // Move the pig with the shared (server-identical) AI.
+    const nxt = B.pigStep(work.pig, work.fences, work.rows, work.cols);
+    if (nxt === null) {
+      done = true;
+      draw(false);
+      return cbs.onSolved && cbs.onSolved();
+    }
+    work.pig = nxt;
+    draw(true);
+    if (B.isBorder(work.pig[0], work.pig[1], work.rows, work.cols)) {
+      done = true;
+      draw(false);
+      return cbs.onEscaped && cbs.onEscaped();
+    }
+  }
+
+  window.DailyRenderers["trappig"] = {
+    mount(boardEl, board, callbacks) {
+      cbs = callbacks || {};
+      moves = [];
+      done = false;
+      boardEl.innerHTML = `<svg id="board"></svg>`;
+      svgEl = boardEl.querySelector("svg");
+      work = freshWork(board);
+      draw(true);
+      if (cbs.onMove) cbs.onMove(0);
+    },
+    getMoves() {
+      return moves;
+    },
+    teardown() {
+      svgEl = null;
+      work = null;
+      moves = [];
+      done = true;
+    },
+  };
+})();

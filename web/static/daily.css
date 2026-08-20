@@ -48,6 +48,14 @@
 .hex.open:hover { fill: var(--openhi); stroke: var(--accent); }
 @media (prefers-reduced-motion: reduce) { .hex { transition: none; } }
 
+/* rush hour cars */
+.stage svg.rh-board { touch-action: none; }
+.rh-car { cursor: grab; transition: filter .12s; }
+.rh-car:hover { filter: brightness(1.12); }
+.rh-car:active { cursor: grabbing; }
+.rh-car.target { filter: drop-shadow(0 0 3px color-mix(in srgb, var(--red) 60%, transparent)); }
+@media (prefers-reduced-motion: reduce) { .rh-car { transition: none; } }
+
 .actions { display: flex; gap: 10px; }
 
 /* tutorial / how-to card (shown before the board is revealed) */
