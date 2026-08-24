@@ -499,12 +499,31 @@ class TestFortune:
     def test_four_of_a_kind(self):
         cards = ["9♠", "9♥", "9♦", "9♣", "2♠", "5♥", "K♦"]
         payout, label = _fortune_payout(cards, 10)
-        assert payout == 250  # 25:1
+        assert payout == 200  # 20× total
+
+    def test_straight_flush_not_paid_as_royal(self):
+        # Regression: a non-royal straight flush used to pay 150× ("Royal Flush").
+        cards = ["5♠", "6♠", "7♠", "8♠", "9♠", "2♥", "K♦"]
+        payout, label = _fortune_payout(cards, 10)
+        assert (payout, label) == (500, "Straight Flush")  # 50× total, not 150×
+
+    def test_royal_flush(self):
+        cards = ["10♠", "J♠", "Q♠", "K♠", "A♠", "2♥", "3♦"]
+        payout, label = _fortune_payout(cards, 10)
+        assert (payout, label) == (1500, "Royal Flush")
 
     def test_five_aces(self):
         cards = ["A♠", "A♥", "A♦", "A♣", JOKER, "5♥", "K♦"]
         payout, label = _fortune_payout(cards, 10)
-        assert payout == 4000  # 400:1
+        assert (payout, label) == (4000, "Five Aces")  # 400× total
+
+    def test_fortune_has_house_edge(self):
+        # The Fortune bet must not be +EV for the player. Monte-carlo the actual
+        # payout path over real deals; expected return per unit staked < 1.
+        N, total = 40_000, 0
+        for _ in range(N):
+            total += _fortune_payout(_new_deck()[:7], 1)[0]
+        assert total / N < 0.98, f"Fortune EV/unit = {total / N:.4f} (should keep a house edge)"
 
 
 # ── Best 5 from 7 ───────────────────────────────────────────────────────────
