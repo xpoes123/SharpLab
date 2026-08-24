@@ -5885,3 +5885,39 @@ async def claim_daily_result_post(game_id: str, day: str, discord_user: str) -> 
             (game_id, day, discord_user))
         await db.commit()
         return cur.rowcount > 0
+
+
+async def claim_login_streak(discord_user: str, day: str) -> dict:
+    """Claim the daily login-streak reward. Ramps min(1000, 200 + (streak-1)*100),
+    resets to 1 if yesterday wasn't the last claim. Idempotent per day."""
+    from datetime import date, timedelta
+    yesterday = (date.fromisoformat(day) - timedelta(days=1)).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            row = await (await db.execute(
+                "SELECT last_day, streak, longest FROM login_streak WHERE discord_user = ?",
+                (discord_user,))).fetchone()
+            if row and row["last_day"] == day:
+                await db.execute("ROLLBACK")
+                return {"granted": 0, "streak": row["streak"], "longest": row["longest"], "already": True}
+            if row and row["last_day"] == yesterday:
+                streak = row["streak"] + 1
+            else:
+                streak = 1
+            longest = max(streak, row["longest"] if row else 1)
+            granted = min(1000, 200 + (streak - 1) * 100)
+            await db.execute(
+                "INSERT INTO login_streak (discord_user, last_day, streak, longest) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(discord_user) DO UPDATE SET last_day = ?, streak = ?, longest = ?",
+                (discord_user, day, streak, longest, day, streak, longest))
+            await db.commit()
+        except Exception:
+            await db.execute("ROLLBACK")
+            raise
+    # credit outside the streak txn (credit_coins opens its own connection)
+    from datetime import datetime, timezone
+    await credit_coins(discord_user, granted, f"Login streak (day {streak})",
+                       datetime.now(timezone.utc).isoformat())
+    return {"granted": granted, "streak": streak, "longest": longest, "already": False}

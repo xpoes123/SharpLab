@@ -1043,3 +1043,11 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS login_streak ("
+                "discord_user TEXT PRIMARY KEY, last_day TEXT NOT NULL, "
+                "streak INTEGER NOT NULL DEFAULT 1, longest INTEGER NOT NULL DEFAULT 1)")
+            await db.commit()
+        except Exception:
+            pass
