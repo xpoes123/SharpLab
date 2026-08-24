@@ -811,6 +811,20 @@ def test_activity_reward_override_scales_caps_and_logs(tmp_db):
     _run(go())
 
 
+def test_premium_pack_achievements_registered_and_wired():
+    from collections import defaultdict
+    from shared.achievements import ACHIEVEMENTS_BY_ID
+    from bot.cogs.progression import _achievement_checks
+    assert {"box_opener", "card_set_complete"} <= set(ACHIEVEMENTS_BY_ID)
+    # present in the evaluation rules
+    ids = {aid for aid, _ in _achievement_checks(defaultdict(int))}
+    assert {"box_opener", "card_set_complete"} <= ids
+    # wired to the right stats: setting those stats earns exactly these
+    s = defaultdict(int); s["cards_has_box"] = 1; s["cards_completed_sets"] = 1
+    earned = {aid for aid, ok in _achievement_checks(s) if ok}
+    assert {"box_opener", "card_set_complete"} <= earned
+
+
 if __name__ == "__main__":
     import inspect
 

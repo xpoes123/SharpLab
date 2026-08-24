@@ -120,3 +120,11 @@ def test_box_refuses_when_broke(tmp_db):
         with pytest.raises(ValueError):
             await _queries.mint_box("u4", set_id, "2026-01-01T00:00:00Z")
     _run(go())
+
+
+def test_card_stats_exposes_premium_keys(tmp_db):
+    async def go():
+        stats = await _queries.get_card_stats("nobody")
+        assert stats["cards_has_box"] is False
+        assert stats["cards_completed_sets"] == 0
+    _run(go())

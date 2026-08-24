@@ -5360,9 +5360,14 @@ async def get_card_stats(uid: str) -> dict:
         r = await (await db.execute(
             "SELECT COUNT(*) total, COUNT(DISTINCT d.set_id) sets, "
             "MAX(d.rarity = 'legendary') has_leg, MAX(i.is_holo) has_holo, "
-            "MAX(i.gem IS NOT NULL) has_gem, MAX(d.total_copies = 1) has_1of1 "
+            "MAX(i.gem IS NOT NULL) has_gem, MAX(d.total_copies = 1) has_1of1, "
+            "MAX(i.source = 'box') has_box "
             "FROM card_instances i JOIN card_designs d ON i.design_id = d.design_id "
             "WHERE i.owner_id = ?",
+            (uid,),
+        )).fetchone()
+        comp = await (await db.execute(
+            "SELECT COUNT(*) c FROM card_set_completed WHERE discord_user = ?",
             (uid,),
         )).fetchone()
     return {
@@ -5372,6 +5377,8 @@ async def get_card_stats(uid: str) -> dict:
         "cards_has_holo": bool(r["has_holo"]),
         "cards_has_gem": bool(r["has_gem"]),
         "cards_has_1of1": bool(r["has_1of1"]),
+        "cards_has_box": bool(r["has_box"]),
+        "cards_completed_sets": comp["c"] or 0,
     }
 
 

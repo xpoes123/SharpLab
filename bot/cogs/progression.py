@@ -209,6 +209,8 @@ def _achievement_checks(s: dict) -> list[tuple[str, bool]]:
         ("card_legendary", s["cards_has_legendary"]),
         ("card_1of1", s["cards_has_1of1"]),
         ("card_sets_5", s["cards_sets"] >= 5),
+        ("box_opener", s["cards_has_box"]),
+        ("card_set_complete", s["cards_completed_sets"] >= 1),
     ]
 
 
