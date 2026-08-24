@@ -1370,15 +1370,18 @@ async def credit_coins(discord_user: str, amount: int, reason: str, now_iso: str
         return new_balance
 
 
-async def get_coin_ledger(discord_user: str, limit: int = 25) -> list[dict]:
-    """Recent coin gains for a user (newest first) — powers the coin-history hub."""
+async def get_coin_ledger(discord_user: str, limit: int = 25, min_amount: int = 0) -> list[dict]:
+    """Recent coin gains for a user (newest first) — powers the coin-history hub.
+    `min_amount` hides small gains from the DISPLAY (the page passes 50 so the per-message
+    trickle doesn't flood history); it only filters positive rows below the threshold,
+    never debits. Default 0 = unfiltered (accounting callers get the full ledger)."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT amount, reason, created_at FROM coin_ledger WHERE discord_user = ? "
-            "AND NOT (amount > 0 AND amount < 50) "
+            "AND NOT (amount > 0 AND amount < ?) "
             "ORDER BY id DESC LIMIT ?",
-            (discord_user, limit),
+            (discord_user, min_amount, limit),
         )
         return [dict(r) for r in await cur.fetchall()]
 

@@ -36,7 +36,10 @@ def test_sub_50_gains_hidden(tmp_db):
         await _add("u1", 50, "Login streak")  # shown
         await _add("u1", 500, "Box")          # shown
         await _add("u1", -100, "Bet")         # shown (debit)
-        rows = await _queries.get_coin_ledger("u1")
-        amounts = sorted(r["amount"] for r in rows)
-        assert amounts == [-100, 50, 500]
+        # display call (page) hides sub-50 gains
+        rows = await _queries.get_coin_ledger("u1", min_amount=50)
+        assert sorted(r["amount"] for r in rows) == [-100, 50, 500]
+        # default (accounting) call is unfiltered
+        allrows = await _queries.get_coin_ledger("u1")
+        assert sorted(r["amount"] for r in allrows) == [-100, 10, 49, 50, 500]
     _run(go())
