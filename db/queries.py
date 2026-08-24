@@ -5825,6 +5825,36 @@ async def clear_inflight_rounds() -> None:
 
 # ── Skill-game leaderboards (best timed run per game) ───────────────────────────
 
+async def get_all_skill_game_ids() -> list[str]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT DISTINCT game_id FROM skill_scores")
+        return [r[0] for r in await cur.fetchall()]
+
+
+async def record_skill_payout_day(day: str) -> bool:
+    """Claim `day` for the skill payout. True iff this call is the one that claimed it
+    (so the daily payout runs at most once per UTC day, even across restarts)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await db.execute(
+                "INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('skill_payout_day', ?)",
+                (day,))
+            if cur.rowcount == 0:  # key already exists — check whether it's an older day
+                row = await (await db.execute(
+                    "SELECT value FROM bot_settings WHERE key = 'skill_payout_day'")).fetchone()
+                if row and row[0] == day:
+                    await db.execute("ROLLBACK")
+                    return False
+                await db.execute(
+                    "UPDATE bot_settings SET value = ? WHERE key = 'skill_payout_day'", (day,))
+            await db.commit()
+            return True
+        except Exception:
+            await db.execute("ROLLBACK")
+            raise
+
+
 async def record_skill_best(game_id: str, discord_user: str, elapsed_ms: int) -> tuple[int, bool]:
     """Record a completed timed run. Keeps the player's BEST (lowest) time per game and counts
     runs. Returns (best_ms_after, is_new_best)."""

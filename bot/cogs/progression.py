@@ -322,6 +322,24 @@ async def _announce_levelup(bot, uid: str, level: int, channel) -> None:
         log.debug("levelup announce failed for %s", uid, exc_info=True)
 
 
+PRIZES = [2000, 1000, 500]  # skill-leaderboard daily payout, ranks 1-3
+
+
+async def pay_skill_leaderboards() -> int:
+    """Pay the top 3 of every skill leaderboard from the house. Returns coins minted."""
+    from datetime import datetime, timezone
+    minted = 0
+    for game_id in await queries.get_all_skill_game_ids():
+        top = await queries.get_skill_leaderboard(game_id, len(PRIZES))
+        for rank, row in enumerate(top):
+            prize = PRIZES[rank]
+            await queries.credit_coins(
+                row["discord_user"], prize, f"Skill leaderboard: {game_id} (#{rank + 1})",
+                datetime.now(timezone.utc).isoformat())
+            minted += prize
+    return minted
+
+
 # ── Cog ──────────────────────────────────────────────────────────────────────
 
 
@@ -367,11 +385,13 @@ class ProgressionCog(commands.Cog):
         self.check_achievements.start()
         self.sync_discord_users.start()
         self.voice_xp.start()
+        self.skill_payout.start()
 
     async def cog_unload(self) -> None:
         self.check_achievements.cancel()
         self.sync_discord_users.cancel()
         self.voice_xp.cancel()
+        self.skill_payout.cancel()
 
     # ── /player ──────────────────────────────────────────────────────────────
 
@@ -657,6 +677,20 @@ class ProgressionCog(commands.Cog):
 
     @voice_xp.before_loop
     async def before_voice_xp(self) -> None:
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(minutes=60)
+    async def skill_payout(self) -> None:
+        from datetime import datetime, timezone
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        try:
+            if await queries.record_skill_payout_day(day):
+                await pay_skill_leaderboards()
+        except Exception:
+            log.debug("skill payout tick failed", exc_info=True)
+
+    @skill_payout.before_loop
+    async def _before_skill_payout(self) -> None:
         await self.bot.wait_until_ready()
 
     async def _check_user_achievements(self, uid: str) -> None:
