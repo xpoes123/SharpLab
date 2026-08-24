@@ -4692,6 +4692,109 @@ async def mint_pack(user: str, set_id: int, pack_size: int, source: str, now_iso
             raise
 
 
+async def mint_box(user: str, set_id: int, now_iso: str) -> dict:
+    """Open a full box = 36 packs in one transaction. Charges 36 * base_cost, draws
+    36 * pack_size cards from the finite pool, and if the haul has no epic+ appends one
+    guaranteed epic (from the set's epic pool, if any remains). Atomic; ValueError on refusal.
+    Returns {"cards": [...], "guaranteed_upgraded": bool}."""
+    from shared import cards as engine
+
+    PACK_SIZE = 5
+    packs = engine.PACKS_PER_BOX  # 36
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            srow = (await (await db.execute(
+                "SELECT * FROM card_sets WHERE set_id = ?", (set_id,))).fetchone())
+            if srow is None:
+                raise ValueError("no such set")
+            if srow["closed"] or srow["packs_opened"] + packs > srow["total_packs"]:
+                raise ValueError("not enough packs left in this set for a full box")
+            cost = engine.box_price(srow["base_cost"])
+            bal = (await (await db.execute(
+                "SELECT balance FROM casino_wallets WHERE discord_user = ?", (user,))).fetchone())
+            have = bal["balance"] if bal else 0
+            if have < cost:
+                raise ValueError(f"need {cost} coins for a box — you have {have}")
+            await db.execute(
+                "INSERT INTO casino_wallets (discord_user, balance) VALUES (?, ?) "
+                "ON CONFLICT(discord_user) DO UPDATE SET balance = balance - ?",
+                (user, CASINO_STARTING_COINS - cost, cost),
+            )
+
+            drows = (await (await db.execute(
+                "SELECT * FROM card_designs WHERE set_id = ?", (set_id,))).fetchall())
+            drows = [dict(d) for d in drows]
+            manifest = [{"rarity": d["rarity"]} for d in drows]
+            pool = {i: (d["total_copies"] - d["minted"])
+                    for i, d in enumerate(drows) if d["total_copies"] > d["minted"]}
+
+            import random as _random
+            rng = _random.Random()
+
+            async def _mint_one(design_index: int, is_holo: bool, gem, book: float) -> dict:
+                d = drows[design_index]
+                serial = d["minted"] + 1
+                await db.execute(
+                    "UPDATE card_designs SET minted = minted + 1 WHERE design_id = ?",
+                    (d["design_id"],))
+                drows[design_index] = {**d, "minted": serial}
+                cur = await db.execute(
+                    "INSERT INTO card_instances "
+                    "(design_id, owner_id, serial, is_holo, gem, book_value, acquired_cost, source, acquired_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (d["design_id"], user, serial, 1 if is_holo else 0, gem, book,
+                     (cost / (packs * PACK_SIZE)), "box", now_iso))
+                return {
+                    "instance_id": cur.lastrowid, "design_id": d["design_id"],
+                    "name": d["subject_name"], "team": d["team"], "sport": srow["sport"],
+                    "season": srow["season"], "rarity": d["rarity"], "is_rookie": bool(d["is_rookie"]),
+                    "is_holo": is_holo, "gem": gem, "serial": serial,
+                    "total_copies": d["total_copies"], "book_value": book,
+                    "headshot_url": d["headshot_url"],
+                    "stats": json.loads(d["stats"]) if d["stats"] else {},
+                }
+
+            cards_out: list[dict] = []
+            for _ in range(packs):
+                drawn = engine.open_pack(pool, manifest, rng, PACK_SIZE)
+                for c in drawn:
+                    cards_out.append(await _mint_one(
+                        c["design_index"], c["is_holo"], c["gem"], c["book_value"]))
+            if not cards_out:
+                raise ValueError("no cards left in this set")
+
+            guaranteed = False
+            # The guaranteed epic draws ONE extra card from the remaining pool. This
+            # assumes the pool has slack beyond the 36 packs (true for all current sets:
+            # Pokémon caps print run below pool, and draft sets are epic-dense so this
+            # branch never fires). If you ever seed a low-epic set whose pool equals its
+            # print run exactly, this could hand the last box <180 cards — give it slack.
+            if engine.needs_guaranteed_hit(cards_out):
+                epic_pool = [i for i, cnt in pool.items() if cnt > 0 and drows[i]["rarity"] == "epic"]
+                if epic_pool:
+                    idx = rng.choice(epic_pool)
+                    pool[idx] -= 1
+                    is_holo = engine.roll_holo(rng)
+                    gem = engine.roll_gem(rng)
+                    book = engine.book_value("epic", is_holo, gem)
+                    cards_out.append(await _mint_one(idx, is_holo, gem, book))
+                    guaranteed = True
+
+            await db.execute(
+                "UPDATE card_sets SET packs_opened = packs_opened + ?, "
+                "closed = CASE WHEN packs_opened + ? >= total_packs THEN 1 ELSE closed END "
+                "WHERE set_id = ?",
+                (packs, packs, set_id))
+            await db.commit()
+            return {"cards": cards_out, "guaranteed_upgraded": guaranteed}
+        except Exception:
+            await db.execute("ROLLBACK")
+            raise
+
+
 async def get_collection(user: str) -> tuple[list[dict], float]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -5262,9 +5365,14 @@ async def get_card_stats(uid: str) -> dict:
         r = await (await db.execute(
             "SELECT COUNT(*) total, COUNT(DISTINCT d.set_id) sets, "
             "MAX(d.rarity = 'legendary') has_leg, MAX(i.is_holo) has_holo, "
-            "MAX(i.gem IS NOT NULL) has_gem, MAX(d.total_copies = 1) has_1of1 "
+            "MAX(i.gem IS NOT NULL) has_gem, MAX(d.total_copies = 1) has_1of1, "
+            "MAX(i.source = 'box') has_box "
             "FROM card_instances i JOIN card_designs d ON i.design_id = d.design_id "
             "WHERE i.owner_id = ?",
+            (uid,),
+        )).fetchone()
+        comp = await (await db.execute(
+            "SELECT COUNT(*) c FROM card_set_completed WHERE discord_user = ?",
             (uid,),
         )).fetchone()
     return {
@@ -5274,6 +5382,8 @@ async def get_card_stats(uid: str) -> dict:
         "cards_has_holo": bool(r["has_holo"]),
         "cards_has_gem": bool(r["has_gem"]),
         "cards_has_1of1": bool(r["has_1of1"]),
+        "cards_has_box": bool(r["has_box"]),
+        "cards_completed_sets": comp["c"] or 0,
     }
 
 

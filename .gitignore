@@ -11,7 +11,9 @@ wheels/
 
 # Environment / secrets
 .env
-data/
+data/*
+# ...except vendored source-data snapshots checked in for reproducible seeding
+!data/pokemon_cards.json
 
 # Local data — not for tracking
 backups/

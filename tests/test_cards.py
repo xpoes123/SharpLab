@@ -187,6 +187,71 @@ def test_pack_cost_monotonic_increasing_with_age():
     assert cards.pack_cost(current - 20, current) == round(50 * 1.08 ** 20)
 
 
+# --- premium/pokemon seeding + boxes (SharpLab addition) --------------------
+
+
+def test_draft_tiers_are_valid_and_premium():
+    keys = [k for k, _ in cards.DRAFT_TIERS]
+    assert set(keys) == set(cards.RARITIES)
+    frac = dict(cards.DRAFT_TIERS)
+    assert abs(sum(frac.values()) - 1.0) < 1e-9
+    # premium: more legendary/epic than the default player mix
+    default = dict(cards.PLAYER_TIERS)
+    assert frac["legendary"] > default["legendary"]
+    assert frac["epic"] > default["epic"]
+
+
+def test_pokemon_rarity_map_is_total():
+    src = ["Common", "Uncommon", "Rare", "Double rare", "Illustration rare",
+           "Ultra Rare", "ACE SPEC Rare", "Special illustration rare",
+           "Hyper rare", "Mega Hyper Rare", "Black White Rare"]
+    for s in src:
+        assert cards.map_pokemon_rarity(s) in cards.RARITIES
+    assert cards.map_pokemon_rarity("Common") == "common"
+    assert cards.map_pokemon_rarity("Hyper rare") == "legendary"
+    assert cards.map_pokemon_rarity("Ultra Rare") == "epic"
+    # unknown falls back to common (never crash a seed run)
+    assert cards.map_pokemon_rarity("Nonsense") == "common"
+
+
+def test_pokemon_book_value_uses_price_with_tier_floor():
+    # $397 Charizard -> 39700 coins
+    assert cards.pokemon_book_value(397.07, "legendary") == 39707.0
+    # a $0.02 common (2 coins at COIN_PER_USD=100) floors at the common book value (3.5), never below.
+    # NOTE: brief used $0.19 here, but 0.19 * 100 = 19 > BOOK["common"] (3.5), so it never
+    # actually exercised the floor; corrected the price to genuinely test the floor path.
+    assert cards.pokemon_book_value(0.02, "common") == cards.BOOK["common"]
+
+
+def test_needs_guaranteed_hit():
+    assert cards.needs_guaranteed_hit([{"rarity": "common"}, {"rarity": "rare"}])
+    assert not cards.needs_guaranteed_hit([{"rarity": "common"}, {"rarity": "epic"}])
+    assert not cards.needs_guaranteed_hit([{"rarity": "legendary"}])
+    assert cards.needs_guaranteed_hit([])  # empty box would need a hit (defensive)
+
+
+def test_box_price():
+    assert cards.PACKS_PER_BOX == 36
+    # NOTE: brief's expected value (49_996) isn't a multiple of 36 and can't match
+    # box_price = 36 * base_cost for any integer base_cost; corrected to 36 * 1389 = 50_004.
+    assert cards.box_price(1389) == 50_004
+    assert cards.box_price(6944) == 249_984
+
+
+def test_box_summary_embed_counts_and_notables():
+    from bot.cogs.cards import _box_summary_embed
+    haul = (
+        [{"rarity": "common", "name": "C", "is_holo": False, "gem": None, "book_value": 3.5, "serial": 1, "total_copies": 99}] * 170
+        + [{"rarity": "epic", "name": "Grail", "is_holo": False, "gem": None, "book_value": 100, "serial": 1, "total_copies": 6}]
+        + [{"rarity": "legendary", "name": "Big", "is_holo": True, "gem": "ruby", "book_value": 5000, "serial": 1, "total_copies": 1}] * 1
+    )
+    emb = _box_summary_embed(haul, guaranteed=False, title="Test Box", set_name="Test Set")
+    body = emb.description + "".join(f.name + f.value for f in emb.fields)
+    assert "171" in body or "170" in body  # commons count shown
+    assert "Grail" in body      # epic highlighted
+    assert "Big" in body        # legendary highlighted
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # DB-backed: set-completion rewards + dupe trade-up (bot/cogs/cards.py)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -744,6 +809,20 @@ def test_activity_reward_override_scales_caps_and_logs(tmp_db):
         assert sum(e["amount"] for e in await _queries.get_coin_ledger("g1")) == 200
 
     _run(go())
+
+
+def test_premium_pack_achievements_registered_and_wired():
+    from collections import defaultdict
+    from shared.achievements import ACHIEVEMENTS_BY_ID
+    from bot.cogs.progression import _achievement_checks
+    assert {"box_opener", "card_set_complete"} <= set(ACHIEVEMENTS_BY_ID)
+    # present in the evaluation rules
+    ids = {aid for aid, _ in _achievement_checks(defaultdict(int))}
+    assert {"box_opener", "card_set_complete"} <= ids
+    # wired to the right stats: setting those stats earns exactly these
+    s = defaultdict(int); s["cards_has_box"] = 1; s["cards_completed_sets"] = 1
+    earned = {aid for aid, ok in _achievement_checks(s) if ok}
+    assert {"box_opener", "card_set_complete"} <= earned
 
 
 if __name__ == "__main__":

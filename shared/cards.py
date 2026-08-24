@@ -81,6 +81,58 @@ PLAYER_TIERS = [
 ]
 
 
+# Premium skew for curated elite sets (draft classes, Pokémon 1st-Edition).
+# More legendary/epic share than PLAYER_TIERS — a loaded set for a big price.
+DRAFT_TIERS: list[tuple[str, float]] = [
+    ("legendary", 0.08),
+    ("epic", 0.15),
+    ("rare", 0.25),
+    ("uncommon", 0.30),
+    ("common", 0.22),
+]
+
+# Pokémon cards carry an intrinsic rarity (8 tiers) — map onto our 5.
+POKEMON_RARITY_MAP: dict[str, str] = {
+    "Common": "common",
+    "Uncommon": "uncommon",
+    "Rare": "rare",
+    "Double rare": "rare",
+    "Illustration rare": "epic",
+    "Ultra Rare": "epic",
+    "ACE SPEC Rare": "epic",
+    "Special illustration rare": "legendary",
+    "Hyper rare": "legendary",
+    "Mega Hyper Rare": "legendary",
+    "Black White Rare": "legendary",
+}
+
+
+def map_pokemon_rarity(src: str) -> str:
+    """Map a Pokémon source rarity to our tier; unknown -> common (never crash a seed)."""
+    return POKEMON_RARITY_MAP.get(src, "common")
+
+
+COIN_PER_USD = 100  # real card USD price -> coin book value
+
+
+def pokemon_book_value(price_usd: float, tier: str) -> float:
+    """Book value from real market price, never below the tier's floor."""
+    return max(BOOK[tier], round((price_usd or 0.0) * COIN_PER_USD))
+
+
+def needs_guaranteed_hit(cards: list[dict]) -> bool:
+    """True if a box haul has no epic-or-better and should get a guaranteed epic."""
+    return not any(c.get("rarity") in ("epic", "legendary") for c in cards)
+
+
+PACKS_PER_BOX = 36
+
+
+def box_price(base_cost: int) -> int:
+    """Coins for a full box (36 packs)."""
+    return PACKS_PER_BOX * base_cost
+
+
 def build_manifest(
     subjects: list[dict], total_cards: int, tiers: list[tuple[str, float]] | None = None
 ) -> list[dict]:
