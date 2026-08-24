@@ -1376,6 +1376,7 @@ async def get_coin_ledger(discord_user: str, limit: int = 25) -> list[dict]:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT amount, reason, created_at FROM coin_ledger WHERE discord_user = ? "
+            "AND NOT (amount > 0 AND amount < 50) "
             "ORDER BY id DESC LIMIT ?",
             (discord_user, limit),
         )
