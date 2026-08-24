@@ -4987,6 +4987,7 @@ ACTIVITY_REWARDS = {
     "pokedle_win": (25, 200),    # web arcade: solved Pokédle
     "mastermind_win": (30, 200),  # web arcade: cracked the Mastermind code
     "mathsprint_win": (2, 200),   # web arcade: per correct Math Sprint answer
+    "zetamac_win": (2, 300),      # web arcade: per correct answer in a Zetamac 120s sprint
     "countdown_win": (30, 150),   # web arcade: solved a Countdown numbers round
     "stockguess_win": (20, 200),  # web arcade: guessed a stock YTD move within tolerance
     "quizbowl_win": (20, 200),    # web arcade: correct quiz bowl answer
@@ -5823,7 +5824,13 @@ async def clear_inflight_rounds() -> None:
         await db.commit()
 
 
-# ── Skill-game leaderboards (best timed run per game) ───────────────────────────
+# ── Skill-game leaderboards (best run per game) ─────────────────────────────────
+# Most games are timed → LOWEST best_ms wins. A few are score sprints (Zetamac:
+# "most solved in 120s") → HIGHEST value wins; best_ms then holds the score, not ms.
+# Direction is intrinsic to the game_id so every caller (incl. the generic daily
+# payout in pay_skill_leaderboards) orders correctly without knowing the game.
+SKILL_HIGHER_IS_BETTER: set[str] = {"zetamac"}
+
 
 async def get_all_skill_game_ids() -> list[str]:
     async with aiosqlite.connect(DB_PATH) as db:
@@ -5871,8 +5878,12 @@ async def record_skill_best(game_id: str, discord_user: str, elapsed_ms: int) ->
                 "VALUES (?, ?, ?, 1, ?)", (game_id, discord_user, elapsed_ms, now))
             await db.commit()
             return elapsed_ms, True
-        is_new = elapsed_ms < row["best_ms"]
-        best = min(elapsed_ms, row["best_ms"])
+        if game_id in SKILL_HIGHER_IS_BETTER:  # score sprint: higher wins
+            is_new = elapsed_ms > row["best_ms"]
+            best = max(elapsed_ms, row["best_ms"])
+        else:                                   # timed: lower wins
+            is_new = elapsed_ms < row["best_ms"]
+            best = min(elapsed_ms, row["best_ms"])
         await db.execute(
             "UPDATE skill_scores SET best_ms=?, runs=runs+1, updated_at=? "
             "WHERE game_id=? AND discord_user=?", (best, now, game_id, discord_user))
@@ -5883,9 +5894,10 @@ async def record_skill_best(game_id: str, discord_user: str, elapsed_ms: int) ->
 async def get_skill_leaderboard(game_id: str, limit: int = 50) -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        order = "DESC" if game_id in SKILL_HIGHER_IS_BETTER else "ASC"
         cur = await db.execute(
-            "SELECT discord_user, best_ms, runs FROM skill_scores WHERE game_id=? "
-            "ORDER BY best_ms ASC LIMIT ?", (game_id, limit))
+            f"SELECT discord_user, best_ms, runs FROM skill_scores WHERE game_id=? "
+            f"ORDER BY best_ms {order} LIMIT ?", (game_id, limit))
         return [dict(r) for r in await cur.fetchall()]
 
 
@@ -5899,8 +5911,9 @@ async def get_skill_rank(game_id: str, discord_user: str) -> int | None:
         row = await cur.fetchone()
         if row is None:
             return None
+        cmp = ">" if game_id in SKILL_HIGHER_IS_BETTER else "<"
         cur = await db.execute(
-            "SELECT COUNT(*) AS n FROM skill_scores WHERE game_id=? AND best_ms < ?",
+            f"SELECT COUNT(*) AS n FROM skill_scores WHERE game_id=? AND best_ms {cmp} ?",
             (game_id, row["best_ms"]))
         return (await cur.fetchone())["n"] + 1
 

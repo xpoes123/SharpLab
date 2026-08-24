@@ -39,6 +39,7 @@ from web.g_geo import router as geo_router
 from web.g_pokedle import router as pokedle_router
 from web.g_mastermind import router as mastermind_router
 from web.g_mathsprint import router as mathsprint_router
+from web.g_zetamac import router as zetamac_router
 from web.g_countdown import router as countdown_router
 from web.g_nbaguess import router as nbaguess_router
 from web.g_stockguess import router as stockguess_router
@@ -181,6 +182,7 @@ app.include_router(geo_router)
 app.include_router(pokedle_router)
 app.include_router(mastermind_router)
 app.include_router(mathsprint_router)
+app.include_router(zetamac_router)
 app.include_router(countdown_router)
 app.include_router(nbaguess_router)
 app.include_router(stockguess_router)
@@ -320,6 +322,7 @@ GAME_LABELS: dict[str, str] = {
     "tournament": "Tournaments",
     "figgie": "Figgie",
     "mathsprint": "Math Sprint",
+    "zetamac": "Zetamac",
     "tradingfloor": "Trading Floor",
     "solitaire-chess": "Solitaire Chess",
     "minesweeper": "Minesweeper Race",
@@ -369,6 +372,7 @@ ELO_GAME_LABELS: dict[str, str] = {
     "valorant": "Valorant Guess",
     "math24": "Math 24",
     "mathsprint": "Math Sprint",
+    "zetamac": "Zetamac",
     "geography": "Geography",
     "wordle": "Wordle",
     "countdown": "Countdown",
