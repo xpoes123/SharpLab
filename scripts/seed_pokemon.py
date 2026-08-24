@@ -44,13 +44,18 @@ def _load_cards(src_id: str) -> list[dict]:
 
 def build_pokemon_designs(cards: list[dict]) -> list[dict]:
     """Real-card dicts {name, rarity, price_usd} -> designs. Rarity mapped directly,
-    book_value from price, copies from COPIES_REL by tier, legendaries 1-of-1."""
+    book_value from price, copies from COPIES_REL by tier, legendaries 1-of-1.
+    subject_key is index-prefixed so same-name variants (e.g. Common vs
+    Illustration-Rare Pikachu) stay DISTINCT designs — insert_card_designs dedups on
+    (set_id, subject_key), so a name-only key would silently drop variants and make
+    the pool-cap math oversell what's actually inserted."""
     out = []
-    for c in cards:
+    for i, c in enumerate(cards):
         tier = engine.map_pokemon_rarity(c["rarity"])
         copies = 1 if tier == "legendary" else engine.COPIES_REL[tier]
+        slug = c["name"].lower().replace(" ", "_")
         out.append({
-            "subject_key": c["name"].lower().replace(" ", "_"),
+            "subject_key": f"{i:03d}_{slug}",
             "subject_name": c["name"], "team": None, "rarity": tier, "is_rookie": False,
             "career_fame": c.get("price_usd", 0.0), "total_copies": copies,
             "stats": {}, "headshot_url": None,

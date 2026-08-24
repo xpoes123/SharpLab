@@ -36,6 +36,19 @@ def test_sets_config_has_151_and_first_edition():
     assert keys[("pokemon", 1999)]["premium"] is True
 
 
+def test_duplicate_names_stay_distinct_designs():
+    # Same-name cards at different rarities are DISTINCT designs (not deduped away),
+    # so the pool-cap math matches what insert_card_designs actually persists.
+    designs = seed.build_pokemon_designs([
+        {"name": "Pikachu", "rarity": "Common", "price_usd": 0.5},
+        {"name": "Pikachu", "rarity": "Illustration rare", "price_usd": 95.0},
+    ])
+    assert len(designs) == 2
+    assert len({d["subject_key"] for d in designs}) == 2  # unique keys -> nothing dropped
+    # the two variants map to different tiers (common vs epic)
+    assert {d["rarity"] for d in designs} == {"common", "epic"}
+
+
 def test_print_run_never_exceeds_pool():
     # build_pokemon_designs pool must cover the seeded print run for every set
     designs = seed.build_pokemon_designs([
