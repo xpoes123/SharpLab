@@ -238,6 +238,20 @@ def test_box_price():
     assert cards.box_price(6944) == 249_984
 
 
+def test_box_summary_embed_counts_and_notables():
+    from bot.cogs.cards import _box_summary_embed
+    haul = (
+        [{"rarity": "common", "name": "C", "is_holo": False, "gem": None, "book_value": 3.5, "serial": 1, "total_copies": 99}] * 170
+        + [{"rarity": "epic", "name": "Grail", "is_holo": False, "gem": None, "book_value": 100, "serial": 1, "total_copies": 6}]
+        + [{"rarity": "legendary", "name": "Big", "is_holo": True, "gem": "ruby", "book_value": 5000, "serial": 1, "total_copies": 1}] * 1
+    )
+    emb = _box_summary_embed(haul, guaranteed=False, title="Test Box", set_name="Test Set")
+    body = emb.description + "".join(f.name + f.value for f in emb.fields)
+    assert "171" in body or "170" in body  # commons count shown
+    assert "Grail" in body      # epic highlighted
+    assert "Big" in body        # legendary highlighted
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # DB-backed: set-completion rewards + dupe trade-up (bot/cogs/cards.py)
 # ─────────────────────────────────────────────────────────────────────────────

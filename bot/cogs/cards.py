@@ -20,7 +20,7 @@ from shared import cards as engine
 
 log = logging.getLogger(__name__)
 
-SPORTS = ["nba", "nfl", "mlb"]
+SPORTS = ["nba", "nfl", "mlb", "pokemon"]
 SPORT_CHOICES = [app_commands.Choice(name=s.upper(), value=s) for s in SPORTS]
 ALERT_CHANNEL_KEY = "cards_alert_channel"
 
@@ -32,7 +32,7 @@ RARITY_COLOR = {
     "epic": 0xBB9AF7, "legendary": 0xE0AF68,
 }
 GEM_EMOJI = {"chrome": "🔗", "sapphire": "🔷", "ruby": "🔴", "black_lotus": "🌸"}
-SPORT_EMOJI = {"nba": "🏀", "nfl": "🏈", "mlb": "⚾"}
+SPORT_EMOJI = {"nba": "🏀", "nfl": "🏈", "mlb": "⚾", "pokemon": "🔴"}
 
 # --- Set-completion reward ----------------------------------------------------
 # Owning >=1 of every design in a set pays a one-time coin bonus. Scaled to the
@@ -51,6 +51,34 @@ TRADEUP_CHOICES = [app_commands.Choice(name=r.title(), value=r) for r in TRADEUP
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _box_summary_embed(cards: list[dict], guaranteed: bool, title: str, set_name: str) -> discord.Embed:
+    """Summary reveal for a 36-pack box: rarity counts + highlighted notable pulls."""
+    counts: dict[str, int] = {}
+    for c in cards:
+        counts[c["rarity"]] = counts.get(c["rarity"], 0) + 1
+    breakdown = "  ".join(
+        f"{RARITY_EMOJI.get(r, '')}{counts.get(r, 0)}" for r in engine.RARITIES if counts.get(r))
+    notables = [c for c in cards if engine.is_notable_pull(c)]
+    notables.sort(key=lambda c: c["book_value"], reverse=True)
+    emb = discord.Embed(
+        title=f"📦 {title}",
+        description=f"Opened **{len(cards)}** cards from **{set_name}**\n{breakdown}",
+        color=0xBB9AF7,
+    )
+    if notables:
+        lines = []
+        for c in notables[:12]:
+            holo = "✨" if c.get("is_holo") else ""
+            gem = f" 💎{c['gem']}" if c.get("gem") else ""
+            lines.append(
+                f"{RARITY_EMOJI.get(c['rarity'], '')} **{c['name']}** {holo}{gem} "
+                f"#{c['serial']}/{c['total_copies']} · {round(c['book_value'])}🪙")
+        emb.add_field(name=f"🔥 Notable pulls ({len(notables)})", value="\n".join(lines), inline=False)
+    if guaranteed:
+        emb.set_footer(text="Box guarantee: an epic was added — every box hits.")
+    return emb
 
 
 def _completion_reward_for(designs: list[dict]) -> int:
@@ -362,6 +390,59 @@ class CardsCog(commands.Cog):
         title = f"{SPORT_EMOJI.get(sport.value,'🎴')} {cset['name']} — {opened} pack{'s' if opened>1 else ''}"
         await self._send_reveal(interaction, all_cards, title, cset["set_id"], fast=use_fast)
         await self._dm_wanters(all_cards, interaction.user)
+        await self._check_set_completion(uid, cset["set_id"], interaction)
+        await self._grant_achievements(uid, interaction.channel)
+
+    class _BoxConfirm(discord.ui.View):
+        def __init__(self, opener: discord.abc.User):
+            super().__init__(timeout=30)
+            self.opener = opener
+            self.value = False
+
+        @discord.ui.button(label="Open box", style=discord.ButtonStyle.danger, emoji="📦")
+        async def confirm(self, interaction: discord.Interaction, _button: discord.ui.Button):
+            if interaction.user.id != self.opener.id:
+                await interaction.response.send_message("Not your box.", ephemeral=True)
+                return
+            self.value = True
+            for c in self.children:
+                c.disabled = True
+            await interaction.response.edit_message(view=self)
+            self.stop()
+
+    @pack.command(name="box", description="Buy & open a full box (36 packs) with a guaranteed hit")
+    @app_commands.describe(sport="League", season="Season year")
+    @app_commands.choices(sport=SPORT_CHOICES)
+    async def pack_box(
+        self, interaction: discord.Interaction, sport: app_commands.Choice[str], season: int,
+    ):
+        await interaction.response.defer()
+        uid = str(interaction.user.id)
+        cset = await queries.get_card_set(sport.value, season)
+        if not cset:
+            avail = [s for s in await queries.list_card_sets() if s["sport"] == sport.value]
+            seasons = ", ".join(str(s["season"]) for s in avail) or "none yet"
+            await interaction.followup.send(
+                f"No **{sport.name} {season}** set exists. Available {sport.name} seasons: {seasons}")
+            return
+        price = engine.box_price(cset["pack_cost"])
+        view = self._BoxConfirm(interaction.user)
+        prompt = await interaction.followup.send(
+            f"📦 **{cset['name']}** box = **36 packs** for **{price:,}** 🪙. "
+            f"Guaranteed epic+ per box. Confirm?", view=view, wait=True)
+        await view.wait()
+        if not view.value:
+            await prompt.edit(content="Box purchase cancelled.", view=None)
+            return
+        try:
+            res = await queries.mint_box(uid, cset["set_id"], _now_iso())
+        except ValueError as e:
+            await interaction.followup.send(f"❌ {e}")
+            return
+        title = f"{SPORT_EMOJI.get(sport.value, '🎴')} {cset['name']} — Box"
+        emb = _box_summary_embed(res["cards"], res["guaranteed_upgraded"], title, cset["name"])
+        await interaction.followup.send(embed=emb)
+        await self._dm_wanters(res["cards"], interaction.user)
         await self._check_set_completion(uid, cset["set_id"], interaction)
         await self._grant_achievements(uid, interaction.channel)
 
