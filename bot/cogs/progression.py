@@ -226,8 +226,9 @@ async def evaluate_user_achievements(uid: str) -> list[str]:
         if condition and aid not in existing:
             if await queries.unlock_achievement(uid, aid):
                 await queries.add_xp(uid, ACHIEVEMENTS_BY_ID[aid].xp_reward)
+                bounty = ACHIEVEMENTS_BY_ID[aid].xp_reward * 5
                 await queries.credit_coins(
-                    uid, 150, f"Achievement: {ACHIEVEMENTS_BY_ID[aid].name}",
+                    uid, bounty, f"Achievement: {ACHIEVEMENTS_BY_ID[aid].name}",
                     datetime.now(timezone.utc).isoformat(),
                 )
                 newly_unlocked.append(aid)
@@ -246,11 +247,11 @@ async def announce_achievements(bot, uid: str, newly: list[str], channel=None) -
     if len(achs) == 1:
         a = achs[0]
         title = "\U0001f3c6 Achievement Unlocked!"
-        desc = f"{a.emoji} **{a.name}** — {a.description}\n`+{a.xp_reward} XP · +150 🪙`"
+        desc = f"{a.emoji} **{a.name}** — {a.description}\n`+{a.xp_reward} XP · +{a.xp_reward*5} 🪙`"
     else:
         title = f"\U0001f3c6 {len(achs)} Achievements Unlocked!"
         desc = "\n".join(
-            f"{a.emoji} **{a.name}** — {a.description} `+{a.xp_reward} XP · +150 🪙`" for a in achs
+            f"{a.emoji} **{a.name}** — {a.description} `+{a.xp_reward} XP · +{a.xp_reward*5} 🪙`" for a in achs
         )
     embed = discord.Embed(title=title, description=desc, colour=0xF1C40F)
     embed.set_author(name="Achievement")

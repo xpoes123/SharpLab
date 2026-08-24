@@ -1035,3 +1035,11 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        try:
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS bounty_backfilled ("
+                "discord_user TEXT NOT NULL, achievement_id TEXT NOT NULL, "
+                "PRIMARY KEY (discord_user, achievement_id))")
+            await db.commit()
+        except Exception:
+            pass
