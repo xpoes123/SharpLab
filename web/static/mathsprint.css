@@ -59,9 +59,39 @@
 /* ── Result ── */
 .msresult .msbig { font-size: 36px; }
 .msreward { font-size: 22px; font-weight: 800; color: var(--gold); font-variant-numeric: tabular-nums; }
+.msbest { font-size: 14px; color: var(--muted); }
+.msbest b { color: var(--fg); font-variant-numeric: tabular-nums; }
+.msrank { font-size: 13px; color: var(--accent2); font-weight: 700; }
+.msnewbest {
+  font-size: 15px; font-weight: 800; color: var(--gold);
+}
+@keyframes ms-pop { 0% { transform: scale(.85); } 60% { transform: scale(1.12); } 100% { transform: scale(1); } }
+.msnewbest.pop, .msreward.pop { animation: ms-pop .5s ease; }
+@media (prefers-reduced-motion: reduce) {
+  .msnewbest.pop, .msreward.pop { animation: none; }
+}
 
 /* ── Buttons ── */
 .btn.big { font-size: 16px; padding: 12px 18px; }
+
+/* ── Leaderboard ── */
+.msleaderboard { max-width: 460px; margin: 22px auto 0; }
+.mslbhead {
+  font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px;
+  color: var(--accent2); text-align: center; margin-bottom: 12px;
+}
+.mslbempty { text-align: center; color: var(--muted); font-size: 13px; }
+.mslblist { display: flex; flex-direction: column; gap: 6px; }
+.mslbrow {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 8px 12px; font-size: 14px;
+}
+.mslbrow.me { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold); }
+.mslbrank { font-size: 12px; color: var(--muted); width: 32px; font-variant-numeric: tabular-nums; }
+.mslbname { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mslbruns { font-size: 12px; color: var(--muted); }
+.mslbscore { font-weight: 800; color: var(--gold); font-variant-numeric: tabular-nums; }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Copied verbatim from cards.css so the coins hub + toasts are styled on this

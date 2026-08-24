@@ -1,8 +1,9 @@
 // SharpLab HQ — Math Sprint. A 60-second solo arithmetic drill. POST /start to get a
-// batch of 40 problems (operands only) + a signed token; solve as many as you can before
+// batch of 200 problems (operands only) + a signed token; solve as many as you can before
 // the timer runs out, then POST /submit — the server recounts correctness and awards
 // 2 coins per correct answer (daily-capped). The submit response carries the authoritative
 // new balance, which we push into the nav chip + on-page header.
+// Score = number correct → a HIGHEST-wins leaderboard, loaded on page load + after every run.
 
 const app = document.getElementById("app");
 const navRight = document.getElementById("navRight");
@@ -198,6 +199,7 @@ async function finishRun() {
   }
   applyBalance(res.balance);
   renderResult(res);
+  loadLeaderboard();
 }
 
 // ── Views ──
@@ -219,7 +221,9 @@ function renderIntro() {
         <p class="muted">Type the answer and hit Enter — it auto-advances when your answer's complete. Ready?</p>
         <button class="btn primary big" id="msStart"${state.me ? "" : " disabled"}>Start (60s)</button>
       </div>
-    </div>`;
+    </div>
+    <div class="msleaderboard" id="msLeaderboard"></div>`;
+  loadLeaderboard();
 }
 
 function renderPlaying() {
@@ -243,6 +247,13 @@ function renderPlaying() {
 }
 
 function renderResult(res) {
+  const newBest = res.is_new_best
+    ? `<div class="msnewbest${REDUCE ? "" : " pop"}">🏆 new best!</div>`
+    : "";
+  const bestLine = res.best != null
+    ? `<div class="msbest">Your best: <b>${num(res.best)}</b></div>` : "";
+  const rankLine = res.rank != null
+    ? `<div class="msrank">#${num(res.rank)} on the board</div>` : "";
   app.innerHTML = `
     <div class="ms-head">
       <h1>➗ Math Sprint <span class="balancechip" id="pageBal">${coins(state.balance)}</span></h1>
@@ -250,11 +261,42 @@ function renderResult(res) {
     <div class="ms-wrap">
       <div class="card mscard msresult">
         <div class="msbig">${num(res.correct)} correct</div>
-        <div class="msreward">+${num(res.coins)} 🪙</div>
+        <div class="msreward${REDUCE ? "" : " pop"}">+${num(res.coins)} 🪙</div>
         <p class="muted">Balance: <b>${coins(res.balance)}</b></p>
+        ${newBest}${bestLine}${rankLine}
         <button class="btn primary big" id="msStart">Play again</button>
       </div>
+    </div>
+    <div class="msleaderboard" id="msLeaderboard"></div>`;
+}
+
+// ── Leaderboard ──
+async function loadLeaderboard() {
+  const res = await getJSON("/api/v1/arcade/mathsprint/leaderboard");
+  if (!res || res._status || !res.top) { renderLeaderboard({ top: [] }); return; }
+  renderLeaderboard(res);
+}
+
+function renderLeaderboard(res) {
+  const sec = $("msLeaderboard");
+  if (!sec) return;
+  const top = res.top || [];
+  if (!top.length) {
+    sec.innerHTML = `<div class="mslbhead">🏁 Best of 60 seconds</div>
+      <div class="mslbempty">No runs yet — be the first!</div>`;
+    return;
+  }
+  const rows = top.map((r) => {
+    const runs = r.runs != null ? `<span class="mslbruns">${num(r.runs)} run${r.runs === 1 ? "" : "s"}</span>` : "";
+    return `<div class="mslbrow${r.me ? " me" : ""}">
+      <span class="mslbrank">#${num(r.rank)}</span>
+      <span class="mslbname">${esc(r.name)}</span>
+      ${runs}
+      <span class="mslbscore">${num(r.score)}</span>
     </div>`;
+  }).join("");
+  sec.innerHTML = `<div class="mslbhead">🏁 Best of 60 seconds</div>
+    <div class="mslblist">${rows}</div>`;
 }
 
 // ── Delegated events ──
@@ -286,6 +328,12 @@ const MOCK = new URLSearchParams(location.search).get("mock") === "1";
 function mockJSON(url) {
   if (url.startsWith("/api/v1/hq/me"))
     return { authenticated: true, user: { id: "1", username: "davidj", avatar: null }, balance: 12500 };
+  if (url.includes("/leaderboard"))
+    return { game: "mathsprint", top: [
+      { rank: 1, name: "davidj", score: 44, runs: 4, me: true },
+      { rank: 2, name: "steph", score: 39, runs: 2 },
+      { rank: 3, name: "nova", score: 31, runs: 1 },
+    ] };
   return {};
 }
 
@@ -293,7 +341,7 @@ function mockSprint(path, body) {
   if (path === "/start") {
     const ops = ["+", "-", "×"];
     const problems = [];
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 200; i++) {
       const op = ops[Math.floor(Math.random() * ops.length)];
       let a = 2 + Math.floor(Math.random() * 11);
       let b = 2 + Math.floor(Math.random() * 11);
@@ -309,7 +357,11 @@ function mockSprint(path, body) {
     (n, a, i) => n + (ans[i] === a ? 1 : 0), 0);
   const coinsWon = correct * 2;
   state.balance += coinsWon;
-  return { correct, total: (mockSprint._answers || []).length, coins: coinsWon, balance: state.balance };
+  mockSprint._best = Math.max(mockSprint._best || 0, correct);
+  return {
+    correct, total: (mockSprint._answers || []).length, coins: coinsWon, balance: state.balance,
+    best: mockSprint._best, is_new_best: correct === mockSprint._best, rank: 1,
+  };
 }
 
 main();
