@@ -26,8 +26,8 @@ SIM_GAMES = {"nbasim", "nflsim", "mlbsim"}
 
 # ── Rewards ──────────────────────────────────────────────────────────────────
 
-CHALLENGE_COINS = 100
-BONUS_COINS = 200
+CHALLENGE_COINS = 300
+BONUS_COINS = 600
 CHALLENGE_XP = 50
 
 # ── Challenge checks ─────────────────────────────────────────────────────────
@@ -177,6 +177,23 @@ class ChallengesCog(commands.Cog):
 
     async def cog_unload(self) -> None:
         self.check_challenges.cancel()
+
+    # ── Commands ─────────────────────────────────────────────────────────────
+
+    @app_commands.command(name="claim", description="Claim your daily login-streak coins")
+    async def claim(self, interaction: discord.Interaction) -> None:
+        from datetime import datetime, timezone
+        uid = str(interaction.user.id)
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        res = await queries.claim_login_streak(uid, day)
+        if res["already"]:
+            await interaction.response.send_message(
+                f"You already claimed today. Current streak: **{res['streak']} day"
+                f"{'s' if res['streak'] != 1 else ''}**. Come back tomorrow!", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            f"🎁 **+{res['granted']:,}** 🪙 — login streak **day {res['streak']}** "
+            f"(best: {res['longest']}). Keep the streak alive!", ephemeral=True)
 
     # ── Background task ──────────────────────────────────────────────────────
 

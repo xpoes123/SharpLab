@@ -55,7 +55,7 @@ async def coin_history(request: Request):
         return JSONResponse({"authenticated": False, "balance": 0, "ledger": []}, status_code=401)
     return {
         "balance": await queries.get_casino_balance(sess["id"]) or 0,
-        "ledger": await queries.get_coin_ledger(sess["id"]),
+        "ledger": await queries.get_coin_ledger(sess["id"], min_amount=50),  # hide the sub-50 trickle from the page
     }
 
 

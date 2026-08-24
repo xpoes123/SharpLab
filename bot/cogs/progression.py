@@ -226,8 +226,9 @@ async def evaluate_user_achievements(uid: str) -> list[str]:
         if condition and aid not in existing:
             if await queries.unlock_achievement(uid, aid):
                 await queries.add_xp(uid, ACHIEVEMENTS_BY_ID[aid].xp_reward)
+                bounty = ACHIEVEMENTS_BY_ID[aid].xp_reward * 5
                 await queries.credit_coins(
-                    uid, 150, f"Achievement: {ACHIEVEMENTS_BY_ID[aid].name}",
+                    uid, bounty, f"Achievement: {ACHIEVEMENTS_BY_ID[aid].name}",
                     datetime.now(timezone.utc).isoformat(),
                 )
                 newly_unlocked.append(aid)
@@ -246,11 +247,11 @@ async def announce_achievements(bot, uid: str, newly: list[str], channel=None) -
     if len(achs) == 1:
         a = achs[0]
         title = "\U0001f3c6 Achievement Unlocked!"
-        desc = f"{a.emoji} **{a.name}** — {a.description}\n`+{a.xp_reward} XP · +150 🪙`"
+        desc = f"{a.emoji} **{a.name}** — {a.description}\n`+{a.xp_reward} XP · +{a.xp_reward*5} 🪙`"
     else:
         title = f"\U0001f3c6 {len(achs)} Achievements Unlocked!"
         desc = "\n".join(
-            f"{a.emoji} **{a.name}** — {a.description} `+{a.xp_reward} XP · +150 🪙`" for a in achs
+            f"{a.emoji} **{a.name}** — {a.description} `+{a.xp_reward} XP · +{a.xp_reward*5} 🪙`" for a in achs
         )
     embed = discord.Embed(title=title, description=desc, colour=0xF1C40F)
     embed.set_author(name="Achievement")
@@ -321,6 +322,24 @@ async def _announce_levelup(bot, uid: str, level: int, channel) -> None:
         log.debug("levelup announce failed for %s", uid, exc_info=True)
 
 
+PRIZES = [2000, 1000, 500]  # skill-leaderboard daily payout, ranks 1-3
+
+
+async def pay_skill_leaderboards() -> int:
+    """Pay the top 3 of every skill leaderboard from the house. Returns coins minted."""
+    from datetime import datetime, timezone
+    minted = 0
+    for game_id in await queries.get_all_skill_game_ids():
+        top = await queries.get_skill_leaderboard(game_id, len(PRIZES))
+        for rank, row in enumerate(top):
+            prize = PRIZES[rank]
+            await queries.credit_coins(
+                row["discord_user"], prize, f"Skill leaderboard: {game_id} (#{rank + 1})",
+                datetime.now(timezone.utc).isoformat())
+            minted += prize
+    return minted
+
+
 # ── Cog ──────────────────────────────────────────────────────────────────────
 
 
@@ -330,7 +349,8 @@ class ProgressionCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self._last_check_id = 0
-        self._msg_cd: dict[int, float] = {}  # uid → last message-XP monotonic ts
+        self._msg_cd: dict[int, float] = {}       # uid → last message-XP monotonic ts (5s)
+        self._msg_coin_cd: dict[int, float] = {}  # uid → last message-COIN monotonic ts (30s)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
@@ -347,11 +367,13 @@ class ProgressionCog(commands.Cog):
         self._msg_cd[message.author.id] = now
         uid = str(message.author.id)
         await award_xp(self.bot, uid, XP_MESSAGE, message.channel)
-        # Small per-message coin trickle (capped per day so it can't be spam-farmed) — the main
-        # earn now that games no longer top wallets up. Silent; coins accrue to your balance.
+        # Per-message coin reward (10, uncapped/day) — gated to 1 / 30s per user so it can't be
+        # spam-farmed. Silent; coins accrue to your balance.
         from datetime import datetime, timezone
-        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        await queries.grant_activity_reward(uid, "message", day)
+        if now - self._msg_coin_cd.get(message.author.id, 0) >= 30:
+            self._msg_coin_cd[message.author.id] = now
+            day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            await queries.grant_activity_reward(uid, "message", day)
         # Count toward Chat achievements; only re-evaluate (heavy) at a milestone.
         count = await queries.increment_message_count(uid)
         if count in CHAT_MILESTONES:
@@ -363,11 +385,13 @@ class ProgressionCog(commands.Cog):
         self.check_achievements.start()
         self.sync_discord_users.start()
         self.voice_xp.start()
+        self.skill_payout.start()
 
     async def cog_unload(self) -> None:
         self.check_achievements.cancel()
         self.sync_discord_users.cancel()
         self.voice_xp.cancel()
+        self.skill_payout.cancel()
 
     # ── /player ──────────────────────────────────────────────────────────────
 
@@ -653,6 +677,20 @@ class ProgressionCog(commands.Cog):
 
     @voice_xp.before_loop
     async def before_voice_xp(self) -> None:
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(minutes=60)
+    async def skill_payout(self) -> None:
+        from datetime import datetime, timezone
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        try:
+            if await queries.record_skill_payout_day(day):
+                await pay_skill_leaderboards()
+        except Exception:
+            log.debug("skill payout tick failed", exc_info=True)
+
+    @skill_payout.before_loop
+    async def _before_skill_payout(self) -> None:
         await self.bot.wait_until_ready()
 
     async def _check_user_achievements(self, uid: str) -> None:

@@ -632,11 +632,12 @@ def test_multiplayer_winner_only_gets_coins(tmp_db):
 
 def test_web_coins_endpoint(tmp_db, monkeypatch):
     async def go():
-        await _queries.credit_coins("web", 40, "Won bingo", "t")
+        await _queries.credit_coins("web", 60, "Won bingo", "t")   # ≥50 → shown on the page
+        await _queries.credit_coins("web", 10, "Message", "t")     # <50 → hidden from the page
         monkeypatch.setattr(_webcards.auth, "read_session", lambda req: {"id": "web"})
         res = await _webcards.coin_history(_FakeReq())
-        assert res["balance"] == _queries.CASINO_STARTING_COINS + 40
-        assert res["ledger"][0]["reason"] == "Won bingo"
+        assert res["balance"] == _queries.CASINO_STARTING_COINS + 70  # balance counts everything
+        assert [e["reason"] for e in res["ledger"]] == ["Won bingo"]  # trickle hidden
 
     _run(go())
 

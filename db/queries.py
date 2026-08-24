@@ -1370,14 +1370,18 @@ async def credit_coins(discord_user: str, amount: int, reason: str, now_iso: str
         return new_balance
 
 
-async def get_coin_ledger(discord_user: str, limit: int = 25) -> list[dict]:
-    """Recent coin gains for a user (newest first) — powers the coin-history hub."""
+async def get_coin_ledger(discord_user: str, limit: int = 25, min_amount: int = 0) -> list[dict]:
+    """Recent coin gains for a user (newest first) — powers the coin-history hub.
+    `min_amount` hides small gains from the DISPLAY (the page passes 50 so the per-message
+    trickle doesn't flood history); it only filters positive rows below the threshold,
+    never debits. Default 0 = unfiltered (accounting callers get the full ledger)."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT amount, reason, created_at FROM coin_ledger WHERE discord_user = ? "
+            "AND NOT (amount > 0 AND amount < ?) "
             "ORDER BY id DESC LIMIT ?",
-            (discord_user, limit),
+            (discord_user, min_amount, limit),
         )
         return [dict(r) for r in await cur.fetchall()]
 
@@ -4971,7 +4975,7 @@ DAILY_MESSAGE_REWARD = 500  # (legacy) coins for your first chat message each da
 # Activity coin rewards: (coins per event, daily cap per source). Ascending by effort —
 # chatting is a trickle, logging real bets/trades pays more, all capped so nothing is farmable.
 ACTIVITY_REWARDS = {
-    "message": (5, 500),      # small trickle, capped
+    "message": (10, 10_000_000),   # 10/msg, effectively uncapped; spam-gated by a 30s cooldown in on_message
     "pickem_pick": (25, 250),  # daily pick'em
     "bet_log": (50, 1000),     # logging a real sports bet
     "trade_log": (50, 1000),   # logging a stock/option trade
@@ -5821,6 +5825,36 @@ async def clear_inflight_rounds() -> None:
 
 # ── Skill-game leaderboards (best timed run per game) ───────────────────────────
 
+async def get_all_skill_game_ids() -> list[str]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT DISTINCT game_id FROM skill_scores")
+        return [r[0] for r in await cur.fetchall()]
+
+
+async def record_skill_payout_day(day: str) -> bool:
+    """Claim `day` for the skill payout. True iff this call is the one that claimed it
+    (so the daily payout runs at most once per UTC day, even across restarts)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await db.execute(
+                "INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('skill_payout_day', ?)",
+                (day,))
+            if cur.rowcount == 0:  # key already exists — check whether it's an older day
+                row = await (await db.execute(
+                    "SELECT value FROM bot_settings WHERE key = 'skill_payout_day'")).fetchone()
+                if row and row[0] == day:
+                    await db.execute("ROLLBACK")
+                    return False
+                await db.execute(
+                    "UPDATE bot_settings SET value = ? WHERE key = 'skill_payout_day'", (day,))
+            await db.commit()
+            return True
+        except Exception:
+            await db.execute("ROLLBACK")
+            raise
+
+
 async def record_skill_best(game_id: str, discord_user: str, elapsed_ms: int) -> tuple[int, bool]:
     """Record a completed timed run. Keeps the player's BEST (lowest) time per game and counts
     runs. Returns (best_ms_after, is_new_best)."""
@@ -5881,3 +5915,39 @@ async def claim_daily_result_post(game_id: str, day: str, discord_user: str) -> 
             (game_id, day, discord_user))
         await db.commit()
         return cur.rowcount > 0
+
+
+async def claim_login_streak(discord_user: str, day: str) -> dict:
+    """Claim the daily login-streak reward. Ramps min(1000, 200 + (streak-1)*100),
+    resets to 1 if yesterday wasn't the last claim. Idempotent per day."""
+    from datetime import date, timedelta
+    yesterday = (date.fromisoformat(day) - timedelta(days=1)).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            row = await (await db.execute(
+                "SELECT last_day, streak, longest FROM login_streak WHERE discord_user = ?",
+                (discord_user,))).fetchone()
+            if row and row["last_day"] == day:
+                await db.execute("ROLLBACK")
+                return {"granted": 0, "streak": row["streak"], "longest": row["longest"], "already": True}
+            if row and row["last_day"] == yesterday:
+                streak = row["streak"] + 1
+            else:
+                streak = 1
+            longest = max(streak, row["longest"] if row else 1)
+            granted = min(1000, 200 + (streak - 1) * 100)
+            await db.execute(
+                "INSERT INTO login_streak (discord_user, last_day, streak, longest) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(discord_user) DO UPDATE SET last_day = ?, streak = ?, longest = ?",
+                (discord_user, day, streak, longest, day, streak, longest))
+            await db.commit()
+        except Exception:
+            await db.execute("ROLLBACK")
+            raise
+    # credit outside the streak txn (credit_coins opens its own connection)
+    from datetime import datetime, timezone
+    await credit_coins(discord_user, granted, f"Login streak (day {streak})",
+                       datetime.now(timezone.utc).isoformat())
+    return {"granted": granted, "streak": streak, "longest": longest, "already": False}
