@@ -335,6 +335,46 @@ class TestHandNames:
         assert _hand_name_2((0, 14, 7)) == "Ace-Seven"
 
 
+# ── Main-bet settlement ──────────────────────────────────────────────────────
+
+
+class TestSettleMain:
+    """_settle_main takes evaluated hand tuples (tier, ...); higher tuple wins."""
+
+    def test_dealer_ace_high_paigow_pushes_even_when_player_wins_both(self):
+        from bot.cogs.paigow import _settle_main
+        d_hi = (0, 14, 11, 8, 5, 3)  # ace-high pai gow (nothing) — the house rule
+        d_lo = (0, 13, 2)
+        p_hi = (3, 9, 5, 4)          # three of a kind — beats the dealer high
+        p_lo = (1, 6)                # pair — beats the dealer low
+        assert _settle_main(p_hi, p_lo, d_hi, d_lo) == "push"
+
+    def test_win_both(self):
+        from bot.cogs.paigow import _settle_main
+        d_hi = (1, 5, 12, 9, 3); d_lo = (0, 9, 2)
+        p_hi = (1, 9, 13, 4, 2); p_lo = (1, 6)
+        assert _settle_main(p_hi, p_lo, d_hi, d_lo) == "win"
+
+    def test_lose_both(self):
+        from bot.cogs.paigow import _settle_main
+        d_hi = (2, 10, 5, 3); d_lo = (1, 8)         # two pair / pair — not a pai gow
+        p_hi = (1, 4, 12, 9, 2); p_lo = (0, 7, 5)
+        assert _settle_main(p_hi, p_lo, d_hi, d_lo) == "lose"
+
+    def test_split_pushes(self):
+        from bot.cogs.paigow import _settle_main
+        d_hi = (1, 5, 12, 9, 3); d_lo = (1, 10)     # win high, lose low
+        p_hi = (1, 9, 13, 4, 2); p_lo = (0, 8, 3)
+        assert _settle_main(p_hi, p_lo, d_hi, d_lo) == "push"
+
+    def test_tie_goes_to_dealer(self):
+        from bot.cogs.paigow import _settle_main
+        d_hi = (1, 9, 13, 4, 2); d_lo = (0, 9, 3)
+        p_hi = (1, 9, 13, 4, 2)  # identical high hand — copy goes to the dealer
+        p_lo = (1, 5)            # player wins low → split → push
+        assert _settle_main(p_hi, p_lo, d_hi, d_lo) == "push"
+
+
 # ── Validation ───────────────────────────────────────────────────────────────
 
 
