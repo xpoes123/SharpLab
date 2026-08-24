@@ -262,20 +262,31 @@ class CardsCog(commands.Cog):
             rows = await queries.get_card_instances_after(int(raw))
             if not rows:
                 return
+            # Accumulate this tick's rare pulls into ONE message per owner (a 20s tick
+            # captures a whole box/multi-open's mint), instead of spamming one per card.
+            from collections import defaultdict
+            by_owner: dict[str, list] = defaultdict(list)
             for c in rows:
-                if not engine.is_rare_pull(c):
-                    continue
+                if engine.is_rare_pull(c):
+                    by_owner[c["owner_id"]].append(c)
+            for owner_id, cards in by_owner.items():
+                cards.sort(key=lambda c: c.get("book_value", 0), reverse=True)  # best first
+                shown = cards[:30]
+                lines = [f"{_card_line(c)} · *{c['set_name']}*" for c in shown]
+                if len(cards) > len(shown):
+                    lines.append(f"…and **{len(cards) - len(shown)}** more")
+                header = "Rare pull!" if len(cards) == 1 else f"{len(cards)} rare pulls!"
                 emb = discord.Embed(
-                    title=f"{SPORT_EMOJI.get(c['sport'], '🎴')} Rare pull!",
-                    description=f"<@{c['owner_id']}> pulled {_card_line(c)}\n*{c['set_name']}*",
-                    color=RARITY_COLOR.get(c["rarity"], 0xE0AF68),
+                    title=f"{SPORT_EMOJI.get(cards[0]['sport'], '🎴')} {header}",
+                    description=f"<@{owner_id}> pulled:\n" + "\n".join(lines),
+                    color=RARITY_COLOR.get(cards[0]["rarity"], 0xE0AF68),
                 )
-                if c.get("headshot_url"):
-                    emb.set_thumbnail(url=c["headshot_url"])
+                if cards[0].get("headshot_url"):
+                    emb.set_thumbnail(url=cards[0]["headshot_url"])  # the best card's art
                 try:
                     await channel.send(embed=emb)
                 except Exception:
-                    log.debug("rare-pull post failed for %s", c.get("instance_id"), exc_info=True)
+                    log.debug("rare-pull post failed for %s", owner_id, exc_info=True)
             # Advance only after we've had a channel and processed the batch.
             await queries.set_bot_setting(CURSOR_KEY, str(rows[-1]["instance_id"]))
         except Exception:
