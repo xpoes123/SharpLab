@@ -16,12 +16,16 @@ def test_rosters_present_and_priced():
 
 def test_build_designs_shape_and_premium():
     players = rosters.ROSTERS[("nba", 1984)]["players"]
-    designs = seed.build_designs(players)
+    boxes = rosters.ROSTERS[("nba", 1984)]["boxes"]
+    total_packs = boxes * engine.PACKS_PER_BOX
+    designs = seed.build_designs(players, total_packs)
     assert len(designs) == len(players)
     keys = {"subject_key", "subject_name", "rarity", "is_rookie", "total_copies", "book_value"}
     assert keys <= set(designs[0])
     assert all(d["is_rookie"] for d in designs)
-    # premium skew yields at least one legendary in a ~15-player elite set
+    # premium skew yields at least one legendary in a ~14-player elite set
     assert any(d["rarity"] == "legendary" for d in designs)
     # legendaries are 1-of-1 grails
     assert all(d["total_copies"] == 1 for d in designs if d["rarity"] == "legendary")
+    # the copy pool is sized to the full print run (so every purchasable box is fulfillable)
+    assert sum(d["total_copies"] for d in designs) == total_packs * 5
