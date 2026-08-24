@@ -198,6 +198,25 @@ def _hand_name_2(score: tuple[int, ...]) -> str:
 
 # ── House way (brute-force optimal split) ────────────────────────────────────
 
+def _settle_main(p_hi: tuple, p_lo: tuple, d_hi: tuple, d_lo: tuple) -> str:
+    """Main-bet outcome from evaluated hands: "win" | "push" | "lose".
+
+    Ties (copies) go to the dealer. House no-commission rule: when the dealer's
+    5-card hand is an ace-high pai gow (nothing, ace high), the whole hand pushes
+    — this is where the house edge comes from, so it must be checked FIRST, before
+    the win/loss comparison (else a player who beats the dealer's junk wrongly wins).
+    """
+    if d_hi[0] == 0 and d_hi[1] == 14:  # dealer ace-high pai gow → push
+        return "push"
+    hi_win = p_hi > d_hi
+    lo_win = p_lo > d_lo
+    if hi_win and lo_win:
+        return "win"
+    if hi_win or lo_win:
+        return "push"
+    return "lose"
+
+
 def _valid_setting(high: list[str], low: list[str]) -> bool:
     """High hand must rank at least as high as low hand."""
     return _evaluate_5(high) >= _evaluate_2(low)
@@ -1051,18 +1070,8 @@ class PaiGowTableView(ui.View):
         for seat in table.players.values():
             p_hi = _evaluate_5(seat.player_high)
             p_lo = _evaluate_2(seat.player_low)
-            hi_win = p_hi > d_hi  # tie goes to dealer
-            lo_win = p_lo > d_lo
-
-            if hi_win and lo_win:
-                seat.outcome = "win"
-                seat.main_payout = seat.wager * 2  # original bet + 1:1 win
-            elif hi_win or lo_win:
-                seat.outcome = "push"
-                seat.main_payout = seat.wager
-            else:
-                seat.outcome = "lose"
-                seat.main_payout = 0
+            seat.outcome = _settle_main(p_hi, p_lo, d_hi, d_lo)
+            seat.main_payout = {"win": seat.wager * 2, "push": seat.wager, "lose": 0}[seat.outcome]
 
             # Fortune bonus
             if seat.fortune_bet > 0:

@@ -24,6 +24,7 @@ from bot.cogs.paigow import (
     _hand_name_2,
     _hand_name_5,
     _house_way,
+    _settle_main,
     _valid_setting,
 )
 from db import queries
@@ -112,15 +113,8 @@ async def set_hand(request: Request, body: SetBody):
     dealer_high, dealer_low = _house_way(st["dealer"])
     d_hi, d_lo = _evaluate_5(dealer_high), _evaluate_2(dealer_low)
     p_hi, p_lo = _evaluate_5(high), _evaluate_2(low)
-    hi_win = p_hi > d_hi  # ties (copies) go to the dealer
-    lo_win = p_lo > d_lo
-
-    if hi_win and lo_win:
-        outcome, main = "win", bet * 2
-    elif hi_win or lo_win:
-        outcome, main = "push", bet  # split decision: bet back
-    else:
-        outcome, main = "lose", 0
+    outcome = _settle_main(p_hi, p_lo, d_hi, d_lo)
+    main = {"win": bet * 2, "push": bet, "lose": 0}[outcome]
 
     fortune_win, fortune_label = (0, "")
     if fortune > 0:
