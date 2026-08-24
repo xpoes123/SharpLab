@@ -5832,6 +5832,7 @@ async def clear_inflight_rounds() -> None:
 SKILL_HIGHER_IS_BETTER: set[str] = {
     "zetamac", "mathsprint", "sequence",       # arithmetic / number sprints
     "geo", "nbaguess", "valorant", "whosthat",  # 120s ID-as-many-as-you-can guessers
+    "countdown",                                 # 120s: solve as many number targets as you can
 }
 
 
