@@ -4972,7 +4972,7 @@ DAILY_MESSAGE_REWARD = 500  # (legacy) coins for your first chat message each da
 # Activity coin rewards: (coins per event, daily cap per source). Ascending by effort —
 # chatting is a trickle, logging real bets/trades pays more, all capped so nothing is farmable.
 ACTIVITY_REWARDS = {
-    "message": (5, 500),      # small trickle, capped
+    "message": (10, 10_000_000),   # 10/msg, effectively uncapped; spam-gated by a 30s cooldown in on_message
     "pickem_pick": (25, 250),  # daily pick'em
     "bet_log": (50, 1000),     # logging a real sports bet
     "trade_log": (50, 1000),   # logging a stock/option trade

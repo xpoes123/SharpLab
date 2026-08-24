@@ -330,7 +330,8 @@ class ProgressionCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self._last_check_id = 0
-        self._msg_cd: dict[int, float] = {}  # uid → last message-XP monotonic ts
+        self._msg_cd: dict[int, float] = {}       # uid → last message-XP monotonic ts (5s)
+        self._msg_coin_cd: dict[int, float] = {}  # uid → last message-COIN monotonic ts (30s)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
@@ -347,11 +348,13 @@ class ProgressionCog(commands.Cog):
         self._msg_cd[message.author.id] = now
         uid = str(message.author.id)
         await award_xp(self.bot, uid, XP_MESSAGE, message.channel)
-        # Small per-message coin trickle (capped per day so it can't be spam-farmed) — the main
-        # earn now that games no longer top wallets up. Silent; coins accrue to your balance.
+        # Per-message coin reward (10, uncapped/day) — gated to 1 / 30s per user so it can't be
+        # spam-farmed. Silent; coins accrue to your balance.
         from datetime import datetime, timezone
-        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        await queries.grant_activity_reward(uid, "message", day)
+        if now - self._msg_coin_cd.get(message.author.id, 0) >= 30:
+            self._msg_coin_cd[message.author.id] = now
+            day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            await queries.grant_activity_reward(uid, "message", day)
         # Count toward Chat achievements; only re-evaluate (heavy) at a milestone.
         count = await queries.increment_message_count(uid)
         if count in CHAT_MILESTONES:
