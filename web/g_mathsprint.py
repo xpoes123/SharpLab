@@ -2,7 +2,8 @@
 correct answer. Stateless: the batch of correct answers rides in a signed, time-limited
 token (no server-side game state), and coin rewards are the shared per-day-capped
 activity reward ("mathsprint_win" = 2 coins/correct, capped 200/day), so it can't be
-farmed. The client is authoritative only for UX — the server recounts correctness."""
+farmed. The client is authoritative only for UX — the server recounts correctness.
+Score = number correct → a HIGHEST-wins leaderboard (skill_scores game_id "mathsprint")."""
 
 from __future__ import annotations
 
@@ -17,7 +18,8 @@ from db import queries
 from web import auth, gameround
 
 router = APIRouter(prefix="/api/v1/arcade/mathsprint")
-_N_PROBLEMS = 40
+GAME_ID = "mathsprint"
+_N_PROBLEMS = 200      # open-ended — well above what's solvable in 60s, so no cap-out ties
 
 
 def _uid(request: Request) -> str | None:
@@ -82,5 +84,20 @@ async def submit(request: Request, body: SubmitBody):
     coins = 0
     for _ in range(correct):
         coins += await queries.grant_activity_reward(uid, "mathsprint_win", day)
+    best, is_new = await queries.record_skill_best(GAME_ID, uid, correct)
+    rank = await queries.get_skill_rank(GAME_ID, uid)
     balance = await queries.get_casino_balance(uid) or 0
-    return {"correct": correct, "total": total, "coins": coins, "balance": balance}
+    return {"correct": correct, "total": total, "coins": coins, "balance": balance,
+            "best": best, "is_new_best": is_new, "rank": rank}
+
+
+@router.get("/leaderboard")
+async def leaderboard(request: Request):
+    rows = await queries.get_skill_leaderboard(GAME_ID, 50)
+    names = await queries.get_display_names([r["discord_user"] for r in rows])
+    me = _uid(request)
+    return {"game": GAME_ID,
+            "top": [{"rank": i + 1,
+                     "name": names.get(r["discord_user"]) or f"user-{r['discord_user'][-4:]}",
+                     "score": r["best_ms"], "runs": r["runs"],
+                     "me": r["discord_user"] == me} for i, r in enumerate(rows)]}
