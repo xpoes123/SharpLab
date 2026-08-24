@@ -5829,7 +5829,10 @@ async def clear_inflight_rounds() -> None:
 # "most solved in 120s") → HIGHEST value wins; best_ms then holds the score, not ms.
 # Direction is intrinsic to the game_id so every caller (incl. the generic daily
 # payout in pay_skill_leaderboards) orders correctly without knowing the game.
-SKILL_HIGHER_IS_BETTER: set[str] = {"zetamac", "mathsprint", "sequence"}
+SKILL_HIGHER_IS_BETTER: set[str] = {
+    "zetamac", "mathsprint", "sequence",       # arithmetic / number sprints
+    "geo", "nbaguess", "valorant", "whosthat",  # 120s ID-as-many-as-you-can guessers
+}
 
 
 async def get_all_skill_game_ids() -> list[str]:
