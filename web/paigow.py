@@ -117,13 +117,10 @@ async def set_hand(request: Request, body: SetBody):
 
     if hi_win and lo_win:
         outcome, main = "win", bet * 2
-    elif not hi_win and not lo_win:
-        if d_hi[0] == 0 and d_hi[1] == 14:  # dealer ace-high foul → push (no-commission rule)
-            outcome, main = "push", bet
-        else:
-            outcome, main = "lose", 0
+    elif hi_win or lo_win:
+        outcome, main = "push", bet  # split decision: bet back
     else:
-        outcome, main = "push", bet
+        outcome, main = "lose", 0
 
     fortune_win, fortune_label = (0, "")
     if fortune > 0:

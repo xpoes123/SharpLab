@@ -237,16 +237,21 @@ def _house_way(cards: list[str]) -> tuple[list[str], list[str]]:
 
 # ── Fortune Bonus ────────────────────────────────────────────────────────────
 
+# Payout = TOTAL-return multiple of the Fortune stake (e.g. 5 → get 5× back).
+# Calibrated to THIS engine's best-5-of-7 frequencies, where the joker is FULLY
+# wild (_evaluate_5 tries all 52 subs), which roughly doubles textbook 7-card
+# hand rates. At those rates the old textbook paytable ran ~+13% for the player;
+# this table holds a ~5-6% house edge. Five Aces / Royal / Straight Flush are
+# handled explicitly in _fortune_payout (tier 8 never occurs: SF=9, quads=7).
+# ponytail: rates come from the wild-joker evaluator, not book odds — recalibrate
+# against _best_5_from_7 if the joker rule or evaluator changes.
 FORTUNE_TABLE: list[tuple[int, int, str]] = [
-    # (min_tier, payout_multiplier, label)
-    (10, 400, "Five Aces"),
-    (9, 150, "Royal Flush"),     # royal = tier 9, high 14
-    (8, 50, "Straight Flush"),   # tier 8-9 but non-royal covered below
-    (7, 25, "Four of a Kind"),
+    # (min_tier, payout_multiplier, label) — highest tier first
+    (7, 20, "Four of a Kind"),
     (6, 5, "Full House"),
     (5, 4, "Flush"),
     (4, 2, "Straight"),
-    (3, 3, "Three of a Kind"),
+    (3, 2, "Three of a Kind"),
 ]
 
 
@@ -262,13 +267,14 @@ def _best_5_from_7(cards: list[str]) -> tuple[int, ...]:
 
 
 def _fortune_payout(cards: list[str], bet: int) -> tuple[int, str]:
-    """Returns (payout_amount, label). Payout is net win (0 if nothing)."""
+    """Returns (total_return, label). Return is bet × multiplier (0 if no qualifying hand)."""
     score = _best_5_from_7(cards)
     tier = score[0]
 
-    # Royal flush special check (tier 9, high 14)
-    if tier == 9 and score[1] == 14:
-        return bet * 150, "Royal Flush"
+    if tier == 10:
+        return bet * 400, "Five Aces"
+    if tier == 9:  # straight flush; royal = high 14
+        return (bet * 150, "Royal Flush") if score[1] == 14 else (bet * 50, "Straight Flush")
 
     for min_tier, mult, label in FORTUNE_TABLE:
         if tier >= min_tier:
@@ -1051,17 +1057,12 @@ class PaiGowTableView(ui.View):
             if hi_win and lo_win:
                 seat.outcome = "win"
                 seat.main_payout = seat.wager * 2  # original bet + 1:1 win
-            elif not hi_win and not lo_win:
-                # No-commission rule: dealer ace-high (no pair) = push
-                if d_hi[0] == 0 and d_hi[1] == 14:
-                    seat.outcome = "push"
-                    seat.main_payout = seat.wager
-                else:
-                    seat.outcome = "lose"
-                    seat.main_payout = 0
-            else:
+            elif hi_win or lo_win:
                 seat.outcome = "push"
                 seat.main_payout = seat.wager
+            else:
+                seat.outcome = "lose"
+                seat.main_payout = 0
 
             # Fortune bonus
             if seat.fortune_bet > 0:
