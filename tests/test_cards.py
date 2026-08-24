@@ -187,6 +187,57 @@ def test_pack_cost_monotonic_increasing_with_age():
     assert cards.pack_cost(current - 20, current) == round(50 * 1.08 ** 20)
 
 
+# --- premium/pokemon seeding + boxes (SharpLab addition) --------------------
+
+
+def test_draft_tiers_are_valid_and_premium():
+    keys = [k for k, _ in cards.DRAFT_TIERS]
+    assert set(keys) == set(cards.RARITIES)
+    frac = dict(cards.DRAFT_TIERS)
+    assert abs(sum(frac.values()) - 1.0) < 1e-9
+    # premium: more legendary/epic than the default player mix
+    default = dict(cards.PLAYER_TIERS)
+    assert frac["legendary"] > default["legendary"]
+    assert frac["epic"] > default["epic"]
+
+
+def test_pokemon_rarity_map_is_total():
+    src = ["Common", "Uncommon", "Rare", "Double rare", "Illustration rare",
+           "Ultra Rare", "ACE SPEC Rare", "Special illustration rare",
+           "Hyper rare", "Mega Hyper Rare", "Black White Rare"]
+    for s in src:
+        assert cards.map_pokemon_rarity(s) in cards.RARITIES
+    assert cards.map_pokemon_rarity("Common") == "common"
+    assert cards.map_pokemon_rarity("Hyper rare") == "legendary"
+    assert cards.map_pokemon_rarity("Ultra Rare") == "epic"
+    # unknown falls back to common (never crash a seed run)
+    assert cards.map_pokemon_rarity("Nonsense") == "common"
+
+
+def test_pokemon_book_value_uses_price_with_tier_floor():
+    # $397 Charizard -> 39700 coins
+    assert cards.pokemon_book_value(397.07, "legendary") == 39707.0
+    # a $0.02 common (2 coins at COIN_PER_USD=100) floors at the common book value (3.5), never below.
+    # NOTE: brief used $0.19 here, but 0.19 * 100 = 19 > BOOK["common"] (3.5), so it never
+    # actually exercised the floor; corrected the price to genuinely test the floor path.
+    assert cards.pokemon_book_value(0.02, "common") == cards.BOOK["common"]
+
+
+def test_needs_guaranteed_hit():
+    assert cards.needs_guaranteed_hit([{"rarity": "common"}, {"rarity": "rare"}])
+    assert not cards.needs_guaranteed_hit([{"rarity": "common"}, {"rarity": "epic"}])
+    assert not cards.needs_guaranteed_hit([{"rarity": "legendary"}])
+    assert cards.needs_guaranteed_hit([])  # empty box would need a hit (defensive)
+
+
+def test_box_price():
+    assert cards.PACKS_PER_BOX == 36
+    # NOTE: brief's expected value (49_996) isn't a multiple of 36 and can't match
+    # box_price = 36 * base_cost for any integer base_cost; corrected to 36 * 1389 = 50_004.
+    assert cards.box_price(1389) == 50_004
+    assert cards.box_price(6944) == 249_984
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # DB-backed: set-completion rewards + dupe trade-up (bot/cogs/cards.py)
 # ─────────────────────────────────────────────────────────────────────────────
