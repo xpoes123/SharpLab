@@ -92,6 +92,8 @@ ALL_ACHIEVEMENTS: list[Achievement] = [
     Achievement("card_sets_5", "Set Collector", "Own cards from 5 different sets", "Cards", "\U0001f5c3️", 100),
     Achievement("box_opener", "Case Cracker", "Open a full card box (36 packs)", "Cards", "\U0001f4e6", 120),
     Achievement("card_set_complete", "Set Master", "Complete a full card set", "Cards", "\U0001f4da", 200),
+    # ── Special (manually awarded, not condition-based) ──
+    Achievement("ev_exploit", "Exploit Hunter", "Found a real +EV exploit in the casino", "Wealth", "\U0001f41b", 500),
 ]
 
 ACHIEVEMENTS_BY_ID: dict[str, Achievement] = {a.id: a for a in ALL_ACHIEVEMENTS}
