@@ -366,12 +366,28 @@ class CardsCog(commands.Cog):
         view = PackRevealView(cards_out, pull_rates, title, interaction.user, start_summary=fast)
         view.message = await interaction.followup.send(embed=view.current_embed(), view=view)
 
+    async def _season_ac(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[int]]:
+        """Autocomplete the set by NAME (players don't know the synthetic season numbers).
+        Shows available sets for the chosen sport; value is the season the command needs."""
+        sport = getattr(interaction.namespace, "sport", None)
+        sets = await queries.list_card_sets(include_closed=False)
+        if sport:
+            sets = [s for s in sets if s["sport"] == sport]
+        cur = current.lower()
+        out = []
+        for s in sorted(sets, key=lambda s: (s["sport"], -s["season"])):
+            if cur and cur not in s["name"].lower() and cur not in str(s["season"]):
+                continue
+            out.append(app_commands.Choice(name=f"{s['name']} ({s['season']})"[:100], value=s["season"]))
+        return out[:25]
+
     @pack.command(name="open", description="Buy & open card packs with coins")
     @app_commands.describe(
-        sport="League", season="Season year (e.g. 2024)", n="How many packs (1-10)",
+        sport="League", season="Pick the set by name", n="How many packs (1-10)",
         fast="Skip the reveal animation and show the whole haul (defaults to your /pack fast setting)",
     )
     @app_commands.choices(sport=SPORT_CHOICES)
+    @app_commands.autocomplete(season=_season_ac)
     async def pack_open(
         self, interaction: discord.Interaction, sport: app_commands.Choice[str], season: int,
         n: int = 1, fast: bool | None = None,
@@ -422,8 +438,9 @@ class CardsCog(commands.Cog):
             self.stop()
 
     @pack.command(name="box", description="Buy & open a full box (36 packs) with a guaranteed hit")
-    @app_commands.describe(sport="League", season="Season year")
+    @app_commands.describe(sport="League", season="Pick the set by name")
     @app_commands.choices(sport=SPORT_CHOICES)
+    @app_commands.autocomplete(season=_season_ac)
     async def pack_box(
         self, interaction: discord.Interaction, sport: app_commands.Choice[str], season: int,
     ):
