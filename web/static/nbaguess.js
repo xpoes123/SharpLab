@@ -4,6 +4,12 @@
 // carries the authoritative new balance, which we push back into the nav chip +
 // on-page header. Clues arrive all at once but reveal one at a time — a wrong
 // guess (or the "Reveal a clue" button) uncovers the next one.
+//
+// Also has a 120-second SPRINT mode (mirrors zetamac.js/sequence.js): /sprint/start
+// hands back a batch of players (all clues shown at once per player — speed reads over
+// deduction), one player at a time with a single input that advances on Enter, a
+// countdown + live solved counter, and on timeout a /sprint/submit + a
+// highest-correct-wins leaderboard.
 
 const app = document.getElementById("app");
 const navRight = document.getElementById("navRight");
@@ -37,7 +43,7 @@ function renderNav(user) {
 }
 
 // ── State ──
-const state = { me: null, balance: 0, correct: 0 };
+const state = { me: null, balance: 0, correct: 0, mode: "practice" };
 const round = { token: null, clues: [], shown: 0, solved: false, busy: false };
 
 // ── Toast (copied verbatim from casino.js) ──
@@ -233,29 +239,44 @@ async function giveUp() {
   showReveal(res, false);
 }
 
+// ── Mode toggle (practice ⇄ sprint) ──
+function modeToggle() {
+  return `<div class="nba-modetoggle">
+    <button class="btn ${state.mode === "practice" ? "primary" : "ghost"}" id="nModePractice">Practice</button>
+    <button class="btn ${state.mode === "sprint" ? "primary" : "ghost"}" id="nModeSprint">⏱️ 120s Sprint</button>
+  </div>`;
+}
+
 // ── Delegated events ──
 app.addEventListener("click", (e) => {
   if (e.target.closest("#nGuessBtn")) return submitGuess();
   if (e.target.closest("#nGiveUp")) return giveUp();
   if (e.target.closest("#nNext")) return newRound();
   if (e.target.closest("#nMore")) return revealNextClue();
+  if (e.target.closest("#nSprintStart")) return startSprint();
+  if (e.target.closest("#nModePractice")) { state.mode = "practice"; return buildPage(); }
+  if (e.target.closest("#nModeSprint")) { state.mode = "sprint"; return renderSprintIntro(); }
 });
 app.addEventListener("keydown", (e) => {
   if (e.target.id === "nGuess" && e.key === "Enter") { e.preventDefault(); submitGuess(); }
+  if (e.target.id === "nSprintInput" && e.key === "Enter") { e.preventDefault(); advanceSprint(); }
 });
 
 function buildPage() {
+  if (state.mode === "sprint") return renderSprintIntro();
   const signedOut = !state.me
     ? `<div class="card" style="max-width:460px;margin:0 auto 16px;text-align:center">
         <p class="muted" style="margin:0 0 10px">Sign in with Discord to play for coins.</p>
         <a class="btn" href="/api/v1/auth/discord/login">Sign in with Discord</a></div>`
     : "";
   app.innerHTML = `
+    ${modeToggle()}
     <div class="nba-head">
       <h1>🏀 NBA Player Guess <span class="balancechip" id="pageBal">${coins(state.balance)}</span></h1>
       <p>Name the mystery player from their career clues. Fewer clues used, sharper the guess.</p>
     </div>
     ${signedOut}
+    ${state.me ? `
     <div class="nba-wrap">
       <div class="card ncard">
         <div class="nhint">Mystery Player</div>
@@ -273,8 +294,214 @@ function buildPage() {
         </div>
         <div class="ncounter">Correct this session: <b id="nCorrect">0</b></div>
       </div>
+    </div>` : ""}`;
+  if (state.me) newRound();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Sprint mode — 120s batch run (modeled on zetamac.js / sequence.js)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const DEFAULT_SPRINT_SECONDS = 120;
+const HOT_THRESHOLD = 15; // seconds remaining before the bar/label turn "hot"
+const sprint = {
+  active: false, problems: [], token: null, idx: 0, answers: [], solved: 0,
+  seconds: DEFAULT_SPRINT_SECONDS, endAt: 0, raf: 0,
+};
+
+// ── POST to a sprint endpoint ──
+async function postSprint(path, body) {
+  if (MOCK) return mockSprint(path, body);
+  const r = await fetch("/api/v1/arcade/nbaguess/sprint" + path, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok && j.error == null) {
+    j.error = r.status === 401 ? "sign in to play" : `error ${r.status}`;
+  }
+  return j;
+}
+
+async function startSprint() {
+  if (sprint.active) return;
+  state.mode = "sprint";
+  const btn = $("nSprintStart");
+  if (btn) btn.disabled = true;
+  const res = await postSprint("/start", {});
+  if (res.error || res._status) {
+    if (btn) btn.disabled = false;
+    return toast("❌ " + (res.error || "couldn't start"));
+  }
+  sprint.active = true;
+  sprint.problems = res.problems || [];
+  sprint.token = res.token;
+  sprint.seconds = res.duration || DEFAULT_SPRINT_SECONDS;
+  sprint.idx = 0;
+  sprint.answers = [];
+  sprint.solved = 0;
+  sprint.endAt = performance.now() + sprint.seconds * 1000;
+  renderSprintPlaying();
+  sprintTick();
+  showSprintProblem();
+}
+
+// ── Countdown loop (rAF for the bar, interval-free — just paint each frame) ──
+function sprintTick() {
+  const remaining = Math.max(0, sprint.endAt - performance.now());
+  const frac = remaining / (sprint.seconds * 1000);
+  const hot = remaining <= HOT_THRESHOLD * 1000;
+  const bar = $("nBar");
+  if (bar) { bar.style.transform = `scaleX(${frac})`; bar.classList.toggle("hot", hot); }
+  const secs = $("nSecs");
+  if (secs) { secs.textContent = Math.ceil(remaining / 1000) + "s"; secs.classList.toggle("hot", hot); }
+  if (remaining <= 0) { finishSprint(); return; }
+  sprint.raf = requestAnimationFrame(sprintTick);
+}
+
+// ── Show the current player's clues (all at once — speed reads over deduction) ──
+function showSprintProblem() {
+  const problem = sprint.problems[sprint.idx];
+  const list = $("nSprintClues");
+  const input = $("nSprintInput");
+  if (!problem) { finishSprint(); return; }
+  if (list) {
+    list.innerHTML = (problem.clues || []).map(
+      (c, i) => `<li class="nclue"><span class="nclue-n">${i + 1}</span><span class="nclue-t">${esc(c)}</span></li>`
+    ).join("");
+  }
+  if (input) { input.value = ""; input.focus(); }
+}
+
+// ── Commit the typed answer + advance (Enter only) ──
+function advanceSprint() {
+  if (!sprint.active) return;
+  const input = $("nSprintInput");
+  const raw = (input && input.value || "").trim();
+  if (raw === "") return; // nothing to commit yet
+  sprint.answers[sprint.idx] = raw;
+  sprint.solved += 1;
+  const sc = $("nSprintSolved");
+  if (sc) sc.textContent = num(sprint.solved);
+  sprint.idx += 1;
+  if (sprint.idx >= sprint.problems.length) { finishSprint(); return; }
+  showSprintProblem();
+}
+
+// ── Finish + submit ──
+async function finishSprint() {
+  if (!sprint.active) return;
+  sprint.active = false;
+  if (sprint.raf) cancelAnimationFrame(sprint.raf);
+  const res = await postSprint("/submit", { token: sprint.token, answers: sprint.answers });
+  if (res.error || res._status) {
+    renderSprintIntro();
+    return toast("❌ " + (res.error || "couldn't submit run"));
+  }
+  applyBalance(res.balance);
+  renderSprintResult(res);
+  loadSprintLeaderboard();
+}
+
+// ── Sprint views ──
+function renderSprintIntro() {
+  const signedOut = !state.me
+    ? `<div class="card" style="max-width:460px;margin:0 auto 16px;text-align:center">
+        <p class="muted" style="margin:0 0 10px">Sign in with Discord to play for coins.</p>
+        <a class="btn" href="/api/v1/auth/discord/login">Sign in with Discord</a></div>`
+    : "";
+  app.innerHTML = `
+    ${modeToggle()}
+    <div class="nba-head">
+      <h1>🏀 NBA Player Guess Sprint <span class="balancechip" id="pageBal">${coins(state.balance)}</span></h1>
+      <p>Name as many mystery players as you can in 120 seconds. All clues shown up front — speed over deduction.</p>
+    </div>
+    ${signedOut}
+    <div class="nba-wrap">
+      <div class="card ncard">
+        <div class="nbig">⏱️ 120</div>
+        <p class="muted">Type the player's name and hit Enter to lock it in and move on. Ready?</p>
+        <button class="btn primary big" id="nSprintStart"${state.me ? "" : " disabled"}>Start (120s)</button>
+      </div>
+    </div>
+    <div class="nleaderboard" id="nLeaderboard"></div>`;
+  loadSprintLeaderboard();
+}
+
+function renderSprintPlaying() {
+  app.innerHTML = `
+    <div class="nba-head">
+      <h1>🏀 NBA Player Guess Sprint <span class="balancechip" id="pageBal">${coins(state.balance)}</span></h1>
+    </div>
+    <div class="nba-wrap">
+      <div class="card ncard">
+        <div class="ntimebar"><div class="ntimefill" id="nBar"></div></div>
+        <div class="nmeta">
+          <span class="nsecs" id="nSecs">${sprint.seconds}s</span>
+          <span class="nsolved">Solved: <b id="nSprintSolved">0</b></span>
+        </div>
+        <ul class="nclues" id="nSprintClues"></ul>
+        <input class="nguess" id="nSprintInput" type="text" autocomplete="off"
+               autocapitalize="words" spellcheck="false" placeholder="Type a player name…" />
+      </div>
     </div>`;
-  newRound();
+}
+
+function renderSprintResult(res) {
+  const newBest = res.is_new_best
+    ? `<div class="nnewbest${REDUCE ? "" : " pop"}">🏆 new best!</div>`
+    : "";
+  const bestLine = res.best != null
+    ? `<div class="nbest">Your best: <b>${num(res.best)}</b></div>` : "";
+  const rankLine = res.rank != null
+    ? `<div class="nrank">#${num(res.rank)} on the board</div>` : "";
+  app.innerHTML = `
+    ${modeToggle()}
+    <div class="nba-head">
+      <h1>🏀 NBA Player Guess Sprint <span class="balancechip" id="pageBal">${coins(res.balance)}</span></h1>
+    </div>
+    <div class="nba-wrap">
+      <div class="card ncard nresultcard">
+        <div class="nbig">${num(res.correct)} correct</div>
+        <div class="nrewardbig${REDUCE ? "" : " pop"}">+${num(res.coins)} 🪙</div>
+        <p class="muted">Balance: <b>${coins(res.balance)}</b></p>
+        ${newBest}${bestLine}${rankLine}
+        <button class="btn primary big" id="nSprintStart">Play again</button>
+      </div>
+    </div>
+    <div class="nleaderboard" id="nLeaderboard"></div>`;
+  loadSprintLeaderboard();
+}
+
+// ── Sprint leaderboard ──
+async function loadSprintLeaderboard() {
+  const res = await getJSON("/api/v1/arcade/nbaguess/sprint/leaderboard");
+  if (!res || res._status || !res.top) { renderSprintLeaderboard({ top: [] }); return; }
+  renderSprintLeaderboard(res);
+}
+
+function renderSprintLeaderboard(res) {
+  const sec = $("nLeaderboard");
+  if (!sec) return;
+  const top = res.top || [];
+  if (!top.length) {
+    sec.innerHTML = `<div class="nlbhead">🏁 Best of 120 seconds</div>
+      <div class="nlbempty">No runs yet — be the first!</div>`;
+    return;
+  }
+  const rows = top.map((r) => {
+    const runs = r.runs != null ? `<span class="nlbruns">${num(r.runs)} run${r.runs === 1 ? "" : "s"}</span>` : "";
+    return `<div class="nlbrow${r.me ? " me" : ""}">
+      <span class="nlbrank">#${num(r.rank)}</span>
+      <span class="nlbname">${esc(r.name)}</span>
+      ${runs}
+      <span class="nlbscore">${num(r.score)}</span>
+    </div>`;
+  }).join("");
+  sec.innerHTML = `<div class="nlbhead">🏁 Best of 120 seconds</div>
+    <div class="nlblist">${rows}</div>`;
 }
 
 async function main() {
@@ -295,6 +522,12 @@ const MOCK = new URLSearchParams(location.search).get("mock") === "1";
 function mockJSON(url) {
   if (url.startsWith("/api/v1/hq/me"))
     return { authenticated: true, user: { id: "1", username: "davidj", avatar: null }, balance: 12500 };
+  if (url.includes("/sprint/leaderboard"))
+    return { game: "nbaguess", duration: 120, top: [
+      { rank: 1, name: "davidj", score: 14, runs: 3, me: true },
+      { rank: 2, name: "steph", score: 11, runs: 2 },
+      { rank: 3, name: "nova", score: 9, runs: 1 },
+    ] };
   return {};
 }
 
@@ -335,6 +568,31 @@ function mockNba(path, body) {
     return { correct: true, name: answer, reward, balance: state.balance };
   }
   return { correct: false };
+}
+
+function mockSprint(path, body) {
+  if (path === "/start") {
+    const problems = [];
+    const answers = [];
+    for (let i = 0; i < 20; i++) {
+      const p = MOCK_PLAYERS[Math.floor(Math.random() * MOCK_PLAYERS.length)];
+      problems.push({ clues: p.clues.slice() });
+      answers.push(p.name);
+    }
+    mockSprint._answers = answers;
+    return { token: "mock", problems, duration: 120 };
+  }
+  // /submit
+  const ans = body.answers || [];
+  const correct = (mockSprint._answers || []).reduce(
+    (n, a, i) => n + (i < ans.length && String(ans[i]).trim().toLowerCase() === a.toLowerCase() ? 1 : 0), 0);
+  const coinsWon = Math.min(correct, 13) * 15; // mirrors nba_guess cap (200/day ÷ 15 per correct)
+  state.balance += coinsWon;
+  mockSprint._best = Math.max(mockSprint._best || 0, correct);
+  return {
+    correct, coins: coinsWon, balance: state.balance,
+    best: mockSprint._best, is_new_best: correct === mockSprint._best, rank: 1,
+  };
 }
 
 main();
