@@ -145,13 +145,23 @@ class PackRevealView(discord.ui.View):
         self.opener = opener
         self.i = (len(self.cards) - 1) if start_summary else 0
         self.show_summary = start_summary  # fast-open lands straight on the full haul
+        self.summary_page = 0
         self.message: discord.Message | None = None
         self._sync_buttons()
 
+    _PER_PAGE = 20
+
+    def _summary_pages(self) -> int:
+        return max(1, (len(self.cards) + self._PER_PAGE - 1) // self._PER_PAGE)
+
     def _sync_buttons(self) -> None:
-        last = len(self.cards) - 1
-        self.prev_btn.disabled = not self.show_summary and self.i == 0
-        self.next_btn.disabled = self.show_summary
+        if self.show_summary:
+            # In summary mode ◀ ▶ page through the haul (◀ on page 0 drops back to cards).
+            self.prev_btn.disabled = False
+            self.next_btn.disabled = self.summary_page >= self._summary_pages() - 1
+        else:
+            self.prev_btn.disabled = self.i == 0
+            self.next_btn.disabled = False
         self.summary_btn.disabled = self.show_summary or len(self.cards) == 1
 
     def current_embed(self) -> discord.Embed:
@@ -177,14 +187,19 @@ class PackRevealView(discord.ui.View):
     def _summary_embed(self) -> discord.Embed:
         total = round(sum(c["book_value"] for c in self.cards))
         best = self.cards[-1]  # ascending order → last is best
+        pages = self._summary_pages()
+        self.summary_page = max(0, min(self.summary_page, pages - 1))
+        start = self.summary_page * self._PER_PAGE
+        chunk = self.cards[start:start + self._PER_PAGE]
         emb = discord.Embed(
             title=f"{self.title} — your haul",
-            description="\n".join(_card_line(c) for c in self.cards),
+            description="\n".join(_card_line(c) for c in chunk),
             color=RARITY_COLOR.get(best["rarity"], 0x7AA2F7),
         )
         if best.get("headshot_url"):
             emb.set_thumbnail(url=best["headshot_url"])
-        emb.set_footer(text=f"Pack book value: {total} 🪙  ·  opened by {self.opener.display_name}")
+        page_txt = f"Page {self.summary_page + 1}/{pages}  ·  " if pages > 1 else ""
+        emb.set_footer(text=f"{page_txt}Book value: {total} 🪙  ·  opened by {self.opener.display_name}")
         return emb
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -200,22 +215,29 @@ class PackRevealView(discord.ui.View):
     @discord.ui.button(label="◀", style=discord.ButtonStyle.secondary)
     async def prev_btn(self, interaction: discord.Interaction, _button: discord.ui.Button):
         if self.show_summary:
-            self.show_summary = False  # back to the last card
+            if self.summary_page > 0:
+                self.summary_page -= 1       # page back through the haul
+            else:
+                self.show_summary = False     # page 0 → back to the last card
         elif self.i > 0:
             self.i -= 1
         await self._update(interaction)
 
     @discord.ui.button(label="▶", style=discord.ButtonStyle.primary)
     async def next_btn(self, interaction: discord.Interaction, _button: discord.ui.Button):
-        if self.i < len(self.cards) - 1:
+        if self.show_summary:
+            self.summary_page += 1            # page forward (clamped in _summary_embed)
+        elif self.i < len(self.cards) - 1:
             self.i += 1
         else:
             self.show_summary = True
+            self.summary_page = 0
         await self._update(interaction)
 
     @discord.ui.button(label="📋 Summary", style=discord.ButtonStyle.secondary)
     async def summary_btn(self, interaction: discord.Interaction, _button: discord.ui.Button):
         self.show_summary = True
+        self.summary_page = 0
         await self._update(interaction)
 
     async def on_timeout(self) -> None:
