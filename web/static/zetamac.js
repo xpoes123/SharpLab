@@ -1,8 +1,8 @@
 // SharpLab HQ — Zetamac. A 120-second solo arithmetic sprint (add/sub/mul/div).
 // POST /start returns a batch of pre-rendered problem strings ("12 + 34", "56 − 12",
 // "8 × 7", "72 ÷ 9") + a signed token; answers are never sent to the client (server
-// checks them at /submit). Solve one problem at a time — type the answer, hit Enter,
-// it advances immediately (the server is the only one who knows if you were right).
+// checks them at /submit for scoring). We evaluate the shown problem locally so it
+// auto-advances the instant your answer is right — no Enter (real Zetamac).
 // When the clock hits 0 we POST /submit with everything collected; the response
 // carries correct count, coins, new balance, personal best, and leaderboard rank.
 // Score = number correct → a HIGHEST-wins leaderboard, loaded on page load + after
@@ -161,14 +161,28 @@ function showProblem() {
   if (input) { input.value = ""; input.focus(); }
 }
 
-// ── Commit the typed answer + advance (Enter only — the client never knows
-// whether an answer is right, so there's no auto-advance-by-length here). ──
-function advance() {
+// ── Evaluate the shown problem locally so we can auto-advance the instant the
+// typed answer is right (real Zetamac — no Enter). Each problem is a solvable
+// "A op B" string; the ÷ form is always an exact integer by construction. ──
+function evalProblem(text) {
+  const m = String(text).match(/^\s*(\d+)\s*([+−\-×*÷/])\s*(\d+)\s*$/);
+  if (!m) return NaN;
+  const a = parseInt(m[1], 10), b = parseInt(m[3], 10), op = m[2];
+  if (op === "+") return a + b;
+  if (op === "−" || op === "-") return a - b;
+  if (op === "×" || op === "*") return a * b;
+  return Math.round(a / b); // ÷
+}
+
+// Called on every keystroke — advance the moment the typed value is correct.
+function maybeAdvance() {
   if (!run.active) return;
   const input = $("zmInput");
   const raw = (input && input.value || "").trim();
-  if (raw === "" || raw === "-") return; // nothing to commit yet
-  run.answers[run.idx] = parseInt(raw, 10);
+  if (raw === "" || raw === "-") return;
+  const typed = parseInt(raw, 10);
+  if (Number.isNaN(typed) || typed !== evalProblem(run.problems[run.idx])) return;
+  run.answers[run.idx] = typed;
   run.solved += 1;
   const sc = $("zmSolved");
   if (sc) sc.textContent = num(run.solved);
@@ -208,7 +222,7 @@ function renderIntro() {
     <div class="zm-wrap">
       <div class="card zmcard">
         <div class="zmbig">⏱️ 120</div>
-        <p class="muted">Type the answer and hit Enter to lock it in and move on. Ready?</p>
+        <p class="muted">Just type each answer — it advances the instant you're right. No Enter needed. Ready?</p>
         <button class="btn primary big" id="zmStart"${state.me ? "" : " disabled"}>Start (120s)</button>
       </div>
     </div>
@@ -292,8 +306,9 @@ function renderLeaderboard(res) {
 app.addEventListener("click", (e) => {
   if (e.target.closest("#zmStart")) startRun();
 });
-app.addEventListener("keydown", (e) => {
-  if (e.target.id === "zmInput" && e.key === "Enter") { e.preventDefault(); advance(); }
+// Auto-advance the moment the typed answer is correct — no Enter (real Zetamac).
+app.addEventListener("input", (e) => {
+  if (e.target.id === "zmInput") maybeAdvance();
 });
 
 async function main() {
