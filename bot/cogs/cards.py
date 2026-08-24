@@ -434,6 +434,7 @@ class CardsCog(commands.Cog):
         if not view.value:
             await prompt.edit(content="Box purchase cancelled.", view=None)
             return
+        await prompt.edit(content=f"📦 Opening **{cset['name']}** box…", view=None)
         try:
             res = await queries.mint_box(uid, cset["set_id"], _now_iso())
         except ValueError as e:

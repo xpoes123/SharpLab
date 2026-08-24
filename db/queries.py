@@ -4767,6 +4767,11 @@ async def mint_box(user: str, set_id: int, now_iso: str) -> dict:
                 raise ValueError("no cards left in this set")
 
             guaranteed = False
+            # The guaranteed epic draws ONE extra card from the remaining pool. This
+            # assumes the pool has slack beyond the 36 packs (true for all current sets:
+            # Pokémon caps print run below pool, and draft sets are epic-dense so this
+            # branch never fires). If you ever seed a low-epic set whose pool equals its
+            # print run exactly, this could hand the last box <180 cards — give it slack.
             if engine.needs_guaranteed_hit(cards_out):
                 epic_pool = [i for i, cnt in pool.items() if cnt > 0 and drows[i]["rarity"] == "epic"]
                 if epic_pool:
