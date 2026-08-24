@@ -32,18 +32,23 @@ async def backfill() -> int:
         ach = ACHIEVEMENTS_BY_ID.get(aid)
         if ach is None:
             continue
+        # Claim FIRST (mark), then credit. If we crash after marking, that row is skipped
+        # on re-run → we under-pay (safe) rather than double-pay. INSERT rowcount tells us
+        # whether THIS run claimed the row (guards against a concurrent claimer too).
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "INSERT OR IGNORE INTO bounty_backfilled (discord_user, achievement_id) VALUES (?, ?)",
+                (r["discord_user"], aid))
+            await db.commit()
+            claimed = cur.rowcount > 0
+        if not claimed:
+            continue  # already handled by a prior run
         delta = max(0, ach.xp_reward * 5 - 150)
         if delta > 0:
             await queries.credit_coins(
                 r["discord_user"], delta, f"Achievement bounty top-up: {ach.name}",
                 datetime.now(timezone.utc).isoformat())
             paid += 1
-        # mark handled either way so we never revisit
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                "INSERT OR IGNORE INTO bounty_backfilled (discord_user, achievement_id) VALUES (?, ?)",
-                (r["discord_user"], aid))
-            await db.commit()
     return paid
 
 
