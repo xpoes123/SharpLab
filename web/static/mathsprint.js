@@ -172,14 +172,15 @@ function advance() {
   showProblem();
 }
 
-// Auto-advance once the typed value is at least as long as the answer's digits.
+// Auto-advance the instant the typed value is CORRECT (real Zetamac feel) — not
+// merely once it's long enough (which advanced on wrong same-length answers).
 function onInput() {
   const p = run.problems[run.idx];
   if (!p) return;
-  const answerLen = String(Math.max(0, computeLocal(p))).length;
   const input = $("msInput");
-  const val = (input && input.value || "").replace("-", "");
-  if (val.length >= answerLen && val.length > 0) advance();
+  const raw = (input && input.value || "").trim();
+  if (raw === "" || raw === "-") return;
+  if (parseInt(raw, 10) === computeLocal(p)) advance();
 }
 function computeLocal(p) {
   if (p.op === "+") return p.a + p.b;
@@ -218,7 +219,7 @@ function renderIntro() {
     <div class="ms-wrap">
       <div class="card mscard">
         <div class="msbig">⏱️ 60</div>
-        <p class="muted">Type the answer and hit Enter — it auto-advances when your answer's complete. Ready?</p>
+        <p class="muted">Just type each answer — it advances the instant you're right. No Enter needed. Ready?</p>
         <button class="btn primary big" id="msStart"${state.me ? "" : " disabled"}>Start (60s)</button>
       </div>
     </div>
