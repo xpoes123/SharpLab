@@ -1,7 +1,8 @@
 """One-off: trim ~/code/pokemon-cards/data.json into data/pokemon_cards.json.
 
-Keeps only {id, name, cards:[{name, rarity, price_usd}]} — max price across variants.
-Run locally (has the source project), commit the output:
+Keeps {id, name, cards:[{name, rarity, price_usd, img}]} — max price across variants;
+`img` is the source-relative path (e.g. "img/en_sv_sv03.5_001.webp"), served in prod at
+https://pokemon.djiang.xyz/<img>. Run locally (has the source project), commit the output:
     python scripts/extract_pokemon_data.py
 """
 import json
@@ -24,7 +25,8 @@ def main() -> None:
         out.append({
             "id": s["id"], "name": s["name"],
             "cards": [{"name": c["name"], "rarity": c.get("rarity", "Common"),
-                       "price_usd": round(_max_price(c), 2)} for c in s.get("cards", [])],
+                       "price_usd": round(_max_price(c), 2), "img": c.get("img", "")}
+                      for c in s.get("cards", [])],
         })
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     json.dump({"sets": out}, open(OUT, "w"), ensure_ascii=False)
