@@ -6,11 +6,19 @@ numbers to hit the target. The expression is validated + evaluated **server-side
 hand-written tokenizer + shunting-yard parser — NEVER `eval`/`exec` — under Countdown rules
 (integer-only arithmetic, exact division only). Rounds are stateless: the chosen numbers +
 target ride in a signed, time-limited token. An exact solve pays the shared per-day-capped
-activity reward ("countdown_win"), so it can't be farmed."""
+activity reward ("countdown_win"), so it can't be farmed.
+
+Also offers a 120-second SPRINT mode (modeled on web/g_zetamac.py / web/g_sequence.py):
+/sprint/start hands out a batch of rounds (numbers + target — no signed token needed since
+nothing secret rides along, but we still stash server-side via web.gameround to keep the same
+opaque-token pattern) and /sprint/submit re-validates every submitted expression with the same
+`evaluate_expression` used by the solo /solve endpoint, so solve rules stay identical. Countdown
+solves are slow, so 30 rounds is plenty for a 120s run."""
 
 from __future__ import annotations
 
 import secrets
+import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
@@ -19,13 +27,18 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel
 
 from db import queries
-from web import auth
+from web import auth, gameround
 
 router = APIRouter(prefix="/api/v1/arcade/countdown")
 _round_signer = URLSafeTimedSerializer(auth.SESSION_SECRET, salt="arcade-countdown")
 _ROUND_TTL = 300  # seconds a round token stays valid
 
 LARGE = [25, 50, 75, 100]
+
+SPRINT_DURATION = 120    # seconds in the sprint
+SPRINT_GRACE = 15        # extra seconds allowed for the submit to land
+SPRINT_N_PROBLEMS = 30   # countdown solves are slow — 30 rounds is plenty for 120s
+SPRINT_GAME_ID = "countdown"
 
 
 def _uid(request: Request) -> str | None:
@@ -235,3 +248,69 @@ async def countdown_reveal(request: Request, body: RevealBody):
     numbers, target = decoded
     return {"numbers": numbers, "target": target,
             "note": "No solution shown — reach the target yourself next time."}
+
+
+# ── Sprint mode (120s, batch of rounds, highest-solved-wins leaderboard) ────
+
+
+@router.post("/sprint/start")
+async def sprint_start(request: Request):
+    if not _uid(request):
+        return JSONResponse({"error": "sign in to play"}, status_code=401)
+    rounds: list[tuple[list[int], int]] = [_new_round() for _ in range(SPRINT_N_PROBLEMS)]
+    token = gameround.stash({"rounds": rounds, "started": time.monotonic()})
+    problems = [{"numbers": numbers, "target": target} for numbers, target in rounds]
+    return {"token": token, "problems": problems, "duration": SPRINT_DURATION}
+
+
+class SprintSubmitBody(BaseModel):
+    token: str
+    answers: list[str]
+
+
+@router.post("/sprint/submit")
+async def sprint_submit(request: Request, body: SprintSubmitBody):
+    uid = _uid(request)
+    if not uid:
+        return JSONResponse({"error": "sign in to play"}, status_code=401)
+    state = gameround.claim(body.token)  # single-use: can't resubmit to farm
+    if not isinstance(state, dict):
+        return JSONResponse({"error": "run expired — start a new one"}, status_code=400)
+    if time.monotonic() - state["started"] > SPRINT_DURATION + SPRINT_GRACE:
+        return JSONResponse({"error": "too slow — that run timed out"}, status_code=400)
+
+    rounds = state["rounds"]
+    submitted = body.answers[:len(rounds)]  # ignore anything past the round count
+    solved = 0
+    for i, (numbers, target) in enumerate(rounds):
+        expr = submitted[i] if i < len(submitted) else ""
+        if not expr or not expr.strip():
+            continue
+        try:
+            value = evaluate_expression(expr, numbers)
+        except ExprError:
+            continue
+        if value == target:
+            solved += 1
+
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    coins = 0
+    for _ in range(solved):
+        coins += await queries.grant_activity_reward(uid, "countdown_win", day)
+    best, is_new = await queries.record_skill_best(SPRINT_GAME_ID, uid, solved)
+    rank = await queries.get_skill_rank(SPRINT_GAME_ID, uid)
+    balance = await queries.get_casino_balance(uid) or 0
+    return {"correct": solved, "coins": coins, "balance": balance,
+            "best": best, "is_new_best": is_new, "rank": rank}
+
+
+@router.get("/sprint/leaderboard")
+async def sprint_leaderboard(request: Request):
+    rows = await queries.get_skill_leaderboard(SPRINT_GAME_ID, 50)
+    names = await queries.get_display_names([r["discord_user"] for r in rows])
+    me = _uid(request)
+    return {"game": SPRINT_GAME_ID, "duration": SPRINT_DURATION,
+            "top": [{"rank": i + 1,
+                     "name": names.get(r["discord_user"]) or f"user-{r['discord_user'][-4:]}",
+                     "score": r["best_ms"], "runs": r["runs"],
+                     "me": r["discord_user"] == me} for i, r in enumerate(rows)]}
