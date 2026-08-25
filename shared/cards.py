@@ -180,23 +180,26 @@ def expected_pack_value(manifest: list[dict], pack_size: int) -> float:
 
 
 def open_pack(
-    pool: dict[int, int], manifest: list[dict], rng: random.Random, pack_size: int
+    weights: dict[int, int], manifest: list[dict], rng: random.Random, pack_size: int
 ) -> list[dict]:
+    """Draw pack_size cards by rarity ODDS, WITH REPLACEMENT — packs are unlimited, so a set
+    never depletes. `weights` maps design_index -> pull weight (the design's copy count, which
+    encodes rarity: rarer designs have fewer copies → lower odds). Serial numbers are assigned
+    by the caller as a running mint count, not from a finite pool."""
+    live = [(i, w) for i, w in weights.items() if w > 0]
+    total = sum(w for _, w in live)
     out = []
     for _ in range(pack_size):
-        live = [(i, c) for i, c in pool.items() if c > 0]
-        if not live:
+        if total <= 0:
             break
-        total = sum(c for _, c in live)
         r = rng.randint(1, total)
         acc = 0
         pick = live[-1][0]
-        for i, c in live:
-            acc += c
+        for i, w in live:
+            acc += w
             if r <= acc:
                 pick = i
                 break
-        pool[pick] -= 1
         is_holo = roll_holo(rng)
         gem = roll_gem(rng)
         out.append(

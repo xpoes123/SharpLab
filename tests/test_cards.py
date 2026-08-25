@@ -109,26 +109,26 @@ def test_legendaries_can_be_forced_to_one_of_one():
 # --- pack open ---------------------------------------------------------------
 
 
-def test_open_pack_size_and_depletes_pool():
+def test_open_pack_draws_by_odds_with_replacement():
+    # Unlimited supply: weights are NOT mutated (drawn with replacement).
     m = cards.build_manifest(_subjects(200), 5000)
-    pool = {i: d["copies"] for i, d in enumerate(m)}
-    before = sum(pool.values())
-    out = cards.open_pack(pool, m, random.Random(1), pack_size=5)
+    weights = {i: d["copies"] for i, d in enumerate(m)}
+    before = dict(weights)
+    out = cards.open_pack(weights, m, random.Random(1), pack_size=5)
     assert len(out) == 5
-    assert sum(pool.values()) == before - 5
+    assert weights == before  # nothing depleted
     for c in out:
         assert c["book_value"] >= cards.BOOK[m[c["design_index"]]["rarity"]]
 
 
-def test_open_pack_never_exceeds_finite_pool():
-    """A pack can never draw more cards than the whole finite pool holds."""
-    m = cards.build_manifest(_subjects(50), 60)  # tiny pool
-    pool = {i: d["copies"] for i, d in enumerate(m)}
-    supply = sum(pool.values())
-    out = cards.open_pack(pool, m, random.Random(2), pack_size=supply + 100)
-    assert len(out) == supply  # capped at what exists
-    assert all(c >= 0 for c in pool.values())
-    assert sum(pool.values()) == 0  # fully drained
+def test_open_pack_is_unlimited():
+    """A pack always draws pack_size cards, even far beyond the total weight — unlimited."""
+    m = cards.build_manifest(_subjects(50), 60)  # small set
+    weights = {i: d["copies"] for i, d in enumerate(m)}
+    supply = sum(weights.values())
+    out = cards.open_pack(weights, m, random.Random(2), pack_size=supply + 100)
+    assert len(out) == supply + 100  # never capped by supply
+    assert sum(weights.values()) == supply  # weights untouched
 
 
 # --- expected value ----------------------------------------------------------

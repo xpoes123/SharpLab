@@ -4616,8 +4616,7 @@ async def mint_pack(user: str, set_id: int, pack_size: int, source: str, now_iso
             )
             if srow is None:
                 raise ValueError("no such set")
-            if srow["closed"] or srow["packs_opened"] >= srow["total_packs"]:
-                raise ValueError("this set is sold out")
+            # Packs are unlimited (pure-odds draws with replacement) — a set never sells out.
             cost = 0 if source == "daily" else srow["base_cost"]
             if cost > 0:
                 bal = (
@@ -4639,14 +4638,12 @@ async def mint_pack(user: str, set_id: int, pack_size: int, source: str, now_iso
                 )).fetchall()
             )
             manifest = [{"rarity": d["rarity"]} for d in drows]
-            pool = {
-                i: (d["total_copies"] - d["minted"])
-                for i, d in enumerate(drows)
-                if d["total_copies"] > d["minted"]
-            }
-            drawn = engine.open_pack(pool, manifest, random.Random(), pack_size)
+            # Odds weights = each design's copy count (rarer = fewer = lower odds). Fixed, not
+            # depleted — unlimited supply. Serial is a running per-design mint count.
+            weights = {i: d["total_copies"] for i, d in enumerate(drows)}
+            drawn = engine.open_pack(weights, manifest, random.Random(), pack_size)
             if not drawn:
-                raise ValueError("no cards left in this set")
+                raise ValueError("this set has no cards")
             out = []
             for c in drawn:
                 d = drows[c["design_index"]]
@@ -4684,10 +4681,8 @@ async def mint_pack(user: str, set_id: int, pack_size: int, source: str, now_iso
                     "stats": json.loads(d["stats"]) if d["stats"] else {},
                 })
             await db.execute(
-                "UPDATE card_sets SET packs_opened = packs_opened + 1, "
-                "closed = CASE WHEN packs_opened + 1 >= total_packs THEN 1 ELSE closed END "
-                "WHERE set_id = ?",
-                (set_id,),
+                "UPDATE card_sets SET packs_opened = packs_opened + 1 WHERE set_id = ?",
+                (set_id,),  # opened count is a stat now; unlimited sets never close
             )
             await db.commit()
             return out
@@ -4714,8 +4709,7 @@ async def mint_box(user: str, set_id: int, now_iso: str) -> dict:
                 "SELECT * FROM card_sets WHERE set_id = ?", (set_id,))).fetchone())
             if srow is None:
                 raise ValueError("no such set")
-            if srow["closed"] or srow["packs_opened"] + packs > srow["total_packs"]:
-                raise ValueError("not enough packs left in this set for a full box")
+            # Unlimited supply — a box is always openable; no sold-out check.
             cost = engine.box_price(srow["base_cost"])
             bal = (await (await db.execute(
                 "SELECT balance FROM casino_wallets WHERE discord_user = ?", (user,))).fetchone())
@@ -4732,8 +4726,8 @@ async def mint_box(user: str, set_id: int, now_iso: str) -> dict:
                 "SELECT * FROM card_designs WHERE set_id = ?", (set_id,))).fetchall())
             drows = [dict(d) for d in drows]
             manifest = [{"rarity": d["rarity"]} for d in drows]
-            pool = {i: (d["total_copies"] - d["minted"])
-                    for i, d in enumerate(drows) if d["total_copies"] > d["minted"]}
+            # Odds weights (design copy count), fixed — drawn with replacement, unlimited.
+            weights = {i: d["total_copies"] for i, d in enumerate(drows)}
 
             import random as _random
             rng = _random.Random()
@@ -4763,24 +4757,20 @@ async def mint_box(user: str, set_id: int, now_iso: str) -> dict:
 
             cards_out: list[dict] = []
             for _ in range(packs):
-                drawn = engine.open_pack(pool, manifest, rng, PACK_SIZE)
+                drawn = engine.open_pack(weights, manifest, rng, PACK_SIZE)
                 for c in drawn:
                     cards_out.append(await _mint_one(
                         c["design_index"], c["is_holo"], c["gem"], c["book_value"]))
             if not cards_out:
-                raise ValueError("no cards left in this set")
+                raise ValueError("this set has no cards")
 
             guaranteed = False
-            # The guaranteed epic draws ONE extra card from the remaining pool. This
-            # assumes the pool has slack beyond the 36 packs (true for all current sets:
-            # Pokémon caps print run below pool, and draft sets are epic-dense so this
-            # branch never fires). If you ever seed a low-epic set whose pool equals its
-            # print run exactly, this could hand the last box <180 cards — give it slack.
+            # Guarantee ≥1 epic per box: if none rolled, mint one extra epic (unlimited supply,
+            # so an epic design always exists to draw).
             if engine.needs_guaranteed_hit(cards_out):
-                epic_pool = [i for i, cnt in pool.items() if cnt > 0 and drows[i]["rarity"] == "epic"]
+                epic_pool = [i for i, d in enumerate(drows) if d["rarity"] == "epic"]
                 if epic_pool:
                     idx = rng.choice(epic_pool)
-                    pool[idx] -= 1
                     is_holo = engine.roll_holo(rng)
                     gem = engine.roll_gem(rng)
                     book = engine.book_value("epic", is_holo, gem)
@@ -4788,10 +4778,8 @@ async def mint_box(user: str, set_id: int, now_iso: str) -> dict:
                     guaranteed = True
 
             await db.execute(
-                "UPDATE card_sets SET packs_opened = packs_opened + ?, "
-                "closed = CASE WHEN packs_opened + ? >= total_packs THEN 1 ELSE closed END "
-                "WHERE set_id = ?",
-                (packs, packs, set_id))
+                "UPDATE card_sets SET packs_opened = packs_opened + ? WHERE set_id = ?",
+                (packs, set_id))  # stat only; unlimited sets never close
             await db.commit()
             return {"cards": cards_out, "guaranteed_upgraded": guaranteed}
         except Exception:

@@ -74,7 +74,7 @@ def _box_summary_embed(cards: list[dict], guaranteed: bool, title: str, set_name
             gem = f" 💎{c['gem']}" if c.get("gem") else ""
             lines.append(
                 f"{RARITY_EMOJI.get(c['rarity'], '')} **{c['name']}** {holo}{gem} "
-                f"#{c['serial']}/{c['total_copies']} · {round(c['book_value'])}🪙")
+                f"#{c['serial']} · {round(c['book_value'])}🪙")
         emb.add_field(name=f"🔥 Notable pulls ({len(notables)})", value="\n".join(lines), inline=False)
     if guaranteed:
         emb.set_footer(text="Box guarantee: an epic was added — every box hits.")
@@ -115,7 +115,7 @@ def _card_line(c: dict) -> str:
     if c.get("is_holo"):
         bits.append("✨holo")
     name = f"**{c['name']}**"
-    serial = f"#{c['serial']}/{c['total_copies']}" if c.get("serial") else ""
+    serial = f"#{c['serial']}" if c.get("serial") else ""
     tail = f"· {c['rarity'].title()} · {serial} · {round(c['book_value'])}🪙"
     return f"{' '.join(b for b in bits if b)} {name} {tail}".strip()
 
@@ -178,7 +178,7 @@ class PackRevealView(discord.ui.View):
         emb.add_field(name="Odds to pull", value=engine.pull_label(c, self.pull_rates))
         emb.add_field(name="Price (EV)", value=f"{round(c['book_value'])} 🪙")
         if c.get("serial"):
-            emb.add_field(name="Serial", value=f"#{c['serial']}/{c['total_copies']}")
+            emb.add_field(name="Serial", value=f"#{c['serial']}")
         if c.get("headshot_url"):
             emb.set_thumbnail(url=c["headshot_url"])
         emb.set_footer(text=f"{self.title} · card {i + 1}/{len(self.cards)} · opened by {self.opener.display_name}")
@@ -568,8 +568,7 @@ class CardsCog(commands.Cog):
         lines = []
         claimable = 0
         for s in sets:
-            pct = round(100 * s["packs_opened"] / s["total_packs"]) if s["total_packs"] else 0
-            status = "SOLD OUT" if s["closed"] else f"{s['pack_cost']}🪙/pack · {pct}% opened"
+            status = f"{s['pack_cost']}🪙/pack · {s['packs_opened']:,} opened"  # unlimited — never sells out
             comp = await queries.get_set_completion(uid, s["set_id"])
             cpct = round(100 * comp["owned"] / comp["total"]) if comp["total"] else 0
             mark = ""
@@ -732,7 +731,7 @@ class CardsCog(commands.Cog):
             description=(
                 f"{SPORT_EMOJI.get(design['sport'],'')} {design['sport'].upper()} {design['season']} · "
                 f"{design['rarity'].title()}{' · 🌟 Rookie' if design['is_rookie'] else ''}\n"
-                f"{design['minted']}/{design['total_copies']} minted · book {round(design['book_value'])}🪙"
+                f"{design['minted']} minted · book {round(design['book_value'])}🪙"
             ),
             color=RARITY_COLOR.get(design["rarity"], 0x7AA2F7),
         )
