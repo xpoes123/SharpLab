@@ -70,9 +70,8 @@ function cardTile(c, opts) {
   const holo = c.is_holo ? " holo" : "";
   const sport = (c.sport || "").toLowerCase();
   const emoji = SPORT_EMOJI[sport] || "🃏";
-  const oneOfOne = Number(c.total_copies) === 1;
   const serial = c.serial != null
-    ? `<span class="serial${oneOfOne ? " oneofone" : ""}">#${c.serial}/${c.total_copies}</span>`
+    ? `<span class="serial">#${c.serial}</span>`
     : "";
   const gem = c.gem
     ? `<span class="gem-badge">${GEM_EMOJI[String(c.gem).toLowerCase()] || "💠"} ${esc(c.gem)}</span>`
@@ -119,8 +118,7 @@ function tileActions(c, opts) {
 // Quick-sell button for an owned card (75% of book). Grails get a confirm.
 function sellButton(c) {
   const price = Math.round((c.book_value || 0) * SELL_FRACTION);
-  const grail = ["epic", "legendary"].includes((c.rarity || "").toLowerCase())
-    || Number(c.total_copies) === 1;
+  const grail = ["epic", "legendary"].includes((c.rarity || "").toLowerCase());
   return `<button class="sellbtn" data-iid="${c.instance_id}" data-price="${price}"
     data-name="${esc(c.name)}" data-grail="${grail ? "1" : "0"}">Sell ${coins(price)}</button>`;
 }
@@ -392,7 +390,7 @@ function renderCatalog(setId) {
       <td class="muted">${esc(x.team || "")}</td>
       <td><span class="rarity-label" style="--r:var(--r-${rarity})">${esc(rarity)}</span></td>
       <td class="num">${rate != null ? fmtPct(rate) : "—"}</td>
-      <td class="num catrow-mint">${num(x.minted)} / ${num(x.total_copies)}</td>
+      <td class="num catrow-mint">${num(x.minted)}</td>
     </tr>`;
   }).join("");
 

@@ -100,15 +100,14 @@ def test_box_no_epic_available_does_not_crash(tmp_db):
     _run(go())
 
 
-def test_box_refuses_when_fewer_than_36_packs_left(tmp_db):
+def test_box_opens_on_a_tiny_set_unlimited(tmp_db):
+    # Unlimited supply: even a tiny set (well under 36 packs of "stock") opens a full box.
     async def go():
-        designs = _common_only_designs(50, 2)  # 100 cards = 20 packs of pool
+        designs = _common_only_designs(3, 1)  # only 3 cards of "stock"
         set_id = await _seed_set(base_cost=10, total_packs=20, designs=designs)
         await _fund("u3", 1_000_000)
-        with pytest.raises(ValueError):
-            await _queries.mint_box("u3", set_id, "2026-01-01T00:00:00Z")
-        # charge rolled back
-        assert await _queries.get_casino_balance("u3") == 1_000_000
+        res = await _queries.mint_box("u3", set_id, "2026-01-01T00:00:00Z")
+        assert len(res["cards"]) >= 180  # a full box, drawn with replacement
     _run(go())
 
 
