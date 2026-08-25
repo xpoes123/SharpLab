@@ -4988,6 +4988,7 @@ ACTIVITY_REWARDS = {
     "mastermind_win": (30, 200),  # web arcade: cracked the Mastermind code
     "mathsprint_win": (2, 200),   # web arcade: per correct Math Sprint answer
     "zetamac_win": (2, 300),      # web arcade: per correct answer in a Zetamac 120s sprint
+    "math24_win": (10, 300),      # web arcade: per solved Make-24 puzzle
     "countdown_win": (30, 150),   # web arcade: solved a Countdown numbers round
     "stockguess_win": (20, 200),  # web arcade: guessed a stock YTD move within tolerance
     "quizbowl_win": (20, 200),    # web arcade: correct quiz bowl answer
@@ -5833,6 +5834,7 @@ SKILL_HIGHER_IS_BETTER: set[str] = {
     "zetamac", "mathsprint", "sequence",       # arithmetic / number sprints
     "geo", "nbaguess", "valorant", "whosthat",  # 120s ID-as-many-as-you-can guessers
     "countdown",                                 # 120s: solve as many number targets as you can
+    "math24",                                    # 120s: solve as many make-24 puzzles as you can
 }
 
 
