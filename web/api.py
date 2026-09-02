@@ -31,6 +31,7 @@ from web.battleship import router as battleship_router, battleship_websocket, cl
 from web.reversi import router as reversi_router, reversi_websocket, cleanup_stale_reversi_rooms
 from web.liarsdice import router as liarsdice_router, liarsdice_websocket, cleanup_stale_liarsdice_rooms
 from web.penalties import router as penalties_router, penalties_websocket, cleanup_stale_penalties_rooms
+from web.pd import router as pd_router, pd_websocket, cleanup_stale_pd_rooms
 from web.hq import router as hq_router, quote_refresh_loop
 from web.cards import router as cards_router
 from web.casino import router as casino_router
@@ -135,6 +136,7 @@ async def lifespan(app: FastAPI):
     rev_cleanup_task = asyncio.create_task(cleanup_stale_reversi_rooms())
     ld_cleanup_task = asyncio.create_task(cleanup_stale_liarsdice_rooms())
     pen_cleanup_task = asyncio.create_task(cleanup_stale_penalties_rooms())
+    pd_cleanup_task = asyncio.create_task(cleanup_stale_pd_rooms())
     quote_task = asyncio.create_task(quote_refresh_loop())   # keep HQ stock prices warm
     yield
     # Snapshot open hands so a deploy/restart resumes them instead of dropping the player mid-game.
@@ -158,6 +160,7 @@ async def lifespan(app: FastAPI):
     rev_cleanup_task.cancel()
     ld_cleanup_task.cancel()
     pen_cleanup_task.cancel()
+    pd_cleanup_task.cancel()
 
 
 app = FastAPI(title="SharpLab", docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -215,6 +218,7 @@ app.include_router(battleship_router)
 app.include_router(reversi_router)
 app.include_router(liarsdice_router)
 app.include_router(penalties_router)
+app.include_router(pd_router)
 
 
 # WebSocket endpoint (not on the API router — different path pattern)
@@ -294,6 +298,11 @@ async def ws_liarsdice(websocket: WebSocket, room_id: str):
 async def ws_penalties(websocket: WebSocket, room_id: str):
     await penalties_websocket(websocket, room_id)
 
+
+@app.websocket("/ws/pd/{room_id}")
+async def ws_pd(websocket: WebSocket, room_id: str):
+    await pd_websocket(websocket, room_id)
+
 # ── Static data (replicated from bot cogs to avoid importing bot deps) ───────
 
 GAME_LABELS: dict[str, str] = {
@@ -339,6 +348,7 @@ GAME_LABELS: dict[str, str] = {
     "minesweeper": "Minesweeper Race",
     "blotto": "Colonel Blotto",
     "beauty": "Beauty Contest",
+    "pd": "Prisoner's Dilemma",
 }
 
 ALL_ACHIEVEMENTS = [
