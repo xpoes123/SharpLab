@@ -309,7 +309,7 @@
 
   function renderLobby(s, isHost) {
     $("lobbyCode").textContent = s.code || "····";
-    $("lobbyUrl").textContent = `${location.origin}/beauty — code ${s.code}`;
+    $("lobbyUrl").textContent = `${location.origin}/beauty.html — code ${s.code}`;
     $("lobbyPlayers").innerHTML = (s.players || [])
       .map((p) => playerLi(p, s.you, `<span class="score">${p.score}</span> pts`)).join("");
     const connected = (s.players || []).filter((p) => p.connected).length;
@@ -365,7 +365,7 @@
 
   function copyCode() {
     if (!game.code) return;
-    const link = `${location.origin}/beauty`;
+    const link = `${location.origin}/beauty.html`;
     const text = `Join my Beauty Contest — ${link} (code ${game.code})`;
     if (navigator.clipboard && navigator.clipboard.writeText)
       navigator.clipboard.writeText(text).then(() => toast("📋 Invite copied"), () => toast("Code: " + game.code));
