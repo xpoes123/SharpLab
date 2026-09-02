@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SharpLab HQ — Prisoner's Dilemma</title>
+<link rel="stylesheet" href="/hqstyle.css" />
+<style>
+  .pd-head { text-align: center; margin: 8px 0 22px; }
+  .pd-head h1 { font-size: 26px; margin: 0 0 6px; }
+  .pd-head p { color: var(--muted); margin: 0; font-size: 14px; }
+  .pd-wrap { max-width: 640px; margin: 0 auto; padding: 0 16px 60px; }
+  .phase { display: none; }
+  .phase.active { display: block; }
+
+  .pd-field { margin-bottom: 14px; }
+  .pd-field label { display: block; font-size: 12px; text-transform: uppercase;
+    letter-spacing: .06em; color: var(--muted); margin-bottom: 6px; }
+  .pd-input { width: 100%; box-sizing: border-box; background: var(--panel2);
+    border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px;
+    color: var(--fg); font-size: 16px; font-family: inherit; outline: none;
+    transition: border-color var(--t); }
+  .pd-input:focus { border-color: var(--accent); }
+  .pd-input.code { text-transform: uppercase; letter-spacing: .3em; font-weight: 700;
+    font-family: var(--font-mono); }
+  .pd-joinrow { display: flex; gap: 10px; }
+  .pd-joinrow .pd-input { flex: 1; }
+  .pd-sep { text-align: center; color: var(--muted); font-size: 12px; margin: 18px 0; }
+  .pd-actions { margin: 14px 0; }
+
+  .btn.big { width: 100%; padding: 13px; font-size: 15px; font-weight: 800; }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border: 0;
+    border-radius: var(--r); cursor: pointer; font-family: inherit; transition: filter .12s; }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .btn.primary:disabled { opacity: .35; cursor: not-allowed; filter: none; }
+  .btn { background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+    border-radius: var(--r); padding: 12px 16px; cursor: pointer; font-family: inherit;
+    font-weight: 700; font-size: 14px; transition: border-color var(--t); }
+  .btn:hover { border-color: var(--accent); }
+
+  .pd-codebox { text-align: center; background: var(--panel2); border: 1px solid var(--line);
+    border-radius: var(--r-lg); padding: 16px; margin-bottom: 16px; }
+  .pd-codelabel { font-size: 11px; text-transform: uppercase; letter-spacing: .1em;
+    color: var(--muted); }
+  .pd-code { font-size: 40px; font-weight: 800; letter-spacing: .18em; font-family: var(--font-mono);
+    color: var(--accent); cursor: pointer; margin: 4px 0; }
+  .pd-copyhint { font-size: 12px; color: var(--muted); }
+
+  .pd-status { text-align: center; color: var(--muted); font-size: 14px; margin: 10px 0; }
+  .disconn { text-align: center; color: var(--warn, #e0af68); font-size: 13px; margin: 10px 0; }
+
+  /* Scoreboard */
+  .scorebar { display: flex; gap: 12px; margin: 4px 0 18px; }
+  .scorecard { flex: 1; text-align: center; background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--r-lg); padding: 14px 10px; }
+  .scorecard.you { border-color: var(--accent); }
+  .scorecard .sc-name { font-size: 13px; color: var(--muted); font-weight: 700;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .scorecard .sc-pts { font-size: 34px; font-weight: 800; font-family: var(--font-mono);
+    color: var(--accent2); margin-top: 2px; }
+  .scorecard.you .sc-pts { color: var(--accent); }
+  .scorecard .sc-off { font-size: 11px; color: var(--warn, #e0af68); }
+
+  .pd-round-label { font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--muted); margin: 22px 0 10px; text-align: center; }
+
+  /* Choice buttons */
+  .choices { display: flex; gap: 12px; margin: 10px 0 6px; }
+  .choice-btn { flex: 1; padding: 26px 12px; border-radius: var(--r-lg); border: 1px solid var(--line);
+    background: var(--panel2); color: var(--fg); cursor: pointer; font-family: inherit;
+    transition: border-color var(--t), transform .08s, filter .12s; text-align: center; }
+  .choice-btn:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .choice-btn .cb-emoji { font-size: 34px; }
+  .choice-btn .cb-name { font-size: 17px; font-weight: 800; margin-top: 6px; }
+  .choice-btn .cb-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .choice-btn.coop.sel { border-color: #3fb950; background: color-mix(in srgb, #3fb950 16%, var(--panel)); }
+  .choice-btn.defect.sel { border-color: #f7768e; background: color-mix(in srgb, #f7768e 16%, var(--panel)); }
+  .choice-btn:disabled { cursor: not-allowed; opacity: .55; transform: none; }
+
+  .waitbox { text-align: center; background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--r-lg); padding: 20px; margin: 12px 0; }
+  .waitbox .big { font-size: 18px; font-weight: 800; }
+  .waitbox .sub { color: var(--muted); font-size: 13px; margin-top: 4px; }
+
+  /* Reveal */
+  .reveal-row { display: flex; gap: 12px; margin: 10px 0; }
+  .reveal-card { flex: 1; text-align: center; border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 18px 10px; background: var(--panel); }
+  .reveal-card.you { border-color: var(--accent); }
+  .reveal-card .rc-name { font-size: 12px; color: var(--muted); font-weight: 700; }
+  .reveal-card .rc-move { font-size: 22px; font-weight: 800; margin: 6px 0 2px; }
+  .reveal-card .rc-move.C { color: #3fb950; }
+  .reveal-card .rc-move.D { color: #f7768e; }
+  .reveal-card .rc-pts { font-size: 30px; font-weight: 800; font-family: var(--font-mono); color: var(--accent2); }
+  .reveal-card .rc-plus { font-size: 12px; color: var(--muted); }
+  .reveal-verdict { text-align: center; font-size: 14px; color: var(--muted); margin: 8px 0 4px; }
+
+  /* History strip */
+  .histbox { background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r);
+    padding: 12px 14px; margin: 16px 0; font-family: var(--font-mono); font-size: 14px; }
+  .histbox .hrow { margin: 3px 0; white-space: nowrap; overflow-x: auto; }
+  .histbox .hlabel { color: var(--muted); display: inline-block; width: 52px; }
+  .histbox .mv.C { color: #3fb950; font-weight: 700; }
+  .histbox .mv.D { color: #f7768e; font-weight: 700; }
+  .histbox .empty { color: var(--muted); }
+
+  .result-hero { text-align: center; background: linear-gradient(100deg,
+    color-mix(in srgb, var(--accent) 16%, var(--panel)), var(--panel));
+    border: 1px solid var(--accent); border-radius: var(--r-lg); padding: 24px; margin-bottom: 16px; }
+  .result-hero .rh-label { font-size: 11px; text-transform: uppercase; letter-spacing: .1em;
+    color: var(--accent2); font-weight: 700; }
+  .result-hero .rh-outcome { font-size: 34px; font-weight: 800; margin: 6px 0; }
+  .result-hero .rh-sub { color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><a href="/">Sharp<span>Lab</span> HQ</a></div>
+  <nav class="nav"><a href="/">Server</a><a href="/stocks">Stocks</a><a href="/lines">Lines</a><a href="/pickem">Pick'em</a><a href="/cards">Cards</a><a href="/games">Games</a></nav>
+</header>
+<main>
+  <div class="pd-head">
+    <h1>🤝 Iterated Prisoner's Dilemma</h1>
+    <p>Cooperate or defect each round. Read your rival — highest cumulative score wins.</p>
+  </div>
+  <div class="pd-wrap">
+
+    <!-- ── Entry ─────────────────────────────────────── -->
+    <div id="phase-entry" class="phase active">
+      <div class="card">
+        <div class="pd-field">
+          <label for="pdName">Display name</label>
+          <input class="pd-input" id="pdName" type="text" maxlength="32" autocomplete="off"
+                 spellcheck="false" placeholder="Your name" />
+        </div>
+        <div class="pd-actions">
+          <button class="btn primary big" id="pdCreate">Create room</button>
+        </div>
+        <div class="pd-sep">— or join a room —</div>
+        <div class="pd-field">
+          <label for="pdCode">Room code</label>
+          <div class="pd-joinrow">
+            <input class="pd-input code" id="pdCode" type="text" maxlength="4" autocomplete="off"
+                   spellcheck="false" placeholder="ABCD" />
+            <button class="btn" id="pdJoin">Join</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Lobby / waiting ───────────────────────────── -->
+    <div id="phase-lobby" class="phase">
+      <div class="pd-codebox">
+        <div class="pd-codelabel">Room code — share it</div>
+        <div class="pd-code" id="lobbyCode" title="Click to copy">····</div>
+        <div class="pd-copyhint" id="lobbyUrl">Send a friend the code or this link.</div>
+      </div>
+      <p class="pd-status" id="lobbyStatus">Waiting for an opponent to join…</p>
+    </div>
+
+    <!-- ── Round: choose ─────────────────────────────── -->
+    <div id="phase-round" class="phase">
+      <div class="scorebar" id="roundScores"></div>
+      <div class="pd-round-label" id="roundLabel">Round 1</div>
+      <div class="choices">
+        <button class="choice-btn coop" id="btnCoop">
+          <div class="cb-emoji">🤝</div>
+          <div class="cb-name">Cooperate</div>
+          <div class="cb-sub">stay silent</div>
+        </button>
+        <button class="choice-btn defect" id="btnDefect">
+          <div class="cb-emoji">🔪</div>
+          <div class="cb-name">Defect</div>
+          <div class="cb-sub">betray</div>
+        </button>
+      </div>
+      <p class="pd-status" id="roundMsg"></p>
+      <div id="roundHist"></div>
+    </div>
+
+    <!-- ── Reveal / results ──────────────────────────── -->
+    <div id="phase-reveal" class="phase">
+      <div class="pd-round-label" id="revealLabel">Round 1 · result</div>
+      <div class="reveal-row" id="revealRow"></div>
+      <div class="reveal-verdict" id="revealVerdict"></div>
+      <div class="scorebar" id="revealScores"></div>
+      <div id="revealHist"></div>
+      <button class="btn primary big" id="btnNext">Next round →</button>
+      <button class="btn big" id="btnEnd" style="display:none;margin-top:8px">End match (host)</button>
+    </div>
+
+    <!-- ── Match over ────────────────────────────────── -->
+    <div id="phase-over" class="phase">
+      <div class="result-hero">
+        <div class="rh-label">Match over</div>
+        <div class="rh-outcome" id="overOutcome">—</div>
+        <div class="rh-sub" id="overSub"></div>
+      </div>
+      <div class="scorebar" id="overScores"></div>
+      <div id="overHist"></div>
+      <button class="btn primary big" id="btnReset" style="display:none">Play again (host)</button>
+      <p class="pd-status" id="overStatus"></p>
+    </div>
+
+  </div>
+</main>
+
+<div id="toast" style="position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:var(--panel2);
+  border:1px solid var(--line);border-radius:10px;padding:12px 18px;font-size:14px;display:none;z-index:50;
+  box-shadow:var(--shadow-sm)"></div>
+
+<script src="/track.js"></script>
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  const game = { ws: null, roomId: null, code: null, name: "", you: null };
+
+  function toast(msg) {
+    const t = $("toast");
+    t.textContent = msg;
+    t.style.display = "block";
+    clearTimeout(t._h);
+    t._h = setTimeout(() => (t.style.display = "none"), 3000);
+  }
+
+  function showPhase(id) {
+    ["phase-entry", "phase-lobby", "phase-round", "phase-reveal", "phase-over"].forEach((p) =>
+      $(p).classList.toggle("active", p === id));
+  }
+
+  async function postJSON(url, body) {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) j._status = r.status;
+    return j;
+  }
+
+  function readName() {
+    const el = $("pdName");
+    const name = ((el && el.value) || "").trim();
+    if (!name) { el.focus(); toast("Enter a display name first."); return null; }
+    return name.slice(0, 32);
+  }
+
+  async function createRoom() {
+    const name = readName();
+    if (!name) return;
+    const res = await postJSON("/api/v1/pd/rooms", { name });
+    if (res._status || !res.room_id) return toast("❌ Couldn't create a room.");
+    game.name = name; game.code = res.code;
+    connect(res.room_id);
+  }
+
+  async function joinRoom() {
+    const name = readName();
+    if (!name) return;
+    const code = (($("pdCode").value) || "").trim().toUpperCase();
+    if (code.length !== 4) return toast("Enter the 4-letter room code.");
+    const res = await postJSON(`/api/v1/pd/rooms/${code}/join`, { name });
+    if (res._status === 404) return toast("❌ No room with that code.");
+    if (res._status === 409) return toast("❌ That room is full.");
+    if (res._status || !res.room_id) return toast("❌ Couldn't join the room.");
+    game.name = name; game.code = code;
+    connect(res.room_id);
+  }
+
+  function connect(roomId) {
+    game.roomId = roomId;
+    try {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      const ws = new WebSocket(`${proto}://${location.host}/ws/pd/${roomId}`);
+      game.ws = ws;
+      ws.onopen = () => ws.send(JSON.stringify({ type: "identify", name: game.name }));
+      ws.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data); } catch { return; } handleMessage(m); };
+      ws.onerror = () => toast("⚠️ Connection error.");
+      ws.onclose = () => { if (game.ws === ws) { game.ws = null; scheduleReconnect(); } };
+    } catch { toast("⚠️ Could not open a connection."); }
+  }
+
+  function scheduleReconnect() {
+    if (!game.roomId) return;
+    setTimeout(() => { if (!game.ws && game.roomId) connect(game.roomId); }, 2000);
+  }
+
+  function send(msg) {
+    if (game.ws && game.ws.readyState === WebSocket.OPEN) game.ws.send(JSON.stringify(msg));
+  }
+  setInterval(() => send({ type: "ping" }), 30000);
+
+  function handleMessage(msg) {
+    if (!msg || typeof msg !== "object") return;
+    if (msg.type === "pong") return;
+    if (msg.type === "error") return toast("⚠️ " + (msg.message || "error"));
+    if (msg.type === "state") render(msg);
+  }
+
+  const moveName = (m) => (m === "C" ? "Cooperate" : m === "D" ? "Defect" : "—");
+
+  function nameFor(s, slot) {
+    const p = (s.players || []).find((x) => x.slot === slot);
+    return p ? p.name : (slot === s.you ? "You" : "Opponent");
+  }
+  function myName(s) { return nameFor(s, s.you); }
+  function oppSlot(s) { return s.you === "A" ? "B" : "A"; }
+  function oppName(s) {
+    const opp = (s.players || []).find((x) => x.slot !== s.you);
+    return opp ? opp.name : "Opponent";
+  }
+  function oppConnected(s) {
+    const opp = (s.players || []).find((x) => x.slot !== s.you);
+    return !!(opp && opp.connected);
+  }
+
+  function scoreBarHTML(s) {
+    const oppHere = (s.players || []).some((x) => x.slot !== s.you);
+    return `
+      <div class="scorecard you">
+        <div class="sc-name">${esc(myName(s))} (you)</div>
+        <div class="sc-pts">${s.scores.me}</div>
+      </div>
+      <div class="scorecard">
+        <div class="sc-name">${oppHere ? esc(oppName(s)) : "Opponent"}</div>
+        <div class="sc-pts">${s.scores.opp}</div>
+        ${oppHere && !oppConnected(s) ? '<div class="sc-off">offline</div>' : ""}
+      </div>`;
+  }
+
+  function histHTML(s) {
+    const me = s.history && s.history.me ? s.history.me : [];
+    const opp = s.history && s.history.opp ? s.history.opp : [];
+    const strip = (arr) => arr.length
+      ? arr.map((m) => `<span class="mv ${m}">${m}</span>`).join(" ")
+      : '<span class="empty">—</span>';
+    return `<div class="histbox">
+      <div class="hrow"><span class="hlabel">You:</span> ${strip(me)}</div>
+      <div class="hrow"><span class="hlabel">Them:</span> ${strip(opp)}</div>
+    </div>`;
+  }
+
+  function render(s) {
+    game.code = s.code || game.code;
+    game.you = s.you;
+
+    if (s.match_over) { showPhase("phase-over"); renderOver(s); return; }
+
+    const twoConnected = (s.players || []).filter((p) => p.connected).length >= 2
+      && (s.players || []).length >= 2;
+    if (!twoConnected) { showPhase("phase-lobby"); renderLobby(s); return; }
+
+    if (s.revealed) { showPhase("phase-reveal"); renderReveal(s); }
+    else { showPhase("phase-round"); renderRound(s); }
+  }
+
+  function renderLobby(s) {
+    $("lobbyCode").textContent = s.code || "····";
+    $("lobbyUrl").textContent = `${location.origin}/pd.html — code ${s.code}`;
+    const twoPlayers = (s.players || []).length >= 2;
+    $("lobbyStatus").textContent = twoPlayers
+      ? "Opponent disconnected — waiting for them to reconnect…"
+      : "Waiting for an opponent to join…";
+  }
+
+  function renderRound(s) {
+    $("roundScores").innerHTML = scoreBarHTML(s);
+    $("roundLabel").textContent = `Round ${s.round}`;
+    const chosen = s.you_submitted;
+    $("btnCoop").disabled = chosen;
+    $("btnDefect").disabled = chosen;
+    $("btnCoop").classList.toggle("sel", s.your_choice === "C");
+    $("btnDefect").classList.toggle("sel", s.your_choice === "D");
+    if (chosen) {
+      $("roundMsg").innerHTML = s.opp_submitted
+        ? "Both locked in — revealing…"
+        : `Locked in <b>${moveName(s.your_choice)}</b>. Waiting for ${esc(oppName(s))}'s choice…`;
+    } else {
+      $("roundMsg").textContent = s.opp_submitted
+        ? `${oppName(s)} has chosen. Make your move.`
+        : "Both choose secretly — hidden until you both submit.";
+    }
+    $("roundHist").innerHTML = histHTML(s);
+  }
+
+  function renderReveal(s) {
+    $("revealLabel").textContent = `Round ${s.round} · result`;
+    const mine = s.your_choice, theirs = s.opp_choice;
+    const pay = s.last_payoff || { me: 0, opp: 0 };
+    $("revealRow").innerHTML = `
+      <div class="reveal-card you">
+        <div class="rc-name">${esc(myName(s))} (you)</div>
+        <div class="rc-move ${mine}">${moveName(mine)}</div>
+        <div class="rc-pts">+${pay.me}</div>
+        <div class="rc-plus">this round</div>
+      </div>
+      <div class="reveal-card">
+        <div class="rc-name">${esc(oppName(s))}</div>
+        <div class="rc-move ${theirs}">${moveName(theirs)}</div>
+        <div class="rc-pts">+${pay.opp}</div>
+        <div class="rc-plus">this round</div>
+      </div>`;
+    let verdict;
+    if (mine === "C" && theirs === "C") verdict = "Mutual cooperation — you both did well.";
+    else if (mine === "D" && theirs === "D") verdict = "Mutual defection — you both lose out.";
+    else if (mine === "D" && theirs === "C") verdict = `You betrayed ${esc(oppName(s))} for the max payoff.`;
+    else verdict = `${esc(oppName(s))} betrayed you.`;
+    $("revealVerdict").textContent = verdict;
+    $("revealScores").innerHTML = scoreBarHTML(s);
+    $("revealHist").innerHTML = histHTML(s);
+    $("btnEnd").style.display = s.is_host ? "block" : "none";
+  }
+
+  function renderOver(s) {
+    let outcome, sub;
+    if (s.winner === "you") { outcome = "🏆 You win!"; }
+    else if (s.winner === "opp") { outcome = "You lose"; }
+    else { outcome = "🤝 Dead heat"; }
+    sub = `Final — you ${s.scores.me} · ${esc(oppName(s))} ${s.scores.opp}`;
+    $("overOutcome").textContent = outcome;
+    $("overSub").textContent = sub;
+    $("overScores").innerHTML = scoreBarHTML(s);
+    $("overHist").innerHTML = histHTML(s);
+    $("btnReset").style.display = s.is_host ? "block" : "none";
+    $("overStatus").textContent = s.is_host ? "" : "Waiting for the host to start a new match…";
+  }
+
+  function copyCode() {
+    if (!game.code) return;
+    const link = `${location.origin}/pd.html`;
+    const text = `Join my Prisoner's Dilemma — ${link} (code ${game.code})`;
+    if (navigator.clipboard && navigator.clipboard.writeText)
+      navigator.clipboard.writeText(text).then(() => toast("📋 Invite copied"), () => toast("Code: " + game.code));
+    else toast("Code: " + game.code);
+  }
+
+  // ── Wire up ──
+  $("pdCreate").addEventListener("click", createRoom);
+  $("pdJoin").addEventListener("click", joinRoom);
+  $("pdCode").addEventListener("input", (e) => {
+    e.target.value = e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4);
+  });
+  $("pdCode").addEventListener("keydown", (e) => { if (e.key === "Enter") joinRoom(); });
+  $("pdName").addEventListener("keydown", (e) => { if (e.key === "Enter") createRoom(); });
+  $("lobbyCode").addEventListener("click", copyCode);
+  $("btnCoop").addEventListener("click", () => send({ type: "submit", choice: "C" }));
+  $("btnDefect").addEventListener("click", () => send({ type: "submit", choice: "D" }));
+  $("btnNext").addEventListener("click", () => send({ type: "next" }));
+  $("btnEnd").addEventListener("click", () => send({ type: "end_match" }));
+  $("btnReset").addEventListener("click", () => send({ type: "reset" }));
+})();
+</script>
+</body>
+</html>
