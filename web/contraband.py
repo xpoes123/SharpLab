@@ -61,6 +61,13 @@ def smuggler_slot(rnd: int) -> str:
     return "A" if rnd % 2 == 1 else "B"
 
 
+def completed_rounds(room: "ContrabandRoom") -> int:
+    """Rounds fully resolved so far. Since the smuggler role alternates each round,
+    both players have smuggled the same number of times iff this is even — the only
+    fair point to end a match (only the smuggler can score)."""
+    return room.round if room.revealed else room.round - 1
+
+
 # ── In-memory state ──────────────────────────────────────────────────────────
 
 
@@ -339,6 +346,14 @@ async def _handle_end_match(room: ContrabandRoom, player: WebPlayer) -> None:
     if player.slot != "A":
         await _send_error(player, "Only the host can end the match.")
         return
+    done = completed_rounds(room)
+    if done < 2 or done % 2 != 0:
+        await _send_error(
+            player,
+            f"End on an even round so both of you have smuggled the same number of "
+            f"times — you're at {done} completed. Finish the current pair first.",
+        )
+        return
     room.match_over = True
     room.last_activity = time.time()
     await _broadcast_state(room)
@@ -414,6 +429,7 @@ def _state_msg(room: ContrabandRoom, me: WebPlayer) -> dict:
         "sealed": room.sealed,
         "revealed": room.revealed,
         "match_over": room.match_over,
+        "can_end": completed_rounds(room) >= 2 and completed_rounds(room) % 2 == 0,
         "you": me.slot,
         "is_host": me.slot == "A",
         "your_role": my_role,               # "smuggler" | "inspector" this round
