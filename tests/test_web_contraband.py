@@ -145,3 +145,43 @@ def test_sealed_amount_hidden_from_inspector():
         assert seen["revealed"] is False, seen
         assert seen["your_sealed_amount"] is None, seen  # inspector: hidden
         assert seen["your_role"] == "inspector", seen
+
+
+def test_end_match_only_on_balanced_even_round():
+    """Only the smuggler scores and the role alternates, so a match may end only
+    when both players have smuggled equally — i.e. an even number of completed
+    rounds. Ending on an odd count would hand the first smuggler a free turn."""
+    import asyncio
+
+    from web.contraband import (
+        ContrabandRoom,
+        WebPlayer,
+        completed_rounds,
+        _handle_end_match,
+    )
+
+    room = ContrabandRoom(room_id="r", code="TEST")
+    room.players = [WebPlayer(name="A", slot="A"), WebPlayer(name="B", slot="B")]
+    for p in room.players:
+        p.ws = None  # _send is a no-op on a missing socket
+
+    def ends_after(rnd, revealed):
+        room.round, room.revealed, room.match_over = rnd, revealed, False
+        asyncio.run(_handle_end_match(room, room.players[0]))  # host = slot A
+        return room.match_over
+
+    # odd (or zero) completed rounds → blocked (unbalanced)
+    assert ends_after(1, True) is False   # 1 completed
+    assert ends_after(2, False) is False  # 1 completed (round 2 not yet revealed)
+    assert ends_after(3, True) is False   # 3 completed
+    # even completed rounds → allowed (both smuggled equally)
+    assert ends_after(2, True) is True    # 2 completed
+    assert ends_after(4, True) is True    # 4 completed
+
+    room.round, room.revealed = 4, True
+    assert completed_rounds(room) == 4
+
+    # a non-host can never end
+    room.round, room.revealed, room.match_over = 2, True, False
+    asyncio.run(_handle_end_match(room, room.players[1]))
+    assert room.match_over is False

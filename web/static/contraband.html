@@ -263,6 +263,7 @@
       <div id="revealHist"></div>
       <button class="btn primary big" id="btnNext">Next round →</button>
       <button class="btn big" id="btnEnd" style="display:none;margin-top:8px">End match (host)</button>
+      <p id="endHint" style="display:none;margin-top:8px;font-size:13px;color:var(--muted)">Play one more round to end fairly — both players need an equal number of smuggler turns.</p>
     </div>
 
     <!-- ── Match over ────────────────────────────────── -->
@@ -540,7 +541,11 @@
     const nextSmug = (s.smuggler_slot === "A") ? "B" : "A";
     const nextName = nextSmug === s.you ? "You" : esc(oppName(s));
     $("btnNext").textContent = `Next round → (${nextName} smuggle)`;
-    $("btnEnd").style.display = s.is_host ? "block" : "none";
+    // Only the host can end, and only on a balanced (even) round so both have
+    // smuggled the same number of times — otherwise the win is unfair.
+    $("btnEnd").style.display = (s.is_host && s.can_end) ? "block" : "none";
+    const hint = $("endHint");
+    if (hint) hint.style.display = (s.is_host && !s.can_end) ? "block" : "none";
   }
   function inspectorName(s, lr) {
     // Inspector is whoever wasn't the smuggler that round.
