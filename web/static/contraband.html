@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SharpLab HQ — Contraband</title>
+<link rel="stylesheet" href="/hqstyle.css" />
+<style>
+  .cb-head { text-align: center; margin: 8px 0 22px; }
+  .cb-head h1 { font-size: 26px; margin: 0 0 6px; }
+  .cb-head p { color: var(--muted); margin: 0; font-size: 14px; }
+  .cb-wrap { max-width: 640px; margin: 0 auto; padding: 0 16px 60px; }
+  .phase { display: none; }
+  .phase.active { display: block; }
+
+  .cb-field { margin-bottom: 14px; }
+  .cb-field label { display: block; font-size: 12px; text-transform: uppercase;
+    letter-spacing: .06em; color: var(--muted); margin-bottom: 6px; }
+  .cb-input { width: 100%; box-sizing: border-box; background: var(--panel2);
+    border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px;
+    color: var(--fg); font-size: 16px; font-family: inherit; outline: none;
+    transition: border-color var(--t); }
+  .cb-input:focus { border-color: var(--accent); }
+  .cb-input.code { text-transform: uppercase; letter-spacing: .3em; font-weight: 700;
+    font-family: var(--font-mono); }
+  .cb-joinrow { display: flex; gap: 10px; }
+  .cb-joinrow .cb-input { flex: 1; }
+  .cb-sep { text-align: center; color: var(--muted); font-size: 12px; margin: 18px 0; }
+  .cb-actions { margin: 14px 0; }
+
+  .btn.big { width: 100%; padding: 13px; font-size: 15px; font-weight: 800; }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border: 0;
+    border-radius: var(--r); cursor: pointer; font-family: inherit; transition: filter .12s; }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .btn.primary:disabled { opacity: .35; cursor: not-allowed; filter: none; }
+  .btn { background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+    border-radius: var(--r); padding: 12px 16px; cursor: pointer; font-family: inherit;
+    font-weight: 700; font-size: 14px; transition: border-color var(--t); }
+  .btn:hover { border-color: var(--accent); }
+  .btn.danger { border-color: #f7768e; color: #f7768e; }
+  .btn.danger:hover { filter: brightness(1.1); }
+
+  .cb-codebox { text-align: center; background: var(--panel2); border: 1px solid var(--line);
+    border-radius: var(--r-lg); padding: 16px; margin-bottom: 16px; }
+  .cb-codelabel { font-size: 11px; text-transform: uppercase; letter-spacing: .1em;
+    color: var(--muted); }
+  .cb-code { font-size: 40px; font-weight: 800; letter-spacing: .18em; font-family: var(--font-mono);
+    color: var(--accent); cursor: pointer; margin: 4px 0; }
+  .cb-copyhint { font-size: 12px; color: var(--muted); }
+
+  .cb-status { text-align: center; color: var(--muted); font-size: 14px; margin: 10px 0; }
+
+  /* Rules card */
+  .rules { background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r);
+    padding: 12px 16px; margin: 16px 0; font-size: 13px; color: var(--muted); line-height: 1.6; }
+  .rules b { color: var(--fg); }
+
+  /* Scoreboard */
+  .scorebar { display: flex; gap: 12px; margin: 4px 0 18px; }
+  .scorecard { flex: 1; text-align: center; background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--r-lg); padding: 14px 10px; }
+  .scorecard.you { border-color: var(--accent); }
+  .scorecard .sc-name { font-size: 13px; color: var(--muted); font-weight: 700;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .scorecard .sc-pts { font-size: 34px; font-weight: 800; font-family: var(--font-mono);
+    color: var(--accent2); margin-top: 2px; }
+  .scorecard.you .sc-pts { color: var(--accent); }
+  .scorecard .sc-role { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+    margin-top: 4px; font-weight: 700; }
+  .scorecard .sc-role.smuggler { color: #e0af68; }
+  .scorecard .sc-role.inspector { color: #7dcfff; }
+  .scorecard .sc-off { font-size: 11px; color: var(--warn, #e0af68); }
+
+  .cb-round-label { font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--muted); margin: 22px 0 10px; text-align: center; }
+
+  .role-banner { text-align: center; border-radius: var(--r-lg); border: 1px solid var(--line);
+    padding: 16px; margin: 10px 0 16px; }
+  .role-banner.smuggler { border-color: #e0af68;
+    background: color-mix(in srgb, #e0af68 12%, var(--panel)); }
+  .role-banner.inspector { border-color: #7dcfff;
+    background: color-mix(in srgb, #7dcfff 12%, var(--panel)); }
+  .role-banner .rb-role { font-size: 22px; font-weight: 800; }
+  .role-banner.smuggler .rb-role { color: #e0af68; }
+  .role-banner.inspector .rb-role { color: #7dcfff; }
+  .role-banner .rb-sub { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+  /* Amount picker */
+  .amt-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin: 12px 0; }
+  .amt-btn { padding: 16px 0; border-radius: var(--r); border: 1px solid var(--line);
+    background: var(--panel2); color: var(--fg); cursor: pointer; font-family: var(--font-mono);
+    font-size: 20px; font-weight: 800; transition: border-color var(--t), transform .08s; }
+  .amt-btn:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .amt-btn.sel { border-color: #e0af68; background: color-mix(in srgb, #e0af68 18%, var(--panel)); }
+  .amt-btn.empty { grid-column: span 6; font-size: 15px; }
+  .amt-btn.empty.sel { border-color: #f7768e; background: color-mix(in srgb, #f7768e 16%, var(--panel)); }
+
+  /* Inspector call */
+  .call-row { display: flex; gap: 12px; margin: 12px 0 6px; }
+  .call-btn { flex: 1; padding: 22px 12px; border-radius: var(--r-lg); border: 1px solid var(--line);
+    background: var(--panel2); color: var(--fg); cursor: pointer; font-family: inherit;
+    transition: border-color var(--t), transform .08s; text-align: center; }
+  .call-btn:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .call-btn .cbb-emoji { font-size: 30px; }
+  .call-btn .cbb-name { font-size: 16px; font-weight: 800; margin-top: 6px; }
+  .call-btn .cbb-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .call-btn.pass:hover { border-color: #3fb950; }
+  .call-btn.doubt:hover { border-color: #f7768e; }
+
+  .guessbox { background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 16px; margin: 12px 0; }
+  .guessbox .gb-label { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); }
+  .guessbox .gb-val { font-size: 30px; font-weight: 800; font-family: var(--font-mono);
+    color: #f7768e; text-align: center; margin: 4px 0 8px; }
+  .guessbox input[type=range] { width: 100%; accent-color: #f7768e; }
+
+  .waitbox { text-align: center; background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--r-lg); padding: 24px; margin: 12px 0; }
+  .waitbox .big { font-size: 18px; font-weight: 800; }
+  .waitbox .sub { color: var(--muted); font-size: 13px; margin-top: 4px; }
+
+  /* Reveal */
+  .reveal-hero { text-align: center; border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 22px; margin: 10px 0 14px; background: var(--panel); }
+  .reveal-hero .rh-case { font-size: 40px; font-weight: 800; font-family: var(--font-mono); }
+  .reveal-hero .rh-case.empty { color: #f7768e; font-size: 26px; }
+  .reveal-hero .rh-case.loaded { color: #e0af68; }
+  .reveal-hero .rh-sub { color: var(--muted); font-size: 13px; margin-top: 6px; }
+  .reveal-verdict { text-align: center; font-size: 15px; margin: 8px 0; font-weight: 700; }
+  .reveal-bank { text-align: center; font-size: 14px; color: var(--muted); margin-bottom: 8px; }
+  .reveal-bank b { color: var(--accent2); font-size: 20px; font-family: var(--font-mono); }
+
+  /* History strip */
+  .histbox { background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r);
+    padding: 12px 14px; margin: 16px 0; font-family: var(--font-mono); font-size: 13px; }
+  .histbox .hh { color: var(--muted); font-family: inherit; font-size: 11px; text-transform: uppercase;
+    letter-spacing: .06em; margin-bottom: 6px; }
+  .histbox .hrow { margin: 3px 0; white-space: nowrap; overflow-x: auto; }
+  .histbox .empty { color: var(--muted); }
+
+  .result-hero { text-align: center; background: linear-gradient(100deg,
+    color-mix(in srgb, var(--accent) 16%, var(--panel)), var(--panel));
+    border: 1px solid var(--accent); border-radius: var(--r-lg); padding: 24px; margin-bottom: 16px; }
+  .result-hero .rh-label { font-size: 11px; text-transform: uppercase; letter-spacing: .1em;
+    color: var(--accent2); font-weight: 700; }
+  .result-hero .rh-outcome { font-size: 34px; font-weight: 800; margin: 6px 0; }
+  .result-hero .rh-sub { color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><a href="/">Sharp<span>Lab</span> HQ</a></div>
+  <nav class="nav"><a href="/">Server</a><a href="/stocks">Stocks</a><a href="/lines">Lines</a><a href="/pickem">Pick'em</a><a href="/cards">Cards</a><a href="/games">Games</a></nav>
+</header>
+<main>
+  <div class="cb-head">
+    <h1>📦 Contraband</h1>
+    <p>The Liar Game, 1v1. Smuggle a hidden load — or doubt your rival's case. Roles swap every round.</p>
+  </div>
+  <div class="cb-wrap">
+
+    <!-- ── Entry ─────────────────────────────────────── -->
+    <div id="phase-entry" class="phase active">
+      <div class="card">
+        <div class="cb-field">
+          <label for="cbName">Display name</label>
+          <input class="cb-input" id="cbName" type="text" maxlength="32" autocomplete="off"
+                 spellcheck="false" placeholder="Your name" />
+        </div>
+        <div class="cb-actions">
+          <button class="btn primary big" id="cbCreate">Create room</button>
+        </div>
+        <div class="cb-sep">— or join a room —</div>
+        <div class="cb-field">
+          <label for="cbCode">Room code</label>
+          <div class="cb-joinrow">
+            <input class="cb-input code" id="cbCode" type="text" maxlength="4" autocomplete="off"
+                   spellcheck="false" placeholder="ABCD" />
+            <button class="btn" id="cbJoin">Join</button>
+          </div>
+        </div>
+      </div>
+      <div class="rules">
+        <b>How it works.</b> Each round one player is the <b>Smuggler</b>, the other the
+        <b>Inspector</b> — roles swap every round. The smuggler secretly seals a case with
+        an amount <b>0–10</b> (0 = an empty decoy). The inspector, without seeing it, either
+        <b>Passes</b> or <b>Doubts</b> with a guess N.<br>
+        • Pass → smuggler banks the full amount.<br>
+        • Doubt an empty case → smuggler banks <b>N ÷ 2</b> (you baited the penalty).<br>
+        • Doubt a real load with <b>N ≥ amount</b> → caught, smuggler banks <b>0</b>.<br>
+        • Doubt a real load with <b>N &lt; amount</b> → it slips, smuggler banks the amount.<br>
+        Higher cumulative bank wins.
+      </div>
+    </div>
+
+    <!-- ── Lobby / waiting ───────────────────────────── -->
+    <div id="phase-lobby" class="phase">
+      <div class="cb-codebox">
+        <div class="cb-codelabel">Room code — share it</div>
+        <div class="cb-code" id="lobbyCode" title="Click to copy">····</div>
+        <div class="cb-copyhint" id="lobbyUrl">Send a friend the code or this link.</div>
+      </div>
+      <p class="cb-status" id="lobbyStatus">Waiting for an opponent to join…</p>
+    </div>
+
+    <!-- ── Round ─────────────────────────────────────── -->
+    <div id="phase-round" class="phase">
+      <div class="scorebar" id="roundScores"></div>
+      <div class="cb-round-label" id="roundLabel">Round 1</div>
+      <div class="role-banner" id="roleBanner">
+        <div class="rb-role" id="rbRole">—</div>
+        <div class="rb-sub" id="rbSub"></div>
+      </div>
+
+      <!-- Smuggler: seal a case -->
+      <div id="smugglerPanel" style="display:none">
+        <div class="amt-grid" id="amtGrid"></div>
+        <button class="btn primary big" id="btnSeal" disabled>🔒 Seal case</button>
+      </div>
+
+      <!-- Inspector: pass or doubt -->
+      <div id="inspectorPanel" style="display:none">
+        <div class="call-row">
+          <button class="call-btn pass" id="btnPass">
+            <div class="cbb-emoji">✅</div>
+            <div class="cbb-name">Pass</div>
+            <div class="cbb-sub">let it through</div>
+          </button>
+          <button class="call-btn doubt" id="btnDoubtToggle">
+            <div class="cbb-emoji">🔍</div>
+            <div class="cbb-name">Doubt</div>
+            <div class="cbb-sub">guess & confiscate</div>
+          </button>
+        </div>
+        <div class="guessbox" id="guessBox" style="display:none">
+          <div class="gb-label">Your guess N (1–10)</div>
+          <div class="gb-val" id="guessVal">5</div>
+          <input type="range" id="guessRange" min="1" max="10" value="5" />
+          <button class="btn danger big" id="btnDoubt" style="margin-top:12px">🔍 Doubt with N = <span id="doubtN">5</span></button>
+        </div>
+      </div>
+
+      <!-- Waiting (either role, when it's not your move) -->
+      <div class="waitbox" id="roundWait" style="display:none">
+        <div class="big" id="waitBig">Waiting…</div>
+        <div class="sub" id="waitSub"></div>
+      </div>
+
+      <div id="roundHist"></div>
+    </div>
+
+    <!-- ── Reveal ────────────────────────────────────── -->
+    <div id="phase-reveal" class="phase">
+      <div class="cb-round-label" id="revealLabel">Round 1 · result</div>
+      <div class="reveal-hero">
+        <div class="rh-case" id="revealCase">—</div>
+        <div class="rh-sub" id="revealCall"></div>
+      </div>
+      <div class="reveal-verdict" id="revealVerdict"></div>
+      <div class="reveal-bank" id="revealBank"></div>
+      <div class="scorebar" id="revealScores"></div>
+      <div id="revealHist"></div>
+      <button class="btn primary big" id="btnNext">Next round →</button>
+      <button class="btn big" id="btnEnd" style="display:none;margin-top:8px">End match (host)</button>
+    </div>
+
+    <!-- ── Match over ────────────────────────────────── -->
+    <div id="phase-over" class="phase">
+      <div class="result-hero">
+        <div class="rh-label">Match over</div>
+        <div class="rh-outcome" id="overOutcome">—</div>
+        <div class="rh-sub" id="overSub"></div>
+      </div>
+      <div class="scorebar" id="overScores"></div>
+      <div id="overHist"></div>
+      <button class="btn primary big" id="btnReset" style="display:none">Play again (host)</button>
+      <p class="cb-status" id="overStatus"></p>
+    </div>
+
+  </div>
+</main>
+
+<div id="toast" style="position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:var(--panel2);
+  border:1px solid var(--line);border-radius:10px;padding:12px 18px;font-size:14px;display:none;z-index:50;
+  box-shadow:var(--shadow-sm)"></div>
+
+<script src="/track.js"></script>
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const fmt = (n) => (Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100));
+
+  const game = { ws: null, roomId: null, code: null, name: "", you: null,
+                 pickAmount: null, doubtMode: false };
+
+  function toast(msg) {
+    const t = $("toast");
+    t.textContent = msg;
+    t.style.display = "block";
+    clearTimeout(t._h);
+    t._h = setTimeout(() => (t.style.display = "none"), 3000);
+  }
+
+  function showPhase(id) {
+    ["phase-entry", "phase-lobby", "phase-round", "phase-reveal", "phase-over"].forEach((p) =>
+      $(p).classList.toggle("active", p === id));
+  }
+
+  async function postJSON(url, body) {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) j._status = r.status;
+    return j;
+  }
+
+  function readName() {
+    const el = $("cbName");
+    const name = ((el && el.value) || "").trim();
+    if (!name) { el.focus(); toast("Enter a display name first."); return null; }
+    return name.slice(0, 32);
+  }
+
+  async function createRoom() {
+    const name = readName();
+    if (!name) return;
+    const res = await postJSON("/api/v1/contraband/rooms", { name });
+    if (res._status || !res.room_id) return toast("❌ Couldn't create a room.");
+    game.name = name; game.code = res.code;
+    connect(res.room_id);
+  }
+
+  async function joinRoom() {
+    const name = readName();
+    if (!name) return;
+    const code = (($("cbCode").value) || "").trim().toUpperCase();
+    if (code.length !== 4) return toast("Enter the 4-letter room code.");
+    const res = await postJSON(`/api/v1/contraband/rooms/${code}/join`, { name });
+    if (res._status === 404) return toast("❌ No room with that code.");
+    if (res._status === 409) return toast("❌ That room is full.");
+    if (res._status || !res.room_id) return toast("❌ Couldn't join the room.");
+    game.name = name; game.code = code;
+    connect(res.room_id);
+  }
+
+  function connect(roomId) {
+    game.roomId = roomId;
+    try {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      const ws = new WebSocket(`${proto}://${location.host}/ws/contraband/${roomId}`);
+      game.ws = ws;
+      ws.onopen = () => ws.send(JSON.stringify({ type: "identify", name: game.name }));
+      ws.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data); } catch { return; } handleMessage(m); };
+      ws.onerror = () => toast("⚠️ Connection error.");
+      ws.onclose = () => { if (game.ws === ws) { game.ws = null; scheduleReconnect(); } };
+    } catch { toast("⚠️ Could not open a connection."); }
+  }
+
+  function scheduleReconnect() {
+    if (!game.roomId) return;
+    setTimeout(() => { if (!game.ws && game.roomId) connect(game.roomId); }, 2000);
+  }
+
+  function send(msg) {
+    if (game.ws && game.ws.readyState === WebSocket.OPEN) game.ws.send(JSON.stringify(msg));
+  }
+  setInterval(() => send({ type: "ping" }), 30000);
+
+  function handleMessage(msg) {
+    if (!msg || typeof msg !== "object") return;
+    if (msg.type === "pong") return;
+    if (msg.type === "error") return toast("⚠️ " + (msg.message || "error"));
+    if (msg.type === "state") render(msg);
+  }
+
+  function nameFor(s, slot) {
+    const p = (s.players || []).find((x) => x.slot === slot);
+    return p ? p.name : (slot === s.you ? "You" : "Opponent");
+  }
+  function myName(s) { return nameFor(s, s.you); }
+  function oppName(s) {
+    const opp = (s.players || []).find((x) => x.slot !== s.you);
+    return opp ? opp.name : "Opponent";
+  }
+  function oppConnected(s) {
+    const opp = (s.players || []).find((x) => x.slot !== s.you);
+    return !!(opp && opp.connected);
+  }
+  const roleOf = (s, slot) => (slot === s.smuggler_slot ? "smuggler" : "inspector");
+
+  function scoreBarHTML(s) {
+    const oppHere = (s.players || []).some((x) => x.slot !== s.you);
+    const myRole = s.your_role;
+    const oppRole = myRole === "smuggler" ? "inspector" : "smuggler";
+    const roleTag = (r) => `<div class="sc-role ${r}">${r === "smuggler" ? "📦 Smuggler" : "🔍 Inspector"}</div>`;
+    return `
+      <div class="scorecard you">
+        <div class="sc-name">${esc(myName(s))} (you)</div>
+        <div class="sc-pts">${fmt(s.scores.me)}</div>
+        ${!s.match_over ? roleTag(myRole) : ""}
+      </div>
+      <div class="scorecard">
+        <div class="sc-name">${oppHere ? esc(oppName(s)) : "Opponent"}</div>
+        <div class="sc-pts">${fmt(s.scores.opp)}</div>
+        ${!s.match_over && oppHere ? roleTag(oppRole) : ""}
+        ${oppHere && !oppConnected(s) ? '<div class="sc-off">offline</div>' : ""}
+      </div>`;
+  }
+
+  function histHTML(s) {
+    const h = s.history || [];
+    if (!h.length) return "";
+    const rows = h.map((r) => {
+      const who = nameFor(s, r.smuggler_slot);
+      const caseTxt = r.x === 0 ? "empty" : String(r.x);
+      const call = r.doubted ? `doubt N=${r.guess}` : "pass";
+      return `<div class="hrow">R${r.round}: ${esc(who)} smuggled <b>${caseTxt}</b> · ${call} · banked <b>${fmt(r.banked)}</b></div>`;
+    }).join("");
+    return `<div class="histbox"><div class="hh">History</div>${rows}</div>`;
+  }
+
+  function render(s) {
+    game.code = s.code || game.code;
+    game.you = s.you;
+
+    if (s.match_over) { showPhase("phase-over"); renderOver(s); return; }
+
+    const twoConnected = (s.players || []).filter((p) => p.connected).length >= 2
+      && (s.players || []).length >= 2;
+    if (!twoConnected) { showPhase("phase-lobby"); renderLobby(s); return; }
+
+    if (s.revealed) { showPhase("phase-reveal"); renderReveal(s); }
+    else { showPhase("phase-round"); renderRound(s); }
+  }
+
+  function renderLobby(s) {
+    $("lobbyCode").textContent = s.code || "····";
+    $("lobbyUrl").textContent = `${location.origin}/contraband.html — code ${s.code}`;
+    const twoPlayers = (s.players || []).length >= 2;
+    $("lobbyStatus").textContent = twoPlayers
+      ? "Opponent disconnected — waiting for them to reconnect…"
+      : "Waiting for an opponent to join…";
+  }
+
+  function renderRound(s) {
+    $("roundScores").innerHTML = scoreBarHTML(s);
+    $("roundLabel").textContent = `Round ${s.round}`;
+
+    const role = s.your_role;
+    const banner = $("roleBanner");
+    banner.className = "role-banner " + role;
+    if (role === "smuggler") {
+      $("rbRole").textContent = "📦 You are the Smuggler";
+      $("rbSub").textContent = "Seal a hidden amount 0–10 (0 = empty decoy).";
+    } else {
+      $("rbRole").textContent = "🔍 You are the Inspector";
+      $("rbSub").textContent = "Pass the case, or Doubt with a guess N (1–10).";
+    }
+
+    const smug = $("smugglerPanel"), insp = $("inspectorPanel"), wait = $("roundWait");
+    smug.style.display = "none"; insp.style.display = "none"; wait.style.display = "none";
+
+    if (role === "smuggler") {
+      if (!s.sealed) {
+        smug.style.display = "block";
+        renderAmountGrid();
+      } else {
+        wait.style.display = "block";
+        $("waitBig").textContent = `🔒 Sealed: ${s.your_sealed_amount === 0 ? "empty decoy" : s.your_sealed_amount}`;
+        $("waitSub").textContent = `Waiting for ${esc(oppName(s))} to Pass or Doubt…`;
+      }
+    } else { // inspector
+      if (!s.sealed) {
+        wait.style.display = "block";
+        $("waitBig").textContent = "Waiting for the smuggler…";
+        $("waitSub").textContent = `${esc(oppName(s))} is sealing a case.`;
+      } else {
+        insp.style.display = "block";
+        // reset doubt sub-panel to hidden each time we enter
+        if (!game.doubtMode) $("guessBox").style.display = "none";
+      }
+    }
+
+    $("roundHist").innerHTML = histHTML(s);
+  }
+
+  function renderAmountGrid() {
+    const grid = $("amtGrid");
+    if (grid._built) { syncAmtSel(); return; }
+    let html = "";
+    for (let i = 1; i <= 10; i++) html += `<button class="amt-btn" data-amt="${i}">${i}</button>`;
+    html += `<button class="amt-btn empty" data-amt="0">0 · empty decoy</button>`;
+    grid.innerHTML = html;
+    grid._built = true;
+    grid.querySelectorAll(".amt-btn").forEach((b) => {
+      b.addEventListener("click", () => {
+        game.pickAmount = parseInt(b.dataset.amt, 10);
+        syncAmtSel();
+        $("btnSeal").disabled = false;
+      });
+    });
+    syncAmtSel();
+  }
+  function syncAmtSel() {
+    $("amtGrid").querySelectorAll(".amt-btn").forEach((b) =>
+      b.classList.toggle("sel", parseInt(b.dataset.amt, 10) === game.pickAmount));
+  }
+
+  function renderReveal(s) {
+    const lr = s.last_round || {};
+    $("revealLabel").textContent = `Round ${lr.round} · result`;
+    const empty = lr.x === 0;
+    const caseEl = $("revealCase");
+    caseEl.className = "rh-case " + (empty ? "empty" : "loaded");
+    caseEl.textContent = empty ? "🃏 Empty decoy" : `📦 ${lr.x}`;
+    const smugName = lr.smuggler_is_you ? "You" : esc(oppName(s));
+    const call = lr.doubted ? `${esc(inspectorName(s, lr))} doubted with N = ${lr.guess}` :
+                              `${esc(inspectorName(s, lr))} passed`;
+    $("revealCall").textContent = `${smugName} smuggled · ${call}`;
+
+    let verdict, color = "var(--muted)";
+    if (!lr.doubted) { verdict = "Passed — the full amount slips through."; color = "#e0af68"; }
+    else if (empty) { verdict = "Doubted an empty decoy — the inspector pays the penalty!"; color = "#e0af68"; }
+    else if (lr.guess >= lr.x) { verdict = "Caught! Contraband confiscated."; color = "#f7768e"; }
+    else { verdict = "Under-guessed — the load slips through."; color = "#e0af68"; }
+    const v = $("revealVerdict"); v.textContent = verdict; v.style.color = color;
+
+    $("revealBank").innerHTML = `${smugName} banked <b>${fmt(lr.banked)}</b> coins this round.`;
+    $("revealScores").innerHTML = scoreBarHTML(s);
+    $("revealHist").innerHTML = histHTML(s);
+
+    // Whose turn to smuggle next round (roles swap).
+    const nextSmug = (s.smuggler_slot === "A") ? "B" : "A";
+    const nextName = nextSmug === s.you ? "You" : esc(oppName(s));
+    $("btnNext").textContent = `Next round → (${nextName} smuggle)`;
+    $("btnEnd").style.display = s.is_host ? "block" : "none";
+  }
+  function inspectorName(s, lr) {
+    // Inspector is whoever wasn't the smuggler that round.
+    const inspSlot = lr.smuggler_slot === "A" ? "B" : "A";
+    return nameFor(s, inspSlot);
+  }
+
+  function renderOver(s) {
+    let outcome;
+    if (s.winner === "you") outcome = "🏆 You win!";
+    else if (s.winner === "opp") outcome = "You lose";
+    else outcome = "🤝 Dead heat";
+    $("overOutcome").textContent = outcome;
+    $("overSub").textContent = `Final — you ${fmt(s.scores.me)} · ${esc(oppName(s))} ${fmt(s.scores.opp)}`;
+    $("overScores").innerHTML = scoreBarHTML(s);
+    $("overHist").innerHTML = histHTML(s);
+    $("btnReset").style.display = s.is_host ? "block" : "none";
+    $("overStatus").textContent = s.is_host ? "" : "Waiting for the host to start a new match…";
+  }
+
+  function copyCode() {
+    if (!game.code) return;
+    const link = `${location.origin}/contraband.html`;
+    const text = `Join my Contraband game — ${link} (code ${game.code})`;
+    if (navigator.clipboard && navigator.clipboard.writeText)
+      navigator.clipboard.writeText(text).then(() => toast("📋 Invite copied"), () => toast("Code: " + game.code));
+    else toast("Code: " + game.code);
+  }
+
+  // ── Wire up ──
+  $("cbCreate").addEventListener("click", createRoom);
+  $("cbJoin").addEventListener("click", joinRoom);
+  $("cbCode").addEventListener("input", (e) => {
+    e.target.value = e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4);
+  });
+  $("cbCode").addEventListener("keydown", (e) => { if (e.key === "Enter") joinRoom(); });
+  $("cbName").addEventListener("keydown", (e) => { if (e.key === "Enter") createRoom(); });
+  $("lobbyCode").addEventListener("click", copyCode);
+
+  $("btnSeal").addEventListener("click", () => {
+    if (game.pickAmount === null) return toast("Pick an amount first.");
+    send({ type: "seal", amount: game.pickAmount });
+    game.pickAmount = null;
+  });
+
+  $("btnPass").addEventListener("click", () => { game.doubtMode = false; send({ type: "call", action: "pass" }); });
+  $("btnDoubtToggle").addEventListener("click", () => {
+    game.doubtMode = true;
+    $("guessBox").style.display = "block";
+  });
+  $("guessRange").addEventListener("input", (e) => {
+    $("guessVal").textContent = e.target.value;
+    $("doubtN").textContent = e.target.value;
+  });
+  $("btnDoubt").addEventListener("click", () => {
+    const n = parseInt($("guessRange").value, 10);
+    game.doubtMode = false;
+    send({ type: "call", action: "doubt", guess: n });
+  });
+
+  $("btnNext").addEventListener("click", () => { game.doubtMode = false; send({ type: "next" }); });
+  $("btnEnd").addEventListener("click", () => send({ type: "end_match" }));
+  $("btnReset").addEventListener("click", () => send({ type: "reset" }));
+})();
+</script>
+</body>
+</html>
