@@ -25,6 +25,7 @@ from web.minesweeper import router as minesweeper_router, minesweeper_websocket,
 from web.blotto import router as blotto_router, blotto_websocket, cleanup_stale_blotto_rooms
 from web.tictactoe import router as tictactoe_router, tictactoe_websocket, cleanup_stale_tictactoe_rooms
 from web.connect4 import router as connect4_router, connect4_websocket, cleanup_stale_connect4_rooms
+from web.beauty import router as beauty_router, beauty_websocket, cleanup_stale_beauty_rooms
 from web.rps import router as rps_router, rps_websocket, cleanup_stale_rps_rooms
 from web.battleship import router as battleship_router, battleship_websocket, cleanup_stale_battleship_rooms
 from web.reversi import router as reversi_router, reversi_websocket, cleanup_stale_reversi_rooms
@@ -128,6 +129,7 @@ async def lifespan(app: FastAPI):
     blotto_cleanup_task = asyncio.create_task(cleanup_stale_blotto_rooms())
     ttt_cleanup_task = asyncio.create_task(cleanup_stale_tictactoe_rooms())
     c4_cleanup_task = asyncio.create_task(cleanup_stale_connect4_rooms())
+    beauty_cleanup_task = asyncio.create_task(cleanup_stale_beauty_rooms())
     rps_cleanup_task = asyncio.create_task(cleanup_stale_rps_rooms())
     bs_cleanup_task = asyncio.create_task(cleanup_stale_battleship_rooms())
     rev_cleanup_task = asyncio.create_task(cleanup_stale_reversi_rooms())
@@ -150,6 +152,7 @@ async def lifespan(app: FastAPI):
     blotto_cleanup_task.cancel()
     ttt_cleanup_task.cancel()
     c4_cleanup_task.cancel()
+    beauty_cleanup_task.cancel()
     rps_cleanup_task.cancel()
     bs_cleanup_task.cancel()
     rev_cleanup_task.cancel()
@@ -206,6 +209,7 @@ app.include_router(uth_router)
 app.include_router(paigow_router)
 app.include_router(tictactoe_router)
 app.include_router(connect4_router)
+app.include_router(beauty_router)
 app.include_router(rps_router)
 app.include_router(battleship_router)
 app.include_router(reversi_router)
@@ -257,6 +261,11 @@ async def ws_tictactoe(websocket: WebSocket, room_id: str):
 @app.websocket("/ws/connect4/{room_id}")
 async def ws_connect4(websocket: WebSocket, room_id: str):
     await connect4_websocket(websocket, room_id)
+
+
+@app.websocket("/ws/beauty/{room_id}")
+async def ws_beauty(websocket: WebSocket, room_id: str):
+    await beauty_websocket(websocket, room_id)
 
 
 @app.websocket("/ws/rps/{room_id}")
@@ -329,6 +338,7 @@ GAME_LABELS: dict[str, str] = {
     "solitaire-chess": "Solitaire Chess",
     "minesweeper": "Minesweeper Race",
     "blotto": "Colonel Blotto",
+    "beauty": "Beauty Contest",
 }
 
 ALL_ACHIEVEMENTS = [

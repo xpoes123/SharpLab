@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SharpLab HQ — Beauty Contest</title>
+<link rel="stylesheet" href="/hqstyle.css" />
+<style>
+  .bc-head { text-align: center; margin: 8px 0 22px; }
+  .bc-head h1 { font-size: 26px; margin: 0 0 6px; }
+  .bc-head p { color: var(--muted); margin: 0; font-size: 14px; }
+  .bc-wrap { max-width: 640px; margin: 0 auto; padding: 0 16px 60px; }
+  .phase { display: none; }
+  .phase.active { display: block; }
+
+  .bc-field { margin-bottom: 14px; }
+  .bc-field label { display: block; font-size: 12px; text-transform: uppercase;
+    letter-spacing: .06em; color: var(--muted); margin-bottom: 6px; }
+  .bc-input { width: 100%; box-sizing: border-box; background: var(--panel2);
+    border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px;
+    color: var(--fg); font-size: 16px; font-family: inherit; outline: none;
+    transition: border-color var(--t); }
+  .bc-input:focus { border-color: var(--accent); }
+  .bc-input.code { text-transform: uppercase; letter-spacing: .3em; font-weight: 700;
+    font-family: var(--font-mono); }
+  .bc-joinrow { display: flex; gap: 10px; }
+  .bc-joinrow .bc-input { flex: 1; }
+  .bc-sep { text-align: center; color: var(--muted); font-size: 12px; margin: 18px 0; }
+  .bc-actions { margin: 14px 0; }
+
+  .btn.big { width: 100%; padding: 13px; font-size: 15px; font-weight: 800; }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border: 0;
+    border-radius: var(--r); cursor: pointer; font-family: inherit; transition: filter .12s; }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .btn.primary:disabled { opacity: .35; cursor: not-allowed; filter: none; }
+  .btn { background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+    border-radius: var(--r); padding: 12px 16px; cursor: pointer; font-family: inherit;
+    font-weight: 700; font-size: 14px; transition: border-color var(--t); }
+  .btn:hover { border-color: var(--accent); }
+
+  .bc-codebox { text-align: center; background: var(--panel2); border: 1px solid var(--line);
+    border-radius: var(--r-lg); padding: 16px; margin-bottom: 16px; }
+  .bc-codelabel { font-size: 11px; text-transform: uppercase; letter-spacing: .1em;
+    color: var(--muted); }
+  .bc-code { font-size: 40px; font-weight: 800; letter-spacing: .18em; font-family: var(--font-mono);
+    color: var(--accent); cursor: pointer; margin: 4px 0; }
+  .bc-copyhint { font-size: 12px; color: var(--muted); }
+
+  .player-list { list-style: none; margin: 4px 0 16px; padding: 0; }
+  .player-list li { display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--r); margin-bottom: 6px; font-size: 14px; }
+  .player-list .pl-left { display: flex; align-items: center; gap: 8px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); display: inline-block; }
+  .dot.on { background: #3fb950; }
+  .host-badge { background: var(--accent); color: var(--accent-ink); font-size: 10px;
+    padding: 2px 6px; border-radius: 5px; font-weight: 800; letter-spacing: .04em; }
+  .pl-right { font-family: var(--font-mono); color: var(--muted); font-size: 13px; }
+  .pl-right .score { color: var(--accent2); font-weight: 700; }
+  .sub-yes { color: #3fb950; font-weight: 700; }
+  .sub-no { color: var(--muted); }
+
+  .bc-status { text-align: center; color: var(--muted); font-size: 14px; margin: 10px 0; }
+
+  .submit-box { text-align: center; background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--r-lg); padding: 22px 18px; margin-bottom: 16px; }
+  .submit-box .big-num { width: 160px; font-size: 30px; text-align: center; font-weight: 800;
+    font-family: var(--font-mono); }
+  .progress { text-align: center; font-size: 15px; margin: 14px 0; }
+  .progress b { color: var(--accent); font-family: var(--font-mono); }
+
+  .result-hero { text-align: center; background: linear-gradient(100deg,
+    color-mix(in srgb, var(--accent) 16%, var(--panel)), var(--panel));
+    border: 1px solid var(--accent); border-radius: var(--r-lg); padding: 20px; margin-bottom: 16px; }
+  .result-hero .rh-label { font-size: 11px; text-transform: uppercase; letter-spacing: .1em;
+    color: var(--accent2); font-weight: 700; }
+  .result-hero .target { font-size: 44px; font-weight: 800; font-family: var(--font-mono);
+    color: var(--accent); margin: 4px 0; }
+  .result-hero .rh-avg { color: var(--muted); font-size: 14px; }
+  .result-hero .rh-win { margin-top: 10px; font-size: 16px; font-weight: 700; }
+  .result-hero .rh-win .names { color: var(--accent); }
+
+  table.rtable { width: 100%; border-collapse: collapse; margin: 10px 0 4px; }
+  table.rtable th { text-align: left; font-size: 11px; text-transform: uppercase; color: var(--muted);
+    padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  table.rtable td { padding: 10px; border-bottom: 1px solid var(--line); font-size: 14px; }
+  table.rtable tr.win td { color: var(--accent); font-weight: 700; }
+  table.rtable td.g { font-family: var(--font-mono); text-align: right; }
+  table.rtable td.d { font-family: var(--font-mono); text-align: right; color: var(--muted); }
+
+  h2.bc-h { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
+    margin: 22px 0 10px; }
+  .disconn { text-align: center; color: var(--warn, #e0af68); font-size: 13px; margin: 10px 0; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><a href="/">Sharp<span>Lab</span> HQ</a></div>
+  <nav class="nav"><a href="/">Server</a><a href="/stocks">Stocks</a><a href="/lines">Lines</a><a href="/pickem">Pick'em</a><a href="/cards">Cards</a><a href="/games">Games</a></nav>
+</header>
+<main>
+  <div class="bc-head">
+    <h1>💃 Keynesian Beauty Contest</h1>
+    <p>Guess ⅔ of the average. Closest to the target wins the round.</p>
+  </div>
+  <div class="bc-wrap">
+
+    <!-- ── Entry ─────────────────────────────────────── -->
+    <div id="phase-entry" class="phase active">
+      <div class="card">
+        <div class="bc-field">
+          <label for="bcName">Display name</label>
+          <input class="bc-input" id="bcName" type="text" maxlength="32" autocomplete="off"
+                 spellcheck="false" placeholder="Your name" />
+        </div>
+        <div class="bc-actions">
+          <button class="btn primary big" id="bcCreate">Create room</button>
+        </div>
+        <div class="bc-sep">— or join a room —</div>
+        <div class="bc-field">
+          <label for="bcCode">Room code</label>
+          <div class="bc-joinrow">
+            <input class="bc-input code" id="bcCode" type="text" maxlength="4" autocomplete="off"
+                   spellcheck="false" placeholder="ABCD" />
+            <button class="btn" id="bcJoin">Join</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Lobby ─────────────────────────────────────── -->
+    <div id="phase-lobby" class="phase">
+      <div class="bc-codebox">
+        <div class="bc-codelabel">Room code — share it</div>
+        <div class="bc-code" id="lobbyCode" title="Click to copy">····</div>
+        <div class="bc-copyhint" id="lobbyUrl">Send friends the code or this link.</div>
+      </div>
+      <h2 class="bc-h">Players</h2>
+      <ul class="player-list" id="lobbyPlayers"></ul>
+      <button class="btn primary big" id="btnStart" disabled>Start round</button>
+      <p class="bc-status" id="lobbyStatus">Waiting for players…</p>
+    </div>
+
+    <!-- ── Submitting ────────────────────────────────── -->
+    <div id="phase-submit" class="phase">
+      <h2 class="bc-h" id="roundLabel">Round 1</h2>
+      <div class="submit-box">
+        <div class="bc-field">
+          <label for="bcGuess" style="text-align:center">Your number (0–100, one decimal)</label>
+          <input class="bc-input big-num" id="bcGuess" type="number" min="0" max="100" step="0.1"
+                 inputmode="decimal" placeholder="0" />
+        </div>
+        <button class="btn primary big" id="btnSubmit">Submit</button>
+        <p class="bc-status" id="submitMsg" style="margin-bottom:0"></p>
+      </div>
+      <div class="progress">Submitted: <b id="progCount">0/0</b></div>
+      <ul class="player-list" id="submitPlayers"></ul>
+      <button class="btn big" id="btnForceReveal" style="display:none">Reveal now (host)</button>
+    </div>
+
+    <!-- ── Reveal / results ──────────────────────────── -->
+    <div id="phase-reveal" class="phase">
+      <div class="result-hero">
+        <div class="rh-label" id="revealRound">Round 1 · target = ⅔ × average</div>
+        <div class="target" id="revealTarget">—</div>
+        <div class="rh-avg" id="revealAvg"></div>
+        <div class="rh-win" id="revealWinners"></div>
+      </div>
+      <table class="rtable">
+        <thead><tr><th>Player</th><th style="text-align:right">Guess</th><th style="text-align:right">|Δ target|</th></tr></thead>
+        <tbody id="revealBody"></tbody>
+      </table>
+      <h2 class="bc-h">Scoreboard</h2>
+      <ul class="player-list" id="scoreboard"></ul>
+      <button class="btn primary big" id="btnNext" style="display:none">Next round</button>
+      <p class="bc-status" id="revealStatus">Waiting for the host to start the next round…</p>
+      <button class="btn big" id="btnReset" style="display:none;margin-top:8px">Reset scores</button>
+    </div>
+
+  </div>
+</main>
+
+<div id="toast" style="position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:var(--panel2);
+  border:1px solid var(--line);border-radius:10px;padding:12px 18px;font-size:14px;display:none;z-index:50;
+  box-shadow:var(--shadow-sm)"></div>
+
+<script src="/track.js"></script>
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  const game = { ws: null, roomId: null, code: null, name: "", you: null, phase: "entry" };
+
+  function toast(msg) {
+    const t = $("toast");
+    t.textContent = msg;
+    t.style.display = "block";
+    clearTimeout(t._h);
+    t._h = setTimeout(() => (t.style.display = "none"), 3000);
+  }
+
+  function showPhase(id) {
+    ["phase-entry", "phase-lobby", "phase-submit", "phase-reveal"].forEach((p) =>
+      $(p).classList.toggle("active", p === id));
+  }
+
+  async function postJSON(url, body) {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) j._status = r.status;
+    return j;
+  }
+
+  function readName() {
+    const el = $("bcName");
+    const name = ((el && el.value) || "").trim();
+    if (!name) { el.focus(); toast("Enter a display name first."); return null; }
+    return name.slice(0, 32);
+  }
+
+  async function createRoom() {
+    const name = readName();
+    if (!name) return;
+    const res = await postJSON("/api/v1/beauty/rooms", { name });
+    if (res._status || !res.room_id) return toast("❌ Couldn't create a room.");
+    game.name = name; game.code = res.code;
+    connect(res.room_id);
+  }
+
+  async function joinRoom() {
+    const name = readName();
+    if (!name) return;
+    const code = (($("bcCode").value) || "").trim().toUpperCase();
+    if (code.length !== 4) return toast("Enter the 4-letter room code.");
+    const res = await postJSON(`/api/v1/beauty/rooms/${code}/join`, { name });
+    if (res._status === 404) return toast("❌ No room with that code.");
+    if (res._status === 409) return toast("❌ That room is full.");
+    if (res._status || !res.room_id) return toast("❌ Couldn't join the room.");
+    game.name = name; game.code = code;
+    connect(res.room_id);
+  }
+
+  function connect(roomId) {
+    game.roomId = roomId;
+    try {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      const ws = new WebSocket(`${proto}://${location.host}/ws/beauty/${roomId}`);
+      game.ws = ws;
+      ws.onopen = () => ws.send(JSON.stringify({ type: "identify", name: game.name }));
+      ws.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data); } catch { return; } handleMessage(m); };
+      ws.onerror = () => toast("⚠️ Connection error.");
+      ws.onclose = () => { if (game.ws === ws) { game.ws = null; scheduleReconnect(); } };
+    } catch { toast("⚠️ Could not open a connection."); }
+  }
+
+  function scheduleReconnect() {
+    if (!game.roomId) return;
+    setTimeout(() => { if (!game.ws && game.roomId) connect(game.roomId); }, 2000);
+  }
+
+  function send(msg) {
+    if (game.ws && game.ws.readyState === WebSocket.OPEN) game.ws.send(JSON.stringify(msg));
+  }
+  setInterval(() => send({ type: "ping" }), 30000);
+
+  function handleMessage(msg) {
+    if (!msg || typeof msg !== "object") return;
+    if (msg.type === "pong") return;
+    if (msg.type === "error") return toast("⚠️ " + (msg.message || "error"));
+    if (msg.type === "state") render(msg);
+  }
+
+  let lastState = null;
+  function render(s) {
+    lastState = s;
+    game.code = s.code || game.code;
+    game.you = s.you;
+    const me = (s.players || []).find((p) => p.name === s.you);
+    const isHost = !!(me && me.is_host);
+
+    if (s.phase === "lobby") { showPhase("phase-lobby"); renderLobby(s, isHost); }
+    else if (s.phase === "submitting") { showPhase("phase-submit"); renderSubmit(s, me, isHost); }
+    else if (s.phase === "reveal") { showPhase("phase-reveal"); renderReveal(s, isHost); }
+  }
+
+  function multLabel(m) {
+    if (Math.abs(m - 2 / 3) < 0.001) return "⅔";
+    return String(Math.round(m * 1000) / 1000);
+  }
+
+  function playerLi(p, you, extraRight) {
+    const you_ = p.name === you ? ' <span class="pl-right">(you)</span>' : "";
+    return `<li>
+      <span class="pl-left">
+        <span class="dot ${p.connected ? "on" : ""}"></span>
+        ${esc(p.name)}${you_}
+        ${p.is_host ? '<span class="host-badge">HOST</span>' : ""}
+      </span>
+      <span class="pl-right">${extraRight}</span>
+    </li>`;
+  }
+
+  function renderLobby(s, isHost) {
+    $("lobbyCode").textContent = s.code || "····";
+    $("lobbyUrl").textContent = `${location.origin}/beauty — code ${s.code}`;
+    $("lobbyPlayers").innerHTML = (s.players || [])
+      .map((p) => playerLi(p, s.you, `<span class="score">${p.score}</span> pts`)).join("");
+    const connected = (s.players || []).filter((p) => p.connected).length;
+    $("btnStart").style.display = isHost ? "block" : "none";
+    $("btnStart").disabled = !isHost || connected < 2;
+    $("lobbyStatus").textContent = isHost
+      ? (connected < 2 ? "Need at least 2 connected players." : "Ready — start when everyone's in.")
+      : "Waiting for the host to start…";
+  }
+
+  function renderSubmit(s, me, isHost) {
+    $("roundLabel").textContent = `Round ${s.round_num} · target = ${multLabel(s.multiplier)} × average`;
+    const submitted = me && me.submitted;
+    $("bcGuess").disabled = !!submitted;
+    $("btnSubmit").disabled = !!submitted;
+    $("btnSubmit").textContent = submitted ? "Submitted ✓" : "Submit";
+    $("submitMsg").textContent = submitted ? "Locked in — waiting on the others." : "";
+    const players = s.players || [];
+    const connected = players.filter((p) => p.connected);
+    const subCount = connected.filter((p) => p.submitted).length;
+    $("progCount").textContent = `${subCount}/${connected.length}`;
+    $("submitPlayers").innerHTML = players
+      .map((p) => playerLi(p, s.you,
+        p.connected
+          ? (p.submitted ? '<span class="sub-yes">submitted ✓</span>' : '<span class="sub-no">thinking…</span>')
+          : '<span class="sub-no">offline</span>')).join("");
+    const fr = $("btnForceReveal");
+    fr.style.display = (isHost && subCount > 0) ? "block" : "none";
+  }
+
+  function renderReveal(s, isHost) {
+    const r = s.result || {};
+    $("revealRound").textContent = `Round ${r.round_num} · target = ${multLabel(r.multiplier)} × average`;
+    $("revealTarget").textContent = (r.target != null ? r.target : "—");
+    $("revealAvg").textContent = r.average != null ? `average of ${r.guesses ? r.guesses.length : 0} guesses = ${r.average}` : "";
+    const winners = r.winners || [];
+    $("revealWinners").innerHTML = winners.length
+      ? `🏆 Winner${winners.length > 1 ? "s" : ""}: <span class="names">${winners.map(esc).join(", ")}</span>`
+      : "";
+    $("revealBody").innerHTML = (r.guesses || []).map((g) => {
+      const d = Math.round(Math.abs(g.guess - r.target) * 100) / 100;
+      return `<tr class="${g.won ? "win" : ""}">
+        <td>${esc(g.name)}${g.name === s.you ? " (you)" : ""}${g.won ? " 🏆" : ""}</td>
+        <td class="g">${g.guess}</td><td class="d">${d}</td></tr>`;
+    }).join("");
+    const scores = (s.players || []).slice().sort((a, b) => b.score - a.score);
+    $("scoreboard").innerHTML = scores
+      .map((p) => playerLi(p, s.you, `<span class="score">${p.score}</span> pts`)).join("");
+    $("btnNext").style.display = isHost ? "block" : "none";
+    $("btnReset").style.display = isHost ? "block" : "none";
+    $("revealStatus").textContent = isHost ? "" : "Waiting for the host to start the next round…";
+  }
+
+  function copyCode() {
+    if (!game.code) return;
+    const link = `${location.origin}/beauty`;
+    const text = `Join my Beauty Contest — ${link} (code ${game.code})`;
+    if (navigator.clipboard && navigator.clipboard.writeText)
+      navigator.clipboard.writeText(text).then(() => toast("📋 Invite copied"), () => toast("Code: " + game.code));
+    else toast("Code: " + game.code);
+  }
+
+  // ── Wire up ──
+  $("bcCreate").addEventListener("click", createRoom);
+  $("bcJoin").addEventListener("click", joinRoom);
+  $("bcCode").addEventListener("input", (e) => {
+    e.target.value = e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4);
+  });
+  $("bcCode").addEventListener("keydown", (e) => { if (e.key === "Enter") joinRoom(); });
+  $("bcName").addEventListener("keydown", (e) => { if (e.key === "Enter") createRoom(); });
+  $("lobbyCode").addEventListener("click", copyCode);
+  $("btnStart").addEventListener("click", () => send({ type: "start_round" }));
+  $("btnNext").addEventListener("click", () => send({ type: "start_round" }));
+  $("btnForceReveal").addEventListener("click", () => send({ type: "reveal" }));
+  $("btnReset").addEventListener("click", () => send({ type: "reset" }));
+  $("btnSubmit").addEventListener("click", () => {
+    const v = parseFloat($("bcGuess").value);
+    if (isNaN(v) || v < 0 || v > 100) return toast("Enter a number between 0 and 100.");
+    send({ type: "submit", guess: Math.round(v * 10) / 10 });
+  });
+  $("bcGuess").addEventListener("keydown", (e) => { if (e.key === "Enter") $("btnSubmit").click(); });
+})();
+</script>
+</body>
+</html>
