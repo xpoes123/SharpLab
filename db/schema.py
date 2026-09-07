@@ -559,6 +559,39 @@ CREATE TABLE IF NOT EXISTS card_trade_listings (
     created_at   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_card_trade_listings_owner ON card_trade_listings(owner_id);
+
+-- Kalshi auto-logger: one row per fill (dedup by trade_id) + the polled price trajectory
+-- of each bet contract, from which drift / excursions / P&L are derived.
+CREATE TABLE IF NOT EXISTS kalshi_fills (
+    trade_id      TEXT PRIMARY KEY,
+    order_id      TEXT,
+    ticker        TEXT NOT NULL,
+    action        TEXT NOT NULL,          -- buy | sell
+    side          TEXT NOT NULL,          -- yes | no
+    long_yes      INTEGER NOT NULL,       -- effective direction (1 long YES, 0 long NO)
+    count         INTEGER NOT NULL,
+    yes_price_c   INTEGER NOT NULL,       -- entry price in YES cents
+    created_time  TEXT NOT NULL,          -- Kalshi fill timestamp (UTC iso)
+    bet_id        INTEGER REFERENCES bets(bet_id),
+    settled       INTEGER NOT NULL DEFAULT 0,
+    is_live       INTEGER,                -- 1 if game in progress at fill (null = unknown)
+    clv_c         REAL,                   -- pre-game: entry vs kickoff (null until game times known)
+    drift_5m_c    REAL,                   -- live: signed move at +5m
+    mfe_c         REAL,
+    mae_c         REAL,
+    pnl_c         REAL                    -- realized per-contract at settle
+);
+CREATE INDEX IF NOT EXISTS idx_kalshi_fills_open ON kalshi_fills(settled);
+
+CREATE TABLE IF NOT EXISTS price_trajectory (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id     TEXT NOT NULL REFERENCES kalshi_fills(trade_id),
+    captured_at  TEXT NOT NULL,           -- UTC iso
+    yes_bid_c    INTEGER,
+    yes_ask_c    INTEGER,
+    mid_c        REAL
+);
+CREATE INDEX IF NOT EXISTS idx_trajectory_trade ON price_trajectory(trade_id, captured_at);
 """
 
 
@@ -571,6 +604,24 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass  # column already exists
+        # Kalshi auto-logger tables (explicit create for DBs predating them)
+        try:
+            await db.executescript(
+                "CREATE TABLE IF NOT EXISTS kalshi_fills ("
+                "trade_id TEXT PRIMARY KEY, order_id TEXT, ticker TEXT NOT NULL, action TEXT NOT NULL, "
+                "side TEXT NOT NULL, long_yes INTEGER NOT NULL, count INTEGER NOT NULL, "
+                "yes_price_c INTEGER NOT NULL, created_time TEXT NOT NULL, bet_id INTEGER, "
+                "settled INTEGER NOT NULL DEFAULT 0, is_live INTEGER, clv_c REAL, drift_5m_c REAL, "
+                "mfe_c REAL, mae_c REAL, pnl_c REAL);"
+                "CREATE INDEX IF NOT EXISTS idx_kalshi_fills_open ON kalshi_fills(settled);"
+                "CREATE TABLE IF NOT EXISTS price_trajectory ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, trade_id TEXT NOT NULL, captured_at TEXT NOT NULL, "
+                "yes_bid_c INTEGER, yes_ask_c INTEGER, mid_c REAL);"
+                "CREATE INDEX IF NOT EXISTS idx_trajectory_trade ON price_trajectory(trade_id, captured_at);"
+            )
+            await db.commit()
+        except Exception:
+            pass
         await db.execute("CREATE INDEX IF NOT EXISTS idx_games_sport_start ON games(sport, start_time)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_odds_snapshots_game_source_kind_time ON odds_snapshots(game_id, source, kind, captured_at)")
         await db.commit()

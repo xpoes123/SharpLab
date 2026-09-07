@@ -5958,3 +5958,90 @@ async def claim_login_streak(discord_user: str, day: str) -> dict:
     await credit_coins(discord_user, granted, f"Login streak (day {streak})",
                        datetime.now(timezone.utc).isoformat())
     return {"granted": granted, "streak": streak, "longest": longest, "already": False}
+
+
+# --- Kalshi auto-logger ---------------------------------------------------
+
+async def kalshi_fill_exists(trade_id: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT 1 FROM kalshi_fills WHERE trade_id = ?", (trade_id,))
+        return await cur.fetchone() is not None
+
+
+async def insert_kalshi_fill(row: dict) -> None:
+    """Insert a fill row. Caller guards dedup via kalshi_fill_exists first."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT OR IGNORE INTO kalshi_fills
+               (trade_id, order_id, ticker, action, side, long_yes, count, yes_price_c,
+                created_time, bet_id, settled, is_live)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)""",
+            (row["trade_id"], row.get("order_id"), row["ticker"], row["action"], row["side"],
+             int(row["long_yes"]), int(row["count"]), int(row["yes_price_c"]),
+             row["created_time"], row.get("bet_id"), row.get("is_live")),
+        )
+        await db.commit()
+
+
+async def get_open_kalshi_fills() -> list[dict]:
+    """Unsettled fills that still need price tracking."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT trade_id, ticker, yes_price_c, long_yes, count, created_time, bet_id "
+            "FROM kalshi_fills WHERE settled = 0")
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def append_trajectory(trade_id: str, captured_at: str, yes_bid_c, yes_ask_c, mid_c) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO price_trajectory (trade_id, captured_at, yes_bid_c, yes_ask_c, mid_c) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (trade_id, captured_at, yes_bid_c, yes_ask_c, mid_c))
+        await db.commit()
+
+
+async def get_last_trajectory_time(trade_id: str) -> str | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT MAX(captured_at) FROM price_trajectory WHERE trade_id = ?", (trade_id,))
+        row = await cur.fetchone()
+        return row[0] if row else None
+
+
+async def get_trajectory_mids(trade_id: str) -> list[tuple[str, float]]:
+    """(captured_at_iso, mid_c) in time order; rows with no mid are skipped."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT captured_at, mid_c FROM price_trajectory "
+            "WHERE trade_id = ? AND mid_c IS NOT NULL ORDER BY captured_at", (trade_id,))
+        return [(r[0], r[1]) for r in await cur.fetchall()]
+
+
+async def finalize_kalshi_fill(trade_id: str, metrics: dict, bet_status: str | None = None) -> None:
+    """Write final metrics onto the fill, mark settled, and grade the linked bet."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE kalshi_fills SET settled = 1, clv_c = ?, drift_5m_c = ?, mfe_c = ?, "
+            "mae_c = ?, pnl_c = ? WHERE trade_id = ?",
+            (metrics.get("clv_c"), metrics.get("drift_5m_c"), metrics.get("mfe_c"),
+             metrics.get("mae_c"), metrics.get("pnl_c"), trade_id))
+        cur = await db.execute("SELECT bet_id FROM kalshi_fills WHERE trade_id = ?", (trade_id,))
+        row = await cur.fetchone()
+        if row and row[0] and bet_status:
+            await db.execute("UPDATE bets SET status = ?, clv = ? WHERE bet_id = ?",
+                             (bet_status, metrics.get("clv_c"), row[0]))
+        await db.commit()
+
+
+async def kalshi_edge_summary() -> dict:
+    """Aggregate live-edge stats over settled fills: n, mean drift@5m, %positive drift, mean P&L."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT COUNT(*) , AVG(drift_5m_c), "
+            "AVG(CASE WHEN drift_5m_c > 0 THEN 1.0 ELSE 0.0 END), AVG(pnl_c), SUM(pnl_c * count) "
+            "FROM kalshi_fills WHERE settled = 1 AND drift_5m_c IS NOT NULL")
+        n, mean_drift, pct_pos, mean_pnl, total_pnl_c = await cur.fetchone()
+        return {"n": n or 0, "mean_drift_c": mean_drift, "pct_positive": pct_pos,
+                "mean_pnl_c": mean_pnl, "total_pnl_dollars": (total_pnl_c or 0) / 100}
