@@ -819,6 +819,33 @@ class BetsCog(commands.Cog):
         embed = _record_embed(target_user, bets, game_labels)
         await interaction.followup.send(embed=embed)
 
+    @bet_group.command(name="edge", description="Kalshi live-edge: post-entry drift (the live analog of CLV)")
+    async def edge(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+        s = await queries.kalshi_edge_summary()
+        if not s["n"]:
+            await interaction.followup.send(
+                "No settled Kalshi bets with a price trajectory yet. Place a live bet and let it settle — "
+                "drift shows up here.")
+            return
+        drift = s["mean_drift_c"] or 0.0
+        pct = (s["pct_positive"] or 0.0) * 100
+        pnl = s["mean_pnl_c"] or 0.0
+        embed = discord.Embed(
+            title="⚡ Kalshi live edge",
+            description=(f"**{s['n']}** settled bets with a tracked price trajectory.\n"
+                         f"Post-entry drift is the live-betting analog of CLV — did the market move your way?"),
+            colour=0x7aa2f7,
+        )
+        embed.add_field(name="Mean drift @5m",
+                        value=f"{drift:+.1f}¢ {'✅' if drift > 0 else '❌'}", inline=True)
+        embed.add_field(name="% bets drifting your way", value=f"{pct:.0f}%", inline=True)
+        embed.add_field(name="Realized P&L",
+                        value=f"{pnl:+.1f}¢/contract · ${s['total_pnl_dollars']:+.2f} total", inline=True)
+        embed.set_footer(text="Positive mean drift over a few hundred bets = real live edge. "
+                              "Small n = still noise.")
+        await interaction.followup.send(embed=embed)
+
     @bet_group.command(name="leaderboard", description="Who's beating the closing line — CLV, ROI & record leaderboard")
     @app_commands.describe(metric="Rank by (default: CLV)")
     @app_commands.choices(metric=[
