@@ -88,7 +88,7 @@
 /* ── Result line ── */
 .m24-result { min-height: 22px; font-size: 15px; font-weight: 600; }
 .m24-result b { font-variant-numeric: tabular-nums; }
-.m24-result.hit { color: var(--green, #9ece6a); font-size: 18px; font-weight: 800; }
+.m24-result.hit { color: var(--green); font-size: 18px; font-weight: 800; }
 .m24-result.bad { color: var(--red); }
 .m24-reward { color: var(--gold); font-weight: 800; }
 .m24-cap { color: var(--muted); font-weight: 600; font-size: 14px; }

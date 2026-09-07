@@ -25,8 +25,8 @@
 
 .banner { display: none; border-radius: 14px; padding: 16px; text-align: center; }
 .banner.show { display: block; animation: pop .35s ease; }
-.banner.win { background: linear-gradient(180deg, rgba(158,206,106,.14), transparent); border: 1px solid var(--green, #9ece6a); }
-.banner h2 { margin: 0 0 6px; color: var(--green, #9ece6a); font-size: 20px; }
+.banner.win { background: linear-gradient(180deg, rgba(158,206,106,.14), transparent); border: 1px solid var(--green); }
+.banner h2 { margin: 0 0 6px; color: var(--green); font-size: 20px; }
 .banner .line { color: var(--muted); font-size: 13px; }
 @keyframes pop { from { transform: scale(.97); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }

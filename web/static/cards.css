@@ -3,8 +3,8 @@
 
 :root {
   --r-common:    #7884b0;  /* gray  */
-  --r-uncommon:  #9ece6a;  /* green */
-  --r-rare:      #7aa2f7;  /* blue  */
+  --r-uncommon:  var(--green);  /* green */
+  --r-rare:      var(--blue);  /* blue  */
   --r-epic:      #bb9af7;  /* purple*/
   --r-legendary: #e0af68;  /* gold  */
 }
@@ -185,7 +185,7 @@
 .cd-pack {
   position: relative; width: 190px; height: 262px; border-radius: 16px; overflow: hidden;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
-  background: linear-gradient(150deg, #7aa2f7, #5865f2 30%, #bb6bff 62%, #22d3ee 100%);
+  background: linear-gradient(150deg, var(--blue), #5865f2 30%, #bb6bff 62%, #22d3ee 100%);
   border: 1px solid #8fb0ff;
   box-shadow: 0 30px 60px -20px #000, 0 0 50px -10px rgba(122,162,247,0.7), inset 0 0 0 3px rgba(255,255,255,0.14);
   animation: cd-pack-shake 0.7s ease-in-out 2, cd-pack-burst 0.35s ease-in 1 0.9s forwards;

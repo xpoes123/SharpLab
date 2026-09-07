@@ -67,7 +67,7 @@
 /* ── Result line ── */
 .cd-result { min-height: 22px; font-size: 15px; font-weight: 600; }
 .cd-result b { font-variant-numeric: tabular-nums; }
-.cd-result.hit { color: var(--green, #9ece6a); font-size: 18px; font-weight: 800; }
+.cd-result.hit { color: var(--green); font-size: 18px; font-weight: 800; }
 .cd-result.off { color: var(--muted); }
 .cd-result.bad { color: var(--red); }
 .cd-reward { color: var(--gold); font-weight: 800; }
