@@ -7,7 +7,8 @@ from temporalio.worker import Worker
 from db.schema import init_db
 from shared.log_config import setup_logging
 from .bootstrap import ensure_workflows
-from .workflows import OddsPollingWorkflow, CloseCaptureWorkflow, InjuryPollingWorkflow, BetResolutionWorkflow
+from .workflows import (OddsPollingWorkflow, CloseCaptureWorkflow, InjuryPollingWorkflow,
+                        BetResolutionWorkflow, KalshiLoggingWorkflow)
 from .activities import (
     fetch_games_for_today,
     fetch_odds_batch,
@@ -24,6 +25,8 @@ from .activities import (
     fetch_polymarket_close_snapshot,
     fetch_final_scores,
     resolve_bets_for_game,
+    poll_kalshi_fills,
+    snapshot_kalshi_positions,
 )
 
 setup_logging()
@@ -49,7 +52,8 @@ async def main() -> None:
     worker = Worker(
         client,
         task_queue=TASK_QUEUE,
-        workflows=[OddsPollingWorkflow, CloseCaptureWorkflow, InjuryPollingWorkflow, BetResolutionWorkflow],
+        workflows=[OddsPollingWorkflow, CloseCaptureWorkflow, InjuryPollingWorkflow,
+                   BetResolutionWorkflow, KalshiLoggingWorkflow],
         activities=[
             fetch_games_for_today,
             fetch_odds_batch,
@@ -66,6 +70,8 @@ async def main() -> None:
             fetch_polymarket_close_snapshot,
             fetch_final_scores,
             resolve_bets_for_game,
+            poll_kalshi_fills,
+            snapshot_kalshi_positions,
         ],
     )
 

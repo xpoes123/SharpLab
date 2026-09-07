@@ -1091,3 +1091,130 @@ async def resolve_bets_for_game(result: GameResult) -> int:
         f"{result.away_score}-{result.home_score}, {resolved} bets resolved"
     )
     return resolved
+
+
+# --- Kalshi auto-logger ----------------------------------------------------
+from shared.kalshi_log import (  # noqa: E402
+    parse_kalshi_ticker, long_yes, realized_pnl_c, excursions, drift_at,
+)
+from shared.odds_utils import prob_to_american  # noqa: E402
+
+KALSHI_KEY_ID = os.getenv("KALSHI_KEY_ID", "")
+KALSHI_PRIVATE_KEY_PATH = os.getenv("KALSHI_PRIVATE_KEY_PATH", "")
+KALSHI_LOG_USER = os.getenv("KALSHI_LOG_USER", "kalshi")  # discord id to attribute fills to
+
+
+def _kalshi_signed_client():
+    """RSA-signing client for authenticated endpoints; None if creds absent (no-op)."""
+    if not (KALSHI_KEY_ID and KALSHI_PRIVATE_KEY_PATH):
+        return None
+    from shared.kalshi import KalshiClient
+    return KalshiClient(KALSHI_KEY_ID, KALSHI_PRIVATE_KEY_PATH, KALSHI_BASE)
+
+
+def _parse_iso(s):
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+@activity.defn
+async def poll_kalshi_fills(since_ts: int) -> dict:
+    """Fetch new fills since since_ts (unix seconds), mirror each into bets + kalshi_fills.
+    Returns {count, newest_ts}. No-op (count 0) if Kalshi creds are unset."""
+    client = _kalshi_signed_client()
+    if client is None:
+        return {"count": 0, "newest_ts": since_ts}
+    try:
+        fills, _ = await client.fills(min_ts=since_ts, limit=200)
+    finally:
+        await client.aclose()
+    added, newest = 0, since_ts
+    for f in fills:
+        tid = f.get("trade_id")
+        if not tid or await queries.kalshi_fill_exists(tid):
+            continue
+        parsed = parse_kalshi_ticker(f["ticker"])
+        ly = long_yes(f["action"], f["side"])
+        yes_c = int(f["yes_price"])
+        side_c = yes_c if ly else 100 - yes_c
+        side_prob = min(0.99, max(0.01, side_c / 100))
+        bet = Bet(
+            game_id=None, placed_at=f["created_time"], discord_user=KALSHI_LOG_USER,
+            book="kalshi", market=parsed.market, side=parsed.side, line=parsed.line,
+            odds=prob_to_american(side_prob), units=round(int(f["count"]) * side_c / 100, 2),
+            notes=f"{f['ticker']} {f['action']} {f['side']} @{yes_c}c",
+        )
+        bet_id = await queries.insert_bet(bet)
+        await queries.insert_kalshi_fill({
+            "trade_id": tid, "order_id": f.get("order_id"), "ticker": f["ticker"],
+            "action": f["action"], "side": f["side"], "long_yes": ly, "count": int(f["count"]),
+            "yes_price_c": yes_c, "created_time": f["created_time"], "bet_id": bet_id,
+            "is_live": None,
+        })
+        added += 1
+        d = _parse_iso(f["created_time"])
+        if d:
+            newest = max(newest, int(d.timestamp()))
+    if added:
+        activity.logger.info(f"[poll_kalshi_fills] logged {added} new fills")
+    return {"count": added, "newest_ts": newest}
+
+
+@activity.defn
+async def snapshot_kalshi_positions() -> int:
+    """Poll the price of every open bet contract (age-based cadence), append to the
+    trajectory, and finalize metrics when a market settles. Returns snapshots written."""
+    client = _kalshi_signed_client()
+    if client is None:
+        return 0
+    opens = await queries.get_open_kalshi_fills()
+    if not opens:
+        await client.aclose()
+        return 0
+    now = datetime.now(timezone.utc)
+    markets: dict = {}
+    try:
+        for tk in {o["ticker"] for o in opens}:
+            try:
+                markets[tk] = await client.market(tk)
+            except Exception as e:
+                activity.logger.warning(f"[snapshot_kalshi_positions] market {tk} failed: {e}")
+    finally:
+        await client.aclose()
+    snapped = 0
+    for o in opens:
+        m = markets.get(o["ticker"])
+        if not m:
+            continue
+        created = _parse_iso(o["created_time"])
+        age = (now - created).total_seconds() if created else 1e9
+        cadence = 30 if age < 300 else 120  # dense early window for live drift, then relax
+        last = _parse_iso(await queries.get_last_trajectory_time(o["trade_id"]))
+        due = last is None or (now - last).total_seconds() >= cadence - 2
+        if due and m["mid_c"] is not None:
+            await queries.append_trajectory(o["trade_id"], now.isoformat(),
+                                            m["yes_bid_c"], m["yes_ask_c"], m["mid_c"])
+            snapped += 1
+        if m["result"] in ("yes", "no") and m["status"] != "active":
+            await _finalize_kalshi(o, m, created)
+    return snapped
+
+
+async def _finalize_kalshi(o: dict, m: dict, created) -> None:
+    entry, ly = o["yes_price_c"], bool(o["long_yes"])
+    rows = await queries.get_trajectory_mids(o["trade_id"])
+    mids = [mid for _, mid in rows]
+    ages = [((_parse_iso(ts) - created).total_seconds(), mid)
+            for ts, mid in rows if created and _parse_iso(ts)]
+    pnl = realized_pnl_c(entry, m["result"] == "yes", ly)
+    mfe, mae = excursions(entry, mids, ly)
+    status = "won" if pnl > 0 else ("push" if pnl == 0 else "lost")
+    await queries.finalize_kalshi_fill(o["trade_id"], {
+        "clv_c": None, "drift_5m_c": drift_at(entry, ages, ly, 300),
+        "mfe_c": mfe, "mae_c": mae, "pnl_c": pnl,
+    }, bet_status=status)
+    activity.logger.info(f"[snapshot_kalshi_positions] settled {o['trade_id']} pnl={pnl}c")

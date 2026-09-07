@@ -26,6 +26,7 @@ LONG_RUNNING_WORKFLOWS: list[tuple[str, str, list]] = [
     ("BetResolutionWorkflow", "bet-resolution-nba-v2", [2, "nba"]),
     ("BetResolutionWorkflow", "bet-resolution-mlb-v2", [2, "mlb"]),
     ("BetResolutionWorkflow", "bet-resolution-nfl-v2", [2, "nfl"]),
+    ("KalshiLoggingWorkflow", "kalshi-logging-v1", [0, 30]),  # [since_ts=0 -> from now, tick 30s]
 ]
 
 

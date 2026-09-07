@@ -21,6 +21,8 @@ with workflow.unsafe.imports_passed_through():
         fetch_polymarket_close_snapshot,
         fetch_final_scores,
         resolve_bets_for_game,
+        poll_kalshi_fills,
+        snapshot_kalshi_positions,
         FetchCloseSnapshotInput,
     )
 
@@ -442,3 +444,28 @@ class InjuryPollingWorkflow:
             await workflow.sleep(timedelta(minutes=interval_minutes))
             # sport is intentionally omitted — injuries are NBA-only, hardcoded above
             workflow.continue_as_new(args=[interval_minutes])
+
+
+@workflow.defn
+class KalshiLoggingWorkflow:
+    """Auto-log Kalshi fills + track each bet contract's price to settlement. Every tick:
+    pull new fills (advancing the watermark) and snapshot open positions. from-today-forward:
+    on first start the watermark is `now`, so pre-existing fills are ignored."""
+
+    @workflow.run
+    async def run(self, since_ts: int = 0, tick_seconds: int = 30) -> None:
+        if since_ts == 0:
+            since_ts = int(workflow.now().timestamp())  # start from deploy time forward
+        res = await workflow.execute_activity(
+            poll_kalshi_fills, since_ts,
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(maximum_attempts=3),
+        )
+        since_ts = max(since_ts, res.get("newest_ts") or since_ts)
+        await workflow.execute_activity(
+            snapshot_kalshi_positions,
+            start_to_close_timeout=timedelta(seconds=60),
+            retry_policy=RetryPolicy(maximum_attempts=3),
+        )
+        await workflow.sleep(timedelta(seconds=tick_seconds))
+        workflow.continue_as_new(args=[since_ts, tick_seconds])
