@@ -9,6 +9,7 @@ dependencies = [
     "anthropic>=0.107.1",
     "chess>=1.11.2",
     "discord-py>=2.7.1",
+    "djtoolkit",
     "fastapi>=0.136.1",
     "httpx>=0.28.1",
     "itsdangerous>=2.2.0",
@@ -27,6 +28,9 @@ include = ["bot*", "db*", "shared*", "temporal*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["."]
+
+[tool.uv.sources]
+djtoolkit = { git = "https://github.com/xpoes123/toolkit.git" }
 
 [dependency-groups]
 dev = [
