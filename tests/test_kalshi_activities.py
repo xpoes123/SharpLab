@@ -1,5 +1,10 @@
 """End-to-end drive of the Kalshi auto-logger activities against a temp DB with a fake
-client: a fill is mirrored to bets, its price is tracked, and settlement finalizes metrics."""
+client: a fill is mirrored to bets, its price is tracked, and settlement finalizes metrics.
+
+NOTE: everything is referenced through `temporal.activities` (A.queries / A.schema) so the
+test patches the SAME module instances the activities use. Under pytest's import gymnastics
+the suite can hold a second `db.queries` module; patching our own import wouldn't reach the
+one the activity actually writes through. (Production imports db.queries exactly once.)"""
 from __future__ import annotations
 
 import asyncio
@@ -7,9 +12,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-import db.schema as _schema
-import db.queries as _queries
 import temporal.activities as A
+
+_queries = A.queries
+_schema = A.schema
 
 
 def _run(coro):
