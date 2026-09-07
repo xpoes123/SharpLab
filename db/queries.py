@@ -6036,12 +6036,16 @@ async def finalize_kalshi_fill(trade_id: str, metrics: dict, bet_status: str | N
 
 
 async def kalshi_edge_summary() -> dict:
-    """Aggregate live-edge stats over settled fills: n, mean drift@5m, %positive drift, mean P&L."""
+    """Aggregate over settled fills. n / P&L cover ALL settled bets; drift stats cover only
+    the subset that lived long enough to have a +5m snapshot (n_drift)."""
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "SELECT COUNT(*) , AVG(drift_5m_c), "
-            "AVG(CASE WHEN drift_5m_c > 0 THEN 1.0 ELSE 0.0 END), AVG(pnl_c), SUM(pnl_c * count) "
-            "FROM kalshi_fills WHERE settled = 1 AND drift_5m_c IS NOT NULL")
-        n, mean_drift, pct_pos, mean_pnl, total_pnl_c = await cur.fetchone()
-        return {"n": n or 0, "mean_drift_c": mean_drift, "pct_positive": pct_pos,
-                "mean_pnl_c": mean_pnl, "total_pnl_dollars": (total_pnl_c or 0) / 100}
+            "SELECT COUNT(*), AVG(pnl_c), SUM(pnl_c * count), "
+            "AVG(CASE WHEN drift_5m_c IS NOT NULL THEN drift_5m_c END), "
+            "AVG(CASE WHEN drift_5m_c IS NOT NULL THEN (CASE WHEN drift_5m_c > 0 THEN 1.0 ELSE 0.0 END) END), "
+            "SUM(CASE WHEN drift_5m_c IS NOT NULL THEN 1 ELSE 0 END) "
+            "FROM kalshi_fills WHERE settled = 1")
+        n, mean_pnl, total_pnl_c, mean_drift, pct_pos, n_drift = await cur.fetchone()
+        return {"n": n or 0, "n_drift": n_drift or 0, "mean_drift_c": mean_drift,
+                "pct_positive": pct_pos, "mean_pnl_c": mean_pnl,
+                "total_pnl_dollars": (total_pnl_c or 0) / 100}

@@ -828,18 +828,21 @@ class BetsCog(commands.Cog):
                 "No settled Kalshi bets with a price trajectory yet. Place a live bet and let it settle — "
                 "drift shows up here.")
             return
-        drift = s["mean_drift_c"] or 0.0
-        pct = (s["pct_positive"] or 0.0) * 100
         pnl = s["mean_pnl_c"] or 0.0
         embed = discord.Embed(
             title="⚡ Kalshi live edge",
-            description=(f"**{s['n']}** settled bets with a tracked price trajectory.\n"
-                         f"Post-entry drift is the live-betting analog of CLV — did the market move your way?"),
+            description=(f"**{s['n']}** settled bets. Post-entry drift is the live-betting analog "
+                         f"of CLV — did the market move your way?"),
             colour=0x7aa2f7,
         )
-        embed.add_field(name="Mean drift @5m",
-                        value=f"{drift:+.1f}¢ {'✅' if drift > 0 else '❌'}", inline=True)
-        embed.add_field(name="% bets drifting your way", value=f"{pct:.0f}%", inline=True)
+        if s["n_drift"]:
+            drift = s["mean_drift_c"] or 0.0
+            pct = (s["pct_positive"] or 0.0) * 100
+            embed.add_field(name=f"Mean drift @5m (n={s['n_drift']})",
+                            value=f"{drift:+.1f}¢ {'✅' if drift > 0 else '❌'}", inline=True)
+            embed.add_field(name="% drifting your way", value=f"{pct:.0f}%", inline=True)
+        else:
+            embed.add_field(name="Mean drift @5m", value="— (no bet held ≥5m yet)", inline=True)
         embed.add_field(name="Realized P&L",
                         value=f"{pnl:+.1f}¢/contract · ${s['total_pnl_dollars']:+.2f} total", inline=True)
         embed.set_footer(text="Positive mean drift over a few hundred bets = real live edge. "
