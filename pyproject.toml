@@ -8,6 +8,7 @@ dependencies = [
     "aiosqlite>=0.22.1",
     "anthropic>=0.107.1",
     "chess>=1.11.2",
+    "cryptography>=50.0.1",
     "discord-py>=2.7.1",
     "djtoolkit @ git+https://github.com/xpoes123/toolkit.git",
     "fastapi>=0.136.1",
