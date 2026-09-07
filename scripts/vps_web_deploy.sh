@@ -21,7 +21,13 @@ echo "▶ target:  $(git log --oneline -1)"
 
 # shellcheck disable=SC1091
 source venv/bin/activate
-pip install -e . -q 2>/dev/null || true
+# Deps must actually install — a failure here (e.g. an unresolvable git dep) means
+# the new code can't run. Do NOT swallow it; abort with the live service untouched.
+if ! pip install -e . -q; then
+  echo "✗ pip install failed (deps unresolved) — reverting; live service untouched."
+  git reset --hard "$OLD" -q
+  exit 1
+fi
 
 health() {
   for _ in $(seq 1 20); do
@@ -31,10 +37,32 @@ health() {
   return 1
 }
 
-# 1) PRE-FLIGHT
-if ! python -c "import web.api" 2>/tmp/preflight.err; then
+# 1) PRE-FLIGHT — import EVERY service entrypoint (web, worker, bot) AND every cog,
+# so an import error in the worker or a betting cog aborts the deploy instead of
+# silently crash-looping the worker / dropping a cog (as a djtoolkit dep once did).
+if ! python -c "
+import importlib, glob, os
+mods = ['web.api', 'temporal.worker', 'bot.main']
+mods += ['bot.cogs.' + os.path.basename(f)[:-3]
+         for f in sorted(glob.glob('bot/cogs/*.py')) if not f.endswith('__init__.py')]
+bad = []
+for m in mods:
+    try:
+        importlib.import_module(m)
+    except ImportError as e:          # missing dependency / bad import — the fatal class
+        bad.append(f'{m}: {e}')
+    except Exception:
+        pass                          # runtime env/config errors at import aren't a dep problem
+if bad:
+    import sys
+    print('IMPORT FAILURES (missing deps / bad imports):', file=sys.stderr)
+    for b in bad:
+        print('  ' + b, file=sys.stderr)
+    raise SystemExit(1)
+print(f'preflight import OK ({len(mods)} modules checked)')
+" 2>/tmp/preflight.err; then
   echo "✗ PRE-FLIGHT FAILED — new code won't import. Reverting; live service untouched:"
-  sed -n '1,15p' /tmp/preflight.err
+  sed -n '1,20p' /tmp/preflight.err
   git reset --hard "$OLD" -q
   exit 1
 fi
