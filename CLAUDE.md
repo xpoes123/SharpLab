@@ -282,11 +282,11 @@ SharpLab runs on a shared Hetzner VPS (`87.99.136.82`). Full details in [`docs/v
 - **SSH**: `ssh root@87.99.136.82`
 - **Install dir**: `/opt/sharplab/` (venv, .env, data/)
 - **Services**: `temporal.service` → `sharplab-worker` + `sharplab-bot` + `sharplab-web`
-- **Deploy**: `git pull` → `pip install -e .` → restart services (temporal first, wait 3s, then bot+worker+web). Sentinel is decommissioned, so deploys are manual — see `/deploy` skill.
+- **Deploy**: Claude deploys directly over ssh — `git pull` → `pip install -e .` → restart services (temporal first, wait 3s, then bot+worker+web). See `/deploy` skill.
 - **Logs**: `journalctl -u sharplab-bot.service -n 50 --no-pager`
 - **DB**: SQLite at `/opt/sharplab/data/sharplab.db`
 
-**Rules**: Never restart sentinel/guardian/stavid. Always restart temporal before bot+worker. Verify with status + logs after deploy.
+**Rules**: Never restart guardian/stavid from here. Always restart temporal before bot+worker. Verify with status + logs after deploy.
 
 ---
 
