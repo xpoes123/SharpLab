@@ -78,8 +78,15 @@ async def start(request: Request):
     started_at = await queries.get_or_create_daily_start(uid, puz["game_id"], day)
     elapsed_ms = _elapsed_ms(started_at)
     token = _start_signer.dumps({"day": day, "game": puz["game_id"], "uid": uid})
-    return {"board": puz["payload"], "difficulty": puz["difficulty"], "par": puz["par"],
-            "number": daily.puzzle_number(day), "start_token": token, "elapsed_ms": elapsed_ms}
+    game = daily.DAILY_GAMES[puz["game_id"]]
+    # Online games (Mastermind) HIDE part of the board (the secret code) — redact before it leaves
+    # the server; feedback comes back per-guess via /mm-guess.
+    board = game.redact(puz["payload"]) if hasattr(game, "redact") else puz["payload"]
+    out = {"board": board, "difficulty": puz["difficulty"], "par": puz["par"],
+           "number": daily.puzzle_number(day), "start_token": token, "elapsed_ms": elapsed_ms}
+    if getattr(game, "ONLINE", False):
+        out["mm_history"] = await queries.get_daily_mm_state(uid, day)  # resume prior guesses
+    return out
 
 
 def _elapsed_ms(started_at_iso: str) -> int:
@@ -124,6 +131,11 @@ async def submit(request: Request, body: SubmitBody):
         return JSONResponse({"error": "that didn't trap the pig — keep going"}, status_code=400)
     # Continuous clock from the first Start across all retries.
     result["secondary"] = min(_elapsed_ms(started_at), _START_TTL * 1000)
+    # Online games count moves SERVER-side (Mastermind): the honest guess total is the persisted
+    # history length, not the client-submitted list — so a refresh can't shrink your move count.
+    if getattr(game, "ONLINE", False):
+        result["primary"] = max(result["primary"],
+                                len(await queries.get_daily_mm_state(uid, day)))
 
     recorded = await queries.record_daily_result(
         puz["game_id"], day, uid, solved=result["solved"],
@@ -144,6 +156,44 @@ async def submit(request: Request, body: SubmitBody):
         "share": game.share_grid(result, {"difficulty": puz["difficulty"], "par": puz["par"],
                                            "number": daily.puzzle_number(day)}),
     }
+
+
+class GuessBody(BaseModel):
+    start_token: str
+    guess: list[int]
+
+
+@router.post("/mm-guess")
+async def mm_guess(request: Request, body: GuessBody):
+    """Per-guess feedback for an ONLINE daily (Mastermind). The secret code lives only on the
+    server; this scores a guess, PERSISTS it to the day's history (so the move count is honest
+    across refreshes) and returns (black, white). It never records the final result — the client
+    still POSTs /submit on a win, which reads the persisted count as the move score."""
+    uid = _uid(request)
+    if not uid:
+        return JSONResponse({"error": "sign in to play the daily"}, status_code=401)
+    day = daily.puzzle_day()
+    puz = await queries.get_or_create_daily_puzzle(day)
+    game = daily.DAILY_GAMES[puz["game_id"]]
+    if not getattr(game, "ONLINE", False):
+        return JSONResponse({"error": "today's game isn't interactive"}, status_code=400)
+    try:
+        data = _start_signer.loads(body.start_token, max_age=_START_TTL)
+    except (BadSignature, SignatureExpired, ValueError):
+        return JSONResponse({"error": "your run expired — press Start again"}, status_code=400)
+    if data.get("day") != day or data.get("uid") != uid or data.get("game") != puz["game_id"]:
+        return JSONResponse({"error": "stale run — press Start again"}, status_code=400)
+    if await queries.get_daily_start(uid, puz["game_id"], day) is None:
+        return JSONResponse({"error": "press Start first"}, status_code=400)
+    if await queries.get_daily_result(puz["game_id"], day, uid):
+        return JSONResponse({"error": "you already played today's daily"}, status_code=409)
+    fb = game.feedback(puz["payload"], list(body.guess))
+    if fb is None:
+        return JSONResponse({"error": "invalid guess"}, status_code=400)
+    black, white = fb
+    count = await queries.append_daily_mm_guess(uid, day, list(body.guess), black, white)
+    return {"black": black, "white": white, "count": count,
+            "solved": black == puz["payload"]["len"]}
 
 
 # Board generation (rushhour build_solvable, etc.) is CPU-heavy BFS search — a single "hard"

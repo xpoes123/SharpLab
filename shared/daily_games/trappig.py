@@ -20,14 +20,14 @@ NAME = "Trap the Pig"
 ICON = "🐷"
 SURFACE = "web"
 DIFFICULTIES = ["easy", "medium", "hard"]
-# Rank by TIME first (secondary_score = elapsed ms), then fences (primary_score). With unlimited
-# retries everyone can grind to par fences, so speed is what separates the leaderboard.
-RANK_ORDER = ("secondary_score", "primary_score")
+# Rank by FEWEST FENCES first (primary_score), then time (secondary_score) as the tiebreak —
+# fewest moves wins, speed only separates players tied on move count (community preference).
+RANK_ORDER = ("primary_score", "secondary_score")
 HOWTO = (
     "A pig sits in the middle of a hex grid. Each turn you click one hex to drop a **fence**; "
     "then the pig bolts one hex along its shortest path to the edge. **Wall it in completely to "
-    "win.** Your rank is your **time** — the faster you trap it, the higher you place; fences "
-    "break ties. You can reset and retry, but **the clock keeps running across retries** — so "
+    "win.** Your rank is your **fence count** — trap it in the fewest fences to place highest; "
+    "time breaks ties. You can reset and retry, but **the clock keeps running across retries** — so "
     "solve it in as few tries as you can. Only a win counts. The clock starts when you hit Start."
 )
 

@@ -5786,6 +5786,47 @@ async def get_daily_start(discord_user: str, game_id: str, day: str) -> str | No
         return row["started_at"] if row else None
 
 
+async def get_daily_mm_state(discord_user: str, day: str) -> list:
+    """Mastermind's persisted guess history for the day: [[guess, black, white], ...] (oldest
+    first). Empty list if nothing recorded yet."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT mm_state FROM daily_starts WHERE discord_user=? AND game_id=? AND puzzle_date=?",
+            (discord_user, "mastermind", day))
+        row = await cur.fetchone()
+    if not row or not row["mm_state"]:
+        return []
+    try:
+        return json.loads(row["mm_state"])
+    except (ValueError, TypeError):
+        return []
+
+
+async def append_daily_mm_guess(discord_user: str, day: str, guess: list, black: int,
+                                white: int) -> int:
+    """Append one scored guess to the day's Mastermind history and return the new total count.
+    Server-side so the move count can't be reset by refreshing the page."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT mm_state FROM daily_starts WHERE discord_user=? AND game_id=? AND puzzle_date=?",
+            (discord_user, "mastermind", day))
+        row = await cur.fetchone()
+        history = []
+        if row and row["mm_state"]:
+            try:
+                history = json.loads(row["mm_state"])
+            except (ValueError, TypeError):
+                history = []
+        history.append([list(guess), int(black), int(white)])
+        await db.execute(
+            "UPDATE daily_starts SET mm_state=? WHERE discord_user=? AND game_id=? AND puzzle_date=?",
+            (json.dumps(history), discord_user, "mastermind", day))
+        await db.commit()
+        return len(history)
+
+
 # ── In-flight round persistence (resume open casino hands across restarts) ──────
 
 async def save_inflight_rounds(rows: list[tuple]) -> None:

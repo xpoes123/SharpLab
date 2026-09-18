@@ -13,7 +13,7 @@ import hashlib
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from shared.daily_games import rushhour, trappig
+from shared.daily_games import mastermind, rushhour, trappig
 
 ET = ZoneInfo("America/New_York")
 ROLLOVER_HOUR = 4                # a puzzle-day runs 4am ET → 4am ET
@@ -21,8 +21,8 @@ EPOCH = date(2026, 1, 1)         # day_index origin
 
 # Registry + rotation. Add plugins to DAILY_GAMES; DAILY_POOL is the rotation order, and it only
 # takes effect from POOL_START_DAY so introducing a game never changes already-cached past days.
-DAILY_GAMES = {trappig.ID: trappig, rushhour.ID: rushhour}
-DAILY_POOL = [rushhour.ID, trappig.ID]
+DAILY_GAMES = {trappig.ID: trappig, rushhour.ID: rushhour, mastermind.ID: mastermind}
+DAILY_POOL = [rushhour.ID, trappig.ID, mastermind.ID]
 POOL_START_DAY = "2026-08-21"   # multi-game rotation begins here; before it, Trap the Pig only
 
 

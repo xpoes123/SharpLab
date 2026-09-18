@@ -101,3 +101,51 @@ def test_leaderboard_ranks_two_players(monkeypatch):
         assert lb["season"][0]["days"] == 1
 
     _run(go())
+
+
+def test_mastermind_online_flow_and_server_move_count(monkeypatch):
+    """Mastermind: per-guess feedback via /mm-guess, and the move count is SERVER-counted so a
+    client that replays the answer in a short list still scores its true (persisted) guess total."""
+    _fresh()
+
+    async def go():
+        await sch.init_db()
+        # Force today's game to Mastermind regardless of the rotation date.
+        monkeypatch.setattr(web_daily.daily, "schedule", lambda day: ("mastermind", "easy"))
+        day = web_daily.daily.puzzle_day()
+        code = (await q.get_or_create_daily_puzzle(day))["payload"]["code"]
+        colors = (await q.get_or_create_daily_puzzle(day))["payload"]["colors"]
+        wrong = [(code[0] + 1) % colors] + list(code[1:])
+
+        monkeypatch.setattr(web_daily.auth, "read_session", lambda r: {"id": "m1"})
+        await q.get_or_create_casino_wallet("m1")
+        s = await web_daily.start(_Req())
+        assert "code" not in s["board"]          # secret is redacted
+        assert s["mm_history"] == []
+
+        g1 = await web_daily.mm_guess(_Req(), web_daily.GuessBody(start_token=s["start_token"], guess=wrong))
+        assert g1["solved"] is False and g1["count"] == 1
+        g2 = await web_daily.mm_guess(_Req(), web_daily.GuessBody(start_token=s["start_token"], guess=code))
+        assert g2["solved"] is True and g2["count"] == 2
+
+        res = await web_daily.submit(_Req(), web_daily.SubmitBody(
+            start_token=s["start_token"], solution={"moves": [wrong, code]}))
+        assert res["result"]["solved"] and res["result"]["primary"] == 2 and res["rank"] == 1
+
+        # Anti-cheese: a second player grinds 3 guesses server-side, then tries to submit a
+        # 1-guess "solution". The move score must be the server total (3), not the client's 1.
+        monkeypatch.setattr(web_daily.auth, "read_session", lambda r: {"id": "m2"})
+        await q.get_or_create_casino_wallet("m2")
+        s2 = await web_daily.start(_Req())
+        for _ in range(2):
+            await web_daily.mm_guess(_Req(), web_daily.GuessBody(start_token=s2["start_token"], guess=wrong))
+        await web_daily.mm_guess(_Req(), web_daily.GuessBody(start_token=s2["start_token"], guess=code))
+        res2 = await web_daily.submit(_Req(), web_daily.SubmitBody(
+            start_token=s2["start_token"], solution={"moves": [code]}))
+        assert res2["result"]["primary"] == 3    # server-counted, cheese-proof
+
+        # m1 (2 guesses) ranks above m2 (3 guesses) — move-count first.
+        lb = await web_daily.leaderboard(_Req())
+        assert lb["today"][0]["primary"] == 2 and lb["today"][1]["primary"] == 3
+
+    _run(go())
