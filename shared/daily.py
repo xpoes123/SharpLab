@@ -10,6 +10,7 @@ DIFFICULTIES, generate/validate/par/share_grid).
 from __future__ import annotations
 
 import hashlib
+import os
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -72,11 +73,22 @@ def schedule(day: str) -> tuple[str, str]:
     return game_id, diffs[i % len(diffs)]
 
 
-def seed_for(game_id: str, day: str) -> int:
-    """Stable 32-bit seed from (game, day). hashlib (not hash()) so it's identical across
-    processes and restarts — everyone gets the same board."""
-    h = hashlib.sha256(f"{game_id}:{day}".encode()).hexdigest()
+def seed_for(game_id: str, day: str, secret: str = "") -> int:
+    """Stable 32-bit seed from (game, day[, secret]). hashlib (not hash()) so it's identical across
+    processes and restarts — everyone gets the same board. `secret` salts the seed for ONLINE games
+    (Mastermind) whose answer is HIDDEN: without it the code would be `generate(sha256("mastermind:
+    <date>"))` — computable offline by anyone who knows the (public) scheme, letting them submit a
+    1-guess solution and bypass the server-side guess count. Offline games pass secret="" (their
+    board is handed to the client anyway, so a derivable seed reveals nothing extra)."""
+    h = hashlib.sha256(f"{game_id}:{day}:{secret}".encode()).hexdigest()
     return int(h[:8], 16)
+
+
+def _server_secret() -> str:
+    """A deployment secret used only to make ONLINE daily codes unguessable. Reused from the web
+    session secret so there's nothing new to configure; empty in dev (codes are then derivable,
+    which is fine for local play)."""
+    return os.environ.get("SESSION_SECRET") or os.environ.get("WEB_API_SECRET") or ""
 
 
 def build_puzzle(day: str) -> dict:
@@ -87,7 +99,9 @@ def build_puzzle(day: str) -> dict:
     `generate` for games that are solvable by construction."""
     game_id, difficulty = schedule(day)
     game = DAILY_GAMES[game_id]
-    seed = seed_for(game_id, day)
+    # ONLINE games hide their answer → salt the seed so the code can't be recomputed off the clock.
+    secret = _server_secret() if getattr(game, "ONLINE", False) else ""
+    seed = seed_for(game_id, day, secret)
     if hasattr(game, "build_solvable"):
         payload = game.build_solvable(seed, difficulty)
     else:

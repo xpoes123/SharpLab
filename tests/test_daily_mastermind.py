@@ -53,3 +53,11 @@ def test_par_is_approximate():
 def test_rank_order_is_move_first():
     assert mm.RANK_ORDER == ("primary_score", "secondary_score")
     assert getattr(mm, "ONLINE", False) is True
+
+
+def test_seed_salt_makes_online_code_unguessable():
+    from shared import daily
+    # A server secret must change the seed (so the hidden code can't be recomputed offline)...
+    assert daily.seed_for("mastermind", "2026-09-19", "") != daily.seed_for("mastermind", "2026-09-19", "s3cret")
+    # ...while offline games (secret="") are unchanged.
+    assert daily.seed_for("trappig", "2026-09-19") == daily.seed_for("trappig", "2026-09-19", "")

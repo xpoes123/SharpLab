@@ -149,3 +149,20 @@ def test_mastermind_online_flow_and_server_move_count(monkeypatch):
         assert lb["today"][0]["primary"] == 2 and lb["today"][1]["primary"] == 3
 
     _run(go())
+
+
+def test_mm_history_is_capped(monkeypatch):
+    """A flood of /mm-guess can't grow the stored history without bound."""
+    _fresh()
+
+    async def go():
+        await sch.init_db()
+        day = web_daily.daily.puzzle_day()
+        await q.get_or_create_daily_start("capuser", "mastermind", day)
+        n = 0
+        for _ in range(q.MM_MAX_GUESSES + 5):
+            n = await q.append_daily_mm_guess("capuser", day, [0, 0, 0, 0], 0, 0)
+        assert n == q.MM_MAX_GUESSES
+        assert len(await q.get_daily_mm_state("capuser", day)) == q.MM_MAX_GUESSES
+
+    _run(go())

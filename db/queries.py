@@ -5803,12 +5803,20 @@ async def get_daily_mm_state(discord_user: str, day: str) -> list:
         return []
 
 
+MM_MAX_GUESSES = 500   # resource bound: cap stored guess history so a flood of /mm-guess can't
+                       # bloat the row. Far beyond any real solve; once hit, the count freezes
+                       # (the player is already losing badly) instead of growing unbounded.
+
+
 async def append_daily_mm_guess(discord_user: str, day: str, guess: list, black: int,
                                 white: int) -> int:
     """Append one scored guess to the day's Mastermind history and return the new total count.
-    Server-side so the move count can't be reset by refreshing the page."""
+    Server-side so the move count can't be reset by refreshing the page. BEGIN IMMEDIATE serializes
+    the read-modify-write so two concurrent guesses from the same client can't both read the old
+    history and clobber one another (which would UNDERcount and cheese the move-count leaderboard)."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")   # take the write lock before reading
         cur = await db.execute(
             "SELECT mm_state FROM daily_starts WHERE discord_user=? AND game_id=? AND puzzle_date=?",
             (discord_user, "mastermind", day))
@@ -5819,6 +5827,9 @@ async def append_daily_mm_guess(discord_user: str, day: str, guess: list, black:
                 history = json.loads(row["mm_state"])
             except (ValueError, TypeError):
                 history = []
+        if len(history) >= MM_MAX_GUESSES:    # bound reached — stop growing the row
+            await db.commit()
+            return len(history)
         history.append([list(guess), int(black), int(white)])
         await db.execute(
             "UPDATE daily_starts SET mm_state=? WHERE discord_user=? AND game_id=? AND puzzle_date=?",
