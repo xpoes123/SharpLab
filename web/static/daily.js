@@ -76,11 +76,14 @@ function gameId() {
   return (D.today && D.today.game && D.today.game.id) || "trappig";
 }
 const isRush = () => gameId() === "rushhour";
-const unitWord = () => (isRush() ? "moves" : "fences"); // lowercase, for prose
-const unitLabel = () => (isRush() ? "Moves" : "Fences"); // Titlecase, for headers
-const solvedTitle = () => (isRush() ? "🎉 Solved!" : "🎉 Trapped!");
-const solvedVerb = () => (isRush() ? "Solved" : "Trapped");
+const isMind = () => gameId() === "mastermind";
+const unitWord = () => (isMind() ? "guesses" : isRush() ? "moves" : "fences"); // lowercase, for prose
+const unitLabel = () => (isMind() ? "Guesses" : isRush() ? "Moves" : "Fences"); // Titlecase, for headers
+const solvedTitle = () => (isMind() ? "🎉 Cracked!" : isRush() ? "🎉 Solved!" : "🎉 Trapped!");
+const solvedVerb = () => (isMind() ? "Cracked" : isRush() ? "Solved" : "Trapped");
 function ruleText() {
+  if (isMind())
+    return "Crack the secret code in as few guesses as you can — everyone gets today's code; fewest guesses wins, time breaks ties.";
   return isRush()
     ? "Slide the red car out through the exit in as few moves as you can — everyone gets today's board; time breaks ties."
     : "Fence the pig in as few moves as you can — everyone gets today's board; time breaks ties.";
@@ -242,6 +245,7 @@ async function startGame() {
   // Board is here for the first time. Sync any metadata the server refreshed.
   D.board = j.board;
   D.startToken = j.start_token;
+  D.mmHistory = j.mm_history || []; // online games: prior guesses to repaint on resume
   if (j.game && j.game.id) D.today.game = Object.assign({}, D.today.game, j.game);
   if (j.par != null) D.today.par = j.par;
   if (j.difficulty != null) D.today.difficulty = j.difficulty;
@@ -254,7 +258,8 @@ async function startGame() {
   D.submitting = false;
   D.submitted = false;
 
-  buildSkeleton({ showReset: true });
+  // Mastermind has no "stuck/reset" state — you just keep guessing — so hide Reset for it.
+  buildSkeleton({ showReset: !isMind() });
   // Tear down any previous renderer before mounting the fresh board.
   if (D.renderer && D.renderer.teardown) {
     try { D.renderer.teardown(); } catch (_) {}
@@ -626,6 +631,163 @@ main();
       work = null;
       moves = [];
       done = true;
+    },
+  };
+})();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Mastermind renderer — the platform's first ONLINE game. Unlike the pig/car
+// renderers (which play fully offline and hand back a solution to replay), the
+// secret code lives on the server: each guess is POSTed to /api/v1/daily/mm-guess
+// which returns (black, white) feedback and PERSISTS the guess, so the move count
+// is server-authoritative and survives a refresh (D.mmHistory repaints it).
+// getMoves() returns every guess in order; the winning submit's last guess = code.
+// ─────────────────────────────────────────────────────────────────────────────
+(function () {
+  const PALETTE = ["#e05a5a", "#e0913a", "#e8d24a", "#4ec06a",
+                   "#4a86e8", "#9a6ce0", "#3ec6c6", "#e06aa8"];
+  let stage = null, board = null, cbs = {};
+  let rows = [];       // [{guess:[...], black, white}] — every scored guess (history + session)
+  let current = [];    // the in-progress guess, entries are colorIdx or null
+  let pending = false, solved = false;
+
+  const pegHTML = (c, extra) =>
+    `<span style="display:inline-block;width:26px;height:26px;border-radius:50%;` +
+    `background:${PALETTE[c % PALETTE.length]};border:1px solid rgba(0,0,0,.35);` +
+    `margin:3px;vertical-align:middle;${extra || ""}"></span>`;
+
+  const slotHTML = (c, i) =>
+    c == null
+      ? `<button class="mm-slot" data-slot="${i}" title="empty" style="width:26px;height:26px;` +
+        `border-radius:50%;margin:3px;vertical-align:middle;background:transparent;` +
+        `border:2px dashed var(--border,#556);cursor:pointer"></button>`
+      : `<button class="mm-slot" data-slot="${i}" title="click to clear" style="width:26px;` +
+        `height:26px;border-radius:50%;margin:3px;vertical-align:middle;cursor:pointer;` +
+        `background:${PALETTE[c % PALETTE.length]};border:1px solid rgba(0,0,0,.35)"></button>`;
+
+  function feedbackHTML(black, white) {
+    const total = board.len;
+    let dots = "";
+    for (let i = 0; i < black; i++)
+      dots += `<span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:#111;border:1px solid #000;margin:1px"></span>`;
+    for (let i = 0; i < white; i++)
+      dots += `<span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:#fff;border:1px solid #999;margin:1px"></span>`;
+    for (let i = black + white; i < total; i++)
+      dots += `<span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:transparent;border:1px solid var(--border,#556);margin:1px"></span>`;
+    return `<span style="display:inline-block;min-width:70px;margin-left:12px">${dots}</span>`;
+  }
+
+  function render() {
+    const history = rows
+      .map(
+        (r) =>
+          `<div style="display:flex;align-items:center;margin:2px 0">` +
+          r.guess.map((c) => pegHTML(c)).join("") +
+          feedbackHTML(r.black, r.white) +
+          `</div>`
+      )
+      .join("");
+
+    let entry = "";
+    if (!solved) {
+      const slots = current.map((c, i) => slotHTML(c, i)).join("");
+      const swatches = PALETTE.slice(0, board.colors)
+        .map(
+          (_, i) =>
+            `<button class="mm-swatch" data-color="${i}" ${pending ? "disabled" : ""} ` +
+            `style="width:30px;height:30px;border-radius:50%;margin:4px;cursor:pointer;` +
+            `background:${PALETTE[i]};border:2px solid rgba(255,255,255,.25)"></button>`
+        )
+        .join("");
+      const ready = current.every((c) => c != null) && !pending;
+      entry =
+        `<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border,#556)">` +
+        `<div style="display:flex;align-items:center">${slots}` +
+        `<button class="btn" id="mmGuess" ${ready ? "" : "disabled"} style="margin-left:14px">${pending ? "…" : "Guess"}</button>` +
+        `</div><div style="margin-top:8px">${swatches}</div></div>`;
+    }
+
+    stage.innerHTML =
+      `<div style="max-width:420px;margin:0 auto">${history || ""}${entry}</div>`;
+
+    if (solved) return;
+    stage.querySelectorAll(".mm-swatch").forEach((b) => {
+      b.onclick = () => {
+        const idx = current.indexOf(null);
+        if (idx === -1) return;
+        current[idx] = Number(b.dataset.color);
+        render();
+      };
+    });
+    stage.querySelectorAll(".mm-slot").forEach((b) => {
+      b.onclick = () => {
+        current[Number(b.dataset.slot)] = null;
+        render();
+      };
+    });
+    const g = document.getElementById("mmGuess");
+    if (g) g.onclick = sendGuess;
+  }
+
+  async function sendGuess() {
+    if (pending || solved) return;
+    if (current.some((c) => c == null)) return;
+    pending = true;
+    render();
+    let r, j;
+    try {
+      r = await fetch("/api/v1/daily/mm-guess", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ start_token: D.startToken, guess: current }),
+      });
+      j = await r.json().catch(() => ({}));
+    } catch (_) {
+      pending = false;
+      showNotice("warn", "Network error — try that guess again.");
+      render();
+      return;
+    }
+    pending = false;
+    if (!r.ok) {
+      showNotice("warn", esc((j && (j.error || j.detail)) || "Guess rejected — press Start again."));
+      render();
+      return;
+    }
+    rows.push({ guess: current.slice(), black: j.black, white: j.white });
+    if (cbs.onMove) cbs.onMove(j.count != null ? j.count : rows.length);
+    current = new Array(board.len).fill(null);
+    if (j.solved) {
+      solved = true;
+      render();
+      if (cbs.onSolved) cbs.onSolved();
+      return;
+    }
+    render();
+  }
+
+  window.DailyRenderers["mastermind"] = {
+    mount(stageEl, b, callbacks) {
+      stage = stageEl;
+      board = b;
+      cbs = callbacks || {};
+      pending = false;
+      solved = false;
+      rows = (D.mmHistory || []).map((h) => ({ guess: h[0], black: h[1], white: h[2] }));
+      current = new Array(board.len).fill(null);
+      render();
+      if (cbs.onMove) cbs.onMove(rows.length);
+    },
+    getMoves() {
+      return rows.map((r) => r.guess);
+    },
+    teardown() {
+      stage = null;
+      board = null;
+      rows = [];
+      current = [];
+      solved = true;
     },
   };
 })();

@@ -1086,6 +1086,12 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        try:  # mastermind (online game): per-day server-side guess history [[guess,black,white],...]
+              # so the move count survives refreshes and can't be cheesed by replaying the answer.
+            await db.execute("ALTER TABLE daily_starts ADD COLUMN mm_state TEXT")
+            await db.commit()
+        except Exception:
+            pass
         try:
             await db.execute(
                 "CREATE TABLE IF NOT EXISTS bounty_backfilled ("
