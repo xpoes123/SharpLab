@@ -77,11 +77,14 @@ function gameId() {
 }
 const isRush = () => gameId() === "rushhour";
 const isMind = () => gameId() === "mastermind";
-const unitWord = () => (isMind() ? "guesses" : isRush() ? "moves" : "fences"); // lowercase, for prose
-const unitLabel = () => (isMind() ? "Guesses" : isRush() ? "Moves" : "Fences"); // Titlecase, for headers
-const solvedTitle = () => (isMind() ? "🎉 Cracked!" : isRush() ? "🎉 Solved!" : "🎉 Trapped!");
-const solvedVerb = () => (isMind() ? "Cracked" : isRush() ? "Solved" : "Trapped");
+const isCount = () => gameId() === "countdown";
+const unitWord = () => (isCount() ? "numbers" : isMind() ? "guesses" : isRush() ? "moves" : "fences"); // lowercase, for prose
+const unitLabel = () => (isCount() ? "Numbers" : isMind() ? "Guesses" : isRush() ? "Moves" : "Fences"); // Titlecase, for headers
+const solvedTitle = () => (isMind() ? "🎉 Cracked!" : isRush() || isCount() ? "🎉 Solved!" : "🎉 Trapped!");
+const solvedVerb = () => (isMind() ? "Cracked" : "Solved");
 function ruleText() {
+  if (isCount())
+    return "Use the six numbers and + − × ÷ to hit the target exactly — everyone gets today's numbers; fastest exact solve wins, fewest numbers breaks ties.";
   if (isMind())
     return "Crack the secret code in as few guesses as you can — everyone gets today's code; fewest guesses wins, time breaks ties.";
   return isRush()
@@ -787,6 +790,183 @@ main();
       board = null;
       rows = [];
       current = [];
+      solved = true;
+    },
+  };
+})();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Countdown renderer — an OFFLINE game (like the pig/car): the board (six numbers
+// + a target) is handed over on Start and the whole solution rides in a single
+// expression string. getMoves() returns [expression]; the win is REPLAYED and
+// scored server-side by the plugin's validate(), so the client is never trusted
+// for the outcome. cdEval() below mirrors the server evaluator EXACTLY (integer
+// arithmetic, exact division only, each number usable only as it appears) so the
+// "Exact!" the player sees is the same verdict the server will reach on submit.
+// Ranking is fastest-exact-solve; the count of numbers used breaks ties.
+// ─────────────────────────────────────────────────────────────────────────────
+(function () {
+  let stage = null, board = null, cbs = {}, expr = "", solved = false;
+
+  const OPS = { "+": 1, "-": 1, "*": 2, "/": 2 };
+
+  // Parse + evaluate an expression under Countdown rules; returns {ok, value, err}.
+  // Deliberately identical in behaviour to shared/daily_games/countdown.evaluate_expression.
+  function cdEval(s, numbers) {
+    const toks = [];
+    let i = 0;
+    while (i < s.length) {
+      const c = s[i];
+      if (c === " ") { i++; continue; }
+      if (c >= "0" && c <= "9") {
+        let j = i;
+        while (j < s.length && s[j] >= "0" && s[j] <= "9") j++;
+        toks.push(parseInt(s.slice(i, j), 10));
+        i = j;
+        continue;
+      }
+      if (c in OPS || c === "(" || c === ")") { toks.push(c); i++; continue; }
+      return { ok: false, value: null, err: "illegal character" };
+    }
+    if (!toks.length) return { ok: false, value: null, err: "" };
+    const out = [], st = [];
+    let prev = null;
+    for (const t of toks) {
+      if (typeof t === "number") {
+        if (prev === "num" || prev === ")") return { ok: false, value: null, err: "missing operator" };
+        out.push(t); prev = "num";
+      } else if (t in OPS) {
+        if (prev === null || prev === "op" || prev === "(") return { ok: false, value: null, err: "misplaced operator" };
+        while (st.length && st[st.length - 1] in OPS && OPS[st[st.length - 1]] >= OPS[t]) out.push(st.pop());
+        st.push(t); prev = "op";
+      } else if (t === "(") {
+        if (prev === "num" || prev === ")") return { ok: false, value: null, err: "missing operator" };
+        st.push(t); prev = "(";
+      } else if (t === ")") {
+        if (prev !== "num" && prev !== ")") return { ok: false, value: null, err: "misplaced )" };
+        while (st.length && st[st.length - 1] !== "(") out.push(st.pop());
+        if (!st.length) return { ok: false, value: null, err: "unbalanced ()" };
+        st.pop(); prev = ")";
+      }
+    }
+    if (prev === "op" || prev === "(") return { ok: false, value: null, err: "incomplete" };
+    while (st.length) { const op = st.pop(); if (op === "(") return { ok: false, value: null, err: "unbalanced ()" }; out.push(op); }
+    const vs = [], used = [];
+    for (const t of out) {
+      if (typeof t === "number") { vs.push(t); used.push(t); continue; }
+      if (vs.length < 2) return { ok: false, value: null, err: "malformed" };
+      const b = vs.pop(), a = vs.pop();
+      if (t === "+") vs.push(a + b);
+      else if (t === "-") vs.push(a - b);
+      else if (t === "*") vs.push(a * b);
+      else { if (b === 0 || a % b !== 0) return { ok: false, value: null, err: "division must be exact" }; vs.push(a / b); }
+    }
+    if (vs.length !== 1) return { ok: false, value: null, err: "malformed" };
+    const avail = {};
+    for (const x of numbers) avail[x] = (avail[x] || 0) + 1;
+    for (const x of used) { if (!avail[x]) return { ok: false, value: null, err: "number " + x + " isn't available" }; avail[x]--; }
+    return { ok: true, value: vs[0], err: "" };
+  }
+
+  const OP_FACE = { "+": "+", "-": "−", "*": "×", "/": "÷" };
+
+  function render() {
+    const tiles = board.numbers
+      .map((n) => `<button class="cd-tile" data-ins="${n}">${n}</button>`)
+      .join("");
+    const ops = ["+", "-", "*", "/", "(", ")"]
+      .map((o) => `<button class="cd-op" data-ins="${o}">${OP_FACE[o] || o}</button>`)
+      .join("");
+
+    const ev = expr.trim() ? cdEval(expr, board.numbers) : null;
+    let status = `<span class="cd-hint">Tap numbers &amp; operators, or type. Hit <b>${esc(board.target)}</b> exactly.</span>`;
+    if (ev) {
+      if (!ev.ok) {
+        status = `<span class="cd-bad">${esc(ev.err || "keep going")}</span>`;
+      } else if (ev.value === board.target) {
+        status = `<span class="cd-good">✓ Exact — ${esc(ev.value)}! Locking it in…</span>`;
+      } else {
+        const d = ev.value - board.target;
+        status = `<span class="cd-near">= ${esc(ev.value)} · ${d > 0 ? "+" : ""}${esc(d)} from target</span>`;
+      }
+    }
+
+    stage.innerHTML =
+      `<div class="cd-wrap">
+        <div class="cd-target">Target <b>${esc(board.target)}</b></div>
+        <div class="cd-tiles">${tiles}</div>
+        <div class="cd-ops">${ops}</div>
+        <input id="cdExpr" class="cd-expr" type="text" inputmode="text" autocomplete="off"
+               spellcheck="false" placeholder="e.g. (100 + 25) * 3" value="${esc(expr)}" />
+        <div class="cd-controls">
+          <button class="cd-op" id="cdBack">⌫</button>
+          <button class="cd-op" id="cdClear">Clear</button>
+        </div>
+        <div class="cd-status">${status}</div>
+      </div>`;
+
+    if (solved) {
+      stage.querySelectorAll("button, input").forEach((el) => (el.disabled = true));
+      return;
+    }
+
+    const input = document.getElementById("cdExpr");
+    const sync = () => { expr = input.value; check(); };
+    input.oninput = () => { expr = input.value; live(); };
+    input.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); check(); } };
+
+    stage.querySelectorAll("[data-ins]").forEach((b) => {
+      b.onclick = () => { expr += b.dataset.ins; render(); focusEnd(); };
+    });
+    document.getElementById("cdBack").onclick = () => { expr = expr.slice(0, -1); render(); focusEnd(); };
+    document.getElementById("cdClear").onclick = () => { expr = ""; render(); focusEnd(); };
+  }
+
+  function focusEnd() {
+    const input = document.getElementById("cdExpr");
+    if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
+  }
+
+  // Repaint the status line only (cheap) as the player types, without rebuilding the input.
+  function live() {
+    const el = stage && stage.querySelector(".cd-status");
+    if (!el) return;
+    const ev = expr.trim() ? cdEval(expr, board.numbers) : null;
+    if (!ev) { el.innerHTML = `<span class="cd-hint">Hit <b>${esc(board.target)}</b> exactly.</span>`; }
+    else if (!ev.ok) { el.innerHTML = `<span class="cd-bad">${esc(ev.err || "keep going")}</span>`; }
+    else if (ev.value === board.target) { check(); }
+    else { const d = ev.value - board.target; el.innerHTML = `<span class="cd-near">= ${esc(ev.value)} · ${d > 0 ? "+" : ""}${esc(d)} from target</span>`; }
+  }
+
+  // The player has (locally) hit the target exactly → hand the expression to the page, which
+  // POSTs /submit; the server re-validates it before recording the solve.
+  function check() {
+    if (solved) return;
+    const ev = expr.trim() ? cdEval(expr, board.numbers) : null;
+    if (ev && ev.ok && ev.value === board.target) {
+      solved = true;
+      render();
+      if (cbs.onSolved) cbs.onSolved();
+    }
+  }
+
+  window.DailyRenderers["countdown"] = {
+    mount(stageEl, b, callbacks) {
+      stage = stageEl;
+      board = b;
+      cbs = callbacks || {};
+      expr = "";
+      solved = false;
+      render();
+      if (cbs.onMove) cbs.onMove(0);
+    },
+    getMoves() {
+      return [expr];
+    },
+    teardown() {
+      stage = null;
+      board = null;
+      expr = "";
       solved = true;
     },
   };

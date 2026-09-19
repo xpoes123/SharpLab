@@ -60,6 +60,34 @@
 
 .actions { display: flex; gap: 10px; }
 
+/* countdown (numbers round) */
+.cd-wrap { display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 380px; }
+.cd-target { text-align: center; font-size: 15px; color: var(--muted); font-weight: 600; }
+.cd-target b { display: inline-block; margin-left: 6px; font-family: var(--font-mono); font-size: 30px;
+  font-weight: 800; color: var(--fg); letter-spacing: .02em; }
+.cd-tiles { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.cd-tile { min-width: 52px; padding: 12px 10px; font-family: var(--font-mono); font-size: 20px;
+  font-weight: 800; color: var(--fg); background: var(--panel); border: 1px solid var(--line-strong);
+  border-radius: 12px; cursor: pointer; transition: border-color .12s, transform .06s; }
+.cd-tile:hover { border-color: var(--accent); }
+.cd-tile:active { transform: translateY(1px); }
+.cd-ops, .cd-controls { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+.cd-op { min-width: 44px; padding: 10px 12px; font-size: 18px; font-weight: 700; color: var(--fg-2);
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; cursor: pointer;
+  font-family: inherit; transition: border-color .12s; }
+.cd-op:hover { border-color: var(--accent); color: var(--fg); }
+.cd-expr { width: 100%; box-sizing: border-box; padding: 12px 14px; font-family: var(--font-mono);
+  font-size: 18px; color: var(--fg); background: var(--panel2); border: 1px solid var(--line-strong);
+  border-radius: 12px; text-align: center; }
+.cd-expr:focus { outline: none; border-color: var(--accent); }
+.cd-status { text-align: center; font-size: 14px; min-height: 20px; }
+.cd-hint { color: var(--muted); }
+.cd-hint b, .cd-status b { color: var(--fg); font-family: var(--font-mono); }
+.cd-near { color: var(--gold); font-family: var(--font-mono); font-weight: 700; }
+.cd-good { color: var(--green); font-weight: 800; }
+.cd-bad { color: var(--muted); }
+.cd-tile:disabled, .cd-op:disabled, .cd-expr:disabled { opacity: .55; cursor: default; }
+
 /* tutorial / how-to card (shown before the board is revealed) */
 .tutorial { background: var(--panel); border: 1px solid var(--line); border-radius: 18px;
   padding: 20px; display: flex; flex-direction: column; gap: 14px; }
