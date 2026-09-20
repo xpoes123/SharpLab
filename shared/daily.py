@@ -14,7 +14,7 @@ import os
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from shared.daily_games import countdown, mastermind, rushhour, trappig
+from shared.daily_games import countdown, mastermind, rushhour, trappig, windmill
 
 ET = ZoneInfo("America/New_York")
 ROLLOVER_HOUR = 4                # a puzzle-day runs 4am ET → 4am ET
@@ -24,7 +24,7 @@ EPOCH = date(2026, 1, 1)         # day_index origin
 # been retired from the active rotation (see _ERAS) so historical Mastermind days still render on
 # leaderboards; it just never gets scheduled again.
 DAILY_GAMES = {trappig.ID: trappig, rushhour.ID: rushhour,
-               mastermind.ID: mastermind, countdown.ID: countdown}
+               mastermind.ID: mastermind, countdown.ID: countdown, windmill.ID: windmill}
 
 # Rotation eras: (start_day, pool). A day uses the LATEST era whose start_day <= it; before the
 # first era only Trap the Pig runs. Each era is anchored at its own start, so introducing or
@@ -34,9 +34,11 @@ DAILY_GAMES = {trappig.ID: trappig, rushhour.ID: rushhour,
 #   era 2 (2026-09-19): Mastermind retired, Countdown added and live on day one of the era.
 DAILY_POOL = [rushhour.ID, trappig.ID, mastermind.ID]   # era-1 pool (kept for reference/history)
 POOL_START_DAY = "2026-08-21"
+#   era 3 (2026-09-20): Windmill added and live on day one of the era.
 _ERAS: list[tuple[str, list[str]]] = [
     ("2026-08-21", [rushhour.ID, trappig.ID, mastermind.ID]),
     ("2026-09-19", [countdown.ID, rushhour.ID, trappig.ID]),
+    ("2026-09-20", [windmill.ID, countdown.ID, rushhour.ID, trappig.ID]),
 ]
 
 
@@ -126,6 +128,10 @@ def build_puzzle(day: str) -> dict:
     else:
         payload = game.generate(seed, difficulty)
     par_v, approx = game.par(payload)
+    # Strip private (_-prefixed) fields before the payload is cached + shipped to the client — a
+    # plugin may stash its witness/solution there for par/tests, and that must never reach the
+    # browser (e.g. Windmill's `_witness`/`_gaps`). par() has already run against the full payload.
+    payload = {k: v for k, v in payload.items() if not k.startswith("_")}
     return {"game_id": game_id, "difficulty": difficulty, "seed": seed,
             "payload": payload, "par": par_v, "par_approx": approx}
 
