@@ -14,17 +14,30 @@ import os
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from shared.daily_games import mastermind, rushhour, trappig
+from shared.daily_games import countdown, mastermind, rushhour, trappig
 
 ET = ZoneInfo("America/New_York")
 ROLLOVER_HOUR = 4                # a puzzle-day runs 4am ET → 4am ET
 EPOCH = date(2026, 1, 1)         # day_index origin
 
-# Registry + rotation. Add plugins to DAILY_GAMES; DAILY_POOL is the rotation order, and it only
-# takes effect from POOL_START_DAY so introducing a game never changes already-cached past days.
-DAILY_GAMES = {trappig.ID: trappig, rushhour.ID: rushhour, mastermind.ID: mastermind}
-DAILY_POOL = [rushhour.ID, trappig.ID, mastermind.ID]
-POOL_START_DAY = "2026-08-21"   # multi-game rotation begins here; before it, Trap the Pig only
+# Registry: every plugin the platform knows about. Mastermind stays registered even though it has
+# been retired from the active rotation (see _ERAS) so historical Mastermind days still render on
+# leaderboards; it just never gets scheduled again.
+DAILY_GAMES = {trappig.ID: trappig, rushhour.ID: rushhour,
+               mastermind.ID: mastermind, countdown.ID: countdown}
+
+# Rotation eras: (start_day, pool). A day uses the LATEST era whose start_day <= it; before the
+# first era only Trap the Pig runs. Each era is anchored at its own start, so introducing or
+# retiring a game only affects days from that era onward — earlier days keep their schedule (and
+# their game_id lookups stay valid for cached puzzles + past leaderboards).
+#   era 1 (2026-08-21): the original multi-game rotation.
+#   era 2 (2026-09-19): Mastermind retired, Countdown added and live on day one of the era.
+DAILY_POOL = [rushhour.ID, trappig.ID, mastermind.ID]   # era-1 pool (kept for reference/history)
+POOL_START_DAY = "2026-08-21"
+_ERAS: list[tuple[str, list[str]]] = [
+    ("2026-08-21", [rushhour.ID, trappig.ID, mastermind.ID]),
+    ("2026-09-19", [countdown.ID, rushhour.ID, trappig.ID]),
+]
 
 
 # ── puzzle-day & rotation ─────────────────────────────────────────────────────
@@ -59,14 +72,20 @@ RAMP_EASY_DAYS = 5
 
 
 def schedule(day: str) -> tuple[str, str]:
-    """(game_id, difficulty) for a puzzle-day. Before POOL_START_DAY only Trap the Pig runs; from
-    there the game rotates through DAILY_POOL (so adding a game never disturbs cached past days).
-    Difficulty cycles easy→medium→hard, except the first RAMP_EASY_DAYS from launch are all easy."""
+    """(game_id, difficulty) for a puzzle-day. Before the first era only Trap the Pig runs; within an
+    era the game rotates through that era's pool, anchored at the era's start (so retiring/adding a
+    game never disturbs earlier days). Difficulty cycles easy→medium→hard, except the first
+    RAMP_EASY_DAYS from launch are all easy."""
     i = day_index(day)
-    if i < day_index(POOL_START_DAY):
+    era = None
+    for start, pool in _ERAS:
+        if i >= day_index(start):
+            era = (start, pool)
+    if era is None:
         game_id = trappig.ID
     else:
-        game_id = DAILY_POOL[(i - day_index(POOL_START_DAY)) % len(DAILY_POOL)]
+        start, pool = era
+        game_id = pool[(i - day_index(start)) % len(pool)]
     diffs = DAILY_GAMES[game_id].DIFFICULTIES
     if 0 <= i - day_index(LAUNCH_DAY) < RAMP_EASY_DAYS and "easy" in diffs:
         return game_id, "easy"

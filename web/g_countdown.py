@@ -27,6 +27,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel
 
 from db import queries
+from shared.daily_games.countdown import ExprError, evaluate_expression  # single source of truth
 from web import auth, gameround
 
 router = APIRouter(prefix="/api/v1/arcade/countdown")
@@ -62,129 +63,9 @@ def _new_round() -> tuple[list[int], int]:
     return numbers, target
 
 
-# ── Hand-written expression evaluator (NO eval / NO Function) ──
-class ExprError(ValueError):
-    """Raised for any malformed / disallowed / non-integer-division expression."""
-
-
-_OPS = {"+", "-", "*", "/"}
-_PREC = {"+": 1, "-": 1, "*": 2, "/": 2}
-
-
-def _tokenize(expr: str) -> list:
-    """Turn the string into a list of ints and single-char operator/paren tokens.
-    Only digits, spaces, + - * / and parentheses are permitted."""
-    tokens: list = []
-    i, n = 0, len(expr)
-    while i < n:
-        c = expr[i]
-        if c.isspace():
-            i += 1
-            continue
-        if c.isdigit():
-            j = i
-            while j < n and expr[j].isdigit():
-                j += 1
-            tokens.append(int(expr[i:j]))
-            i = j
-            continue
-        if c in _OPS or c in "()":
-            tokens.append(c)
-            i += 1
-            continue
-        raise ExprError(f"illegal character {c!r}")
-    if not tokens:
-        raise ExprError("empty expression")
-    return tokens
-
-
-def _to_rpn(tokens: list) -> list:
-    """Shunting-yard: infix tokens -> reverse-polish output. Validates structure so
-    malformed input (double operators, unbalanced parens) raises rather than mis-parsing."""
-    output: list = []
-    stack: list = []
-    prev = None  # None | 'num' | 'op' | '(' | ')'
-    for t in tokens:
-        if isinstance(t, int):
-            if prev in ("num", ")"):
-                raise ExprError("missing operator")
-            output.append(t)
-            prev = "num"
-        elif t in _OPS:
-            if prev is None or prev == "op" or prev == "(":
-                raise ExprError("misplaced operator")
-            while stack and stack[-1] in _OPS and _PREC[stack[-1]] >= _PREC[t]:
-                output.append(stack.pop())
-            stack.append(t)
-            prev = "op"
-        elif t == "(":
-            if prev in ("num", ")"):
-                raise ExprError("missing operator")
-            stack.append(t)
-            prev = "("
-        elif t == ")":
-            if prev not in ("num", ")"):
-                raise ExprError("misplaced parenthesis")
-            while stack and stack[-1] != "(":
-                output.append(stack.pop())
-            if not stack:
-                raise ExprError("unbalanced parentheses")
-            stack.pop()  # discard '('
-            prev = ")"
-    if prev in ("op", "("):
-        raise ExprError("incomplete expression")
-    while stack:
-        op = stack.pop()
-        if op == "(":
-            raise ExprError("unbalanced parentheses")
-        output.append(op)
-    return output
-
-
-def _eval_rpn(rpn: list) -> tuple[int, list[int]]:
-    """Evaluate RPN with integer-only, exact-division Countdown rules.
-    Returns (value, literals_used)."""
-    stack: list[int] = []
-    used: list[int] = []
-    for t in rpn:
-        if isinstance(t, int):
-            stack.append(t)
-            used.append(t)
-            continue
-        if len(stack) < 2:
-            raise ExprError("malformed expression")
-        b = stack.pop()
-        a = stack.pop()
-        if t == "+":
-            stack.append(a + b)
-        elif t == "-":
-            stack.append(a - b)
-        elif t == "*":
-            stack.append(a * b)
-        elif t == "/":
-            if b == 0 or a % b != 0:
-                raise ExprError("division must be exact (no fractions)")
-            stack.append(a // b)
-    if len(stack) != 1:
-        raise ExprError("malformed expression")
-    return stack[0], used
-
-
-def evaluate_expression(expr: str, numbers: list[int]) -> int:
-    """Full validation + evaluation. Verifies every literal used is available in the
-    `numbers` multiset (each usable at most as many times as it appears; a SUBSET is fine).
-    Raises ExprError on anything invalid. Returns the integer result."""
-    if len(expr) > 200:
-        raise ExprError("expression too long")
-    value, used = _eval_rpn(_to_rpn(_tokenize(expr)))
-    avail: dict[int, int] = {}
-    for x in numbers:
-        avail[x] = avail.get(x, 0) + 1
-    for x in used:
-        if avail.get(x, 0) <= 0:
-            raise ExprError(f"number {x} is not available")
-        avail[x] -= 1
-    return value
+# The expression evaluator (ExprError / evaluate_expression) lives in shared/daily_games/countdown.py
+# — the ONE source of truth for Countdown parsing + evaluation — and is imported at the top so the
+# solo, sprint, and daily surfaces all score expressions with identical rules.
 
 
 @router.post("/new")
