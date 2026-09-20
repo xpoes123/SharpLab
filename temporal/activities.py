@@ -84,13 +84,15 @@ _extract_payload = extract_book_payload  # canonical impl lives in shared.odds_u
 # ── Activities ─────────────────────────────────────────────────────────────────
 
 @activity.defn
-async def fetch_games_for_today(sport: str = "nba") -> list[Game]:
+async def fetch_games_for_today(sport: str = "nba", dry_run: bool = False) -> list[Game]:
     """
     Fetch today's schedule from The Odds API /events endpoint.
     Lightweight call — no odds data, minimal quota usage.
     Also upserts games to the DB so the rest of the pipeline can reference them.
+    dry_run skips the init_db + upsert writes (used by the --dry-run refresh script).
     """
-    await schema.init_db()
+    if not dry_run:
+        await schema.init_db()
     sport_key = _sport_key(sport)
 
     async with httpx.AsyncClient() as client:
@@ -117,7 +119,10 @@ async def fetch_games_for_today(sport: str = "nba") -> list[Game]:
             start_time_utc_iso=event["commence_time"],
             sport=sport,
         )
-        await queries.upsert_game(game)
+        if dry_run:
+            activity.logger.info(f"[dry-run] would upsert game {game.game_id} {game.away_team} @ {game.home_team}")
+        else:
+            await queries.upsert_game(game)
         games.append(game)
 
     return games
@@ -183,7 +188,10 @@ async def fetch_odds_batch(game_ids: list[str], sport: str = "nba") -> OddsBatch
 
 
 @activity.defn
-async def upsert_odds_snapshot(snapshot: OddsSnapshot) -> None:
+async def upsert_odds_snapshot(snapshot: OddsSnapshot, dry_run: bool = False) -> None:
+    if dry_run:
+        activity.logger.info(f"[dry-run] would upsert {snapshot.snapshot_id} payload={snapshot.payload}")
+        return
     await queries.upsert_odds_snapshot(snapshot)
     activity.logger.info(f"[upsert_odds_snapshot] {snapshot.snapshot_id}")
 
