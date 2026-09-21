@@ -10,6 +10,7 @@
 // server the final placements [[x,y,w,h], ...] (x=col, y=row) to validate.
 // ─────────────────────────────────────────────────────────────────────────────
 (function () {
+  window.DailyRenderers = window.DailyRenderers || {};
   const TILE_COLORS = [
     "#4f8cff", "#ff6b6b", "#ffd166", "#06d6a0", "#c77dff", "#ff9f45",
     "#4cc9f0", "#f15bb5", "#80ed99", "#e07a5f", "#9b5de5", "#00bbf9",
