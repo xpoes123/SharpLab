@@ -233,7 +233,11 @@ class SportsNewsCog(commands.Cog):
                 if a["id"] not in major:
                     continue
                 ping = _ping_leagues(a["leagues"])
-                content = " ".join(f"<@&{LEAGUES[k]['role']}>" for k in LEAGUES if k in ping)
+                mentions = " ".join(f"<@&{LEAGUES[k]['role']}>" for k in LEAGUES if k in ping)
+                # Put the headline in the message content, not just the embed: watch/phone push
+                # notifications show content text, so this makes the notif read the actual news
+                # instead of just the pinged role name ("NFL").
+                content = f"{mentions} {a['headline']}".strip()[:2000]
                 await channel.send(content=content or None, embed=self._embed(a),
                                    allowed_mentions=discord.AllowedMentions(roles=True))
         except Exception:
