@@ -70,12 +70,13 @@ def test_par_is_achievable():
 
 
 def test_rotation_countdown_live_and_mastermind_retired():
-    # era 2 begins 2026-09-19 → that day is Countdown; era 3 (2026-09-20) adds Windmill on top.
+    # era 2 begins 2026-09-19 → that day is Countdown; era 3 (2026-09-24) re-anchors on Countdown.
     # Across everything from era 2 onward, Mastermind is retired from the pool but still resolves.
     assert daily.schedule("2026-09-19")[0] == "countdown"
+    assert daily.schedule("2026-09-24")[0] == "countdown"   # today, forced by era 3 re-anchor
     post_retire = {daily.schedule(f"2026-09-{d:02d}")[0] for d in range(19, 30)}
     assert "mastermind" not in post_retire
-    assert post_retire <= {"countdown", "rushhour", "trappig", "windmill"}
+    assert post_retire <= {"countdown", "rushhour", "trappig"}
     # earlier days are untouched (history intact)
     assert daily.schedule("2026-09-18")[0] != "countdown"
     # mastermind stays registered so historical days still resolve

@@ -78,14 +78,11 @@ function gameId() {
 const isRush = () => gameId() === "rushhour";
 const isMind = () => gameId() === "mastermind";
 const isCount = () => gameId() === "countdown";
-const isWind = () => gameId() === "windmill";
-const unitWord = () => (isWind() ? "tiles" : isCount() ? "numbers" : isMind() ? "guesses" : isRush() ? "moves" : "fences"); // lowercase, for prose
-const unitLabel = () => (isWind() ? "Tiles" : isCount() ? "Numbers" : isMind() ? "Guesses" : isRush() ? "Moves" : "Fences"); // Titlecase, for headers
-const solvedTitle = () => (isWind() ? "🎉 Tiled!" : isMind() ? "🎉 Cracked!" : isRush() || isCount() ? "🎉 Solved!" : "🎉 Trapped!");
+const unitWord = () => (isCount() ? "numbers" : isMind() ? "guesses" : isRush() ? "moves" : "fences"); // lowercase, for prose
+const unitLabel = () => (isCount() ? "Numbers" : isMind() ? "Guesses" : isRush() ? "Moves" : "Fences"); // Titlecase, for headers
+const solvedTitle = () => (isMind() ? "🎉 Cracked!" : isRush() || isCount() ? "🎉 Solved!" : "🎉 Trapped!");
 const solvedVerb = () => (isMind() ? "Cracked" : "Solved");
 function ruleText() {
-  if (isWind())
-    return "Place every tile so each row and each column has exactly ONE empty square — tiles rotate; everyone gets today's bag; fastest valid solve wins, tile count breaks ties.";
   if (isCount())
     return "Use the six numbers and + − × ÷ to hit the target exactly — everyone gets today's numbers; fastest exact solve wins, fewest numbers breaks ties.";
   if (isMind())
