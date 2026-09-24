@@ -27,6 +27,7 @@ def test_today_shape_has_no_board(monkeypatch):
 
     async def go():
         await sch.init_db()
+        monkeypatch.setattr(web_daily.daily, "schedule", lambda day: ("trappig", "medium"))
         monkeypatch.setattr(web_daily.auth, "read_session", lambda r: None)  # signed out
         t = await web_daily.today(_Req())
         assert t["game"]["id"] == "trappig" and t["game"]["howto"]
@@ -41,6 +42,7 @@ def test_start_then_submit_witness_solves_and_server_times(monkeypatch):
 
     async def go():
         await sch.init_db()
+        monkeypatch.setattr(web_daily.daily, "schedule", lambda day: ("trappig", "medium"))
         monkeypatch.setattr(web_daily.auth, "read_session", lambda r: {"id": "p1"})
         await q.get_or_create_casino_wallet("p1")
         s = await web_daily.start(_Req())
@@ -86,6 +88,7 @@ def test_leaderboard_ranks_two_players(monkeypatch):
 
     async def go():
         await sch.init_db()
+        monkeypatch.setattr(web_daily.daily, "schedule", lambda day: ("trappig", "medium"))
         t_day = web_daily.daily.puzzle_day()
         puz = await q.get_or_create_daily_puzzle(t_day)
         _, witness = trappig.is_solvable(puz["payload"])
