@@ -65,6 +65,24 @@ async def resolve_user(who: str) -> str:
     return row[0]
 
 
+async def apply_portfolio(user: str, rows: list[dict], cash: float | None) -> dict:
+    """Wipe the user's stock+option trades and reseed one buy per row; optionally
+    set cash. Returns {positions, cash}. Shared by the CLI and /stock import."""
+    for s in await queries.get_stock_positions_full(user):
+        await queries.delete_stock_trades_for_ticker(user, s["ticker"])
+    for t in await queries.get_option_trades(user):
+        await queries.delete_option_trade(user, t["trade_id"])
+    for r in rows:
+        await queries.add_stock_trade(user, r["ticker"], "buy", r["shares"], r["price"],
+                                      notes="bulk import")
+    if cash is not None:
+        await queries.set_stock_cash(user, cash)
+    left = await queries.get_stock_holdings(user)
+    left_opt = [o for o in await queries.get_option_positions_full(user) if not o["closed"]]
+    assert len(left) == len(rows) and not left_opt, "post-import position count mismatch"
+    return {"positions": len(left), "cash": await queries.get_stock_cash(user)}
+
+
 async def apply(user: str, rows: list[dict], cash: float | None, commit: bool):
     old_stocks = await queries.get_stock_positions_full(user)
     old_opts = await queries.get_option_positions_full(user)
@@ -81,23 +99,8 @@ async def apply(user: str, rows: list[dict], cash: float | None, commit: bool):
     if not commit:
         print("\nDRY RUN — re-run with --apply to commit.")
         return
-
-    # wipe existing trades (stocks by ticker, options by trade id) — all via queries
-    for s in old_stocks:
-        await queries.delete_stock_trades_for_ticker(user, s["ticker"])
-    for t in await queries.get_option_trades(user):
-        await queries.delete_option_trade(user, t["trade_id"])
-    # reseed
-    for r in rows:
-        await queries.add_stock_trade(user, r["ticker"], "buy", r["shares"], r["price"],
-                                      notes="bulk import")
-    if cash is not None:
-        await queries.set_stock_cash(user, cash)
-
-    left = await queries.get_stock_holdings(user)
-    left_opt = [o for o in await queries.get_option_positions_full(user) if not o["closed"]]
-    assert len(left) == len(rows) and not left_opt, "post-import position count mismatch"
-    print(f"\n✅ applied: {len(left)} open positions, cash ${await queries.get_stock_cash(user):,.2f}")
+    res = await apply_portfolio(user, rows, cash)
+    print(f"\n✅ applied: {res['positions']} open positions, cash ${res['cash']:,.2f}")
 
 
 def selftest():

@@ -38,6 +38,7 @@ from discord.ext import commands, tasks
 
 from bot.cogs._movers_helpers import build_movers_embed
 from db import queries
+from scripts.bulk_stock import apply_portfolio, parse_csv
 
 log = logging.getLogger(__name__)
 
@@ -2692,6 +2693,37 @@ class _TradeEditView(discord.ui.View):
 # ── Cog ─────────────────────────────────────────────────────────────────────
 
 
+class ConfirmImportView(discord.ui.View):
+    """Confirm gate for /stock import — replaces the caller's whole portfolio."""
+
+    def __init__(self, author_id: int, rows: list[dict], cash: float | None):
+        super().__init__(timeout=300)
+        self.author_id = author_id
+        self.rows = rows
+        self.cash = cash
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("Not your import.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="✅ Replace my portfolio", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.defer()
+        res = await apply_portfolio(str(self.author_id), self.rows, self.cash)
+        await interaction.edit_original_response(
+            content=f"✅ Imported **{res['positions']}** positions. Cash: **${res['cash']:,.2f}**.",
+            embed=None, view=None)
+        self.stop()
+
+    @discord.ui.button(label="✖ Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.edit_message(content="Cancelled — nothing changed.",
+                                                embed=None, view=None)
+        self.stop()
+
+
 class StockCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -3595,6 +3627,41 @@ class StockCog(commands.Cog):
         await _award_trade_xp(interaction)
 
     # ── /stock sell ──────────────────────────────────────────────────────────
+
+    @stock.command(name="import", description="Bulk-replace your whole portfolio from a CSV (ticker,shares,price)")
+    @app_commands.describe(
+        file="CSV with a header row: ticker,shares,price (price = your avg cost)",
+        cash="Optional: set your cash balance too",
+    )
+    async def import_portfolio(
+        self,
+        interaction: discord.Interaction,
+        file: discord.Attachment,
+        cash: float | None = None,
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
+        if file.size > 100_000:
+            await interaction.followup.send("CSV too big (max 100 KB).", ephemeral=True)
+            return
+        try:
+            rows = parse_csv((await file.read()).decode("utf-8-sig"))
+        except (ValueError, UnicodeDecodeError) as e:
+            await interaction.followup.send(f"Couldn't read that CSV: {e}", ephemeral=True)
+            return
+
+        preview = "\n".join(f"`{r['shares']:g}` {r['ticker']} @ ${r['price']:,.2f}" for r in rows[:40])
+        if len(rows) > 40:
+            preview += f"\n… +{len(rows) - 40} more"
+        embed = discord.Embed(
+            title="Import preview",
+            description=f"This **replaces your entire portfolio** ({len(rows)} positions) — "
+                        "existing stock and option trades are wiped.\n\n" + preview,
+            color=0xE0A030,
+        )
+        if cash is not None:
+            embed.add_field(name="Cash", value=f"set to ${cash:,.2f}")
+        await interaction.followup.send(
+            embed=embed, view=ConfirmImportView(interaction.user.id, rows, cash), ephemeral=True)
 
     @stock.command(name="sell", description="Record a stock sale (realized P/L is computed)")
     @app_commands.describe(
