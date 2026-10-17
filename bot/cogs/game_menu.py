@@ -15,7 +15,8 @@ from bot.cogs.casino import CASINO_GAMES, GAME_CATEGORIES, MODE_EMOJI
 
 # command name → (cog class name, launcher method name)
 GAME_DISPATCH: dict[str, tuple[str, str]] = {
-    "blackjack": ("CasinoCog", "blackjack"),
+    "blackjack": ("CasinoCog", "_open_classic"),
+    "breakout": ("BreakoutCog", "_open"),
     "baccarat": ("BaccaratCog", "baccarat"),
     "paigow": ("PaiGowCog", "paigow"),
     "uth": ("UTHCog", "uth"),

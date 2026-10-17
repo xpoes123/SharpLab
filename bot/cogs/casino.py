@@ -37,6 +37,7 @@ MAX_PLAYERS = 5
 
 GAME_LABELS: dict[str, str] = {
     "blackjack": "Blackjack",
+    "breakout": "Breakout Blackjack",
     "plinko": "Plinko",
     "craps": "Craps",
     "crapless": "Crapless Craps",
@@ -1402,8 +1403,26 @@ class CasinoCog(commands.Cog):
     async def _before_cleanup(self) -> None:
         await self.bot.wait_until_ready()
 
-    @app_commands.command(name="blackjack", description="Open a blackjack table (multiplayer)")
-    async def blackjack(self, interaction: discord.Interaction) -> None:
+    blackjack_group = app_commands.Group(
+        name="blackjack", description="Blackjack & its variants")
+
+    @blackjack_group.command(
+        name="classic", description="Classic multiplayer blackjack table")
+    async def blackjack_classic(self, interaction: discord.Interaction) -> None:
+        await self._open_classic(interaction)
+
+    @blackjack_group.command(
+        name="breakout",
+        description="Breakout Blackjack — bet Player or Dealer + total-cards side bet")
+    async def blackjack_breakout(self, interaction: discord.Interaction) -> None:
+        cog = self.bot.get_cog("BreakoutCog")
+        if cog is None:
+            await interaction.response.send_message(
+                "Breakout isn't loaded right now.", ephemeral=True)
+            return
+        await cog._open(interaction)
+
+    async def _open_classic(self, interaction: discord.Interaction) -> None:
         channel_id = interaction.channel_id
         if channel_id in self.active_tables:
             existing = self.active_tables[channel_id]
@@ -2364,6 +2383,7 @@ CASINO_GAMES: list[tuple[str, str, str, str]] = [
     # (command, description, category, mode)
     # ── Card Games
     ("blackjack", "Blackjack table", "Card Games", "duo"),
+    ("breakout", "Breakout Blackjack — bet Player/Dealer + total-cards side bet", "Card Games", "party"),
     ("baccarat", "Baccarat card game", "Card Games", "solo"),
     ("paigow", "Pai Gow Poker", "Card Games", "duo"),
     ("uth", "Ultimate Texas Hold'em", "Card Games", "solo"),
