@@ -78,6 +78,7 @@ COGS = [
     "bot.cogs.cards",
     "bot.cogs.trading",
     "bot.cogs.baccarat",
+    "bot.cogs.breakout",
     "bot.cogs.craps",
     "bot.cogs.crapless",
     "bot.cogs.paigow",
