@@ -52,6 +52,7 @@ from web.g_sequence import router as sequence_router
 from web.g_valorant import router as valorant_router
 from web.blackjack import router as blackjack_router
 from web.baccarat import router as baccarat_router
+from web.breakout import router as breakout_router
 from web.videopoker import router as videopoker_router
 from web.hilo import router as hilo_router
 from web.craps import router as craps_router
@@ -202,6 +203,7 @@ app.include_router(sequence_router)
 app.include_router(valorant_router)
 app.include_router(blackjack_router)
 app.include_router(baccarat_router)
+app.include_router(breakout_router)
 app.include_router(videopoker_router)
 app.include_router(hilo_router)
 app.include_router(craps_router)
@@ -324,6 +326,7 @@ GAME_LABELS: dict[str, str] = {
     "videopoker": "Video Poker",
     "uth": "Texas Hold'em",
     "baccarat": "Baccarat",
+    "breakout": "Breakout Blackjack",
     "paigow": "Pai Gow",
     "bingo": "Bingo",
     "horserace": "Horse Race",
