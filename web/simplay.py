@@ -25,6 +25,49 @@ def _pick(seq):
     return seq[_rand(len(seq))]
 
 
+def _weighted(pairs):
+    """Pick a value from (value, weight) pairs, CSPRNG."""
+    r = _rand(sum(w for _, w in pairs))
+    for v, w in pairs:
+        if r < w:
+            return v
+        r -= w
+    return pairs[-1][0]
+
+
+# Realistic NFL drive outcomes as whole-play point values. TD+XP and FG dominate;
+# missed-XP occasional; TD+2pt rare. Each value is a COMPLETE, legal scoring play —
+# a try (XP/2pt) only ever rides along with its touchdown. Safety (2) is injected
+# separately and rarely (see _nfl_chunks) so it never gets used as remainder filler.
+_NFL_SCORES = [(7, 50), (3, 34), (6, 11), (8, 5)]
+
+
+def _expressible(r: int) -> bool:
+    """Can r be formed from {3,6,7,8}? (0, 3, or anything >=6.)"""
+    return r == 0 or r == 3 or r >= 6
+
+
+def _nfl_chunks(total: int) -> list[int]:
+    """Decompose a team's final points into coherent NFL scoring plays that sum exactly.
+
+    Only picks an increment if the REMAINDER stays expressible from {3,6,7,8}, so it
+    never strands a 1/2/4/5 that would surface as a phantom "score" or a forced glut
+    of safeties (the old bugs). A lone safety is injected up front ~3% of the time.
+    """
+    out: list[int] = []
+    if total >= 8 and _rand(100) < 3 and _expressible(total - 2):
+        out.append(2)
+        total -= 2
+    while total > 0:
+        opts = [(v, w) for v, w in _NFL_SCORES if v <= total and _expressible(total - v)]
+        if not opts:  # unreachable for NFL finals (>=13); stay safe
+            opts = [(v, w) for v, w in _NFL_SCORES if v <= total] or [(total, 1)]
+        v = _weighted(opts)
+        out.append(v)
+        total -= v
+    return out
+
+
 # ── per-sport final-score generators (winner strictly ahead) ──────────────────
 
 def _final_nba(winner: str) -> tuple[int, int]:
@@ -68,8 +111,9 @@ def _timeline_scoring(sport: str, home_final: int, away_final: int, winner: str)
             total -= step
         return out
 
-    home_chunks = [("home", c) for c in chunks(home_final)]
-    away_chunks = [("away", c) for c in chunks(away_final)]
+    chunker = _nfl_chunks if sport == "nfl" else chunks
+    home_chunks = [("home", c) for c in chunker(home_final)]
+    away_chunks = [("away", c) for c in chunker(away_final)]
     plays = home_chunks + away_chunks
     # shuffle order (CSPRNG) so scoring alternates naturally
     for i in range(len(plays) - 1, 0, -1):
@@ -170,7 +214,7 @@ _SCORING = {
         "plabel": "Q",
         "desc": {7: ["touchdown + XP", "TD, extra point good"],
                  3: ["field goal"], 6: ["touchdown, XP no good"],
-                 2: ["safety", "two-point conversion"], 8: ["TD + 2-pt"], "*": ["score"]},
+                 2: ["safety"], 8: ["TD + 2-pt"], "*": ["score"]},
     },
 }
 
