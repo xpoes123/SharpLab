@@ -232,6 +232,45 @@ def _prob_to_american(prob: float) -> str:
         return f"+{odds}"
 
 
+def _ou_payout(bet: int) -> int:
+    """Spread / over-under payout at -110 (≈ bet * 1.909)."""
+    return bet + int(bet * 100 / 110)
+
+
+def _expected_goals(home: "SoccerTeam", away: "SoccerTeam") -> tuple[float, float]:
+    """Expected match goals for (home, away).
+
+    Mirrors the per-half xG used in _simulate_half: 0.65 base per half, two
+    halves → 1.3 base per match, scaled by attack vs. opponent defense.
+    """
+    home_xg = 1.3 * (home.attack / 85.0) * (85.0 / max(away.defense, 1))
+    away_xg = 1.3 * (away.attack / 85.0) * (85.0 / max(home.defense, 1))
+    return home_xg, away_xg
+
+
+def _compute_spread(home: "SoccerTeam", away: "SoccerTeam") -> float:
+    """Goal handicap. Positive = home favored (matches score_diff > spread).
+
+    Rounded to X.5 so a half-goal line at the median margin stays ~50/50
+    and never pushes. Soccer margins are small, so this is usually ±0.5/±1.5.
+    """
+    home_xg, away_xg = _expected_goals(home, away)
+    raw = home_xg - away_xg
+    rounded = round(raw)
+    if rounded > 0:
+        return rounded + 0.5
+    if rounded < 0:
+        return rounded - 0.5
+    return 0.5 if raw >= 0 else -0.5
+
+
+def _compute_total(home: "SoccerTeam", away: "SoccerTeam") -> float:
+    """Total-goals O/U, rounded to the nearest X.5 (realistic ~2.5-3.5)."""
+    home_xg, away_xg = _expected_goals(home, away)
+    raw = home_xg + away_xg
+    return round(raw - 0.5) + 0.5
+
+
 @dataclass
 class MatchEvent:
     minute: int
@@ -450,7 +489,8 @@ class SoccerSimPlayer:
     user_id: int
     display_name: str
     bet: int
-    side: str  # "home" or "away"
+    side: str  # ml/spread: "home"/"away"; ou: "over"/"under"
+    market: str = "ml"  # "ml" | "spread" | "ou"
     payout: int = 0
     won: bool = False
 
@@ -464,10 +504,12 @@ class SoccerSimTable:
     home_team: SoccerTeam | None = None
     away_team: SoccerTeam | None = None
     home_prob: float = 0.5
+    spread: float = 0.5
+    total: float = 2.5
     players: dict[int, SoccerSimPlayer] = field(default_factory=dict)
     message: discord.Message | None = None
     round_num: int = 1
-    last_bets: dict[int, tuple[str, int, str]] = field(default_factory=dict)
+    last_bets: dict[int, tuple[str, int, str, str]] = field(default_factory=dict)
     home_score: int = 0
     away_score: int = 0
     half: int = 0
@@ -482,6 +524,34 @@ class SoccerSimTable:
 
 def _ratings_bar(team: SoccerTeam) -> str:
     return f"ATK {team.attack} | MID {team.midfield} | DEF {team.defense} | GK {team.goalkeeper}"
+
+
+def _lines_text(table: SoccerSimTable) -> str:
+    """Spread + total lines for a single match (goal handicap / total goals)."""
+    home = table.home_team
+    away = table.away_team
+    spread_val = table.spread
+    if spread_val >= 0:
+        home_spread_str = f"-{spread_val}"
+        away_spread_str = f"+{spread_val}"
+    else:
+        home_spread_str = f"+{abs(spread_val)}"
+        away_spread_str = f"{spread_val}"
+    return (
+        f"Spread (goals): {home.abbr} {home_spread_str} / {away.abbr} {away_spread_str} (-110)\n"
+        f"O/U {table.total} goals (-110)"
+    )
+
+
+def _side_label(table: SoccerSimTable, p: SoccerSimPlayer) -> str:
+    """Human label for a player's market + side."""
+    home = table.home_team
+    away = table.away_team
+    if p.market == "ml":
+        return f"ML {home.abbr if p.side == 'home' else away.abbr}"
+    if p.market == "spread":
+        return f"Spread {home.abbr if p.side == 'home' else away.abbr}"
+    return f"O/U {p.side.capitalize()}"
 
 
 def _betting_embed(table: SoccerSimTable) -> discord.Embed:
@@ -514,14 +584,17 @@ def _betting_embed(table: SoccerSimTable) -> discord.Embed:
     )
     embed.add_field(name=f"{away.abbr} @ {home.abbr}", value=matchup_text, inline=False)
 
+    embed.add_field(name="Markets (ML / Spread / O/U)", value=_lines_text(table), inline=False)
+
     if total_wagered:
         embed.add_field(name="Total Wagered", value=f"{total_wagered}c", inline=True)
 
     if table.players:
         player_lines = []
         for p in table.players.values():
-            side_abbr = home.abbr if p.side == "home" else away.abbr
-            player_lines.append(f"\U0001f3b0 **{p.display_name}** \u2014 {p.bet}c on **{side_abbr}**")
+            player_lines.append(
+                f"\U0001f3b0 **{p.display_name}** \u2014 {p.bet}c on **{_side_label(table, p)}**"
+            )
         embed.add_field(name="Players", value="\n".join(player_lines), inline=False)
     else:
         embed.add_field(
@@ -531,7 +604,7 @@ def _betting_embed(table: SoccerSimTable) -> discord.Embed:
         )
 
     embed.set_footer(
-        text=f"Host: {table.host_name} \u2502 Min {MIN_PLAYERS} player(s) \u2502 Pick home or away in modal",
+        text=f"Host: {table.host_name} \u2502 Min {MIN_PLAYERS} player(s) \u2502 ML / Spread / O-U in modal",
     )
     return embed
 
@@ -568,10 +641,11 @@ def _playing_embed(table: SoccerSimTable) -> discord.Embed:
         event_text = "\n".join(_event_line(e) for e in table.events[-15:])
         embed.add_field(name="Match Events", value=event_text, inline=False)
 
+    embed.add_field(name="Lines", value=_lines_text(table), inline=False)
+
     bet_lines: list[str] = []
     for p in table.players.values():
-        side_abbr = home.abbr if p.side == "home" else away.abbr
-        bet_lines.append(f"**{p.display_name}** \u2014 {p.bet}c on {side_abbr}")
+        bet_lines.append(f"**{p.display_name}** \u2014 {p.bet}c on {_side_label(table, p)}")
     if bet_lines:
         embed.add_field(name="Bets", value="\n".join(bet_lines), inline=False)
 
@@ -632,20 +706,22 @@ def _finished_embed(
         event_text = "\n".join(_event_line(e) for e in table.events[-20:])
         embed.add_field(name="Match Events", value=event_text, inline=False)
 
+    embed.add_field(name="Lines", value=_lines_text(table), inline=False)
+
     lines: list[str] = []
     for p in table.players.values():
         bal = balances.get(p.user_id, 0) if balances else 0
-        side_abbr = home.abbr if p.side == "home" else away.abbr
+        market_label = _side_label(table, p)
         net = p.payout - p.bet
         sign = "+" if net >= 0 else ""
         if p.won:
             lines.append(
-                f"\U0001f3c6 **{p.display_name}** ({side_abbr}) \u2014 "
+                f"\U0001f3c6 **{p.display_name}** ({market_label}) \u2014 "
                 f"{p.bet}c \u2192 {p.payout}c (**{sign}{net}c**) \u2014 bal: {bal}c"
             )
         else:
             lines.append(
-                f"\u274c **{p.display_name}** ({side_abbr}) \u2014 "
+                f"\u274c **{p.display_name}** ({market_label}) \u2014 "
                 f"{p.bet}c \u2192 0c (**-{p.bet}c**) \u2014 bal: {bal}c"
             )
     if lines:
@@ -988,11 +1064,17 @@ class JoinSoccerSimModal(ui.Modal):
         required=True,
         max_length=10,
     )
-    side_input = ui.TextInput(
-        label="Side (home or away)",
-        placeholder="home / away",
+    market_input = ui.TextInput(
+        label="Market (ml / spread / ou)",
+        placeholder="ml / spread / ou",
         required=True,
-        max_length=4,
+        max_length=6,
+    )
+    side_input = ui.TextInput(
+        label="Side: home/away (ml/spread), over/under (ou)",
+        placeholder="home / away / over / under",
+        required=True,
+        max_length=5,
     )
 
     def __init__(
@@ -1004,7 +1086,9 @@ class JoinSoccerSimModal(ui.Modal):
         self.table = table
         self.table_view = view
         self.amount.placeholder = f"e.g. 100 (bal: {balance}c)"
-        self.side_input.placeholder = f"home ({home.abbr}) / away ({away.abbr})"
+        self.side_input.placeholder = (
+            f"home ({home.abbr}) / away ({away.abbr}) / over / under"
+        )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
@@ -1020,19 +1104,44 @@ class JoinSoccerSimModal(ui.Modal):
             )
             return
 
-        raw = self.side_input.value.strip().lower()
-        home = self.table.home_team
-        away = self.table.away_team
-        if raw in ("home", "h", home.abbr.lower()):
-            side = "home"
-        elif raw in ("away", "a", away.abbr.lower()):
-            side = "away"
+        raw_market = self.market_input.value.strip().lower()
+        if raw_market in ("ml", "moneyline", "money line"):
+            market = "ml"
+        elif raw_market in ("spread", "sp"):
+            market = "spread"
+        elif raw_market in ("ou", "o/u", "over/under", "total"):
+            market = "ou"
         else:
             await interaction.response.send_message(
-                f"Enter **home** ({home.abbr}) or **away** ({away.abbr}).",
-                ephemeral=True,
+                "Market must be **ml**, **spread**, or **ou**.", ephemeral=True,
             )
             return
+
+        home = self.table.home_team
+        away = self.table.away_team
+        raw = self.side_input.value.strip().lower()
+
+        if market in ("ml", "spread"):
+            if raw in ("home", "h", home.abbr.lower()):
+                side = "home"
+            elif raw in ("away", "a", away.abbr.lower()):
+                side = "away"
+            else:
+                await interaction.response.send_message(
+                    f"For ml/spread, enter **home** ({home.abbr}) or **away** ({away.abbr}).",
+                    ephemeral=True,
+                )
+                return
+        else:
+            if raw in ("over", "o"):
+                side = "over"
+            elif raw in ("under", "u"):
+                side = "under"
+            else:
+                await interaction.response.send_message(
+                    "For ou, enter **over** or **under**.", ephemeral=True,
+                )
+                return
 
         uid = interaction.user.id
         if uid in self.table.players:
@@ -1055,6 +1164,7 @@ class JoinSoccerSimModal(ui.Modal):
             display_name=interaction.user.display_name,
             bet=amt,
             side=side,
+            market=market,
         )
 
         self.table_view._update_buttons()
@@ -1257,7 +1367,7 @@ class SoccerSimTableView(ui.View):
                 "Table is full!", ephemeral=True,
             )
             return
-        name, amt, side = last
+        name, amt, market, side = last
         try:
             await queries.update_casino_balance(str(uid), -amt)
         except ValueError:
@@ -1268,7 +1378,7 @@ class SoccerSimTableView(ui.View):
             )
             return
         self.table.players[uid] = SoccerSimPlayer(
-            user_id=uid, display_name=name, bet=amt, side=side,
+            user_id=uid, display_name=name, bet=amt, side=side, market=market,
         )
         self._update_buttons()
         await interaction.response.edit_message(
@@ -1442,13 +1552,33 @@ class SoccerSimTableView(ui.View):
             # Draw — nobody wins
             home_won = None
 
+        score_diff = h - a
+        total_goals = h + a
+
         balances: dict[int, int] = {}
         for uid, player in table.players.items():
-            if home_won is not None:
-                if (player.side == "home" and home_won) or (player.side == "away" and not home_won):
+            if player.market == "ml":
+                if home_won is not None and (
+                    (player.side == "home" and home_won)
+                    or (player.side == "away" and not home_won)
+                ):
                     player.won = True
                     prob = table.home_prob if player.side == "home" else (1 - table.home_prob)
                     player.payout = int(player.bet * _payout_multiplier(prob))
+            elif player.market == "spread":
+                if player.side == "home" and score_diff > table.spread:
+                    player.won = True
+                    player.payout = _ou_payout(player.bet)
+                elif player.side == "away" and score_diff < table.spread:
+                    player.won = True
+                    player.payout = _ou_payout(player.bet)
+            else:  # ou
+                if player.side == "over" and total_goals > table.total:
+                    player.won = True
+                    player.payout = _ou_payout(player.bet)
+                elif player.side == "under" and total_goals < table.total:
+                    player.won = True
+                    player.payout = _ou_payout(player.bet)
 
             if player.won and player.payout > 0:
                 balances[uid] = await queries.update_casino_balance(
@@ -1463,7 +1593,7 @@ class SoccerSimTableView(ui.View):
 
         for uid, player in table.players.items():
             table.last_bets[uid] = (
-                player.display_name, player.bet, player.side,
+                player.display_name, player.bet, player.market, player.side,
             )
 
         self._update_buttons()
@@ -1486,6 +1616,8 @@ class SoccerSimTableView(ui.View):
         table.home_team = home
         table.away_team = away
         table.home_prob = _generate_win_prob(home, away)
+        table.spread = _compute_spread(home, away)
+        table.total = _compute_total(home, away)
         table.half = 0
         table.home_score = 0
         table.away_score = 0
@@ -2021,6 +2153,8 @@ class SoccerSimCog(commands.Cog):
             home_team=home,
             away_team=away,
             home_prob=_generate_win_prob(home, away),
+            spread=_compute_spread(home, away),
+            total=_compute_total(home, away),
         )
         view = SoccerSimTableView(table, self.active_tables)
         embed = _betting_embed(table)

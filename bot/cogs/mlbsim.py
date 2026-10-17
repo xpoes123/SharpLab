@@ -1,12 +1,14 @@
 """Casino cog — /mlbsim fake MLB game simulator.
 
 Two random MLB teams are drawn. Each gets a win probability.
-Players pick a side and bet coins. An inning-by-inning simulation runs
-with baseball-style scoring (runs), and winners are paid fixed odds
-based on the pre-game probability.
+Players pick a market (ML / run line / O-U) and side, then bet coins.
+An inning-by-inning simulation runs with baseball-style scoring (runs).
+ML winners are paid fair odds off the pre-game probability; run-line and
+O/U winners are paid at -110 (≈ 1.909x).
 """
 
 import asyncio
+import math
 import random
 from dataclasses import dataclass, field
 
@@ -60,6 +62,46 @@ def _prob_to_american(prob: float) -> str:
     else:
         odds = round((1 - prob) / prob * 100)
         return f"+{odds}"
+
+
+def _compute_spread(home_prob: float) -> float:
+    """Run line for the home team, in runs, rounded to a half-run.
+
+    Baseball margins are small, so the win-prob edge is scaled to ~runs
+    (scale 10 → roughly +0.5 at a coin-flip up to +3.5 for a big favorite).
+    Positive = home favored by that many runs (matches the `score_diff >
+    spread` resolution in _resolve). Half-run lines never push.
+    """
+    raw = (home_prob - 0.5) * 10
+    rounded = round(raw)
+    if rounded >= 0:
+        return rounded + 0.5
+    else:
+        return rounded - 0.5
+
+
+def _expected_team_runs(prob: float) -> float:
+    """Expected runs a team scores over 9 innings for a given win prob.
+
+    Fit to the _simulate_half_inning model: ~2.26 runs/team at a coin-flip,
+    scaling ~5.1 runs per unit of win probability.
+    """
+    return 2.258 + 5.13 * (prob - 0.5)
+
+
+def _compute_total(home_prob: float) -> float:
+    """Total-runs O/U line, derived from both teams' expected scoring.
+
+    Snapped down to a half-run so the total can never land exactly on the
+    line (no pushes). The sim is low-scoring, so this sits near 4.5.
+    """
+    raw = _expected_team_runs(home_prob) + _expected_team_runs(1 - home_prob)
+    return math.floor(raw) + 0.5
+
+
+def _ou_payout(bet: int) -> int:
+    """Payout (stake + profit) for a run-line / O-U bet graded at -110."""
+    return bet + int(bet * 100 / 110)
 
 
 def _simulate_half_inning(team_prob: float) -> int:
@@ -131,7 +173,8 @@ class MlbSimPlayer:
     user_id: int
     display_name: str
     bet: int
-    side: str  # "home" or "away"
+    side: str  # ml/spread: "home"/"away"; ou: "over"/"under"
+    market: str = "ml"  # "ml" | "spread" | "ou"
     payout: int = 0
     won: bool = False
 
@@ -146,11 +189,14 @@ class MlbSimTable:
     home_team: tuple[str, str] = ("", "")  # (full_name, abbr)
     away_team: tuple[str, str] = ("", "")
     home_prob: float = 0.5
+    spread: float = 0.0  # home run line (positive = home favored)
+    total: float = 4.5  # total-runs O/U line
     # Players
     players: dict[int, MlbSimPlayer] = field(default_factory=dict)
     message: discord.Message | None = None
     round_num: int = 1
-    last_bets: dict[int, tuple[str, int, str]] = field(default_factory=dict)
+    # (display_name, bet, market, side)
+    last_bets: dict[int, tuple[str, int, str, str]] = field(default_factory=dict)
     # Sim state
     inning: int = 0
     home_score: int = 0
@@ -161,6 +207,36 @@ class MlbSimTable:
 
 
 # ── Embeds ───────────────────────────────────────────────────────────────────
+
+
+def _lines_text(table: MlbSimTable) -> str:
+    """Render all three markets: ML odds, run line (-110), O/U (-110)."""
+    _, home_abbr = table.home_team
+    _, away_abbr = table.away_team
+    away_prob = 1 - table.home_prob
+    home_ml = _prob_to_american(table.home_prob)
+    away_ml = _prob_to_american(away_prob)
+    spread_val = table.spread
+    if spread_val >= 0:
+        home_spread_str = f"-{spread_val}"
+        away_spread_str = f"+{spread_val}"
+    else:
+        home_spread_str = f"+{abs(spread_val)}"
+        away_spread_str = f"{spread_val}"
+    return (
+        f"ML: {home_abbr} {home_ml} / {away_abbr} {away_ml}\n"
+        f"Run line: {home_abbr} {home_spread_str} / {away_abbr} {away_spread_str} (-110)\n"
+        f"O/U {table.total} (-110)"
+    )
+
+
+def _player_side_label(p: MlbSimPlayer, home_abbr: str, away_abbr: str) -> str:
+    """Short market+side label for a player's bet."""
+    if p.market == "ml":
+        return f"ML {home_abbr if p.side == 'home' else away_abbr}"
+    if p.market == "spread":
+        return f"RL {home_abbr if p.side == 'home' else away_abbr}"
+    return f"O/U {p.side.capitalize()}"
 
 
 def _betting_embed(table: MlbSimTable) -> discord.Embed:
@@ -178,8 +254,8 @@ def _betting_embed(table: MlbSimTable) -> discord.Embed:
     embed = discord.Embed(
         title=f"\u26be MLB Sim \u2014 Place Your Bets (Round {table.round_num})",
         description=(
-            "Pick a side and bet coins on the outcome!\n"
-            "Odds are based on each team's simulated win probability."
+            "Pick a market and side, then bet coins on the outcome!\n"
+            "ML pays fair odds; run line and O/U pay -110."
         ),
         colour=discord.Colour.blue(),
     )
@@ -192,14 +268,16 @@ def _betting_embed(table: MlbSimTable) -> discord.Embed:
     )
     embed.add_field(name=f"{away_abbr} @ {home_abbr}", value=matchup_text, inline=False)
 
+    embed.add_field(name="Lines", value=_lines_text(table), inline=False)
+
     if total_wagered:
         embed.add_field(name="Total Wagered", value=f"{total_wagered}c", inline=True)
 
     if table.players:
         player_lines = []
         for p in table.players.values():
-            side_abbr = home_abbr if p.side == "home" else away_abbr
-            player_lines.append(f"\U0001f3b0 **{p.display_name}** \u2014 {p.bet}c on **{side_abbr}**")
+            label = _player_side_label(p, home_abbr, away_abbr)
+            player_lines.append(f"\U0001f3b0 **{p.display_name}** \u2014 {p.bet}c on **{label}**")
         embed.add_field(name="Players", value="\n".join(player_lines), inline=False)
     else:
         embed.add_field(
@@ -209,7 +287,7 @@ def _betting_embed(table: MlbSimTable) -> discord.Embed:
         )
 
     embed.set_footer(
-        text=f"Host: {table.host_name} \u2502 Min {MIN_PLAYERS} player(s) \u2502 Pick home or away in modal",
+        text=f"Host: {table.host_name} \u2502 Min {MIN_PLAYERS} player(s) \u2502 Pick market + side in modal",
     )
     return embed
 
@@ -262,11 +340,13 @@ def _playing_embed(table: MlbSimTable) -> discord.Embed:
     )
     embed.description = _scoreboard_text(table)
 
+    embed.add_field(name="Lines", value=_lines_text(table), inline=False)
+
     # Show bets
     bet_lines: list[str] = []
     for p in table.players.values():
-        side_abbr = home_abbr if p.side == "home" else away_abbr
-        bet_lines.append(f"**{p.display_name}** \u2014 {p.bet}c on {side_abbr}")
+        label = _player_side_label(p, home_abbr, away_abbr)
+        bet_lines.append(f"**{p.display_name}** \u2014 {p.bet}c on {label}")
     if bet_lines:
         embed.add_field(name="Bets", value="\n".join(bet_lines), inline=False)
 
@@ -303,22 +383,23 @@ def _finished_embed(
         value=_scoreboard_text(table),
         inline=False,
     )
+    embed.add_field(name="Lines", value=_lines_text(table), inline=False)
 
     # Results per player
     lines: list[str] = []
     for p in table.players.values():
         bal = balances.get(p.user_id, 0) if balances else 0
-        side_abbr = home_abbr if p.side == "home" else away_abbr
+        label = _player_side_label(p, home_abbr, away_abbr)
         net = p.payout - p.bet
         sign = "+" if net >= 0 else ""
         if p.won:
             lines.append(
-                f"\U0001f3c6 **{p.display_name}** ({side_abbr}) \u2014 "
+                f"\U0001f3c6 **{p.display_name}** ({label}) \u2014 "
                 f"{p.bet}c \u2192 {p.payout}c (**{sign}{net}c**) \u2014 bal: {bal}c"
             )
         else:
             lines.append(
-                f"\u274c **{p.display_name}** ({side_abbr}) \u2014 "
+                f"\u274c **{p.display_name}** ({label}) \u2014 "
                 f"{p.bet}c \u2192 0c (**-{p.bet}c**) \u2014 bal: {bal}c"
             )
     if lines:
@@ -338,11 +419,17 @@ class JoinMlbSimModal(ui.Modal):
         required=True,
         max_length=10,
     )
-    side_input = ui.TextInput(
-        label="Side (home or away)",
-        placeholder="home / away",
+    market_input = ui.TextInput(
+        label="Market (ml / spread / ou)",
+        placeholder="ml / spread / ou",
         required=True,
-        max_length=4,
+        max_length=6,
+    )
+    side_input = ui.TextInput(
+        label="Side: home/away (ml/spread), over/under (ou)",
+        placeholder="home / away / over / under",
+        required=True,
+        max_length=5,
     )
 
     def __init__(
@@ -354,7 +441,7 @@ class JoinMlbSimModal(ui.Modal):
         self.table = table
         self.table_view = view
         self.amount.placeholder = f"e.g. 100 (bal: {balance}c)"
-        self.side_input.placeholder = f"home ({home_abbr}) / away ({away_abbr})"
+        self.side_input.placeholder = f"home ({home_abbr}) / away ({away_abbr}) / over / under"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         # Validate bet
@@ -370,20 +457,46 @@ class JoinMlbSimModal(ui.Modal):
                 "Must be at least 1 coin.", ephemeral=True,
             )
             return
-        # Validate side
-        raw = self.side_input.value.strip().lower()
-        _, home_abbr = self.table.home_team
-        _, away_abbr = self.table.away_team
-        if raw in ("home", "h", home_abbr.lower()):
-            side = "home"
-        elif raw in ("away", "a", away_abbr.lower()):
-            side = "away"
+
+        # Validate market
+        raw_market = self.market_input.value.strip().lower()
+        if raw_market in ("ml", "moneyline", "money line"):
+            market = "ml"
+        elif raw_market in ("spread", "sp", "runline", "run line", "rl"):
+            market = "spread"
+        elif raw_market in ("ou", "o/u", "over/under", "total"):
+            market = "ou"
         else:
             await interaction.response.send_message(
-                f"Enter **home** ({home_abbr}) or **away** ({away_abbr}).",
-                ephemeral=True,
+                "Market must be **ml**, **spread**, or **ou**.", ephemeral=True,
             )
             return
+
+        # Validate side
+        _, home_abbr = self.table.home_team
+        _, away_abbr = self.table.away_team
+        raw = self.side_input.value.strip().lower()
+        if market in ("ml", "spread"):
+            if raw in ("home", "h", home_abbr.lower()):
+                side = "home"
+            elif raw in ("away", "a", away_abbr.lower()):
+                side = "away"
+            else:
+                await interaction.response.send_message(
+                    f"For ml/spread, enter **home** ({home_abbr}) or **away** ({away_abbr}).",
+                    ephemeral=True,
+                )
+                return
+        else:
+            if raw in ("over", "o"):
+                side = "over"
+            elif raw in ("under", "u"):
+                side = "under"
+            else:
+                await interaction.response.send_message(
+                    "For ou, enter **over** or **under**.", ephemeral=True,
+                )
+                return
 
         uid = interaction.user.id
         if uid in self.table.players:
@@ -407,6 +520,7 @@ class JoinMlbSimModal(ui.Modal):
             display_name=interaction.user.display_name,
             bet=amt,
             side=side,
+            market=market,
         )
 
         self.table_view._update_buttons()
@@ -523,7 +637,7 @@ class MlbSimTableView(ui.View):
                 "Table is full!", ephemeral=True,
             )
             return
-        name, amt, side = last
+        name, amt, market, side = last
         try:
             await queries.update_casino_balance(str(uid), -amt)
         except ValueError:
@@ -534,7 +648,7 @@ class MlbSimTableView(ui.View):
             )
             return
         self.table.players[uid] = MlbSimPlayer(
-            user_id=uid, display_name=name, bet=amt, side=side,
+            user_id=uid, display_name=name, bet=amt, side=side, market=market,
         )
         self._update_buttons()
         await interaction.response.edit_message(
@@ -691,12 +805,29 @@ class MlbSimTableView(ui.View):
         table.phase = "finished"
 
         home_won = table.home_score > table.away_score
+        score_diff = table.home_score - table.away_score
+        total_score = table.home_score + table.away_score
 
         for p in table.players.values():
-            if (p.side == "home" and home_won) or (p.side == "away" and not home_won):
-                p.won = True
-                prob = table.home_prob if p.side == "home" else (1 - table.home_prob)
-                p.payout = int(p.bet * _payout_multiplier(prob))
+            if p.market == "ml":
+                if (p.side == "home" and home_won) or (p.side == "away" and not home_won):
+                    p.won = True
+                    prob = table.home_prob if p.side == "home" else (1 - table.home_prob)
+                    p.payout = int(p.bet * _payout_multiplier(prob))
+            elif p.market == "spread":
+                if p.side == "home" and score_diff > table.spread:
+                    p.won = True
+                    p.payout = _ou_payout(p.bet)
+                elif p.side == "away" and score_diff < table.spread:
+                    p.won = True
+                    p.payout = _ou_payout(p.bet)
+            else:
+                if p.side == "over" and total_score > table.total:
+                    p.won = True
+                    p.payout = _ou_payout(p.bet)
+                elif p.side == "under" and total_score < table.total:
+                    p.won = True
+                    p.payout = _ou_payout(p.bet)
 
         # Credit winners and log
         balances: dict[int, int] = {}
@@ -715,7 +846,7 @@ class MlbSimTableView(ui.View):
         # Save last bets
         for uid, player in table.players.items():
             table.last_bets[uid] = (
-                player.display_name, player.bet, player.side,
+                player.display_name, player.bet, player.market, player.side,
             )
 
         self._update_buttons()
@@ -739,6 +870,8 @@ class MlbSimTableView(ui.View):
         table.home_team = home
         table.away_team = away
         table.home_prob = _generate_win_prob()
+        table.spread = _compute_spread(table.home_prob)
+        table.total = _compute_total(table.home_prob)
         table.inning = 0
         table.home_score = 0
         table.away_score = 0
@@ -828,13 +961,16 @@ class MlbSimCog(commands.Cog):
         await queries.get_or_create_casino_wallet(str(interaction.user.id))
 
         home, away = _pick_matchup()
+        home_prob = _generate_win_prob()
         table = MlbSimTable(
             channel_id=channel_id,
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             home_team=home,
             away_team=away,
-            home_prob=_generate_win_prob(),
+            home_prob=home_prob,
+            spread=_compute_spread(home_prob),
+            total=_compute_total(home_prob),
         )
         view = MlbSimTableView(table, self.active_tables)
         embed = _betting_embed(table)
