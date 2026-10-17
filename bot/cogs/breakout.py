@@ -1,11 +1,10 @@
 """Breakout Blackjack — bet Player or Dealer, plus a 'Breakout' total-cards side bet.
 
-Both hands auto-play by fixed house rules (hit until >=17, stand on all 17s), so
-there's no player skill — you bet which side wins (like baccarat) and peel the
-cards one at a time for the slow reveal.
-
-Edges tuned to ~1% by simulation (see scripts/breakout_edge.py):
-  Player 2.17x (1.0%), Dealer 1.82x (0.8%), Breakout side bet ~0.96%.
+Both hands auto-play by fixed house rules (hit until >=17, HIT soft 17), so there's
+no player skill — you bet which side wins (like baccarat) and peel the cards one at a
+time for the slow reveal. The sides are symmetric (a double-bust pushes), so the main
+bet is an even-money (1:1) coin flip with ~0% edge; the house edge lives entirely in
+the Breakout side bet (~1.1%), tuned by simulation (scripts/breakout_edge.py).
 Launched via the `/blackjack breakout` command group (see casino.py).
 """
 import random
@@ -30,12 +29,14 @@ RESHUFFLE_THRESHOLD = 60
 MAX_PLAYERS = 8
 CARD_BACK = "🂠"
 
-# Main-bet payout multipliers (returned per unit staked, incl. stake). Push = stake back.
-PLAYER_MULT = 2.17
-DEALER_MULT = 1.82
+# Main-bet payout multipliers (returned per unit staked, incl. stake). Even money both
+# sides; push (tie or double-bust) returns the stake. ~0% edge — see module docstring.
+PLAYER_MULT = 2.0
+DEALER_MULT = 2.0
 # Breakout side bet: total cards across both hands -> win odds (X:1). <7 loses.
-BREAKOUT_TABLE = {7: 1, 8: 4, 9: 12, 10: 25, 11: 75}
-BREAKOUT_12PLUS = 200
+# Tuned to a ~1.1% house edge under H17 rules (scripts/breakout_edge.py).
+BREAKOUT_TABLE = {7: 1, 8: 4, 9: 8, 10: 20, 11: 75}
+BREAKOUT_12PLUS = 150
 
 
 def _breakout_odds(total_cards: int) -> int:
@@ -60,18 +61,35 @@ def _hand_value(hand: list[str]) -> int:
     return total
 
 
+def _is_soft(hand: list[str]) -> bool:
+    """True if an ace is still counted as 11 (a soft total)."""
+    total = sum(VALUES[c[:-1]] for c in hand)
+    aces = sum(1 for c in hand if c[:-1] == "A")
+    while total > 21 and aces:
+        total -= 10
+        aces -= 1
+    return aces > 0
+
+
 def _play_out(shoe: list[str]) -> list[str]:
     hand = [shoe.pop(), shoe.pop()]
-    while _hand_value(hand) < 17:  # stand on all 17s (S17)
-        hand.append(shoe.pop())
+    while True:  # hit below 17, and HIT soft 17 (H17)
+        v = _hand_value(hand)
+        if v < 17 or (v == 17 and _is_soft(hand)):
+            hand.append(shoe.pop())
+            continue
+        break
     return hand
 
 
 def _resolve_winner(p_val: int, d_val: int) -> str:
-    """player | dealer | push. Busts (incl. double bust) favour the house (dealer)."""
-    if p_val > 21:  # player busts first -> dealer wins even on a double bust
+    """player | dealer | push. Symmetric: a double-bust pushes (even-money main bet)."""
+    p_bust, d_bust = p_val > 21, d_val > 21
+    if p_bust and d_bust:
+        return "push"
+    if p_bust:
         return "dealer"
-    if d_val > 21:
+    if d_bust:
         return "player"
     if p_val > d_val:
         return "player"
@@ -155,8 +173,8 @@ BET_EMOJI = {"player": "\U0001f535", "dealer": "\U0001f534"}
 
 
 def _paytable_text() -> str:
-    return ("Total cards: **7**→1:1 · **8**→4:1 · **9**→12:1 · "
-            "**10**→25:1 · **11**→75:1 · **12+**→200:1")
+    return ("Total cards: **7**→1:1 · **8**→4:1 · **9**→8:1 · "
+            "**10**→20:1 · **11**→75:1 · **12+**→150:1")
 
 
 def _display_hand(hand: list[str], revealed: int, show_all: bool) -> str:
@@ -180,9 +198,9 @@ def _embed(table: Table, *, balances: dict[int, int] | None = None) -> discord.E
 
     if not table.dealt:
         embed.description = (
-            f"Bet on **{BET_EMOJI['player']} Player** (2.17×) or "
-            f"**{BET_EMOJI['dealer']} Dealer** (1.82×) — both hands auto-play, "
-            f"you pick the winner. Then peel to reveal.\n\n"
+            f"Bet on **{BET_EMOJI['player']} Player** or **{BET_EMOJI['dealer']} Dealer** "
+            f"— **even money (1:1)**, both hands auto-play (you pick the winner). "
+            f"A tie or double-bust pushes. Then peel to reveal.\n\n"
             f"🚀 **Breakout side bet** — {_paytable_text()}")
     elif finished:
         p_val, d_val = _hand_value(table.player_hand), _hand_value(table.dealer_hand)
