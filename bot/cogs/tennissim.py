@@ -112,6 +112,35 @@ def _prob_to_american(prob: float) -> str:
         return f"+{odds}"
 
 
+def _compute_spread(p1_prob: float) -> float:
+    """Games-handicap line. Positive = p1 favored (e.g. 3.5 → p1 -3.5 games).
+
+    Calibrated against the sim: average (p1_games - p2_games) margin is
+    ~(p1_prob - 0.5) * 15. Always a half-point so there are no pushes.
+    """
+    raw = (p1_prob - 0.5) * 15.0
+    rounded = round(raw)
+    if rounded >= 0:
+        return rounded + 0.5
+    return rounded - 0.5
+
+
+def _compute_total(p1_prob: float) -> float:
+    """Total-games O/U line. Closer matches run more games (3-set risk).
+
+    Calibrated against the sim: avg total games ~24.6 at pick'em falling to
+    ~21 for an 85% favorite. floor()+0.5 keeps it a half-point (no pushes).
+    """
+    closeness = 1.0 - abs(p1_prob - 0.5) * 2.0
+    raw = 20.0 + closeness * 4.6
+    return math.floor(raw) + 0.5
+
+
+def _ou_payout(bet: int) -> int:
+    """Fixed -110 payout for spread / over-under bets."""
+    return bet + int(bet * 100 / 110)
+
+
 def _simulate_game(server_prob: float) -> int:
     """Simulate one service game. Returns 1 if server holds, 0 if broken.
 
@@ -175,7 +204,8 @@ class TennisSimPlayer:
     user_id: int
     display_name: str
     bet: int
-    side: str  # "p1" or "p2"
+    side: str  # ml/spread: "p1"|"p2"  ·  ou: "over"|"under"
+    market: str = "ml"  # "ml" | "spread" | "ou"
     payout: int = 0
     won: bool = False
 
@@ -190,11 +220,13 @@ class TennisSimTable:
     p1: TennisPlayerInfo | None = None
     p2: TennisPlayerInfo | None = None
     p1_prob: float = 0.5
+    spread: float = 0.0  # games handicap, positive = p1 favored
+    total: float = 22.5  # total-games O/U line
     # Players
     players: dict[int, TennisSimPlayer] = field(default_factory=dict)
     message: discord.Message | None = None
     round_num: int = 1
-    last_bets: dict[int, tuple[str, int, str]] = field(default_factory=dict)
+    last_bets: dict[int, tuple[str, int, str, str]] = field(default_factory=dict)
     # Sim state
     current_set: int = 0
     p1_sets: int = 0
@@ -208,6 +240,36 @@ class TennisSimTable:
 
 
 # ── Embeds ───────────────────────────────────────────────────────────────────
+
+
+def _side_label(table: TennisSimTable, p: TennisSimPlayer) -> str:
+    """Short human label for a player's market + side."""
+    p1s = table.p1.short
+    p2s = table.p2.short
+    if p.market == "ml":
+        return f"ML {p1s if p.side == 'p1' else p2s}"
+    if p.market == "spread":
+        return f"Spread {p1s if p.side == 'p1' else p2s}"
+    return f"O/U {p.side.capitalize()}"
+
+
+def _lines_text(table: TennisSimTable) -> str:
+    """The three market lines (ML / games spread / games total)."""
+    p1s = table.p1.short
+    p2s = table.p2.short
+    p2_prob = 1 - table.p1_prob
+    p1_ml = _prob_to_american(table.p1_prob)
+    p2_ml = _prob_to_american(p2_prob)
+    sv = table.spread
+    if sv >= 0:
+        p1_sp, p2_sp = f"-{sv}", f"+{sv}"
+    else:
+        p1_sp, p2_sp = f"+{abs(sv)}", f"{sv}"
+    return (
+        f"ML: {p1s} {p1_ml} / {p2s} {p2_ml}\n"
+        f"Spread (games): {p1s} {p1_sp} / {p2s} {p2_sp} (-110)\n"
+        f"O/U {table.total} games (-110)"
+    )
 
 
 def _betting_embed(table: TennisSimTable) -> discord.Embed:
@@ -243,15 +305,16 @@ def _betting_embed(table: TennisSimTable) -> discord.Embed:
         name=f"{p1.short} vs {p2.short}", value=matchup_text, inline=False,
     )
 
+    embed.add_field(name="Lines", value=_lines_text(table), inline=False)
+
     if total_wagered:
         embed.add_field(name="Total Wagered", value=f"{total_wagered}c", inline=True)
 
     if table.players:
         player_lines = []
         for p in table.players.values():
-            pick_short = p1.short if p.side == "p1" else p2.short
             player_lines.append(
-                f"\U0001f3b0 **{p.display_name}** \u2014 {p.bet}c on **{pick_short}**"
+                f"\U0001f3b0 **{p.display_name}** \u2014 {p.bet}c on {_side_label(table, p)}"
             )
         embed.add_field(name="Players", value="\n".join(player_lines), inline=False)
     else:
@@ -264,7 +327,7 @@ def _betting_embed(table: TennisSimTable) -> discord.Embed:
     embed.set_footer(
         text=(
             f"Host: {table.host_name} \u2502 Min {MIN_PLAYERS} player(s) "
-            f"\u2502 Enter \"{p1.short.lower()}\" or \"{p2.short.lower()}\" in modal"
+            f"\u2502 Markets: ml / spread / ou"
         ),
     )
     return embed
@@ -325,10 +388,11 @@ def _playing_embed(table: TennisSimTable) -> discord.Embed:
     )
     embed.description = _scoreboard_text(table)
 
+    embed.add_field(name="Lines", value=_lines_text(table), inline=False)
+
     bet_lines: list[str] = []
     for p in table.players.values():
-        pick_short = p1_short if p.side == "p1" else p2_short
-        bet_lines.append(f"**{p.display_name}** \u2014 {p.bet}c on {pick_short}")
+        bet_lines.append(f"**{p.display_name}** \u2014 {p.bet}c on {_side_label(table, p)}")
     if bet_lines:
         embed.add_field(name="Bets", value="\n".join(bet_lines), inline=False)
 
@@ -344,11 +408,15 @@ def _finished_embed(
 
     winner_short = p1_short if table.p1_sets > table.p2_sets else p2_short
     sets_text = f"{table.p1_sets}-{table.p2_sets}"
+    p1_games = sum(g for g, _ in table.set_scores)
+    p2_games = sum(g for _, g in table.set_scores)
 
     embed = discord.Embed(
         title=f"\U0001f3be Tennis Sim \u2014 Final (Round {table.round_num})",
         description=(
             f"\U0001f3c6 **{winner_short}** wins {sets_text}! "
+            f"({p1_short} {p1_games} \u2014 {p2_games} {p2_short} games, "
+            f"{p1_games + p2_games} total)"
         ),
         colour=discord.Colour.green(),
     )
@@ -358,21 +426,21 @@ def _finished_embed(
         value=_scoreboard_text(table),
         inline=False,
     )
+    embed.add_field(name="Lines", value=_lines_text(table), inline=False)
 
     lines: list[str] = []
     for p in table.players.values():
         bal = balances.get(p.user_id, 0) if balances else 0
-        pick_short = p1_short if p.side == "p1" else p2_short
         net = p.payout - p.bet
         sign = "+" if net >= 0 else ""
         if p.won:
             lines.append(
-                f"\U0001f3c6 **{p.display_name}** ({pick_short}) \u2014 "
+                f"\U0001f3c6 **{p.display_name}** ({_side_label(table, p)}) \u2014 "
                 f"{p.bet}c \u2192 {p.payout}c (**{sign}{net}c**) \u2014 bal: {bal}c"
             )
         else:
             lines.append(
-                f"\u274c **{p.display_name}** ({pick_short}) \u2014 "
+                f"\u274c **{p.display_name}** ({_side_label(table, p)}) \u2014 "
                 f"{p.bet}c \u2192 0c (**-{p.bet}c**) \u2014 bal: {bal}c"
             )
     if lines:
@@ -392,9 +460,15 @@ class JoinTennisSimModal(ui.Modal):
         required=True,
         max_length=10,
     )
+    market_input = ui.TextInput(
+        label="Market (ml / spread / ou)",
+        placeholder="ml / spread / ou",
+        required=True,
+        max_length=6,
+    )
     side_input = ui.TextInput(
-        label="Pick a player",
-        placeholder="player name",
+        label="Side: player (ml/spread), over/under (ou)",
+        placeholder="player name / over / under",
         required=True,
         max_length=20,
     )
@@ -408,7 +482,7 @@ class JoinTennisSimModal(ui.Modal):
         self.table = table
         self.table_view = view
         self.amount.placeholder = f"e.g. 100 (bal: {balance}c)"
-        self.side_input.placeholder = f"{p1_short} / {p2_short}"
+        self.side_input.placeholder = f"{p1_short} / {p2_short} / over / under"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
@@ -424,19 +498,44 @@ class JoinTennisSimModal(ui.Modal):
             )
             return
 
-        raw = self.side_input.value.strip().lower()
-        p1 = self.table.p1
-        p2 = self.table.p2
-        if raw in (p1.short.lower(), p1.name.lower(), "p1", "1"):
-            side = "p1"
-        elif raw in (p2.short.lower(), p2.name.lower(), "p2", "2"):
-            side = "p2"
+        raw_market = self.market_input.value.strip().lower()
+        if raw_market in ("ml", "moneyline", "money line"):
+            market = "ml"
+        elif raw_market in ("spread", "sp"):
+            market = "spread"
+        elif raw_market in ("ou", "o/u", "over/under", "total"):
+            market = "ou"
         else:
             await interaction.response.send_message(
-                f"Enter **{p1.short}** or **{p2.short}**.",
-                ephemeral=True,
+                "Market must be **ml**, **spread**, or **ou**.", ephemeral=True,
             )
             return
+
+        p1 = self.table.p1
+        p2 = self.table.p2
+        raw = self.side_input.value.strip().lower()
+
+        if market in ("ml", "spread"):
+            if raw in (p1.short.lower(), p1.name.lower(), "p1", "1"):
+                side = "p1"
+            elif raw in (p2.short.lower(), p2.name.lower(), "p2", "2"):
+                side = "p2"
+            else:
+                await interaction.response.send_message(
+                    f"For ml/spread, enter **{p1.short}** or **{p2.short}**.",
+                    ephemeral=True,
+                )
+                return
+        else:
+            if raw in ("over", "o"):
+                side = "over"
+            elif raw in ("under", "u"):
+                side = "under"
+            else:
+                await interaction.response.send_message(
+                    "For ou, enter **over** or **under**.", ephemeral=True,
+                )
+                return
 
         uid = interaction.user.id
         if uid in self.table.players:
@@ -459,6 +558,7 @@ class JoinTennisSimModal(ui.Modal):
             display_name=interaction.user.display_name,
             bet=amt,
             side=side,
+            market=market,
         )
 
         self.table_view._update_buttons()
@@ -575,7 +675,7 @@ class TennisSimTableView(ui.View):
                 "Table is full!", ephemeral=True,
             )
             return
-        name, amt, side = last
+        name, amt, market, side = last
         try:
             await queries.update_casino_balance(str(uid), -amt)
         except ValueError:
@@ -586,7 +686,7 @@ class TennisSimTableView(ui.View):
             )
             return
         self.table.players[uid] = TennisSimPlayer(
-            user_id=uid, display_name=name, bet=amt, side=side,
+            user_id=uid, display_name=name, bet=amt, side=side, market=market,
         )
         self._update_buttons()
         await interaction.response.edit_message(
@@ -782,12 +882,31 @@ class TennisSimTableView(ui.View):
         table.phase = "finished"
 
         p1_won = table.p1_sets > table.p2_sets
+        p1_games = sum(g for g, _ in table.set_scores)
+        p2_games = sum(g for _, g in table.set_scores)
+        games_diff = p1_games - p2_games  # p1 minus p2
+        total_games = p1_games + p2_games
 
         for p in table.players.values():
-            if (p.side == "p1" and p1_won) or (p.side == "p2" and not p1_won):
-                p.won = True
-                prob = table.p1_prob if p.side == "p1" else (1 - table.p1_prob)
-                p.payout = int(p.bet * _payout_multiplier(prob))
+            if p.market == "ml":
+                if (p.side == "p1" and p1_won) or (p.side == "p2" and not p1_won):
+                    p.won = True
+                    prob = table.p1_prob if p.side == "p1" else (1 - table.p1_prob)
+                    p.payout = int(p.bet * _payout_multiplier(prob))
+            elif p.market == "spread":
+                if p.side == "p1" and games_diff > table.spread:
+                    p.won = True
+                    p.payout = _ou_payout(p.bet)
+                elif p.side == "p2" and games_diff < table.spread:
+                    p.won = True
+                    p.payout = _ou_payout(p.bet)
+            else:
+                if p.side == "over" and total_games > table.total:
+                    p.won = True
+                    p.payout = _ou_payout(p.bet)
+                elif p.side == "under" and total_games < table.total:
+                    p.won = True
+                    p.payout = _ou_payout(p.bet)
 
         balances: dict[int, int] = {}
         for uid, player in table.players.items():
@@ -804,7 +923,7 @@ class TennisSimTableView(ui.View):
 
         for uid, player in table.players.items():
             table.last_bets[uid] = (
-                player.display_name, player.bet, player.side,
+                player.display_name, player.bet, player.market, player.side,
             )
 
         self._update_buttons()
@@ -827,6 +946,8 @@ class TennisSimTableView(ui.View):
         table.p1 = p1
         table.p2 = p2
         table.p1_prob = _generate_win_prob(p1, p2)
+        table.spread = _compute_spread(table.p1_prob)
+        table.total = _compute_total(table.p1_prob)
         table.current_set = 0
         table.p1_sets = 0
         table.p2_sets = 0
@@ -918,13 +1039,16 @@ class TennisSimCog(commands.Cog):
         await queries.get_or_create_casino_wallet(str(interaction.user.id))
 
         p1, p2 = _pick_matchup()
+        p1_prob = _generate_win_prob(p1, p2)
         table = TennisSimTable(
             channel_id=channel_id,
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             p1=p1,
             p2=p2,
-            p1_prob=_generate_win_prob(p1, p2),
+            p1_prob=p1_prob,
+            spread=_compute_spread(p1_prob),
+            total=_compute_total(p1_prob),
         )
         view = TennisSimTableView(table, self.active_tables)
         embed = _betting_embed(table)
