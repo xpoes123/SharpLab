@@ -62,14 +62,44 @@ NFL_TEAMS: list[tuple[str, str]] = [
     ("Washington Commanders", "WAS"),
 ]
 
-# Scoring plays and their point values
-SCORING_PLAYS = [
-    (7, "TD + XP"),
-    (3, "FG"),
-    (6, "TD (missed XP)"),
-    (8, "TD + 2pt"),
-    (2, "Safety"),
-]
+# A scoring event is a coherent play: (points, label). Touchdowns always carry
+# their try (XP or 2pt) as part of the SAME event, so points and labels can never
+# disagree. These are the only event kinds the engine can emit.
+XP_SUCCESS = 0.94      # extra-point conversion rate
+TWO_PT_RATE = 0.08     # fraction of TDs that go for two
+TWO_PT_SUCCESS = 0.48  # two-point conversion rate
+
+
+def _touchdown_event() -> tuple[int, str]:
+    """A touchdown plus its try, as one coherent event (6 + 0/1/2)."""
+    if random.random() < TWO_PT_RATE:
+        if random.random() < TWO_PT_SUCCESS:
+            return (8, "TD + 2pt")
+        return (6, "TD, 2pt failed")
+    if random.random() < XP_SUCCESS:
+        return (7, "TD + XP")
+    return (6, "TD, XP no good")
+
+
+def _drive_rates(off: float, opp_def: float) -> tuple[float, float]:
+    """(score_chance, td_share) for one team's drive, from strength ratings.
+
+    score_chance: probability a drive ends in points.
+    td_share:     of scoring drives, the fraction that are TDs (rest are FGs).
+    """
+    score_chance = 0.35 + (off - 70) / 200 - (opp_def - 70) / 250
+    score_chance = max(0.15, min(0.55, score_chance))
+    td_share = 0.55 + (off - 70) / 300 - (opp_def - 70) / 400
+    td_share = max(0.40, min(0.75, td_share))
+    return score_chance, td_share
+
+
+def _scoring_drive(off: float, opp_def: float) -> tuple[int, str]:
+    """One coherent scoring event (TD+try or FG) for a drive known to score."""
+    _chance, td_share = _drive_rates(off, opp_def)
+    if random.random() < td_share:
+        return _touchdown_event()
+    return (3, "FG")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -180,67 +210,67 @@ def _prob_to_american(prob: float) -> str:
         return f"+{odds}"
 
 
+def _team_events(off: float, opp_def: float, drives: int) -> list[tuple[int, str]]:
+    """Coherent scoring events for one team's drives in a quarter."""
+    score_chance, _td = _drive_rates(off, opp_def)
+    events: list[tuple[int, str]] = []
+    for _ in range(drives):
+        if random.random() < score_chance:
+            events.append(_scoring_drive(off, opp_def))
+    return events
+
+
 def _simulate_quarter(
     home_off: float, home_def: float, home_coa: float,
     away_off: float, away_def: float, away_coa: float,
-) -> tuple[int, int]:
-    home_pts = 0
-    away_pts = 0
+) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
+    """Return (home_events, away_events) — lists of coherent scoring plays.
 
-    home_score_chance = 0.35 + (home_off - 65) / 200 - (away_def - 65) / 250
-    home_score_chance = max(0.15, min(0.55, home_score_chance))
-
-    away_score_chance = 0.35 + (away_off - 65) / 200 - (home_def - 65) / 250
-    away_score_chance = max(0.15, min(0.55, away_score_chance))
-
+    The caller sums the points, so the score and the play log can never disagree.
+    """
     home_drives = random.randint(2, 4) + (1 if home_coa > 75 else 0)
     away_drives = random.randint(2, 4) + (1 if away_coa > 75 else 0)
 
-    for _ in range(home_drives):
-        if random.random() < home_score_chance:
-            pts, _label = random.choices(
-                SCORING_PLAYS,
-                weights=[60, 25, 5, 8, 2],
-            )[0]
-            home_pts += pts
+    home_events = _team_events(home_off, away_def, home_drives)
+    away_events = _team_events(away_off, home_def, away_drives)
 
-    for _ in range(away_drives):
-        if random.random() < away_score_chance:
-            pts, _label = random.choices(
-                SCORING_PLAYS,
-                weights=[60, 25, 5, 8, 2],
-            )[0]
-            away_pts += pts
-
-    return home_pts, away_pts
-
-
-def _simulate_ot(home_prob: float) -> tuple[int, int]:
-    home_pts = 0
-    away_pts = 0
-
-    if random.random() < (1 - home_prob) * 0.45:
-        pts, _ = random.choices(
-            SCORING_PLAYS[:2],
-            weights=[55, 45],
-        )[0]
-        away_pts += pts
-        if pts == 7:
-            return home_pts, away_pts
-
-    if random.random() < home_prob * 0.45:
-        pts, _ = random.choices(
-            SCORING_PLAYS[:2],
-            weights=[55, 45],
-        )[0]
-        home_pts += pts
-
-    if home_pts == away_pts:
-        if random.random() < home_prob:
-            home_pts += 3
+    # Safeties are rare and credited to the team that forced them (the defense).
+    if random.random() < 0.01:
+        if random.random() < 0.5:
+            home_events.append((2, "Safety"))
         else:
-            away_pts += 3
-    return home_pts, away_pts
+            away_events.append((2, "Safety"))
+
+    return home_events, away_events
+
+
+def _simulate_ot(home_prob: float) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
+    """Return (home_events, away_events) for one OT period of coherent plays."""
+    home_events: list[tuple[int, str]] = []
+    away_events: list[tuple[int, str]] = []
+
+    # Away possession first. A touchdown ends it (walk-off).
+    if random.random() < (1 - home_prob) * 0.45:
+        if random.random() < 0.55:
+            away_events.append(_touchdown_event())
+            return home_events, away_events
+        away_events.append((3, "FG"))
+
+    # Home possession.
+    if random.random() < home_prob * 0.45:
+        if random.random() < 0.55:
+            home_events.append(_touchdown_event())
+        else:
+            home_events.append((3, "FG"))
+
+    # Still tied after possessions — force a FG so the OT loop terminates.
+    if sum(p for p, _ in home_events) == sum(p for p, _ in away_events):
+        if random.random() < home_prob:
+            home_events.append((3, "FG"))
+        else:
+            away_events.append((3, "FG"))
+
+    return home_events, away_events
 
 
 # ── Dataclasses ──────────────────────────────────────────────────────────────
@@ -883,10 +913,12 @@ class NflSimTableView(ui.View):
             for q in range(1, NUM_QUARTERS + 1):
                 await asyncio.sleep(QUARTER_DELAY)
                 table.quarter = q
-                h_pts, a_pts = _simulate_quarter(
+                h_events, a_events = _simulate_quarter(
                     table.home_offense, table.home_defense, table.home_coaching,
                     table.away_offense, table.away_defense, table.away_coaching,
                 )
+                h_pts = sum(p for p, _ in h_events)
+                a_pts = sum(p for p, _ in a_events)
                 table.home_score += h_pts
                 table.away_score += a_pts
                 table.quarter_scores.append((a_pts, h_pts))
@@ -903,7 +935,9 @@ class NflSimTableView(ui.View):
                 table.ot_count += 1
                 table.quarter += 1
                 await asyncio.sleep(OT_DELAY)
-                h_pts, a_pts = _simulate_ot(table.home_prob)
+                h_events, a_events = _simulate_ot(table.home_prob)
+                h_pts = sum(p for p, _ in h_events)
+                a_pts = sum(p for p, _ in a_events)
                 table.home_score += h_pts
                 table.away_score += a_pts
                 table.quarter_scores.append((a_pts, h_pts))
