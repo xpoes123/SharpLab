@@ -65,6 +65,40 @@ const state = { me: null, balance: 0 };
 const game = { busy: false, matchup: null, market: "ml", side: null, result: null };
 const anim = { skip: false, done: false, finish: null };
 
+// ── Pacing (NFL auto + manual only) ──
+// Default is SLOW for the sweat: ~2.2s/play at 1×. ½×≈4.4s, 2×≈1.1s. Speed is
+// persisted across games; pause/skip reset each game. paceWait() polls so that
+// pause holds the loop and a mid-wait speed change takes effect immediately.
+const BASE_PLAY_MS = 2200;
+const pace = { speed: 1, paused: false, skip: false };
+function resetPace() { pace.paused = false; pace.skip = false; }
+
+async function paceWait() {
+  let frac = 0;
+  const step = 60;
+  while (frac < 1) {
+    if (pace.skip) return;
+    if (!pace.paused) frac += step / (BASE_PLAY_MS / pace.speed);
+    await delay(step);
+  }
+}
+
+// Speed (½/1/2×) + Pause/Resume + Skip control bar, used by both NFL modes.
+function controlsBar() {
+  const spd = (v, l) =>
+    `<button class="spdbtn${pace.speed === v ? " sel" : ""}" data-speed="${v}">${l}</button>`;
+  return `<div class="simctrls" id="simCtrls">
+    <div class="spdgroup" role="group" aria-label="Playback speed">
+      ${spd(0.5, "½×")}${spd(1, "1×")}${spd(2, "2×")}
+    </div>
+    <button class="btn ghost" id="simPause">${pace.paused ? "▶ Resume" : "⏸ Pause"}</button>
+    <button class="btn ghost" id="simSkip">Skip ▶▶</button>
+  </div>`;
+}
+
+const fmtAmer = (x) =>
+  x == null ? "—" : typeof x === "number" ? (x > 0 ? "+" + x : String(x)) : String(x);
+
 // ── Nav (login / logout) — mirrors threecardpoker.js ──
 function renderNav(user) {
   if (!user) {
@@ -232,16 +266,58 @@ function onPick(el) {
   updateBetButton();
 }
 
-// ── Start a new game for a sport (POST /new) ──
+// ── Start a new game for a sport ──
+// NFL offers a mode choice first (watch vs live-bet); everything else goes
+// straight to the classic moneyline flow (POST /new).
 async function newGame(sport) {
+  resetPace();
+  manual.active = false;
+  if (sport === "nfl") return nflModeView();
   if (game.busy) return;
   game.busy = true;
   const res = await postSim("/new", { sport });
   game.busy = false;
   if (res.error) return toast("❌ " + res.error);
   game.matchup = res;
-  if (res.sport === "nfl") nflMatchupView();
-  else matchupView();
+  matchupView();
+}
+
+// NFL mode selection: Auto (watch a pre-placed bet) or Manual (live betting).
+function nflModeView() {
+  game.matchup = null;
+  game.side = null;
+  game.result = null;
+  app.innerHTML =
+    pageHead("NFL — watch a bet play out slowly, or live-bet as the game swings.") +
+    `<div class="card">
+       <div class="simbet-top">
+         <button class="btn ghost" id="simBack">← Change sport</button>
+         <span class="simsport">🏈 NFL</span>
+       </div>
+       <div class="modegrid">
+         <button class="modetile" id="modeAuto">
+           <span class="mode-icon">▶</span>
+           <span class="mode-title">Auto · watch</span>
+           <span class="mode-desc">Place one pre-game bet, then sweat it out play-by-play.</span>
+         </button>
+         <button class="modetile" id="modeManual">
+           <span class="mode-icon">🎮</span>
+           <span class="mode-title">Manual · live bet</span>
+           <span class="mode-desc">Odds move every play — hedge or pile on while it's live.</span>
+         </button>
+       </div>
+     </div>`;
+}
+
+// Auto mode: classic pre-game bet flow, just animated slowly.
+async function startAutoNfl() {
+  if (game.busy) return;
+  game.busy = true;
+  const res = await postSim("/new", { sport: "nfl" });
+  game.busy = false;
+  if (res.error) return toast("❌ " + res.error);
+  game.matchup = res;
+  nflMatchupView();
 }
 
 // ── Place the bet (POST /bet) then animate ──
@@ -352,6 +428,7 @@ async function runAnimation(res) {
 function skipAnimation() {
   if (!game.result || anim.done) return;
   anim.skip = true;
+  pace.skip = true;
   (anim.finish || finishAnimation)(game.result);
 }
 
@@ -516,7 +593,7 @@ function nflAnimateView(res) {
          <div class="ez ez-away"><span>${esc(res.away.abbr)}</span></div>
          <div class="ball" id="nflBall" style="left:${ballLeft(50)}%">🏈</div>
        </div>
-       <button class="btn ghost" id="simSkip">Skip ▶▶</button>
+       ${controlsBar()}
      </div>
      <div class="simbanner" id="simBanner"></div>
      <div class="simnote" id="simNote"></div>
@@ -578,6 +655,7 @@ async function runNflAnimation(res) {
   anim.skip = false;
   anim.done = false;
   anim.finish = nflFinish;
+  resetPace();
   const plays = res.plays || [];
 
   if (REDUCE) {
@@ -586,12 +664,11 @@ async function runNflAnimation(res) {
   }
   if (!plays.length) return nflFinish(res);
 
-  // Aim ~25-40s total: clamp per-play delay by play count (long games animate faster).
-  const per = Math.min(650, Math.max(180, Math.floor(30000 / plays.length)));
+  // Slow sweat: one play every ~2.2s at 1× (speed/pause/skip via paceWait).
   for (let i = 0; i < plays.length; i++) {
-    if (anim.skip) break;
     applyNflPlay(res, plays[i]);
-    await delay(per);
+    await paceWait();
+    if (pace.skip || anim.skip) break;
   }
   nflFinish(res);
 }
@@ -654,6 +731,350 @@ function nflFinish(res) {
   }
 }
 
+// ═══════════════ NFL manual mode (live in-game betting) ═══════════════
+// Pull-based: the server reveals one play at a time (it holds the future) and
+// re-prices three markets each play. The user can place live bets whenever a
+// side isn't suspended. Reuses the simcast field/ball/ticker from auto mode.
+
+const manual = {
+  active: false, gid: null, home: null, away: null, odds: null, done: false,
+  bets: [], selMarket: null, selSide: null, loopToken: 0,
+};
+
+function cellFor(odds, market, side) {
+  if (!odds) return null;
+  const m = odds[market];
+  return m ? m[side] : null;
+}
+
+// Label for a market+side using a line source ({spread:{line},total:{line}} or full odds).
+function liveBetLabel(market, side, odds) {
+  const H = manual.home.abbr, A = manual.away.abbr;
+  if (market === "ml") return (side === "home" ? H : A) + " ML";
+  if (market === "spread") {
+    const line = odds && odds.spread ? odds.spread.line : 0;
+    return side === "home" ? `${H} ${fmtSigned(-line)}` : `${A} ${fmtSigned(line)}`;
+  }
+  const line = odds && odds.total ? odds.total.line : "";
+  return side === "over" ? `Over ${line}` : `Under ${line}`;
+}
+
+async function startManualNfl() {
+  if (game.busy) return;
+  game.busy = true;
+  resetPace();
+  const res = await postSim("/start", { sport: "nfl" });
+  game.busy = false;
+  if (res.error) return toast("❌ " + res.error);
+  Object.assign(manual, {
+    active: true, gid: res.gid, home: res.home, away: res.away, odds: res.odds,
+    done: false, bets: [], selMarket: null, selSide: null,
+  });
+  game.matchup = { sport: "nfl" }; // lets "New game" / "Change sport" route correctly
+  nflPrev.home = 0;
+  nflPrev.away = 0;
+  manualView(res);
+  manualLoop();
+}
+
+function manualView(res) {
+  app.innerHTML =
+    pageHead("NFL live — odds move every play. Pause the action to place a live bet.") +
+    `<div class="card nflsim">
+       <div class="nfl-score">
+         <div class="nsc home"><span class="nsc-abbr">${esc(res.home.abbr)}</span><span class="nsc-num" id="nflHome">0</span></div>
+         <div class="nsc-mid">
+           <div class="nsc-q" id="nflQ">Kickoff</div>
+           <div class="nsc-dd" id="nflDD">&nbsp;</div>
+         </div>
+         <div class="nsc away"><span class="nsc-abbr">${esc(res.away.abbr)}</span><span class="nsc-num" id="nflAway">0</span></div>
+       </div>
+       <div class="nfl-field">
+         <div class="ez ez-home"><span>${esc(res.home.abbr)}</span></div>
+         <div class="field-play"></div>
+         <div class="ez ez-away"><span>${esc(res.away.abbr)}</span></div>
+         <div class="ball" id="nflBall" style="left:${ballLeft(50)}%">🏈</div>
+       </div>
+       ${controlsBar()}
+     </div>
+     <div class="card liveodds" id="liveOdds"></div>
+     <div class="card livebet" id="liveBetCard">
+       <div class="lb-sel" id="lbSel">Pick a market above to live-bet.</div>
+       <div class="betline">
+         <input class="betinput" type="number" min="1" step="1" value="100"
+                id="stake-live" inputmode="numeric" />
+         <div class="chipbtns">
+           <button class="chipbtn" data-amt="100">100</button>
+           <button class="chipbtn" data-amt="1000">1k</button>
+           <button class="chipbtn" data-amt="5000">5k</button>
+           <button class="chipbtn" data-amt="max">Max</button>
+         </div>
+         <button class="btn primary" id="liveBetBtn" disabled>Live bet</button>
+       </div>
+       <div class="lb-cap muted">Live bets are capped at 🪙 25,000 each.</div>
+     </div>
+     <div class="simbanner" id="simBanner"></div>
+     <div class="simnote" id="simNote"></div>
+     <div class="simactions" id="simEnd"></div>
+     <div class="card liveodds" id="liveBets"></div>
+     <div class="card simfeed"><div class="feedlist nflfeed" id="simFeed"></div></div>`;
+  renderLiveOdds(res.odds);
+  renderMyBets();
+  updateLiveBetBtn();
+}
+
+// One bettable (or suspended) odds cell. Suspended sides have no data-market,
+// are a <div>, and show "SUSPENDED" — so they can't be selected.
+function oddsBtn(market, side, label, cell) {
+  if (!cell)
+    return `<div class="liveopt susp"><span class="lo-lbl">${esc(label)}</span>
+      <span class="lo-susp">SUSPENDED</span></div>`;
+  const sel = manual.selMarket === market && manual.selSide === side ? " sel" : "";
+  return `<button class="liveopt${sel}" data-market="${market}" data-side="${side}">
+    <span class="lo-lbl">${esc(label)}</span>
+    <span class="lo-odds">${esc(fmtAmer(cell.american))}</span></button>`;
+}
+
+function renderLiveOdds(odds) {
+  const el = $("liveOdds");
+  if (!el) return;
+  manual.odds = odds;
+  if (!odds) { el.innerHTML = `<div class="lo-title">Game over — markets closed</div>`; return; }
+  // Drop a selection that just got suspended.
+  if (manual.selMarket && !cellFor(odds, manual.selMarket, manual.selSide)) {
+    manual.selMarket = null;
+    manual.selSide = null;
+  }
+  const H = manual.home.abbr, A = manual.away.abbr;
+  const spr = odds.spread || {}, tot = odds.total || {};
+  const ml = odds.ml || {};
+  el.innerHTML = `
+    <div class="lo-title">Live odds</div>
+    <div class="lo-market">
+      <div class="lo-mlbl">Moneyline</div>
+      <div class="lo-opts">
+        ${oddsBtn("ml", "away", A, ml.away)}
+        ${oddsBtn("ml", "home", H, ml.home)}
+      </div>
+    </div>
+    <div class="lo-market">
+      <div class="lo-mlbl">Spread</div>
+      <div class="lo-opts">
+        ${oddsBtn("spread", "away", `${A} ${fmtSigned(spr.line)}`, spr.away)}
+        ${oddsBtn("spread", "home", `${H} ${fmtSigned(-spr.line)}`, spr.home)}
+      </div>
+    </div>
+    <div class="lo-market">
+      <div class="lo-mlbl">Total${tot.line != null ? " " + esc(String(tot.line)) : ""}</div>
+      <div class="lo-opts">
+        ${oddsBtn("total", "over", `Over ${tot.line}`, tot.over)}
+        ${oddsBtn("total", "under", `Under ${tot.line}`, tot.under)}
+      </div>
+    </div>`;
+}
+
+function selectLiveOpt(el) {
+  if (!el.dataset.market) return;
+  manual.selMarket = el.dataset.market;
+  manual.selSide = el.dataset.side;
+  document.querySelectorAll(".liveopt").forEach((x) => x.classList.toggle("sel", x === el));
+  updateLiveBetBtn();
+}
+
+function updateLiveBetBtn() {
+  const btn = $("liveBetBtn");
+  if (!btn) return;
+  const el = $("stake-live");
+  const stake = Math.floor(Number(el && el.value));
+  const ok =
+    manual.active && !manual.done && !!manual.selMarket && stake >= 1 &&
+    stake <= Math.floor(state.balance) && stake <= 25000 && !game.busy;
+  btn.disabled = !ok;
+  const sel = $("lbSel");
+  if (sel) {
+    if (!manual.selMarket) {
+      sel.textContent = "Pick a market above to live-bet.";
+    } else {
+      const cell = cellFor(manual.odds, manual.selMarket, manual.selSide);
+      sel.innerHTML = `Betting <b>${esc(liveBetLabel(manual.selMarket, manual.selSide, manual.odds))}</b>` +
+        (cell ? ` @ <b>${esc(fmtAmer(cell.american))}</b>` : "");
+    }
+  }
+}
+
+async function placeLiveBet() {
+  if (!manual.active || manual.done || !manual.selMarket || game.busy) return;
+  const el = $("stake-live");
+  const stake = Math.floor(Number(el && el.value));
+  if (!(stake >= 1)) return toast("Enter a stake of at least 1 coin");
+  if (stake > 25000) return toast("Live bets are capped at 25,000");
+  if (stake > Math.floor(state.balance)) return toast("You don't have enough coins");
+  const market = manual.selMarket, side = manual.selSide;
+  game.busy = true;
+  updateLiveBetBtn();
+  const r = await postSim("/livebet", { gid: manual.gid, market, side, stake });
+  game.busy = false;
+  if (r.error) { updateLiveBetBtn(); return toast("❌ " + r.error); }
+  manual.bets.push({
+    market: r.market, side: r.side, dec: r.dec, american: r.american, stake: r.stake,
+    label: liveBetLabel(r.market, r.side, manual.odds),
+  });
+  applyBalance(r.balance);
+  renderMyBets();
+  updateLiveBetBtn();
+  toast(`✅ Live bet placed: ${liveBetLabel(market, side, manual.odds)}`);
+}
+
+function renderMyBets() {
+  const el = $("liveBets");
+  if (!el || manual.done) return;
+  if (!manual.bets.length) {
+    el.innerHTML = `<div class="lb-title">My live bets</div>
+      <div class="lb-empty muted">No live bets yet. Pick a market and stake to bet while it plays.</div>`;
+    return;
+  }
+  const rows = manual.bets
+    .map((b) => `<div class="mybet">
+      <span class="mb-lbl">${esc(b.label)}</span>
+      <span class="mb-odds">${esc(fmtAmer(b.american))}</span>
+      <span class="mb-stake">${coins(b.stake)}</span>
+      <span class="mb-status live">LIVE</span>
+    </div>`)
+    .join("");
+  el.innerHTML = `<div class="lb-title">My live bets (${manual.bets.length})</div>${rows}`;
+}
+
+function settledBetLabel(b, line, i) {
+  if (manual.bets[i]) return manual.bets[i].label;
+  return liveBetLabel(b.market, b.side, line ? { spread: { line: line.spread }, total: { line: line.total } } : null);
+}
+
+function renderSettledBets(bets, line) {
+  const el = $("liveBets");
+  if (!el) return;
+  if (!bets || !bets.length) {
+    el.innerHTML = `<div class="lb-title">My live bets</div>
+      <div class="lb-empty muted">You didn't place any live bets this game.</div>`;
+    return;
+  }
+  let staked = 0, ret = 0;
+  const rows = bets
+    .map((b, i) => {
+      staked += b.stake;
+      ret += b.payout || 0;
+      const st = b.push ? "push" : b.won ? "won" : "lost";
+      const pay = b.push
+        ? `Refund ${coins(b.payout || b.stake)}`
+        : b.won ? `+${coins(b.payout)}` : `−${coins(b.stake)}`;
+      return `<div class="mybet ${st}">
+        <span class="mb-lbl">${esc(settledBetLabel(b, line, i))}</span>
+        <span class="mb-odds">${esc(fmtAmer(b.american != null ? b.american : decToAmerican(b.dec)))}</span>
+        <span class="mb-stake">${coins(b.stake)}</span>
+        <span class="mb-status ${st}">${st.toUpperCase()}</span>
+        <span class="mb-pay">${pay}</span>
+      </div>`;
+    })
+    .join("");
+  const net = ret - staked;
+  el.innerHTML = `<div class="lb-title">My live bets — settled</div>${rows}
+    <div class="lb-net">Net
+      <b class="${net >= 0 ? "pos" : "neg"}">${net >= 0 ? "+" : "−"}${coins(Math.abs(net))}</b>
+      · Balance <b>${coins(state.balance)}</b></div>`;
+}
+
+async function manualLoop() {
+  const token = ++manual.loopToken;
+  while (!manual.done && manual.loopToken === token) {
+    await paceWait();
+    if (manual.loopToken !== token) return;
+    if (game.busy) { await delay(80); continue; } // a /livebet is in flight — yield
+    const r = await postSim("/advance", { gid: manual.gid });
+    if (manual.loopToken !== token) return;
+    if (r.error) { toast("❌ " + r.error); return; }
+    if (r.done) return manualSettle(r);
+    if (r.play) applyNflPlay(manual, r.play);
+    renderLiveOdds(r.odds);
+    updateLiveBetBtn();
+  }
+}
+
+function manualSkip() {
+  if (!manual.active || manual.done) return;
+  pace.skip = true; // paceWait returns instantly → loop drains to the end fast
+}
+
+function manualSettle(final) {
+  manual.done = true;
+  manual.active = false;
+  manual.loopToken++; // stop the loop
+  game.busy = false;
+
+  if (final.play) applyNflPlay(manual, final.play);
+  const h = $("nflHome"), a = $("nflAway");
+  if (h) h.textContent = final.home_score;
+  if (a) a.textContent = final.away_score;
+  const q = $("nflQ");
+  if (q) q.textContent = "Final";
+  const dd = $("nflDD");
+  if (dd) dd.innerHTML = "&nbsp;";
+
+  const ctrls = $("simCtrls");
+  if (ctrls) ctrls.remove();
+  const betCard = $("liveBetCard");
+  if (betCard) betCard.remove();
+
+  document.querySelectorAll(".nsc").forEach((el) => el.classList.remove("won", "lost"));
+  if (final.winner === "home" || final.winner === "away") {
+    const win = document.querySelector(".nsc." + final.winner);
+    const lose = document.querySelector(".nsc." + (final.winner === "home" ? "away" : "home"));
+    if (win) win.classList.add("won");
+    if (lose) lose.classList.add("lost");
+  }
+
+  applyBalance(final.balance);
+  renderLiveOdds(null);
+  renderSettledBets(final.bets, final.line);
+
+  const bets = final.bets || [];
+  const staked = bets.reduce((s, b) => s + b.stake, 0);
+  const ret = bets.reduce((s, b) => s + (b.payout || 0), 0);
+  const net = ret - staked;
+  const b = $("simBanner");
+  if (b) {
+    if (!bets.length) {
+      b.className = "simbanner show push";
+      b.innerHTML = `<span class="sb-label">GAME OVER</span>
+        <span class="sb-pay">No live bets placed</span>`;
+    } else if (net > 0) {
+      b.className = "simbanner show win";
+      b.innerHTML = `<span class="sb-label">YOU WON</span>
+        <span class="sb-pay">Net +${coins(net)}</span>`;
+    } else if (net < 0) {
+      b.className = "simbanner show lose";
+      b.innerHTML = `<span class="sb-label">YOU LOST</span>
+        <span class="sb-pay">Net −${coins(Math.abs(net))}</span>`;
+    } else {
+      b.className = "simbanner show push";
+      b.innerHTML = `<span class="sb-label">BROKE EVEN</span>
+        <span class="sb-pay">Net ${coins(0)}</span>`;
+    }
+  }
+
+  const winAbbr = final.winner === "tie" ? "Tie" : final.winner === "home" ? final.home.abbr : final.away.abbr;
+  const note = $("simNote");
+  if (note) {
+    const score = `${esc(final.away.abbr)} ${num(final.away_score)} – ${num(final.home_score)} ${esc(final.home.abbr)}`;
+    const result = final.winner === "tie" ? `<b>Tie</b>` : `<b>${esc(winAbbr)}</b> win`;
+    note.innerHTML = `${result} ${score}. Balance: ${coins(state.balance)}.`;
+  }
+
+  const end = $("simEnd");
+  if (end) {
+    end.innerHTML = `<button class="btn primary" id="simAgain">New game</button>
+      <button class="btn ghost" id="simPick">Change sport</button>`;
+  }
+}
+
 // ═══════════════ Events ═══════════════
 
 app.addEventListener("click", (e) => {
@@ -665,25 +1086,53 @@ app.addEventListener("click", (e) => {
 
   const chip = e.target.closest(".chipbtn");
   if (chip) {
-    const inp = $("stake-sim");
+    // Target whichever stake input is on the page (pre-game or live).
+    const inp = (chip.closest(".betline") || document).querySelector(".betinput");
     if (inp) inp.value = chip.dataset.amt === "max"
       ? Math.max(0, Math.floor(state.balance)) : chip.dataset.amt;
     updateBetButton();
+    updateLiveBetBtn();
     return;
   }
 
+  // Mode selection (NFL).
+  if (e.target.closest("#modeAuto")) return startAutoNfl();
+  if (e.target.closest("#modeManual")) return startManualNfl();
+
+  // Playback speed.
+  const spd = e.target.closest(".spdbtn");
+  if (spd) {
+    pace.speed = Number(spd.dataset.speed);
+    document.querySelectorAll(".spdbtn").forEach((b) => b.classList.toggle("sel", b === spd));
+    return;
+  }
+  // Pause / resume.
+  const pauseBtn = e.target.closest("#simPause");
+  if (pauseBtn) {
+    pace.paused = !pace.paused;
+    pauseBtn.textContent = pace.paused ? "▶ Resume" : "⏸ Pause";
+    return;
+  }
+
+  // Live-odds selection + live bet (manual mode).
+  const opt = e.target.closest(".liveopt");
+  if (opt) return selectLiveOpt(opt);
+  if (e.target.closest("#liveBetBtn")) return placeLiveBet();
+
   if (e.target.closest("#simBack")) return pickerView();
   if (e.target.closest("#simPlace")) return placeBet();
-  if (e.target.closest("#simSkip")) return skipAnimation();
+  if (e.target.closest("#simSkip")) return manual.active ? manualSkip() : skipAnimation();
   if (e.target.closest("#simAgain")) return newGame(game.matchup && game.matchup.sport);
   if (e.target.closest("#simPick")) return pickerView();
 });
 
 app.addEventListener("input", (e) => {
   if (e.target.id === "stake-sim") updateBetButton();
+  if (e.target.id === "stake-live") updateLiveBetBtn();
 });
 app.addEventListener("keydown", (e) => {
   if (e.target.id === "stake-sim" && e.key === "Enter") { e.preventDefault(); placeBet(); }
+  if (e.target.id === "stake-live" && e.key === "Enter") { e.preventDefault(); placeLiveBet(); }
 });
 
 async function main() {
@@ -731,6 +1180,9 @@ function mockDecToAmerican(dec) {
 }
 
 function mockSim(path, body) {
+  if (path === "/start") return mockManStart(body);
+  if (path === "/advance") return mockManAdvance(body);
+  if (path === "/livebet") return mockManLivebet(body);
   if (path === "/new") {
     const sport = MOCK_TEAMS[body.sport] ? body.sport : "nba";
     const t = MOCK_TEAMS[sport];
@@ -887,6 +1339,171 @@ function mockNflBuild(g, winner) {
 
 function mkPlay(q, clock, off, def, down, togo, fieldpos, type, yards, result, desc, home, away) {
   return { q, clock, off, def, down, togo, fieldpos, type, yards, result, desc, home, away };
+}
+
+// ── NFL manual mock: pull-based live game ──
+// Pre-generate ~40 plays with evolving scores; price odds on demand from the
+// current margin + game clock (occasionally suspending a side). /livebet records
+// the bet at the live price and deducts stake; settle credits payouts.
+let mockMan = null;
+
+function mockManStart() {
+  const t = MOCK_TEAMS.nfl;
+  const baseProb = 0.5 + (Math.random() * 0.3 - 0.1); // ~0.4..0.7 home
+  const plays = mockManGen(t.home[1], t.away[1]);
+  mockMan = {
+    gid: "mock-" + Date.now(),
+    home: { abbr: t.home[1], name: t.home[0] },
+    away: { abbr: t.away[1], name: t.away[0] },
+    baseProb, plays, cursor: 0, total: plays.length,
+    pregameTotal: 44.5, bets: [], balance: state.balance,
+  };
+  return {
+    gid: mockMan.gid, home: mockMan.home, away: mockMan.away,
+    odds: mockManOdds(0), cursor: 0, done: false, total_plays: plays.length,
+  };
+}
+
+function mockManGen(HOME, AWAY) {
+  const plays = [];
+  let h = 0, a = 0, q = 1, driveInQ = 0;
+  let off = Math.random() < 0.5 ? "home" : "away";
+  const clocks = ["14:30", "11:12", "07:48", "04:33", "01:05"];
+  const outcomes = ["td", "fg", "punt", "punt", "td", "fg", "turnover"];
+  while (plays.length < 38 && q <= 4) {
+    const offAbbr = off === "home" ? HOME : AWAY;
+    const defAbbr = off === "home" ? AWAY : HOME;
+    const dir = off === "home" ? 1 : -1;
+    let spot = off === "home" ? 25 : 75;
+    const clock = clocks[Math.min(driveInQ, clocks.length - 1)];
+    const res = outcomes[Math.floor(Math.random() * outcomes.length)];
+    const setup = 2 + Math.floor(Math.random() * 3); // 2-4 plays before the result
+    for (let k = 0; k < setup; k++) {
+      const yd = Math.floor(Math.random() * 13) - 2; // -2..10
+      spot = Math.max(3, Math.min(97, spot + dir * yd));
+      const kind = Math.random() < 0.5 ? "run" : "pass";
+      const togo = Math.max(1, 10 - Math.max(0, yd));
+      plays.push(mkPlay(q, clock, offAbbr, defAbbr, (k % 4) + 1, togo, spot, kind, yd,
+        yd >= 10 ? "first_down" : "gain", `${offAbbr} ${kind} ${yd >= 0 ? "+" : ""}${yd}`, h, a));
+    }
+    const endSpot = off === "home" ? 100 : 0;
+    if (res === "td") {
+      if (off === "home") h += 6; else a += 6;
+      plays.push(mkPlay(q, clock, offAbbr, defAbbr, null, null, endSpot, "pass", 0, "touchdown", `${offAbbr} TOUCHDOWN`, h, a));
+      if (off === "home") h += 1; else a += 1;
+      plays.push(mkPlay(q, clock, offAbbr, defAbbr, null, null, endSpot, "xp", 0, "extra_point", `${offAbbr} extra point good`, h, a));
+    } else if (res === "fg") {
+      if (off === "home") h += 3; else a += 3;
+      plays.push(mkPlay(q, clock, offAbbr, defAbbr, 4, null, spot, "fg", 0, "field_goal", `${offAbbr} field goal good`, h, a));
+    } else if (res === "punt") {
+      plays.push(mkPlay(q, clock, offAbbr, defAbbr, 4, null, spot, "punt", 0, "punt", `${offAbbr} punt`, h, a));
+    } else {
+      plays.push(mkPlay(q, clock, offAbbr, defAbbr, 3, null, spot, "pass", 0, "turnover", `${offAbbr} turnover on downs`, h, a));
+    }
+    off = off === "home" ? "away" : "home";
+    if (++driveInQ >= 3) { driveInQ = 0; q++; }
+  }
+  return plays;
+}
+
+function mockCell(prob) {
+  const p = Math.max(0.03, Math.min(0.97, prob));
+  const dec = Math.round((1 / p) * 0.95 * 1000) / 1000;
+  return { dec, american: mockDecToAmerican(dec) };
+}
+
+// Odds after `cursor` plays revealed (cursor 0 = pregame, 0-0).
+function mockManOdds(cursor) {
+  const m = mockMan;
+  const pl = cursor > 0 ? m.plays[cursor - 1] : null;
+  const h = pl ? pl.home : 0, a = pl ? pl.away : 0;
+  const margin = h - a; // home − away
+  const elapsed = Math.min(1, cursor / m.total);
+  // Blend pregame prob (fading) with a margin/time read; small noise so lines move.
+  let p = m.baseProb * (1 - elapsed) + (0.5 + 0.5 * Math.tanh(margin / 8)) * elapsed;
+  p = Math.max(0.04, Math.min(0.96, p + margin * 0.004 + (Math.random() - 0.5) * 0.02));
+
+  let mlHome = mockCell(p), mlAway = mockCell(1 - p);
+  // Suspend the favorite's ML when a team pulls well ahead; suspend both right
+  // after a score (markets reset) — shows the SUSPENDED state in the panel.
+  if (margin >= 14) mlHome = null;
+  else if (margin <= -14) mlAway = null;
+  if (pl && SCORING.has(pl.result)) { mlHome = null; mlAway = null; }
+
+  const expMargin = margin * 0.2 + (m.baseProb - 0.5) * 12 * (1 - elapsed);
+  const sprLine = Math.round(expMargin * 2) / 2;
+  const suspSpr = Math.random() < 0.07;
+  const totLine = Math.round(((h + a) + m.pregameTotal * (1 - elapsed)) * 2) / 2;
+  const juice = { dec: 1.909, american: -110 };
+
+  return {
+    ml: { home: mlHome, away: mlAway },
+    spread: { line: sprLine, home: suspSpr ? null : juice, away: suspSpr ? null : juice },
+    total: { line: totLine, over: juice, under: juice },
+  };
+}
+
+function mockManAdvance() {
+  const m = mockMan;
+  if (!m) return { error: "no game" };
+  if (m.cursor >= m.plays.length) return mockManSettle();
+  const play = m.plays[m.cursor];
+  m.cursor++;
+  return {
+    play, cursor: m.cursor, done: false,
+    home_score: play.home, away_score: play.away, odds: mockManOdds(m.cursor),
+  };
+}
+
+function mockManLivebet(body) {
+  const m = mockMan;
+  if (!m) return { error: "no game" };
+  if (m.cursor >= m.plays.length) return { error: "game over" };
+  const stake = Math.floor(Number(body.stake) || 0);
+  if (stake < 1) return { error: "enter a stake" };
+  if (stake > 25000) return { error: "live stake capped at 25,000" };
+  if (stake > Math.floor(m.balance)) return { error: "not enough coins" };
+  const odds = mockManOdds(m.cursor);
+  const cell = cellFor(odds, body.market, body.side);
+  if (!cell) return { error: "that market is suspended right now" };
+  m.balance -= stake;
+  state.balance = m.balance;
+  m.bets.push({
+    market: body.market, side: body.side, stake, dec: cell.dec, american: cell.american,
+    takenLine: body.market === "spread" ? odds.spread.line : null,
+    takenTotal: body.market === "total" ? odds.total.line : null,
+  });
+  return { accepted: true, market: body.market, side: body.side, dec: cell.dec, american: cell.american, stake, balance: state.balance };
+}
+
+function mockManSettle() {
+  const m = mockMan;
+  const last = m.plays[m.plays.length - 1];
+  const h = last.home, a = last.away;
+  const winner = h > a ? "home" : a > h ? "away" : "tie";
+  const margin = h - a, totalPts = h + a;
+  const bets = m.bets.map((b) => {
+    let won = false, push = false;
+    if (b.market === "ml") {
+      if (winner === "tie") push = true; else won = b.side === winner;
+    } else if (b.market === "spread") {
+      const adj = margin - b.takenLine; // >0 home covers, <0 away covers
+      if (adj === 0) push = true; else won = b.side === "home" ? adj > 0 : adj < 0;
+    } else {
+      if (totalPts === b.takenTotal) push = true;
+      else won = b.side === "over" ? totalPts > b.takenTotal : totalPts < b.takenTotal;
+    }
+    const payout = push ? b.stake : won ? Math.round(b.stake * b.dec) : 0;
+    return { market: b.market, side: b.side, stake: b.stake, dec: b.dec, american: b.american, won, push, payout };
+  });
+  m.balance += bets.reduce((s, b) => s + (b.payout || 0), 0);
+  state.balance = Math.max(0, m.balance);
+  return {
+    done: true, settled: true, home: m.home, away: m.away,
+    home_score: h, away_score: a, winner,
+    line: { spread: margin, total: totalPts }, bets, balance: state.balance,
+    play: last, cursor: m.cursor,
+  };
 }
 
 main();

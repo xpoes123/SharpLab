@@ -78,6 +78,7 @@ class _Sim:
         self.half = 1
         self.clock = HALF_SECONDS
         self.ot = False
+        self._silent = False  # True for live-odds continuations (skip recording plays)
 
     # ── clock / display ─────────────────────────────────────────────────────
     def _q(self) -> int:
@@ -92,6 +93,12 @@ class _Sim:
 
     def _two_min(self) -> bool:
         return self.clock <= 120
+
+    def _secs_left(self) -> int:
+        """Whole-game seconds remaining (0..3600), for live win-probability pricing."""
+        if self.ot:
+            return 0
+        return max(0, (1800 if self.half == 1 else 0) + self.clock)
 
     def _burn(self, kind: str, two_min: bool) -> None:
         t = _CLOCK[kind]
@@ -108,8 +115,10 @@ class _Sim:
 
     def _emit(self, off, deff, ptype, yards, result, desc,
               down=None, togo=None, ownyl=None):
+        if self._silent:
+            return
         self.plays.append({
-            "q": self._q(), "clock": self._clock_str(),
+            "q": self._q(), "clock": self._clock_str(), "secs_left": self._secs_left(),
             "off": off.abbr, "def": deff.abbr,
             "down": down, "togo": (None if togo is None else max(0, round(togo))),
             "fieldpos": None if ownyl is None else self._fieldpos(off, ownyl),
@@ -347,9 +356,53 @@ class _Sim:
         # still tied → a tie (rare, allowed)
 
 
+    def _resume(self, off, ownyl, sh_receiver):
+        """Play out the rest of the game from a mid-game state (used for live odds)."""
+        deff = self._opp(off)
+        while self.clock > 0:  # finish the current half from this possession
+            nxt = self._drive(off, deff, ownyl)
+            if nxt is None:
+                break
+            off, ownyl = nxt
+            deff = self._opp(off)
+        if self.half == 1:     # play the second half
+            self.half, self.clock = 2, HALF_SECONDS
+            recv = (self.home if sh_receiver == "home" else self.away) if sh_receiver \
+                else (self.home if self.rng.random() < 0.5 else self.away)
+            self._play_half(recv)
+        if self.home.score == self.away.score:
+            self._overtime()
+
+
 def simulate(home: dict, away: dict, seed: int | None = None) -> GameResult:
     rng = random.Random(seed if seed is not None else secrets.randbits(128))
     return _Sim(home, away, rng).play()
+
+
+def live_probs(home: dict, away: dict, state: dict, spread: float, total: float,
+               k: int = 160) -> tuple[float, float, float]:
+    """Monte-Carlo the rest of the game from `state`, k times, and return the three
+    live probabilities used to price the in-game markets:
+        (P(home wins), P(home covers `spread`), P(final total > `total`)).
+    Calibrated to the engine by construction, so a vig makes every state house-positive.
+
+    state keys: half (1|2), clock (secs left in that half), home_score, away_score,
+    possessing ("home"|"away"), ownyl (0-100 for the possessing team),
+    second_half_receiver ("home"|"away"|None).
+    """
+    hw = cover = over = 0.0
+    for _ in range(k):
+        s = _Sim(home, away, random.Random(secrets.randbits(64)))
+        s._silent = True
+        s.home.score, s.away.score = state["home_score"], state["away_score"]
+        s.half, s.clock = state["half"], state["clock"]
+        off = s.home if state["possessing"] == "home" else s.away
+        s._resume(off, state["ownyl"], state.get("second_half_receiver"))
+        margin = s.home.score - s.away.score
+        hw += 1.0 if margin > 0 else 0.5 if margin == 0 else 0.0
+        cover += 1.0 if margin > spread else 0.0
+        over += 1.0 if (s.home.score + s.away.score) > total else 0.0
+    return hw / k, cover / k, over / k
 
 
 # ── self-check ────────────────────────────────────────────────────────────────
