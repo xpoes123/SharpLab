@@ -16,8 +16,10 @@ which made them a slow coin faucet; a casino table should hold an edge.
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 import statistics
+import time
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -166,6 +168,238 @@ async def new_game(request: Request, body: NewBody):
         out.update({"simcast": True, "spread": spread, "total": total,
                     "spread_dec": OU_DEC, "total_dec": OU_DEC})
     return out
+
+
+# ── Manual mode: live in-game betting on the NFL simcast ──────────────────────
+#
+# The game is fully simulated server-side at /start but the client only pulls one play
+# at a time via /advance; the rest stays hidden here, so a client that already knows the
+# outcome can't live-bet on it (betting is only ever at the current reveal frontier).
+# Live odds are priced by Monte-Carlo continuation of the engine (web/nfl_engine.live_probs),
+# which is calibrated by construction, so the LIVE_VIG hold is positive at every state.
+
+LIVE_GAMES: dict[str, dict] = {}
+LIVE_TTL = 1800          # drop abandoned games after 30 min
+LIVE_MAX = 400           # hard cap on concurrent live games
+# Live betting is only offered on competitive states (band). Lopsided games suspend —
+# which is realistic AND avoids the longshot-pricing danger, where a small calibration
+# error explodes into a player edge at long odds. A wide hold covers residual noise.
+LIVE_VIG = 0.90          # 10% live hold
+LIVE_BAND = (0.30, 0.70)  # suspend a market side priced outside this probability
+LIVE_K = 220             # continuations per live price
+LIVE_MAX_STAKE = 25_000  # per live bet (bounds exposure to any residual pricing leak)
+
+
+def _live_gc() -> None:
+    now = time.time()
+    for gid in [g for g, v in LIVE_GAMES.items() if now - v["created"] > LIVE_TTL]:
+        LIVE_GAMES.pop(gid, None)
+    if len(LIVE_GAMES) > LIVE_MAX:  # evict oldest
+        for gid in sorted(LIVE_GAMES, key=lambda g: LIVE_GAMES[g]["created"])[:len(LIVE_GAMES) - LIVE_MAX]:
+            LIVE_GAMES.pop(gid, None)
+
+
+def _sh_receiver(plays: list, home_abbr: str) -> str | None:
+    """Which side received the 2nd-half kickoff (first real snap with <=1800s left)."""
+    for pl in plays:
+        if pl["secs_left"] <= 1800 and pl["type"] in ("run", "pass", "sack", "punt", "fg"):
+            return "home" if pl["off"] == home_abbr else "away"
+    return None
+
+
+def _state_from_play(pl: dict, home_abbr: str, sh_recv: str | None) -> dict:
+    sl = pl["secs_left"]
+    half, clock = (1, sl - 1800) if sl > 1800 else (2, sl)
+    off_home = pl["off"] == home_abbr
+    if pl["type"] in ("kickoff", "xp", "2pt") or pl["fieldpos"] is None:
+        poss, ownyl = ("away" if off_home else "home"), 25
+    else:
+        poss = "home" if off_home else "away"
+        fp = pl["fieldpos"]
+        ownyl = max(1, min(99, fp if off_home else 100 - fp))
+    return {"half": half, "clock": max(0, clock), "home_score": pl["home"],
+            "away_score": pl["away"], "possessing": poss, "ownyl": ownyl,
+            "second_half_receiver": sh_recv}
+
+
+def _side(p: float) -> dict | None:
+    """Price one market side at LIVE_VIG, or None (suspended) outside the band."""
+    if not (LIVE_BAND[0] <= p <= LIVE_BAND[1]):
+        return None
+    dec = round((1 / p) * LIVE_VIG, 3)
+    return {"dec": dec, "american": _dec_to_american(dec)}
+
+
+def _live_odds(g: dict, p_win: float, p_cover: float, p_over: float) -> dict:
+    return {
+        "ml": {"home": _side(p_win), "away": _side(1 - p_win)},
+        "spread": {"line": g["spread"], "home": _side(p_cover), "away": _side(1 - p_cover)},
+        "total": {"line": g["total"], "over": _side(p_over), "under": _side(1 - p_over)},
+    }
+
+
+def _pregame_odds(g: dict) -> dict:
+    prices = _price(g["home_prob"])
+    ou = {"dec": OU_DEC, "american": _dec_to_american(OU_DEC)}
+    return {
+        "ml": {"home": {"dec": prices["home_dec"], "american": prices["home_american"]},
+               "away": {"dec": prices["away_dec"], "american": prices["away_american"]}},
+        "spread": {"line": g["spread"], "home": dict(ou), "away": dict(ou)},
+        "total": {"line": g["total"], "over": dict(ou), "under": dict(ou)},
+    }
+
+
+def _price_live(g: dict, cursor: int) -> dict:
+    """Live odds for the state AFTER play[cursor-1] (the current reveal frontier)."""
+    if cursor <= 0 or cursor > len(g["plays"]):
+        return _pregame_odds(g)
+    st = _state_from_play(g["plays"][cursor - 1], g["home_abbr"], g["sh_recv"])
+    if st["half"] == 2 and st["clock"] <= 0:  # game essentially over → suspend
+        return {"ml": {"home": None, "away": None},
+                "spread": {"line": g["spread"], "home": None, "away": None},
+                "total": {"line": g["total"], "over": None, "under": None}}
+    p_win, p_cover, p_over = nfl_engine.live_probs(
+        g["home"], g["away"], st, g["spread"], g["total"], k=LIVE_K)
+    return _live_odds(g, p_win, p_cover, p_over)
+
+
+class StartBody(BaseModel):
+    sport: str = "nfl"
+
+
+@router.post("/start")
+async def start_live(request: Request, body: StartBody):
+    uid = _uid(request)
+    if not uid:
+        return JSONResponse({"error": "sign in to play"}, status_code=401)
+    if body.sport != "nfl":
+        return JSONResponse({"error": "live mode is NFL only"}, status_code=400)
+    _live_gc()
+    home, away = _nfl_matchup()
+    home_prob, spread, total = _nfl_lines(home, away)
+    home_prob = min(0.92, max(0.08, home_prob))
+    g = nfl_engine.simulate(home, away)
+    gid = secrets.token_urlsafe(12)
+    LIVE_GAMES[gid] = {
+        "uid": uid, "home": home, "away": away,
+        "home_abbr": home["abbr"], "away_abbr": away["abbr"],
+        "home_name": home["name"], "away_name": away["name"],
+        "plays": g.plays, "drives": g.drives,
+        "home_final": g.home_score, "away_final": g.away_score, "winner": g.winner,
+        "spread": spread, "total": total, "home_prob": home_prob,
+        "sh_recv": _sh_receiver(g.plays, home["abbr"]),
+        "cursor": 0, "bets": [], "odds": None,
+        "created": time.time(), "settled": False,
+    }
+    LIVE_GAMES[gid]["odds"] = _pregame_odds(LIVE_GAMES[gid])
+    return {
+        "gid": gid, "sport": "nfl", "simcast": True, "total_plays": len(g.plays),
+        "home": {"abbr": home["abbr"], "name": home["name"]},
+        "away": {"abbr": away["abbr"], "name": away["name"]},
+        "odds": LIVE_GAMES[gid]["odds"], "cursor": 0, "done": False,
+    }
+
+
+def _owned(request: Request, gid: str) -> dict | None:
+    uid = _uid(request)
+    g = LIVE_GAMES.get(gid)
+    return g if (g and uid and g["uid"] == uid) else None
+
+
+class GidBody(BaseModel):
+    gid: str
+
+
+@router.post("/advance")
+async def advance_live(request: Request, body: GidBody):
+    g = _owned(request, body.gid)
+    if not g:
+        return JSONResponse({"error": "game not found — start a new one"}, status_code=404)
+    plays = g["plays"]
+    if g["cursor"] >= len(plays):
+        return await _settle_live(request, body.gid)
+    play = plays[g["cursor"]]
+    g["cursor"] += 1
+    done = g["cursor"] >= len(plays)
+    if done:
+        res = await _settle_live(request, body.gid)
+        res["play"] = play
+        return res
+    g["odds"] = await asyncio.to_thread(_price_live, g, g["cursor"])  # CPU-bound off the loop
+    return {"play": play, "cursor": g["cursor"], "done": False,
+            "home_score": play["home"], "away_score": play["away"], "odds": g["odds"]}
+
+
+class LiveBetBody(BaseModel):
+    gid: str
+    market: str   # "ml" | "spread" | "total"
+    side: str     # "home"|"away" | "over"|"under"
+    stake: int
+
+
+@router.post("/livebet")
+async def live_bet(request: Request, body: LiveBetBody):
+    uid = _uid(request)
+    g = _owned(request, body.gid)
+    if not g:
+        return JSONResponse({"error": "game not found"}, status_code=404)
+    if g["settled"] or g["cursor"] >= len(g["plays"]):
+        return JSONResponse({"error": "game is over"}, status_code=400)
+    stake = int(body.stake)
+    if stake < MIN_BET or stake > LIVE_MAX_STAKE:
+        return JSONResponse({"error": f"live bet must be {MIN_BET}–{LIVE_MAX_STAKE:,}"}, status_code=400)
+    market = body.market if body.market in ("ml", "spread", "total") else "ml"
+    sides = {"ml": ("home", "away"), "spread": ("home", "away"), "total": ("over", "under")}[market]
+    side = body.side if body.side in sides else sides[0]
+    quote = (g["odds"].get(market) or {}).get(side)  # cached frontier odds — no re-rolling
+    if not quote:
+        return JSONResponse({"error": "that market is suspended right now"}, status_code=400)
+    try:
+        await queries.update_casino_balance(uid, -stake)
+    except ValueError:
+        return JSONResponse({"error": "not enough coins"}, status_code=400)
+    g["bets"].append({"market": market, "side": side, "stake": stake, "dec": quote["dec"],
+                      "cursor": g["cursor"]})
+    balance = await queries.get_casino_balance(uid) or 0
+    return {"accepted": True, "market": market, "side": side,
+            "dec": quote["dec"], "american": quote["american"], "stake": stake, "balance": balance}
+
+
+async def _settle_live(request: Request, gid: str) -> dict:
+    g = LIVE_GAMES.pop(gid, None)  # claim-by-pop so a double /advance can't double-settle
+    if g is None:
+        return JSONResponse({"error": "game not found"}, status_code=404)
+    uid = g["uid"]
+    margin = g["home_final"] - g["away_final"]
+    total_pts = g["home_final"] + g["away_final"]
+    results = []
+    for bt in g["bets"]:
+        push = False
+        if bt["market"] == "ml":
+            if g["winner"] == "tie":
+                push, won = True, False
+            else:
+                won = bt["side"] == g["winner"]
+        elif bt["market"] == "spread":
+            cover = "home" if margin > g["spread"] else "away"
+            won = bt["side"] == cover
+        else:
+            res = "over" if total_pts > g["total"] else "under"
+            won = bt["side"] == res
+        payout = bt["stake"] if push else (round(bt["stake"] * bt["dec"]) if won else 0)
+        if payout:
+            await queries.update_casino_balance(uid, payout)
+        await queries.log_casino_result(uid, "nflsim", bt["stake"], payout)
+        results.append({**bt, "won": won, "push": push, "payout": payout})
+    balance = await queries.get_casino_balance(uid) or 0
+    return {
+        "done": True, "settled": True,
+        "home": {"abbr": g["home_abbr"], "name": g["home_name"]},
+        "away": {"abbr": g["away_abbr"], "name": g["away_name"]},
+        "home_score": g["home_final"], "away_score": g["away_final"], "winner": g["winner"],
+        "line": {"spread": g["spread"], "total": g["total"]},
+        "bets": results, "balance": balance, "cursor": g["cursor"],
+    }
 
 
 class BetBody(BaseModel):
