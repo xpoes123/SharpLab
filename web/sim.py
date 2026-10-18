@@ -33,8 +33,8 @@ from web import auth, nfl_engine, nfl_teams_2026, simplay
 router = APIRouter(prefix="/api/v1/casino/sim")
 
 MIN_BET, MAX_BET = 1, 1_000_000
-VIG = 0.95          # 5% hold baked into the moneyline decimal price
-OU_DEC = 1.909      # -110 spread/total price (~4.5% hold)
+VIG = 0.975         # 2.5% hold baked into the moneyline decimal price
+OU_DEC = 1.95       # spread/total price (~2.5% hold on a ~50/50 market)
 NFL_PRESIM = 700    # engine sims at /new to set the NFL lines from its own distribution
 TOKEN_TTL = 900     # signed matchup good for 15 minutes
 
@@ -184,7 +184,7 @@ LIVE_MAX = 400           # hard cap on concurrent live games
 # Live betting is only offered on competitive states (band). Lopsided games suspend —
 # which is realistic AND avoids the longshot-pricing danger, where a small calibration
 # error explodes into a player edge at long odds. A wide hold covers residual noise.
-LIVE_VIG = 0.90          # 10% live hold
+LIVE_VIG = 0.975         # 2.5% live hold
 LIVE_BAND = (0.30, 0.70)  # suspend a market side priced outside this probability
 LIVE_K = 220             # continuations per live price
 LIVE_MAX_STAKE = 25_000  # per live bet (bounds exposure to any residual pricing leak)
