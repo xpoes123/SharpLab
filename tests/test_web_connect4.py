@@ -17,10 +17,9 @@ def test_two_players_connect4_win():
     assert len(code) == 4
     assert client.post(f"/api/v1/connect4/rooms/{code}/join", json={"name": "yel"}).status_code == 200
 
-    # Each websocket_connect runs on its own portal thread, so messages sent on different sockets
-    # race. Wait for the server to apply each step before sending the next one; otherwise a Y move
-    # can arrive before R's, get ignored as out-of-turn, and the game never reaches a win (the
-    # old version then blocked forever in receive_json and hung the whole suite).
+    # Wait for the server to apply each step before sending the next: moves on two sockets
+    # are handled by two concurrent server tasks, so an unsynchronised Y move can land before
+    # R's, get ignored as out-of-turn, and the game never reaches a win.
     def wait_state(w, pred):
         for _ in range(32):
             m = w.receive_json()
