@@ -182,10 +182,13 @@ def test_nba_quarter_sim_high_offense_scores_more():
 
 def test_nfl_quarter_sim_returns_nonneg():
     _, _, _, _, _, _simulate_quarter = _nfl()
+    # NFL quarters return lists of (points, label) scoring plays; the caller sums them.
     for _ in range(100):
-        h, a = _simulate_quarter(65, 65, 65, 65, 65, 65)
-        assert h >= 0
-        assert a >= 0
+        home_events, away_events = _simulate_quarter(65, 65, 65, 65, 65, 65)
+        for pts, label in home_events + away_events:
+            assert pts > 0 and isinstance(label, str) and label
+        assert sum(p for p, _ in home_events) >= 0
+        assert sum(p for p, _ in away_events) >= 0
 
 
 # ── modal label length ───────────────────────────────────────────────────────
