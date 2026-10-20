@@ -115,13 +115,18 @@ async def haiku_text(prompt: str, *, api_key: str, max_tokens: int = 300,
 
 
 async def haiku_json(prompt: str, *, api_key: str, max_tokens: int = 300,
-                     local: bool = False) -> dict | None:
+                     local: bool = False, meta: dict | None = None) -> dict | None:
     """First ``{...}`` JSON object out of the response, or None on any failure
     or unparseable JSON. ``local=True`` tries Ollama (format=json) first; an
-    invalid local reply falls back to Haiku."""
+    invalid local reply falls back to Haiku. Pass a ``meta`` dict to get
+    ``meta["model"]`` set to whichever model answered."""
     if local:
         text = await local_text(prompt, max_tokens=max_tokens, fmt="json")
         if text is not None:
+            if meta is not None:
+                meta["model"] = "ollama:" + (os.getenv("OLLAMA_MODEL") or "gemma4:12b")
             return _parse_obj(text)  # local_text already validated it parses
     text = await _cloud_text(prompt, api_key=api_key, max_tokens=max_tokens)
+    if text is not None and meta is not None:
+        meta["model"] = HAIKU
     return None if text is None else _parse_obj(text)

@@ -85,8 +85,9 @@ class BetNLP(commands.Cog):
             return
         if "?" in c or low.startswith(("you ", "u ", "did ", "should ", "would ", "who ", "does ")):
             return
+        meta: dict = {}
         try:
-            bet = await self._classify(c)
+            bet = await self._classify(c, meta)
         except Exception:
             log.debug("bet nlp classify failed", exc_info=True)
             return
@@ -96,12 +97,13 @@ class BetNLP(commands.Cog):
         built = await self._build(bet)
         if built is None:
             return  # couldn't match a game — stay quiet rather than guess
-        await message.reply(embed=self._card(built), view=ConfirmBetView(self, built, message.author.id),
+        label = {"text": c, "extracted": bet, "model": meta.get("model")}
+        await message.reply(embed=self._card(built), view=ConfirmBetView(self, built, message.author.id, label),
                             mention_author=False)
 
-    async def _classify(self, content: str) -> dict | None:
+    async def _classify(self, content: str, meta: dict | None = None) -> dict | None:
         prompt = _PROMPT % content
-        return await haiku_json(prompt, api_key=self.api_key, max_tokens=300, local=True)
+        return await haiku_json(prompt, api_key=self.api_key, max_tokens=300, local=True, meta=meta)
 
     async def _build(self, bet: dict) -> dict | None:
         """Match the team to a game, normalize side/odds/units, default the gaps."""
@@ -157,11 +159,23 @@ class BetNLP(commands.Cog):
 
 
 class ConfirmBetView(discord.ui.View):
-    def __init__(self, cog: BetNLP, bet: dict, author_id: int) -> None:
+    def __init__(self, cog: BetNLP, bet: dict, author_id: int, label: dict | None = None) -> None:
         super().__init__(timeout=600)
         self.cog = cog
         self.bet = bet
         self.author_id = author_id
+        self.label = label or {}  # {text, extracted, model} for nlp_labels
+        self.acted = False
+
+    async def log_label(self, action: str) -> None:
+        await queries.log_nlp_label(
+            "bet_nlp", action, discord_user=str(self.author_id),
+            message_text=self.label.get("text"), extracted=self.label.get("extracted"),
+            final=dict(self.bet), model=self.label.get("model"))
+
+    async def on_timeout(self) -> None:
+        if not self.acted:
+            await self.log_label("timeout")
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author_id:
@@ -172,9 +186,11 @@ class ConfirmBetView(discord.ui.View):
     @discord.ui.button(label="✅ Log it", style=discord.ButtonStyle.success)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         bet_id = await self.cog.record(interaction.user.id, self.bet)
+        self.acted = True
         for c in self.children:
             c.disabled = True
         await interaction.response.edit_message(content=f"✅ Logged as bet **#{bet_id}** — see `/bet view`.", view=self)
+        await self.log_label("confirm")
 
     @discord.ui.button(label="✏️ Edit", style=discord.ButtonStyle.secondary)
     async def edit(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -182,7 +198,9 @@ class ConfirmBetView(discord.ui.View):
 
     @discord.ui.button(label="✖ Not a bet", style=discord.ButtonStyle.danger)
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self.acted = True
         await interaction.response.edit_message(content="👍 Ignored.", embed=None, view=None)
+        await self.log_label("cancel")
 
 
 class _BetEditModal(discord.ui.Modal, title="Fix bet details"):
@@ -212,6 +230,7 @@ class _BetEditModal(discord.ui.Modal, title="Fix bet details"):
         if self.line.value.strip():
             b["line"] = _num(self.line.value.strip())
         await interaction.response.edit_message(embed=self.view.cog._card(b), view=self.view)
+        await self.view.log_label("edit")
 
 
 async def setup(bot: commands.Bot) -> None:

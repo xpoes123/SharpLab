@@ -140,8 +140,9 @@ class RohanNLP(commands.Cog):
         low = c.lower()
         if low.startswith(("you ", "u ", "did you", "should ", "would you", "does ")) or "?" in c:
             return
+        meta: dict = {}
         try:
-            trade = await self._classify(c)
+            trade = await self._classify(c, meta)
         except Exception:
             log.exception("rohan nlp classify failed")
             return
@@ -151,14 +152,15 @@ class RohanNLP(commands.Cog):
         if not trade.get("ticker") and trade.get("side") not in ("buy", "sell"):
             return
         review = await self._review(trade)
+        label = {"text": c, "extracted": dict(trade), "model": meta.get("model")}
         await message.reply(embed=self._card(trade, review),
-                            view=TradeReviewView(self, trade), mention_author=False)
+                            view=TradeReviewView(self, trade, label), mention_author=False)
 
     # ── classification ────────────────────────────────────────────────────────
-    async def _classify(self, content: str) -> dict | None:
+    async def _classify(self, content: str, meta: dict | None = None) -> dict | None:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         prompt = f"The current date is {today}.\n\n" + (_PROMPT % content)
-        return await haiku_json(prompt, api_key=self.api_key, max_tokens=300)
+        return await haiku_json(prompt, api_key=self.api_key, max_tokens=300, meta=meta)
 
     # ── review: missing fields, blocking errors, warnings ─────────────────────
     async def _review(self, t: dict) -> dict:
@@ -247,10 +249,22 @@ class RohanNLP(commands.Cog):
 # ── interactive views / modals ────────────────────────────────────────────────
 
 class TradeReviewView(discord.ui.View):
-    def __init__(self, cog: RohanNLP, trade: dict) -> None:
+    def __init__(self, cog: RohanNLP, trade: dict, label: dict | None = None) -> None:
         super().__init__(timeout=1800)
         self.cog = cog
         self.trade = trade
+        self.label = label or {}  # {text, extracted, model} for nlp_labels
+        self.acted = False
+
+    async def log_label(self, action: str, final: dict | None = None) -> None:
+        await queries.log_nlp_label(
+            "rohan_nlp", action, discord_user=str(ROHAN_USER_ID),
+            message_text=self.label.get("text"), extracted=self.label.get("extracted"),
+            final=dict(final if final is not None else self.trade), model=self.label.get("model"))
+
+    async def on_timeout(self) -> None:
+        if not self.acted:
+            await self.log_label("timeout")
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != ROHAN_USER_ID:
@@ -273,8 +287,10 @@ class TradeReviewView(discord.ui.View):
             log.exception("nlp record failed")
             await interaction.response.send_message("Couldn't record — try `/stock buy`.", ephemeral=True)
             return
+        self.acted = True
         e = discord.Embed(title="✅ Trade recorded", description=_describe(self.trade), color=0x9ece6a)
         await interaction.response.edit_message(embed=e, view=None)
+        await self.log_label("confirm")
         await self.cog.fire_pick_alert(interaction, self.trade)
         self.stop()
 
@@ -285,8 +301,10 @@ class TradeReviewView(discord.ui.View):
 
     @discord.ui.button(label="✖ Reject", style=discord.ButtonStyle.danger)
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self.acted = True
         e = discord.Embed(title="✖ Dismissed", description="Not recorded.", color=0x565f89)
         await interaction.response.edit_message(embed=e, view=None)
+        await self.log_label("cancel")
         self.stop()
 
 
@@ -352,6 +370,7 @@ async def _finish_modal(modal, interaction: discord.Interaction, t: dict) -> Non
         modal.view.trade = t  # keep edits for the next attempt
         await modal.message.edit(embed=cog._card(t, review), view=modal.view)
         await interaction.response.send_message("Almost — " + problem, ephemeral=True)
+        await modal.view.log_label("edit", t)
         return
     try:
         await cog.record(t)
@@ -359,9 +378,12 @@ async def _finish_modal(modal, interaction: discord.Interaction, t: dict) -> Non
         log.exception("nlp modal record failed")
         await interaction.response.send_message("Couldn't record — try `/stock buy`.", ephemeral=True)
         return
+    modal.view.acted = True
     e = discord.Embed(title="✅ Trade recorded", description=_describe(t), color=0x9ece6a)
     await modal.message.edit(embed=e, view=None)
     await interaction.response.send_message("✅ Logged.", ephemeral=True)
+    await modal.view.log_label("edit", t)
+    await modal.view.log_label("confirm", t)
     await cog.fire_pick_alert(interaction, t)
     modal.view.stop()
 
