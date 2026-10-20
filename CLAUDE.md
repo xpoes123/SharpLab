@@ -366,7 +366,8 @@ Slash commands in `.claude/commands/`. Type to invoke.
 ## Testing Notes
 
 - **Unit tests** (`test_activities.py`) run fast with no dependencies. Always run these first.
-- **Workflow tests** (`test_workflows.py`) use `WorkflowEnvironment.start_time_skipping()` which downloads a Temporal test server binary on first run. This can hang for several minutes. Run them separately and be patient.
+- **Workflow tests** (`test_workflows.py`) use `WorkflowEnvironment.start_time_skipping()` which downloads a Temporal test server binary on first run (slow once, then cached; ~1s after).
+- **Full suite**: `uv run pytest -q` (~40s, ~1200 tests). Websocket room tests rely on `tests/conftest.py` sharing one event loop per test across TestClient sockets — without it two-socket tests hang intermittently.
 - **Temporal can't deserialize `Optional[X]` / `X | None` return types from activities.** Use `list[X]` instead — empty list = no result, one-item list = result. This is a known SDK limitation.
 - Run unit tests with: `uv run pytest tests/test_activities.py -v`
 - Run workflow tests with: `uv run pytest tests/test_workflows.py -v -s` (the `-s` shows Temporal logs)
