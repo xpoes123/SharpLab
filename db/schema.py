@@ -1108,3 +1108,13 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        try:  # human confirm/cancel/edit clicks on NLP cards (bet_nlp, rohan_nlp) — labels
+              # for calibrating the classifier later. Append-only; nothing reads it at runtime.
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS nlp_labels ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, source TEXT NOT NULL, "
+                "discord_user TEXT, message_text TEXT, extracted TEXT, final TEXT, "
+                "model TEXT, action TEXT NOT NULL)")
+            await db.commit()
+        except Exception:
+            pass

@@ -6101,3 +6101,26 @@ async def kalshi_edge_summary() -> dict:
         return {"n": n or 0, "n_drift": n_drift or 0, "mean_drift_c": mean_drift,
                 "pct_positive": pct_pos, "mean_pnl_c": mean_pnl,
                 "total_pnl_dollars": (total_pnl_c or 0) / 100}
+
+
+# ── NLP card labels (decision-model calibration data) ────────────────────────
+
+
+async def log_nlp_label(source: str, action: str, *, discord_user: str | None,
+                        message_text: str | None, extracted: dict | None,
+                        final: dict | None = None, model: str | None = None) -> None:
+    """Append one human action (confirm/cancel/edit/timeout) on an NLP card.
+    Never raises — label logging must not break the button flow."""
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT INTO nlp_labels (ts, source, discord_user, message_text, extracted, "
+                "final, model, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (datetime.now(timezone.utc).isoformat(), source, discord_user, message_text,
+                 json.dumps(extracted, default=str) if extracted is not None else None,
+                 json.dumps(final, default=str) if final is not None else None,
+                 model, action),
+            )
+            await db.commit()
+    except Exception:
+        log.warning("nlp label log failed", exc_info=True)

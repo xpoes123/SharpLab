@@ -217,7 +217,7 @@ major groups:
 | **Competition** | `duels`, `tournaments`, `tournament_entries`, `game_sessions`, `game_tokens`, `geo_accuracy`, `qb_answers` |
 | **Stock / options brokerage** | `stock_trades`, `option_trades`, `stock_cash`, `portfolio_snapshots`, `ticker_meta`, `stock_monitors`, `bot_settings`. ⚠️ `stock_holdings` exists but is **dead** — compute holdings from `stock_trades`. |
 | **Reaction roles** | `reaction_roles` |
-| **Ops / web** | `error_logs`, `web_events` |
+| **Ops / web** | `error_logs`, `web_events`, `nlp_labels` (human confirm/cancel/edit/timeout on bet_nlp + rohan_nlp cards — calibration labels, write-only) |
 
 **`odds_snapshots.payload` JSON shape** (standardized across all sources):
 ```json
