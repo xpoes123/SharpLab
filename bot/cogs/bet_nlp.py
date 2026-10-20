@@ -101,7 +101,7 @@ class BetNLP(commands.Cog):
 
     async def _classify(self, content: str) -> dict | None:
         prompt = _PROMPT % content
-        return await haiku_json(prompt, api_key=self.api_key, max_tokens=300)
+        return await haiku_json(prompt, api_key=self.api_key, max_tokens=300, local=True)
 
     async def _build(self, bet: dict) -> dict | None:
         """Match the team to a game, normalize side/odds/units, default the gaps."""

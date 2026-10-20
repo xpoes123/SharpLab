@@ -17,6 +17,7 @@ each change is considered exactly once.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import subprocess
@@ -28,6 +29,9 @@ import httpx
 from dotenv import load_dotenv
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))  # `python scripts/announce_deploy.py` only puts scripts/ on the path
+
+from shared.llm import haiku_json  # noqa: E402
 MARKER = REPO / ".last_announced_sha"
 CHANNEL_DEFAULT = "1497129140153876570"
 
@@ -46,7 +50,6 @@ def _in_quiet_hours() -> bool:
     h = datetime.now(ZoneInfo("America/New_York")).hour
     return h >= QUIET_START_HOUR or h < MORNING_HOUR
 
-HAIKU = "claude-haiku-4-5"
 SONNET = "claude-sonnet-4-6"
 DISCORD_LIMIT = 2000
 
@@ -98,12 +101,10 @@ def _worthy(api_key: str, c: dict) -> dict | None:
         'Respond with ONLY JSON: {"announce": true|false, "summary": "<short '
         'player-facing phrase, or empty>"}'
     )
-    try:
-        raw = _claude(api_key, HAIKU, prompt, 200)
-        raw = raw[raw.find("{"): raw.rfind("}") + 1]
-        data = json.loads(raw)
-    except Exception as e:  # noqa: BLE001 — classification is best-effort
-        print(f"  ! classify failed for {c['sha'][:7]} ({e}); skipping", file=sys.stderr)
+    # Local model first (passed the homelab announce suite), Haiku fallback.
+    data = asyncio.run(haiku_json(prompt, api_key=api_key, max_tokens=200, local=True))
+    if data is None:  # classification is best-effort
+        print(f"  ! classify failed for {c['sha'][:7]}; skipping", file=sys.stderr)
         return None
     return {"summary": data.get("summary") or c["subject"]} if data.get("announce") else None
 

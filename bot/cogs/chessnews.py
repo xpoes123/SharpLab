@@ -129,24 +129,26 @@ class ChessNewsCog(commands.Cog):
         except ValueError:
             return None
 
-    async def _judge(self, articles: list[dict]) -> set[str]:
-        """Subset of article ids worth posting. Haiku refines; if unavailable we
-        post nothing (chess RSS has no breaking-news type to fall back on, so a
-        silent miss beats pinging the role for a puzzle column)."""
-        if not articles or not self.api_key:
+    async def _judge(self, articles: list[dict]) -> set[str] | None:
+        """Subset of article ids worth posting, or None if the judge is
+        unavailable (caller posts nothing and retries next cycle — chess RSS has
+        no breaking-news type to fall back on, so a silent miss beats pinging the
+        role for a puzzle column)."""
+        if not articles:
             return set()
         import json
         items = [{"id": a["id"], "headline": a["headline"],
                   "description": a["description"][:200]} for a in articles]
         try:
             obj = await haiku_json(_JUDGE_PROMPT % json.dumps(items, ensure_ascii=False),
-                                   api_key=self.api_key, max_tokens=500)
-            if obj is None:
-                return set()
+                                   api_key=self.api_key, max_tokens=500, local=True)
+            if obj is None or not isinstance(obj.get("major", []), list):
+                log.warning("chess news judge unavailable; posting nothing, retrying next cycle")
+                return None
             return {str(x) for x in obj.get("major", [])}
         except Exception:
-            log.warning("chess news Haiku judge failed; posting nothing this pass", exc_info=True)
-            return set()
+            log.warning("chess news judge failed; posting nothing, retrying next cycle", exc_info=True)
+            return None
 
     def _embed(self, a: dict) -> discord.Embed:
         e = discord.Embed(title=a["headline"][:256], url=a["url"] or None,
@@ -195,14 +197,14 @@ class ChessNewsCog(commands.Cog):
                     continue
                 fresh.append(by_id[aid])
 
+            major = await self._judge(fresh) if fresh else set()
+            if major is None:
+                return  # judge down: leave ids unseen so the next cycle retries them
+
             # Mark seen before posting — judge each once; prefer a miss over a dupe.
             if new_ids:
                 seen = (new_ids + seen)[:_SEEN_CAP]
                 await queries.set_bot_setting(_SEEN_KEY, json.dumps(seen))
-            if not fresh:
-                return
-
-            major = await self._judge(fresh)
             if not major:
                 return
             role_id = await self._role_id()

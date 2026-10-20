@@ -152,29 +152,29 @@ class SportsNewsCog(commands.Cog):
     def cog_unload(self) -> None:
         self.news_check.cancel()
 
-    async def _judge(self, articles: list[dict]) -> set[str]:
-        """Return the subset of article ids worth posting. Only ESPN-tagged breaking
-        news (type 'HeadlineNews') is ever eligible — features/roundups (type 'Story'
-        or 'Media') are dropped outright. Haiku then refines that shortlist; if it's
-        unavailable the full HeadlineNews set is used."""
+    async def _judge(self, articles: list[dict]) -> set[str] | None:
+        """Return the subset of article ids worth posting, or None if the judge is
+        unavailable. Only ESPN-tagged breaking news (type 'HeadlineNews') is ever
+        eligible — features/roundups (type 'Story' or 'Media') are dropped
+        outright. The LLM then refines that shortlist. None means "post nothing,
+        retry next cycle" — never fall back to posting the whole shortlist (that
+        role-pinged every headline whenever the LLM was down)."""
         breaking = [a for a in articles if a["type"] == "HeadlineNews"]
         if not breaking:
             return set()
-        fallback = {a["id"] for a in breaking}
-        if not self.api_key:
-            return fallback
         items = [{"id": a["id"], "league": LEAGUES[_primary(a["leagues"])]["label"],
                   "type": a["type"], "headline": a["headline"],
                   "description": a["description"][:200]} for a in breaking]
         try:
             prompt = _JUDGE_PROMPT % json.dumps(items, ensure_ascii=False)
-            obj = await haiku_json(prompt, api_key=self.api_key, max_tokens=500)
-            if obj is None:
-                raise RuntimeError("haiku judge unavailable")
+            obj = await haiku_json(prompt, api_key=self.api_key, max_tokens=500, local=True)
+            if obj is None or not isinstance(obj.get("major", []), list):
+                log.warning("news judge unavailable; posting nothing, retrying next cycle")
+                return None
             return {str(x) for x in obj.get("major", [])}
         except Exception:
-            log.warning("news Haiku judge failed; falling back to HeadlineNews", exc_info=True)
-            return fallback
+            log.warning("news judge failed; posting nothing, retrying next cycle", exc_info=True)
+            return None
 
     def _embed(self, a: dict) -> discord.Embed:
         cfg = LEAGUES[_primary(a["leagues"])]
@@ -219,16 +219,16 @@ class SportsNewsCog(commands.Cog):
                     continue  # too old to be interesting
                 fresh.append(merged[aid])
 
+            major = await self._judge(fresh) if fresh else set()
+            if major is None:
+                return  # judge down: leave ids unseen so the next cycle retries them
+
             # Mark every new id seen before posting — judge each article once, and
             # prefer a missed post over a duplicate if we crash mid-loop.
             if new_ids:
                 seen = (new_ids + seen)[:_SEEN_CAP]
                 await queries.set_bot_setting(_SEEN_KEY, json.dumps(seen))
 
-            if not fresh:
-                return
-
-            major = await self._judge(fresh)
             for a in fresh:
                 if a["id"] not in major:
                     continue
