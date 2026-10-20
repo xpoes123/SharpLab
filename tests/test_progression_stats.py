@@ -62,6 +62,10 @@ def _base_stats(**over):
         "traded_crypto": False, "has_short": False, "has_options": False, "num_option_trades": 0,
         "level": 0, "messages": 0, "voice_minutes": 0,
         "web_logins": 0, "web_traded": 0, "web_visits": 0,
+        # card-collection counters, merged in from queries.get_card_stats() since #417
+        "cards_total": 0, "cards_sets": 0, "cards_completed_sets": 0,
+        "cards_has_legendary": False, "cards_has_holo": False, "cards_has_gem": False,
+        "cards_has_1of1": False, "cards_has_box": False,
     }
     s.update(over)
     return s

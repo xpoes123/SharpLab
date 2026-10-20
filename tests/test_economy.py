@@ -1,4 +1,4 @@
-"""Casino coin economy: no per-play faucet, losses floor at 0, and the 500/day message reward."""
+"""Casino coin economy: no per-play faucet, losses floor at 0, and per-source daily activity-reward caps."""
 
 import asyncio
 import os
@@ -47,14 +47,15 @@ def test_activity_rewards_per_event_and_capped():
     async def go():
         await sch.init_db()
         u, d = "a", "2026-08-18"
-        # message: 5/event, cap 500 -> 100 grants then dry
+        # message: 10/event, effectively uncapped since #419 (spam-gated by a cooldown in on_message)
         got = [await q.grant_activity_reward(u, "message", d) for _ in range(101)]
-        assert got[0] == 5 and got[100] == 0 and sum(got) == 500
-        # bet_log: 50/event, cap 1000; independent of the message cap
-        assert await q.grant_activity_reward(u, "bet_log", d) == 50
-        assert await q.get_casino_balance(u) == 1000 + 500 + 50  # start + msg cap + one bet
+        assert set(got) == {10} and sum(got) == 1010
+        # bet_log: 50/event, cap 1000 -> 20 grants then dry; independent of the message source
+        bets = [await q.grant_activity_reward(u, "bet_log", d) for _ in range(21)]
+        assert bets[0] == 50 and bets[20] == 0 and sum(bets) == 1000
+        assert await q.get_casino_balance(u) == 1000 + 1010 + 1000  # start + messages + bet cap
         # a new day resets every source
-        assert await q.grant_activity_reward(u, "message", "2026-08-19") == 5
+        assert await q.grant_activity_reward(u, "bet_log", "2026-08-19") == 50
 
     _run(go())
 

@@ -17,6 +17,11 @@ def _run(c):
     return asyncio.run(c)
 
 
+def _tok(sport, home, away, home_prob, spread=None, total=None):
+    # Token layout since #453: [sport, home, away, home_prob, spread, total] (spread/total NFL-only).
+    return sim._signer.dumps([sport, home, away, home_prob, spread, total])
+
+
 def _fresh():
     sch.DB_PATH = q.DB_PATH = os.path.join(tempfile.mkdtemp(), "t.db")
 
@@ -46,13 +51,13 @@ def test_winning_bet_pays_and_losing_pays_zero(monkeypatch):
         await q.get_or_create_casino_wallet("w")
         # force the home team to win
         monkeypatch.setattr(sim.secrets, "randbelow", lambda n: 0)  # draw < prob → home
-        tok = sim._signer.dumps(["nba", "LAL", "BOS", 0.6])
+        tok = _tok("nba", "LAL", "BOS", 0.6)
         r = await sim.place_bet(_Req(), sim.BetBody(token=tok, side="home", stake=100))
         assert r["won"] and r["winner"] == "home" and r["payout"] > 100
         assert r["home_score"] > r["away_score"]
         assert r["timeline"] and r["timeline"][-1]["home"] == r["home_score"]
         # a home-winner game, bet away → lose
-        tok2 = sim._signer.dumps(["nba", "LAL", "BOS", 0.6])
+        tok2 = _tok("nba", "LAL", "BOS", 0.6)
         r2 = await sim.place_bet(_Req(), sim.BetBody(token=tok2, side="away", stake=100))
         assert not r2["won"] and r2["payout"] == 0
 
@@ -68,7 +73,7 @@ def test_odds_recomputed_from_token_not_client(monkeypatch):
         await q.get_or_create_casino_wallet("t")
         monkeypatch.setattr(sim.secrets, "randbelow", lambda n: 0)  # home wins
         # token says prob 0.5 → home_dec ≈ 1.9; payout must follow the token, not any client value
-        tok = sim._signer.dumps(["mlb", "NYY", "BOS", 0.5])
+        tok = _tok("mlb", "NYY", "BOS", 0.5)
         r = await sim.place_bet(_Req(), sim.BetBody(token=tok, side="home", stake=100))
         assert r["payout"] == round(100 * round((1 / 0.5) * sim.VIG, 3))
 
@@ -84,7 +89,7 @@ def test_bad_token_and_overdraw_rejected(monkeypatch):
         await q.get_or_create_casino_wallet("x")
         bad = await sim.place_bet(_Req(), sim.BetBody(token="garbage", side="home", stake=10))
         assert bad.status_code == 400
-        tok = sim._signer.dumps(["nba", "LAL", "BOS", 0.5])
+        tok = _tok("nba", "LAL", "BOS", 0.5)
         over = await sim.place_bet(_Req(), sim.BetBody(token=tok, side="home", stake=10 ** 12))
         assert over.status_code == 400  # stake over MAX_BET
 
@@ -98,11 +103,17 @@ def test_all_sports_settle_without_error(monkeypatch):
         await sch.init_db()
         monkeypatch.setattr(sim.auth, "read_session", lambda r: {"id": "a"})
         await q.get_or_create_casino_wallet("a")
-        for sport in ("nba", "nfl", "mlb", "tennis", "soccer"):
+        for sport in ("nba", "mlb", "tennis", "soccer"):
             for w in (0, 10 ** 9 - 1):  # both winners
                 monkeypatch.setattr(sim.secrets, "randbelow", lambda n, _w=w: min(_w, n - 1))
-                tok = sim._signer.dumps([sport, "AAA", "BBB", 0.5])
-                r = await sim.place_bet(_Req(), sim.BetBody(token=tok, side="home", stake=1))
+                r = await sim.place_bet(_Req(), sim.BetBody(token=_tok(sport, "AAA", "BBB", 0.5),
+                                                            side="home", stake=1))
                 assert "balance" in r and isinstance(r["timeline"], list)
+        # NFL (#453) runs the down-by-down engine and returns a play-by-play simcast, with
+        # moneyline / spread / total markets resolved off the final score.
+        tok = _tok("nfl", "AAA", "BBB", 0.5, spread=-3.5, total=44.5)
+        for market, side in (("ml", "home"), ("spread", "away"), ("total", "over")):
+            r = await sim.place_bet(_Req(), sim.BetBody(token=tok, side=side, stake=1, market=market))
+            assert "balance" in r and r["market"] == market and isinstance(r["plays"], list)
 
     _run(go())

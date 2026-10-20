@@ -58,21 +58,29 @@ class TestTipCasinoCoins:
         assert recipient_bal == 1200  # 1000 (starting) + 200
 
     def test_insufficient_funds_raises(self, tmp_db):
-        """ValueError raised when tip would drop sender below CASINO_MIN_BALANCE."""
-        # Sender has minimum balance (1000). Tipping ANY amount ≥ 1 must fail
-        # because balance - amount < CASINO_MIN_BALANCE (sender can't go below 1000).
-        _run(_queries.get_or_create_casino_wallet("sender"))
+        """ValueError raised when the tip exceeds the sender's balance.
+
+        Since #365 the floor (CASINO_MIN_BALANCE) is 0, so a sender can tip down to exactly 0
+        but never overdraw.
+        """
+        assert _queries.CASINO_MIN_BALANCE == 0
+        _run(_queries.get_or_create_casino_wallet("sender"))  # 1000
         _run(_queries.get_or_create_casino_wallet("recipient"))
 
         with pytest.raises(ValueError, match="Insufficient|No casino wallet"):
-            _run(_queries.tip_casino_coins("sender", "recipient", 1))
+            _run(_queries.tip_casino_coins("sender", "recipient", 1001))
 
-    def test_min_balance_floor_does_not_mint_coins(self, tmp_db):
-        """Coin conservation: tip must be rejected if result would drop sender below CASINO_MIN_BALANCE.
+    def test_can_tip_entire_balance(self, tmp_db):
+        _run(_queries.get_or_create_casino_wallet("sender"))  # 1000
+        _run(_queries.get_or_create_casino_wallet("recipient"))
 
-        Covers the exploit where balance - amount falls between 0 and CASINO_MIN_BALANCE:
-        sender has 1500, tips 600 → result 900 < CASINO_MIN_BALANCE → must be rejected entirely,
-        not silently floored so the sender only loses 500 while recipient gains 600.
+        assert _run(_queries.tip_casino_coins("sender", "recipient", 1000)) == (0, 2000)
+
+    def test_overdraw_does_not_mint_coins(self, tmp_db):
+        """Coin conservation: an over-balance tip is rejected entirely, not floored.
+
+        Covers the exploit where the sender is floored (losing less than `amount`) while the
+        recipient still gains the full `amount`.
         """
         _run(_queries.get_or_create_casino_wallet("sender"))
         _run(_queries.give_casino_coins("sender", 500))  # sender: 1500
@@ -81,9 +89,8 @@ class TestTipCasinoCoins:
         sender_before = _balance(tmp_db, "sender")   # 1500
         recipient_before = _balance(tmp_db, "recipient")  # 1000
 
-        # 1500 - 600 = 900 < CASINO_MIN_BALANCE(1000) → must be rejected
         with pytest.raises(ValueError, match="Insufficient|No casino wallet"):
-            _run(_queries.tip_casino_coins("sender", "recipient", 600))
+            _run(_queries.tip_casino_coins("sender", "recipient", 1600))
 
         assert _balance(tmp_db, "sender") == sender_before
         assert _balance(tmp_db, "recipient") == recipient_before
@@ -97,10 +104,14 @@ class TestTipCasinoCoins:
         recipient_before = _balance(tmp_db, "recipient")
 
         with pytest.raises(ValueError):
-            _run(_queries.tip_casino_coins("sender", "recipient", 1))
+            _run(_queries.tip_casino_coins("sender", "recipient", sender_before + 1))
 
         assert _balance(tmp_db, "sender") == sender_before
         assert _balance(tmp_db, "recipient") == recipient_before
+
+    def test_tip_from_user_without_wallet_raises(self, tmp_db):
+        with pytest.raises(ValueError, match="No casino wallet"):
+            _run(_queries.tip_casino_coins("ghost", "recipient", 1))
 
     def test_tip_to_user_without_wallet(self, tmp_db):
         """Recipient wallet is auto-created if it doesn't exist; tip succeeds."""

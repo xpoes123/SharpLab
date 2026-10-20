@@ -6,52 +6,22 @@ Tests cover:
 - COUNTRY_REGIONS completeness (every country in CAPITALS and COUNTRY_CODES has a region)
 """
 import asyncio
-import importlib
-import os
-import sys
-import types
 
 import pytest
 import aiosqlite
 
-# ── Stub db.queries so the geography module can be imported ──────────────────
-# The geography cog imports functions from db.queries at module level.
-# We install a stub with those names so the import succeeds, then reload the
-# real db.schema / db.queries for the actual query tests below.
-if "db.queries" not in sys.modules:
-    _queries_stub = types.ModuleType("db.queries")
-
-    async def _noop(*a, **kw):
-        pass
-
-    _queries_stub.record_geo_attempt = _noop
-    _queries_stub.get_geo_stats_by_region = _noop
-    _queries_stub.get_elo_rating = _noop
-
-    _schema_stub = types.ModuleType("db.schema")
-    _schema_stub.DB_PATH = "data/sharplab.db"
-
-    _db_stub = types.ModuleType("db")
-    _db_stub.queries = _queries_stub
-    _db_stub.schema = _schema_stub
-    sys.modules["db"] = _db_stub
-    sys.modules["db.queries"] = _queries_stub
-    sys.modules["db.schema"] = _schema_stub
-
+# The real db modules import cleanly, so use them directly. (This file used to install
+# db stubs and then pop + re-import db/db.queries/db.schema, which created a second copy of
+# those modules mid-collection — other test files patching DB_PATH on the first copy then
+# silently talked to a different database. See test_achievement_bounty.)
+import db.schema as _schema  # noqa: E402
+import db.queries as _queries  # noqa: E402
 from bot.cogs.geography import (  # noqa: E402
     CAPITALS,
     COUNTRY_CODES,
     COUNTRY_REGIONS,
     US_STATE_CAPITALS,
 )
-
-# ── Now force-reload the real db modules for query testing ───────────────────
-# Remove stubs and import the real implementations
-for _mod in ("db", "db.queries", "db.schema"):
-    sys.modules.pop(_mod, None)
-
-import db.schema as _schema  # noqa: E402
-import db.queries as _queries  # noqa: E402
 
 
 @pytest.fixture()

@@ -1399,10 +1399,11 @@ async def tip_casino_coins(from_user: str, to_user: str, amount: int) -> tuple[i
     now_iso = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        # Ensure recipient wallet exists within the same transaction
+        # Ensure recipient wallet exists within the same transaction. A new wallet gets the
+        # normal starting grant — seeding it at the (now 0) floor would forfeit those coins.
         await db.execute(
             "INSERT OR IGNORE INTO casino_wallets (discord_user, balance) VALUES (?, ?)",
-            (to_user, CASINO_MIN_BALANCE),
+            (to_user, CASINO_STARTING_COINS),
         )
         # Deduct from sender; the WHERE clause enforces the min-balance floor atomically
         cursor = await db.execute(
