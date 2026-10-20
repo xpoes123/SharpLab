@@ -116,14 +116,16 @@ _one_iteration = asyncio.Event()
 
 @activity.defn(name="fetch_games_for_today")
 async def stub_fetch_games(_sport: str = "nba") -> list[Game]:
-    # Past start time so no child workflow is spawned
-    past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    # Future start: since #170 the workflow skips games that already tipped, so a past start
+    # would mean nothing is polled and the test waits forever. This also spawns a child
+    # CloseCaptureWorkflow, which the worker below registers.
+    future = (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat()
     return [
         Game(
             game_id="GAME123",
             home_team="Boston Celtics",
             away_team="Los Angeles Lakers",
-            start_time_utc_iso=past,
+            start_time_utc_iso=future,
         )
     ]
 
@@ -161,9 +163,10 @@ async def test_odds_polling_one_iteration():
         async with Worker(
             env.client,
             task_queue="test-queue",
-            workflows=[OddsPollingWorkflow],
+            workflows=[OddsPollingWorkflow, CloseCaptureWorkflow],
             activities=[stub_fetch_games, stub_fetch_odds, stub_poll_upsert,
-                        stub_fetch_kalshi_odds, stub_fetch_polymarket_odds],
+                        stub_fetch_kalshi_odds, stub_fetch_polymarket_odds,
+                        stub_fetch_close, stub_fetch_kalshi_close, stub_fetch_polymarket_close],
         ):
             handle = await env.client.start_workflow(
                 OddsPollingWorkflow.run,
@@ -171,7 +174,7 @@ async def test_odds_polling_one_iteration():
                 id="test-polling-wf",
                 task_queue="test-queue",
             )
-            await _one_iteration.wait()
+            await asyncio.wait_for(_one_iteration.wait(), timeout=30)
             await handle.cancel()
             try:
                 await handle.result()
