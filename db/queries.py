@@ -6152,3 +6152,9 @@ async def delete_kalshi_account(discord_user: str) -> bool:
         cur = await db.execute("DELETE FROM kalshi_accounts WHERE discord_user = ?", (discord_user,))
         await db.commit()
         return cur.rowcount > 0
+
+
+async def list_kalshi_account_users() -> list[str]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT discord_user FROM kalshi_accounts") as cur:
+            return [r[0] for r in await cur.fetchall()]
