@@ -85,6 +85,7 @@
 
 /* Sprint mode's number tiles are display-only (no click-to-insert, no hover lift). */
 .cd-tile.sprint-display { cursor: default; }
+.cd-tile.used, .cd-tile.used.large { opacity: .3; cursor: default; border-color: var(--line); transform: none; }
 .cd-tile.sprint-display:hover { border-color: var(--line); transform: none; }
 .cd-tile.sprint-display.large:hover { border-color: color-mix(in srgb, var(--gold) 45%, var(--line)); }
 
