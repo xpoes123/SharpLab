@@ -1,0 +1,63 @@
+import base64
+
+import pytest
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+
+from shared import kalshi_account as ka
+
+
+def _pem(key) -> str:
+    return key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
+                             serialization.NoEncryption()).decode()
+
+
+def test_settled_pnl_matches_vigil_reconciliation():
+    assert ka.settled_pnl({"revenue": 50000, "yes_count_fp": "500", "no_count_fp": "0", "fee_cost": "0.0115",
+                           "yes_total_cost_dollars": "455", "no_total_cost_dollars": "0"}) == pytest.approx(44.9885)
+    # hedged pair: revenue 0, the 2000 matched pairs pay $1 each outside revenue
+    assert ka.settled_pnl({"revenue": 0, "yes_count_fp": "2000", "no_count_fp": "2000", "fee_cost": "32",
+                           "yes_total_cost_dollars": "675", "no_total_cost_dollars": "1800"}) == pytest.approx(-507)
+
+
+def test_sport_and_marks():
+    assert ka.sport("KXNBAPTS-26OCT21MILWAS-X") == "NBA" and ka.sport("KXWNBAGAME-X") == "WNBA"
+    assert ka.sport("KXZZZ-1") == "Other"
+    yes = ka.mark_position({"ticker": "KXNBAGAME-A", "position_fp": "10", "market_exposure_dollars": "4"},
+                           {"yes_bid_dollars": "0.55", "yes_ask_dollars": "0.57"})
+    assert yes["side"] == "YES" and yes["unreal"] == pytest.approx(1.5)
+    no = ka.mark_position({"ticker": "KXNBAGAME-A", "position_fp": "-10", "market_exposure_dollars": "4"},
+                          {"yes_bid_dollars": "0.55", "yes_ask_dollars": "0.57"})
+    assert no["side"] == "NO" and no["value"] == pytest.approx(4.3)
+
+
+def test_summarize_window():
+    st = [{"ticker": "KXNBAGAME-A", "revenue": 1000, "yes_count_fp": "10", "no_count_fp": "0",
+           "yes_total_cost_dollars": "6", "no_total_cost_dollars": "0", "fee_cost": "0.1",
+           "settled_time": "2026-10-20T00:00:00Z"},
+          {"ticker": "KXMLBGAME-B", "revenue": 0, "yes_count_fp": "5", "no_count_fp": "0",
+           "yes_total_cost_dollars": "2", "no_total_cost_dollars": "0", "fee_cost": "0",
+           "settled_time": "2026-01-01T00:00:00Z"}]
+    s = ka.summarize(st, [{"unreal": 1.0}])
+    assert s["n"] == 2 and s["won"] == 1 and s["realized"] == pytest.approx(1.9) and s["unrealized"] == 1.0
+    assert ka.summarize(st, [], since_iso="2026-10-01")["n"] == 1
+
+
+def test_encrypt_roundtrip_and_flattened_pem(monkeypatch):
+    monkeypatch.setenv("KALSHI_CRED_KEY", Fernet.generate_key().decode())
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = _pem(key)
+    blob = ka.encrypt(pem)
+    assert pem.encode() not in blob and ka.decrypt(blob) == pem
+    flat = " ".join(pem.split("\n"))  # Discord paste that lost its newlines
+    assert ka.load_key(flat).private_numbers() == key.private_numbers()
+
+
+def test_signature_verifies_against_full_path():
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    h = ka.sign_headers("kid", key, "/portfolio/positions?limit=200", ts_ms=123)
+    key.public_key().verify(base64.b64decode(h["KALSHI-ACCESS-SIGNATURE"]),
+                            b"123GET/trade-api/v2/portfolio/positions",
+                            padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.DIGEST_LENGTH),
+                            hashes.SHA256())

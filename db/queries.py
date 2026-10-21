@@ -6125,3 +6125,30 @@ async def log_nlp_label(source: str, action: str, *, discord_user: str | None,
             await db.commit()
     except Exception:
         log.warning("nlp label log failed", exc_info=True)
+
+
+async def set_kalshi_account(discord_user: str, key_id: str, private_key_enc: bytes) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO kalshi_accounts (discord_user, key_id, private_key_enc, linked_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(discord_user) DO UPDATE SET "
+            "key_id = excluded.key_id, private_key_enc = excluded.private_key_enc, "
+            "linked_at = excluded.linked_at",
+            (discord_user, key_id, private_key_enc, datetime.now(timezone.utc).isoformat()),
+        )
+        await db.commit()
+
+
+async def get_kalshi_account(discord_user: str) -> tuple[str, bytes] | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT key_id, private_key_enc FROM kalshi_accounts WHERE discord_user = ?",
+                              (discord_user,)) as cur:
+            row = await cur.fetchone()
+    return (row[0], row[1]) if row else None
+
+
+async def delete_kalshi_account(discord_user: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("DELETE FROM kalshi_accounts WHERE discord_user = ?", (discord_user,))
+        await db.commit()
+        return cur.rowcount > 0
