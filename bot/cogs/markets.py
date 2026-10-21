@@ -7,7 +7,8 @@ from datetime import datetime, time as dtime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 _ET = ZoneInfo("America/New_York")
-_RECAP_TIME = dtime(hour=10, minute=0, tzinfo=_ET)  # daily slate recap DM
+_RECAP_TIME = dtime(hour=10, minute=0, tzinfo=_ET)  # daily slate recap
+RECAP_CHANNEL_ID = 1515214409079853116
 
 import discord
 import httpx
@@ -148,7 +149,7 @@ class MarketsCog(commands.Cog):
     def cog_unload(self) -> None:
         self.recap_loop.cancel()
 
-    # ── Daily slate recap DM for linked Kalshi accounts ──────────────
+    # ── Daily slate recap for linked Kalshi accounts (posted in RECAP_CHANNEL_ID) ──
 
     @tasks.loop(time=_RECAP_TIME)
     async def recap_loop(self) -> None:
@@ -160,8 +161,8 @@ class MarketsCog(commands.Cog):
                     continue
                 embed = await _recap_embed(uid, slate)
                 if embed:  # no tracked markets on that slate -> stay quiet
-                    user = self.bot.get_user(int(uid)) or await self.bot.fetch_user(int(uid))
-                    await user.send(embed=embed)
+                    channel = self.bot.get_channel(RECAP_CHANNEL_ID) or await self.bot.fetch_channel(RECAP_CHANNEL_ID)
+                    await channel.send(f"<@{uid}>", embed=embed, allowed_mentions=discord.AllowedMentions.none())
                 await queries.set_bot_setting(key, slate)
             except Exception:
                 log.warning("kalshi recap failed for %s", uid, exc_info=True)
@@ -350,7 +351,7 @@ class MarketsCog(commands.Cog):
     async def kalshi_link(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_modal(_LinkModal())
 
-    @kalshi_group.command(name="recap", description="Your NBA/NFL/MLB/Esports slate recap (DM'd daily 10am ET)")
+    @kalshi_group.command(name="recap", description="Your NBA/NFL/MLB/Esports slate recap (posted daily 10am ET)")
     @app_commands.describe(days_ago="Which slate: 1 = last night (default)")
     async def kalshi_recap(self, interaction: discord.Interaction,
                            days_ago: app_commands.Range[int, 0, 60] = 1) -> None:
