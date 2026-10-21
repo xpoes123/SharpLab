@@ -139,6 +139,17 @@ function renderTiles() {
     .join("");
 }
 
+// Gray out tiles already typed into the expression (each typed number consumes one tile).
+function markUsed(tilesEl, s) {
+  if (!tilesEl) return;
+  const left = (s.match(/\d+/g) || []).map(Number);
+  tilesEl.querySelectorAll(".cd-tile").forEach((t) => {
+    const i = left.indexOf(Number(t.textContent));
+    if (i >= 0) left.splice(i, 1);
+    t.classList.toggle("used", i >= 0);
+  });
+}
+
 // ── Start a new round ──
 async function newRound() {
   round.done = false;
@@ -447,12 +458,17 @@ function modeToggle() {
 }
 
 // ── Delegated events ──
+app.addEventListener("input", (e) => {
+  if (e.target.id === "cdInput") markUsed($("cdTiles"), e.target.value);
+  else if (e.target.id === "cdSprintInput") markUsed($("cdSprintTiles"), e.target.value);
+});
 app.addEventListener("click", (e) => {
   const tile = e.target.closest(".cd-tile");
   if (tile && !tile.classList.contains("sprint-display")) {
     const input = $("cdInput");
-    if (input && !input.disabled) {
+    if (input && !input.disabled && !tile.classList.contains("used")) {
       input.value += input.value && !/[\s(]$/.test(input.value) ? " " + tile.dataset.val : tile.dataset.val;
+      markUsed($("cdTiles"), input.value);
       input.focus();
     }
     return;

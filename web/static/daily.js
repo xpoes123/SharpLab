@@ -870,6 +870,17 @@ main();
 
   const OP_FACE = { "+": "+", "-": "−", "*": "×", "/": "÷" };
 
+  // Gray out tiles already typed into the expression (each typed number consumes one tile).
+  function markUsed(tilesEl, s) {
+    if (!tilesEl) return;
+    const left = (s.match(/\d+/g) || []).map(Number);
+    tilesEl.querySelectorAll(".cd-tile").forEach((t) => {
+      const i = left.indexOf(Number(t.textContent));
+      if (i >= 0) left.splice(i, 1);
+      t.classList.toggle("used", i >= 0);
+    });
+  }
+
   function render() {
     const tiles = board.numbers
       .map((n) => `<button class="cd-tile" data-ins="${n}">${n}</button>`)
@@ -904,6 +915,7 @@ main();
         </div>
         <div class="cd-status">${status}</div>
       </div>`;
+    markUsed(stage.querySelector(".cd-tiles"), expr);
 
     if (solved) {
       stage.querySelectorAll("button, input").forEach((el) => (el.disabled = true));
@@ -912,11 +924,11 @@ main();
 
     const input = document.getElementById("cdExpr");
     const sync = () => { expr = input.value; check(); };
-    input.oninput = () => { expr = input.value; live(); };
+    input.oninput = () => { expr = input.value; markUsed(stage.querySelector(".cd-tiles"), expr); live(); };
     input.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); check(); } };
 
     stage.querySelectorAll("[data-ins]").forEach((b) => {
-      b.onclick = () => { expr += b.dataset.ins; render(); focusEnd(); };
+      b.onclick = () => { if (b.classList.contains("used")) return; expr += b.dataset.ins; render(); focusEnd(); };
     });
     document.getElementById("cdBack").onclick = () => { expr = expr.slice(0, -1); render(); focusEnd(); };
     document.getElementById("cdClear").onclick = () => { expr = ""; render(); focusEnd(); };

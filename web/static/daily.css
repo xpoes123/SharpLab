@@ -71,6 +71,7 @@
   border-radius: 12px; cursor: pointer; transition: border-color .12s, transform .06s; }
 .cd-tile:hover { border-color: var(--accent); }
 .cd-tile:active { transform: translateY(1px); }
+.cd-tile.used { opacity: .3; cursor: default; border-color: var(--line); }
 .cd-ops, .cd-controls { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
 .cd-op { min-width: 44px; padding: 10px 12px; font-size: 18px; font-weight: 700; color: var(--fg-2);
   background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; cursor: pointer;
