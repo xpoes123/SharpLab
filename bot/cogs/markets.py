@@ -3,15 +3,16 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time as dtime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 _ET = ZoneInfo("America/New_York")
+_RECAP_TIME = dtime(hour=10, minute=0, tzinfo=_ET)  # daily slate recap DM
 
 import discord
 import httpx
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 from db import queries
@@ -142,6 +143,32 @@ class MarketsCog(commands.Cog):
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
+        self.recap_loop.start()
+
+    def cog_unload(self) -> None:
+        self.recap_loop.cancel()
+
+    # ── Daily slate recap DM for linked Kalshi accounts ──────────────
+
+    @tasks.loop(time=_RECAP_TIME)
+    async def recap_loop(self) -> None:
+        slate = (datetime.now(_ET).date() - timedelta(days=1)).isoformat()
+        for uid in await queries.list_kalshi_account_users():
+            key = f"kalshi_recap:{uid}"
+            try:
+                if await queries.get_bot_setting(key) == slate:
+                    continue
+                embed = await _recap_embed(uid, slate)
+                if embed:  # no tracked markets on that slate -> stay quiet
+                    user = self.bot.get_user(int(uid)) or await self.bot.fetch_user(int(uid))
+                    await user.send(embed=embed)
+                await queries.set_bot_setting(key, slate)
+            except Exception:
+                log.warning("kalshi recap failed for %s", uid, exc_info=True)
+
+    @recap_loop.before_loop
+    async def _before_recap(self) -> None:
+        await self.bot.wait_until_ready()
 
     async def _kalshi_impl(self, interaction: discord.Interaction, game: str, sport: str) -> None:
         await interaction.response.defer()
@@ -323,6 +350,24 @@ class MarketsCog(commands.Cog):
     async def kalshi_link(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_modal(_LinkModal())
 
+    @kalshi_group.command(name="recap", description="Your NBA/NFL/MLB/Esports slate recap (DM'd daily 10am ET)")
+    @app_commands.describe(days_ago="Which slate: 1 = last night (default)")
+    async def kalshi_recap(self, interaction: discord.Interaction,
+                           days_ago: app_commands.Range[int, 0, 60] = 1) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        uid = str(interaction.user.id)
+        if not await queries.get_kalshi_account(uid):
+            await interaction.followup.send("No Kalshi account linked — run `/kalshi link` first.", ephemeral=True)
+            return
+        slate = (datetime.now(_ET).date() - timedelta(days=days_ago)).isoformat()
+        try:
+            embed = await _recap_embed(uid, slate)
+        except ka.KalshiAuthError:
+            await interaction.followup.send("Kalshi rejected your key. Re-run `/kalshi link`.", ephemeral=True)
+            return
+        await interaction.followup.send(embed=embed or discord.Embed(
+            description=f"No settled NBA/NFL/MLB/Esports markets on the {slate} slate."), ephemeral=True)
+
     @kalshi_group.command(name="unlink", description="Delete your stored Kalshi API key")
     async def kalshi_unlink(self, interaction: discord.Interaction) -> None:
         gone = await queries.delete_kalshi_account(str(interaction.user.id))
@@ -409,6 +454,50 @@ async def _load_account(interaction: discord.Interaction, public: bool, with_set
         return None
     _ACCT_CACHE[uid] = (time.monotonic(), with_settlements, acct)
     return acct
+
+
+
+
+async def _recap_embed(uid: str, slate: str) -> discord.Embed | None:
+    """Recap of one slate (game date, tracked sports) + the 7 days ending there. None if nothing settled that day."""
+    row = await queries.get_kalshi_account(uid)
+    if not row:
+        return None
+    key = ka.load_key(ka.decrypt(row[1]))
+    async with httpx.AsyncClient(timeout=20) as c:
+        settles = await ka._all(c, row[0], key, "/portfolio/settlements", "settlements")
+    slates = ka.slates(settles)
+    day = slates.get(slate)
+    if not day:
+        return None
+    rows = sorted(day["rows"], key=lambda r: r[1])
+    picks = rows[-3:][::-1] + [r for r in rows[:3] if r[1] < 0 and r not in rows[-3:]]
+    try:
+        titles = await ka.market_titles([t for t, _ in picks])
+    except Exception:
+        titles = {}
+    pretty = datetime.fromisoformat(slate).strftime("%a %b %-d")
+    embed = discord.Embed(title=f"📊 Slate recap — {pretty}",
+                          color=0x22C55E if day["pnl"] >= 0 else 0xEF4444)
+    embed.description = (f"**{day['pnl']:+,.2f}** on ${day['cost']:,.0f} staked · "
+                         f"{day['won']}-{day['n'] - day['won']} across {day['n']} markets")
+    icon = {"NBA": "🏀", "NFL": "🏈", "MLB": "⚾", "Esports": "🎮"}
+    embed.add_field(name="By sport", inline=False, value="\n".join(
+        f"{icon.get(sp, '•')} {sp} {w}-{n - w} · **{p:+,.2f}**"
+        for sp, (n, w, p) in sorted(day["sports"].items(), key=lambda kv: -abs(kv[1][2]))))
+    if picks:
+        embed.add_field(name="Biggest swings", inline=False, value="\n".join(
+            f"{'🟢' if p >= 0 else '🔴'} **{p:+,.2f}** {titles.get(t, t)[:70]}" for t, p in picks))
+    start = (datetime.fromisoformat(slate) - timedelta(days=6)).date().isoformat()
+    week = [(d, slates[d]) for d in sorted(slates) if start <= d <= slate]
+    wk_pnl = sum(s["pnl"] for _, s in week)
+    wk_cost = sum(s["cost"] for _, s in week)
+    embed.add_field(name=f"Last 7 days · {wk_pnl:+,.2f}" + (f" ({wk_pnl / wk_cost * 100:+.1f}%)" if wk_cost else ""),
+                    inline=False, value="\n".join(
+        f"`{datetime.fromisoformat(d).strftime('%a %m/%d')}` {s['won']}-{s['n'] - s['won']} · **{s['pnl']:+,.2f}**"
+        for d, s in week))
+    embed.set_footer(text="NBA/NFL/MLB/Esports, grouped by game date · /kalshi recap to re-check")
+    return embed
 
 
 class _LinkModal(discord.ui.Modal, title="Link Kalshi (read-only key)"):

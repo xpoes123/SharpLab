@@ -39,7 +39,7 @@ def test_summarize_window():
           {"ticker": "KXMLBGAME-B", "revenue": 0, "yes_count_fp": "5", "no_count_fp": "0",
            "yes_total_cost_dollars": "2", "no_total_cost_dollars": "0", "fee_cost": "0",
            "settled_time": "2026-01-01T00:00:00Z"}]
-    s = ka.summarize(st, [{"unreal": 1.0}])
+    s = ka.summarize(st + [dict(st[0], ticker="KXNHLGAME-X")], [{"unreal": 1.0}])  # NHL filtered out
     assert s["n"] == 2 and s["won"] == 1 and s["realized"] == pytest.approx(1.9) and s["unrealized"] == 1.0
     assert ka.summarize(st, [], since_iso="2026-10-01")["n"] == 1
 
@@ -61,3 +61,17 @@ def test_signature_verifies_against_full_path():
                             b"123GET/trade-api/v2/portfolio/positions",
                             padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.DIGEST_LENGTH),
                             hashes.SHA256())
+
+
+def test_slate_grouping():
+    assert ka.slate_date("KXNBAPTS-26OCT21MILWAS-MILTHERRO11-25") == "2026-10-21"
+    assert ka.slate_date("KXNBA-26-OKC") is None and ka.slate_date("KXNBAGAME") is None
+    st = lambda t, rev, cost: {"ticker": t, "revenue": rev, "yes_count_fp": "10", "no_count_fp": "0",
+                               "yes_total_cost_dollars": str(cost), "no_total_cost_dollars": "0", "fee_cost": "0"}
+    s = ka.slates([st("KXNBAGAME-26OCT21MILWAS-MIL", 1000, 6), st("KXNBAPTS-26OCT21MILWAS-X", 0, 4),
+                   st("KXMLBGAME-26OCT21NYYLAD-NYY", 1000, 5), st("KXNBA-26-OKC", 1000, 1),
+                   st("KXNHLGAME-26OCT21BOSTOR-BOS", 1000, 5), st("KXATPMATCH-26OCT21X-Y", 1000, 5)])
+    assert list(s) == ["2026-10-21"]
+    d = s["2026-10-21"]
+    assert d["n"] == 3 and d["won"] == 2 and d["pnl"] == pytest.approx(5) and d["cost"] == 15
+    assert d["sports"] == {"NBA": [2, 1, pytest.approx(0)], "MLB": [1, 1, pytest.approx(5)]}

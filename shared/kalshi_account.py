@@ -24,6 +24,8 @@ KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 SPORT = {"NBA": "NBA", "WNBA": "WNBA", "NFL": "NFL", "MLB": "MLB", "NHL": "NHL", "NCAA": "NCAA",
          "VALORANT": "Esports", "CS2": "Esports", "DOTA2": "Esports", "LOL": "Esports",
          "ATP": "Tennis", "WTA": "Tennis", "ITF": "Tennis", "BTC": "Crypto", "ETH": "Crypto"}
+# ponytail: one global filter (David's ask, 2026-10-21; he's the only linked user) — per-user prefs if others link
+TRACKED = {"NBA", "NFL", "MLB", "Esports"}
 
 
 class KalshiAuthError(Exception):
@@ -128,6 +130,8 @@ def summarize(settles: list[dict], open_rows: list[dict], since_iso: str | None 
     for st in settles:
         if since_iso and (st.get("settled_time") or "") < since_iso:
             continue
+        if sport(st["ticker"]) not in TRACKED:
+            continue
         p = settled_pnl(st)
         cost = _f(st.get("yes_total_cost_dollars")) + _f(st.get("no_total_cost_dollars"))
         realized += p
@@ -157,7 +161,8 @@ async def fetch_account(key_id: str, pem: str, with_settlements: bool = True) ->
     async with httpx.AsyncClient(timeout=20) as c:
         bal = await _get(c, key_id, key, "/portfolio/balance")
         positions = await _all(c, key_id, key, "/portfolio/positions", "market_positions")
-        positions = [p for p in positions if _f(p.get("position_fp") or p.get("position"))]
+        positions = [p for p in positions
+                     if _f(p.get("position_fp") or p.get("position")) and sport(p["ticker"]) in TRACKED]
         settles = await _all(c, key_id, key, "/portfolio/settlements", "settlements") if with_settlements else []
         markets = {}
         tickers = [p["ticker"] for p in positions]
@@ -169,3 +174,45 @@ async def fetch_account(key_id: str, pem: str, with_settlements: bool = True) ->
     open_rows = sorted((mark_position(p, markets.get(p["ticker"], {})) for p in positions),
                        key=lambda r: -r["cost"])
     return {"balance": _balance(bal), "open": open_rows, "settlements": settles}
+
+
+_MONTHS = {m: i for i, m in enumerate(
+    ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"), 1)}
+
+
+def slate_date(ticker: str) -> str | None:
+    """Game date from the event segment: KXNBAPTS-26OCT21MILWAS-... -> '2026-10-21'. Futures -> None."""
+    parts = ticker.split("-")
+    seg = parts[1] if len(parts) > 1 else ""
+    if len(seg) < 7 or seg[2:5] not in _MONTHS or not (seg[:2] + seg[5:7]).isdigit():
+        return None
+    return f"20{seg[:2]}-{_MONTHS[seg[2:5]]:02d}-{seg[5:7]}"
+
+
+def slates(settles: list[dict]) -> dict[str, dict]:
+    """Settled TRACKED markets grouped by game date:
+    {date: {n, won, pnl, cost, sports: {sport: [n, won, pnl]}, rows: [(ticker, pnl)]}}."""
+    out: dict[str, dict] = {}
+    for st in settles:
+        d, sp = slate_date(st["ticker"]), sport(st["ticker"])
+        if sp not in TRACKED or not d:
+            continue
+        p = settled_pnl(st)
+        s = out.setdefault(d, {"n": 0, "won": 0, "pnl": 0.0, "cost": 0.0, "sports": {}, "rows": []})
+        s["n"] += 1
+        s["won"] += p > 0
+        s["pnl"] += p
+        s["cost"] += _f(st.get("yes_total_cost_dollars")) + _f(st.get("no_total_cost_dollars"))
+        per = s["sports"].setdefault(sp, [0, 0, 0.0])
+        per[0] += 1; per[1] += p > 0; per[2] += p
+        s["rows"].append((st["ticker"], p))
+    return out
+
+
+async def market_titles(tickers: list[str]) -> dict[str, str]:
+    if not tickers:
+        return {}
+    async with httpx.AsyncClient(timeout=20) as c:
+        r = await c.get(f"{KALSHI_BASE}/markets", params={"tickers": ",".join(tickers[:100]), "limit": 200})
+        r.raise_for_status()
+        return {m["ticker"]: m.get("title") or m["ticker"] for m in r.json().get("markets") or []}
