@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 _ET = ZoneInfo("America/New_York")
@@ -16,6 +17,7 @@ from dotenv import load_dotenv
 from db import queries
 from shared.models import get_team_abbr, get_kalshi_code
 from shared.odds_utils import prob_to_american, kalshi_exec_price, KALSHI_TAKER_FEE
+from shared import kalshi_account as ka
 from .odds import (KALSHI_SERIES, game_autocomplete, mlb_game_autocomplete,
                    log_game_autocomplete, mlb_log_game_autocomplete)
 import logging
@@ -313,6 +315,131 @@ class MarketsCog(commands.Cog):
     @app_commands.autocomplete(game=mlb_log_game_autocomplete)
     async def mlb_kalshi_orderbook(self, interaction: discord.Interaction, game: str) -> None:
         await self._orderbook_impl(interaction, game, "mlb")
+
+
+    # ── Linked-account reads: /kalshi link|unlink|positions|pnl ──────────
+
+    @kalshi_group.command(name="link", description="Link your Kalshi account with a READ-ONLY API key")
+    async def kalshi_link(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(_LinkModal())
+
+    @kalshi_group.command(name="unlink", description="Delete your stored Kalshi API key")
+    async def kalshi_unlink(self, interaction: discord.Interaction) -> None:
+        gone = await queries.delete_kalshi_account(str(interaction.user.id))
+        _ACCT_CACHE.pop(str(interaction.user.id), None)
+        await interaction.response.send_message(
+            "🗑️ Key deleted. Revoke it on Kalshi too (Account → API Keys)." if gone
+            else "No Kalshi account linked.", ephemeral=True)
+
+    @kalshi_group.command(name="positions", description="Your open Kalshi positions, marked to market")
+    @app_commands.describe(public="Post in the channel instead of only to you")
+    async def kalshi_positions(self, interaction: discord.Interaction, public: bool = False) -> None:
+        acct = await _load_account(interaction, public, with_settlements=False)
+        if not acct:
+            return
+        rows = acct["open"]
+        unreal = sum(r["unreal"] for r in rows)
+        embed = discord.Embed(title=f"📂 {interaction.user.display_name}'s Kalshi positions",
+                              color=0x22C55E if unreal >= 0 else 0xEF4444)
+        lines = [f"`{r['side']:<3}` **{r['qty']:g}** × {r['title'][:60]}\n"
+                 f"  cost ${r['cost']:,.2f} · mark {r['mark']*100:.0f}¢ · **{r['unreal']:+,.2f}**"
+                 for r in rows[:15]]
+        embed.description = "\n".join(lines)[:4000] or "No open positions."
+        if len(rows) > 15:
+            embed.set_footer(text=f"+{len(rows) - 15} more")
+        embed.add_field(name="Cash", value=f"${acct['balance']:,.2f}")
+        embed.add_field(name="Open value", value=f"${sum(r['value'] for r in rows):,.2f}")
+        embed.add_field(name="Unrealized", value=f"{unreal:+,.2f}")
+        await interaction.followup.send(embed=embed, ephemeral=not public)
+
+    @kalshi_group.command(name="pnl", description="Your realized + unrealized Kalshi PnL")
+    @app_commands.describe(days="Only count markets settled in the last N days (default: all time)",
+                           public="Post in the channel instead of only to you")
+    async def kalshi_pnl(self, interaction: discord.Interaction,
+                         days: app_commands.Range[int, 1, 3650] | None = None, public: bool = False) -> None:
+        acct = await _load_account(interaction, public, with_settlements=True)
+        if not acct:
+            return
+        since = None
+        if days:
+            since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+        s = ka.summarize(acct["settlements"], acct["open"], since)
+        total = s["realized"] + s["unrealized"]
+        embed = discord.Embed(title=f"📈 {interaction.user.display_name}'s Kalshi PnL"
+                                    + (f" — last {days}d" if days else " — all time"),
+                              color=0x22C55E if total >= 0 else 0xEF4444)
+        embed.add_field(name="Realized", value=f"**{s['realized']:+,.2f}**")
+        embed.add_field(name="Unrealized", value=f"{s['unrealized']:+,.2f}")
+        embed.add_field(name="Fees", value=f"${s['fees']:,.2f}")
+        wr = f"{s['won'] / s['n'] * 100:.0f}%" if s["n"] else "—"
+        embed.add_field(name="Settled", value=f"{s['n']} markets · {wr} green")
+        embed.add_field(name="Cash", value=f"${acct['balance']:,.2f}")
+        if s["by_sport"]:
+            embed.add_field(name="By sport", inline=False, value="\n".join(
+                f"`{sp:<8}` {n:>4} mkts · staked ${cost:,.0f} · **{pnl:+,.2f}**"
+                + (f" ({pnl / cost * 100:+.1f}%)" if cost else "")
+                for sp, n, pnl, cost in s["by_sport"][:10]))
+        embed.set_footer(text="Unrealized = open positions marked at current bid, before fees")
+        await interaction.followup.send(embed=embed, ephemeral=not public)
+
+_ACCT_CACHE: dict[str, tuple[float, bool, dict]] = {}
+_ACCT_TTL = 60
+
+
+async def _load_account(interaction: discord.Interaction, public: bool, with_settlements: bool) -> dict | None:
+    """Defer, fetch the caller's Kalshi account (60s cache), or reply with why not."""
+    await interaction.response.defer(ephemeral=not public, thinking=True)
+    uid = str(interaction.user.id)
+    hit = _ACCT_CACHE.get(uid)
+    if hit and time.monotonic() - hit[0] < _ACCT_TTL and (hit[1] or not with_settlements):
+        return hit[2]
+    row = await queries.get_kalshi_account(uid)
+    if not row:
+        await interaction.followup.send("No Kalshi account linked — run `/kalshi link` first.", ephemeral=True)
+        return None
+    try:
+        acct = await ka.fetch_account(row[0], ka.decrypt(row[1]), with_settlements)
+    except ka.KalshiAuthError:
+        await interaction.followup.send("Kalshi rejected your key (revoked/expired?). Re-run `/kalshi link`.",
+                                        ephemeral=True)
+        return None
+    except Exception:
+        log.warning("kalshi account fetch failed for %s", uid, exc_info=True)
+        await interaction.followup.send("Couldn't reach Kalshi — try again in a minute.", ephemeral=True)
+        return None
+    _ACCT_CACHE[uid] = (time.monotonic(), with_settlements, acct)
+    return acct
+
+
+class _LinkModal(discord.ui.Modal, title="Link Kalshi (read-only key)"):
+    key_id = discord.ui.TextInput(label="API Key ID", placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+                                  max_length=64)
+    pem = discord.ui.TextInput(label="Private key (paste the whole .key/.pem file)",
+                               style=discord.TextStyle.paragraph, max_length=4000,
+                               placeholder="-----BEGIN RSA PRIVATE KEY-----\n...")
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        key_id, pem = self.key_id.value.strip(), self.pem.value.strip()
+        try:
+            ka.load_key(pem)
+        except Exception:
+            await interaction.followup.send("That doesn't parse as an RSA private key.", ephemeral=True)
+            return
+        try:
+            bal = await ka.fetch_balance(key_id, pem)
+        except ka.KalshiAuthError:
+            await interaction.followup.send("Kalshi rejected that key ID + private key pair.", ephemeral=True)
+            return
+        except Exception:
+            log.warning("kalshi link check failed", exc_info=True)
+            await interaction.followup.send("Couldn't reach Kalshi to verify the key — try again.", ephemeral=True)
+            return
+        await queries.set_kalshi_account(str(interaction.user.id), key_id, ka.encrypt(pem))
+        _ACCT_CACHE.pop(str(interaction.user.id), None)
+        await interaction.followup.send(
+            f"✅ Linked (cash ${bal:,.2f}). Key stored encrypted; SharpLab only makes GET requests. "
+            "Use a **read-only** key — `/kalshi unlink` deletes it.", ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:

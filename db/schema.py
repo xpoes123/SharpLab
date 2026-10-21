@@ -1118,3 +1118,11 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        try:  # user-linked read-only Kalshi API keys (/kalshi link); private key Fernet-encrypted
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS kalshi_accounts ("
+                "discord_user TEXT PRIMARY KEY, key_id TEXT NOT NULL, "
+                "private_key_enc BLOB NOT NULL, linked_at TEXT NOT NULL)")
+            await db.commit()
+        except Exception:
+            pass
