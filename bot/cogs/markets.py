@@ -387,12 +387,29 @@ class MarketsCog(commands.Cog):
         unreal = sum(r["unreal"] for r in rows)
         embed = discord.Embed(title=f"📂 {interaction.user.display_name}'s Kalshi positions",
                               color=0x22C55E if unreal >= 0 else 0xEF4444)
-        lines = [f"`{r['side']:<3}` **{r['qty']:g}** × {r['title'][:60]}\n"
-                 f"  cost ${r['cost']:,.2f} · mark {r['mark']*100:.0f}¢ · **{r['unreal']:+,.2f}**"
-                 for r in rows[:15]]
-        embed.description = "\n".join(lines)[:4000] or "No open positions."
-        if len(rows) > 15:
-            embed.set_footer(text=f"+{len(rows) - 15} more")
+        today = datetime.now(_ET).date()
+
+        def when(d: str) -> str:
+            gap = (datetime.fromisoformat(d).date() - today).days
+            return "Today" if gap == 0 else "Tmrw" if gap == 1 else datetime.fromisoformat(d).strftime("%a %-m/%-d")
+
+        def line(r: dict, label: str = "") -> str:
+            return (f"`{r['side']:<3}` **{r['qty']:g}** × {r['title'][:60]}" + (f" · *{label}*" if label else "")
+                    + f"\n  cost ${r['cost']:,.2f} · mark {r['mark']*100:.0f}¢ · **{r['unreal']:+,.2f}**")
+
+        # Game markets carry a date in the ticker; futures (season/champion markets) don't.
+        games = sorted((r for r in rows if ka.slate_date(r["ticker"])),
+                       key=lambda r: (ka.slate_date(r["ticker"]), -r["cost"]))
+        futures = [r for r in rows if not ka.slate_date(r["ticker"])]
+        parts = []
+        for head, group, dated in (("🎯 Games — now & upcoming", games, True), ("🔮 Futures", futures, False)):
+            if not group:
+                continue
+            body = [line(r, when(ka.slate_date(r["ticker"])) if dated else "") for r in group[:10]]
+            if len(group) > 10:
+                body.append(f"*+{len(group) - 10} more*")
+            parts.append(f"**{head}** · {sum(r['unreal'] for r in group):+,.2f}\n" + "\n".join(body))
+        embed.description = "\n\n".join(parts)[:4000] or "No open positions."
         embed.add_field(name="Cash", value=f"${acct['balance']:,.2f}")
         embed.add_field(name="Open value", value=f"${sum(r['value'] for r in rows):,.2f}")
         embed.add_field(name="Unrealized", value=f"{unreal:+,.2f}")
