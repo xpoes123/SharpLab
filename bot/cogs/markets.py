@@ -10,6 +10,7 @@ _ET = ZoneInfo("America/New_York")
 _RECAP_TIME = dtime(hour=10, minute=0, tzinfo=_ET)  # daily slate recap
 RECAP_CHANNEL_ID = 1515214409079853116
 FILLS_CHANNEL_ID = 1563303484697350286  # live trade feed
+FILLS_ROLE_NAME = "Kalshi Trades"  # self-assign via the ⚡ panel in FILLS_CHANNEL_ID
 
 import discord
 import httpx
@@ -146,6 +147,7 @@ class MarketsCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.recap_loop.start()
+        self._fills_role_id: int | None = None
         self.fills_loop.start()
 
     def cog_unload(self) -> None:
@@ -177,13 +179,37 @@ class MarketsCog(commands.Cog):
                 if fills:
                     embed = await _fills_embed(ka.group_fills(fills))
                     channel = self.bot.get_channel(FILLS_CHANNEL_ID) or await self.bot.fetch_channel(FILLS_CHANNEL_ID)
-                    await channel.send(f"<@{uid}>", embed=embed, allowed_mentions=discord.AllowedMentions.none())
+                    ping = f" <@&{self._fills_role_id}>" if self._fills_role_id else ""
+                    await channel.send(f"<@{uid}>{ping}", embed=embed,
+                                       allowed_mentions=discord.AllowedMentions(users=False, roles=True))
             except Exception:
                 log.warning("kalshi fills poll failed for %s", uid, exc_info=True)
 
     @fills_loop.before_loop
     async def _before_fills(self) -> None:
         await self.bot.wait_until_ready()
+        try:
+            await self._ensure_fills_panel()
+        except Exception:
+            log.warning("kalshi fills role panel setup failed", exc_info=True)
+
+    async def _ensure_fills_panel(self) -> None:
+        """One-time: create the ping role and a ⚡ reaction-role panel in the feed channel."""
+        channel = self.bot.get_channel(FILLS_CHANNEL_ID) or await self.bot.fetch_channel(FILLS_CHANNEL_ID)
+        role = discord.utils.get(channel.guild.roles, name=FILLS_ROLE_NAME) or await channel.guild.create_role(
+            name=FILLS_ROLE_NAME, mentionable=True, reason="Kalshi live trade feed pings")
+        self._fills_role_id = role.id
+        if await queries.get_bot_setting("kalshi_fills_panel"):
+            return
+        msg = await channel.send(embed=discord.Embed(
+            title="⚡ Kalshi trade alerts",
+            description=f"React ⚡ to get the {role.mention} role and be pinged on every new trade. Unreact to stop.",
+            color=0x3B82F6))
+        await msg.add_reaction("⚡")
+        await queries.add_reaction_role(str(msg.id), "⚡", str(role.id), str(channel.guild.id), str(channel.id))
+        if rr := self.bot.get_cog("ReactionRolesCog"):
+            rr._panel_ids.add(str(msg.id))
+        await queries.set_bot_setting("kalshi_fills_panel", str(msg.id))
 
     # ── Daily slate recap for linked Kalshi accounts (posted in RECAP_CHANNEL_ID) ──
 
