@@ -588,7 +588,7 @@ async def _fills_embed(rows: list[dict]) -> discord.Embed:
     embed = discord.Embed(title="⚡ New Kalshi trade" + ("s" if len(rows) > 1 else ""), color=0x3B82F6)
     embed.description = "\n".join(
         f"{'🟢 Bought' if r['action'] == 'buy' else '🔴 Sold'} **{r['qty']:,.0f} {r['side'].upper()}** "
-        f"@ {r['avg'] * 100:.0f}¢ (${r['cost']:,.2f}) · [{titles.get(r['ticker'], r['ticker'])[:80]}]({ka.market_url(r['ticker'])})"
+        f"@ {r['avg'] * 100:.0f}¢ (${r['cost']:,.2f}) · [{discord.utils.escape_markdown(titles.get(r['ticker'], r['ticker'])[:80]).replace(']', ')')}]({ka.market_url(r['ticker'])})"
         for r in rows)[:4000]
     return embed
 
