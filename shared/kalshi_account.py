@@ -89,7 +89,7 @@ async def _get(client: httpx.AsyncClient, key_id: str, key, path: str) -> dict:
 async def _all(client, key_id, key, path: str, field: str) -> list[dict]:
     out, cur = [], ""
     for _ in range(100):  # ponytail: 20k-row ceiling, plenty for any human account
-        r = await _get(client, key_id, key, f"{path}?limit=200" + (f"&cursor={cur}" if cur else ""))
+        r = await _get(client, key_id, key, f"{path}{'&' if '?' in path else '?'}limit=200" + (f"&cursor={cur}" if cur else ""))
         out += r.get(field) or []
         cur = r.get("cursor")
         if not cur:
@@ -216,3 +216,24 @@ async def market_titles(tickers: list[str]) -> dict[str, str]:
         r = await c.get(f"{KALSHI_BASE}/markets", params={"tickers": ",".join(tickers[:100]), "limit": 200})
         r.raise_for_status()
         return {m["ticker"]: m.get("title") or m["ticker"] for m in r.json().get("markets") or []}
+
+
+def fill_price(f: dict) -> float:
+    """Price paid per contract on the side traded, in dollars."""
+    side = f.get("side", "yes")
+    p = f.get(f"{side}_price_dollars") or f.get(f"{side}_price_fixed")
+    return _f(p) if p is not None else _f(f.get(f"{side}_price")) / 100
+
+
+def group_fills(fills: list[dict]) -> list[dict]:
+    """Collapse partial fills into one row per (ticker, action, side) with a size-weighted avg price."""
+    out: dict[tuple, dict] = {}
+    for f in sorted(fills, key=lambda f: _f(f.get("ts"))):
+        k = (f["ticker"], f.get("action", "buy"), f.get("side", "yes"))
+        g = out.setdefault(k, {"ticker": k[0], "action": k[1], "side": k[2], "qty": 0.0, "cost": 0.0})
+        q = _f(f.get("count_fp") or f.get("count"))
+        g["qty"] += q
+        g["cost"] += q * fill_price(f)
+    for g in out.values():
+        g["avg"] = g["cost"] / g["qty"] if g["qty"] else 0.0
+    return list(out.values())

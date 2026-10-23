@@ -145,9 +145,44 @@ class MarketsCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.recap_loop.start()
+        self.fills_loop.start()
 
     def cog_unload(self) -> None:
         self.recap_loop.cancel()
+        self.fills_loop.cancel()
+
+    # ── Live trade feed: new Kalshi fills for linked accounts, polled every minute ──
+
+    @tasks.loop(minutes=1)
+    async def fills_loop(self) -> None:
+        for uid in await queries.list_kalshi_account_users():
+            key = f"kalshi_fills_ts:{uid}"
+            try:
+                last = await queries.get_bot_setting(key)
+                if last is None:  # first run: start the feed now, don't replay history
+                    await queries.set_bot_setting(key, str(int(time.time())))
+                    continue
+                row = await queries.get_kalshi_account(uid)
+                if not row:
+                    continue
+                pem_key = ka.load_key(ka.decrypt(row[1]))
+                # ponytail: min_ts is whole seconds, so last+1 can skip a fill landing in the same second as the previous poll's newest
+                async with httpx.AsyncClient(timeout=20) as c:
+                    fills = await ka._all(c, row[0], pem_key, f"/portfolio/fills?min_ts={int(last) + 1}", "fills")
+                if not fills:
+                    continue
+                await queries.set_bot_setting(key, str(max(int(ka._f(f.get("ts"))) for f in fills) or int(time.time())))
+                fills = [f for f in fills if ka.sport(f["ticker"]) in ka.TRACKED]
+                if fills:
+                    embed = await _fills_embed(ka.group_fills(fills))
+                    channel = self.bot.get_channel(RECAP_CHANNEL_ID) or await self.bot.fetch_channel(RECAP_CHANNEL_ID)
+                    await channel.send(f"<@{uid}>", embed=embed, allowed_mentions=discord.AllowedMentions.none())
+            except Exception:
+                log.warning("kalshi fills poll failed for %s", uid, exc_info=True)
+
+    @fills_loop.before_loop
+    async def _before_fills(self) -> None:
+        await self.bot.wait_until_ready()
 
     # ── Daily slate recap for linked Kalshi accounts (posted in RECAP_CHANNEL_ID) ──
 
@@ -515,6 +550,19 @@ async def _recap_embed(uid: str, slate: str) -> discord.Embed | None:
         f"`{datetime.fromisoformat(d).strftime('%a %m/%d')}` {s['won']}-{s['n'] - s['won']} · **{s['pnl']:+,.2f}**"
         for d, s in week))
     embed.set_footer(text="NBA/NFL/MLB/Esports, grouped by game date · /kalshi recap to re-check")
+    return embed
+
+
+async def _fills_embed(rows: list[dict]) -> discord.Embed:
+    try:
+        titles = await ka.market_titles([r["ticker"] for r in rows])
+    except Exception:
+        titles = {}
+    embed = discord.Embed(title="⚡ New Kalshi trade" + ("s" if len(rows) > 1 else ""), color=0x3B82F6)
+    embed.description = "\n".join(
+        f"{'🟢 Bought' if r['action'] == 'buy' else '🔴 Sold'} **{r['qty']:,.0f} {r['side'].upper()}** "
+        f"@ {r['avg'] * 100:.0f}¢ (${r['cost']:,.2f}) · {titles.get(r['ticker'], r['ticker'])[:80]}"
+        for r in rows)[:4000]
     return embed
 
 
