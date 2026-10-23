@@ -75,3 +75,14 @@ def test_slate_grouping():
     d = s["2026-10-21"]
     assert d["n"] == 3 and d["won"] == 2 and d["pnl"] == pytest.approx(5) and d["cost"] == 15
     assert d["sports"] == {"NBA": [2, 1, pytest.approx(0)], "MLB": [1, 1, pytest.approx(5)]}
+
+
+def test_group_fills_weights_partials_and_handles_cent_prices():
+    rows = ka.group_fills([
+        {"ticker": "KXNBAGAME-A", "action": "buy", "side": "yes", "count_fp": "10", "yes_price_dollars": "0.40", "ts": 2},
+        {"ticker": "KXNBAGAME-A", "action": "buy", "side": "yes", "count": 30, "yes_price": 60, "ts": 1},
+        {"ticker": "KXNBAGAME-A", "action": "sell", "side": "no", "count": 5, "no_price": 20, "ts": 3},
+    ])
+    buy, sell = rows
+    assert (buy["qty"], buy["avg"]) == (40, pytest.approx(0.55))
+    assert (sell["action"], sell["side"], sell["avg"]) == ("sell", "no", pytest.approx(0.20))
