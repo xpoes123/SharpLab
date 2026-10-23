@@ -91,3 +91,18 @@ def test_group_fills_weights_partials_and_handles_cent_prices():
 def test_market_url():
     assert ka.market_url("KXNBAGAME-26OCT23LALGSW-LAL") == "https://kalshi.com/markets/kxnbagame/kxnbagame-26oct23lalgsw"
     assert ka.market_url("KXNBA-26") == "https://kalshi.com/markets/kxnba/kxnba-26"
+
+
+def test_resolutions_groups_holders_and_skips_old_and_non_sports():
+    st = lambda t, when, y, n: {"ticker": t, "settled_time": when, "market_result": "yes", "revenue": y * 100,
+                                "yes_count_fp": str(y), "no_count_fp": str(n), "yes_total_cost_dollars": str(y * 0.5),
+                                "no_total_cost_dollars": str(n * 0.5), "fee_cost": "0"}
+    new, old = "2026-10-23T22:00:00Z", "2026-10-23T20:00:00Z"
+    cut = ka._iso_ts("2026-10-23T21:00:00Z")
+    res = ka.resolutions({
+        "a": [st("KXNBAGAME-26OCT23LALGSW-LAL", new, 10, 0), st("KXNBAGAME-26OCT22X-X", old, 5, 0),
+              st("KXBTC-26OCT23-B", new, 3, 0)],
+        "b": [st("KXNBAGAME-26OCT23LALGSW-LAL", new, 0, 4)],
+    }, {"a": cut, "b": cut})
+    assert list(res) == ["KXNBAGAME-26OCT23LALGSW-LAL"]
+    assert res["KXNBAGAME-26OCT23LALGSW-LAL"]["holders"] == [("a", "YES", pytest.approx(5)), ("b", "NO", pytest.approx(-2))]

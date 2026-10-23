@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import os
 import time
+from datetime import datetime
 from collections import defaultdict
 from urllib.parse import urlsplit
 
@@ -243,3 +244,25 @@ def market_url(ticker: str) -> str:
     """kalshi.com page for a market's event: KXNBAGAME-26OCT23LALGSW-LAL -> /markets/kxnbagame/kxnbagame-26oct23lalgsw."""
     t = ticker.lower()
     return f"https://kalshi.com/markets/{t.split('-')[0]}/{t.rsplit('-', 1)[0] if t.count('-') > 1 else t}"
+
+
+def _iso_ts(iso: str | None) -> int:
+    try:
+        return int(datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp())
+    except (AttributeError, ValueError):
+        return 0
+
+
+def resolutions(by_user: dict[str, list[dict]], since: dict[str, int]) -> dict[str, dict]:
+    """New settled TRACKED markets across users: {ticker: {result, holders: [(uid, side, pnl)]}}.
+    Filters by settled_time client-side too, so a server ignoring min_ts can't replay history."""
+    out: dict[str, dict] = {}
+    for uid, settles in by_user.items():
+        for st in settles:
+            if _iso_ts(st.get("settled_time")) <= since[uid] or sport(st["ticker"]) not in TRACKED:
+                continue
+            y, n = _f(st.get("yes_count_fp")), _f(st.get("no_count_fp"))
+            side = "YES" if y > n else "NO" if n > y else "BOTH"
+            m = out.setdefault(st["ticker"], {"result": (st.get("market_result") or "?").upper(), "holders": []})
+            m["holders"].append((uid, side, settled_pnl(st)))
+    return out
