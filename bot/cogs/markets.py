@@ -148,7 +148,6 @@ class MarketsCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.recap_loop.start()
-        self._fills_role_id: int | None = None
         self.fills_loop.start()
 
     def cog_unload(self) -> None:
@@ -179,10 +178,10 @@ class MarketsCog(commands.Cog):
                 fills = [f for f in fills if ka.sport(f["ticker"]) in ka.TRACKED]
                 if fills:
                     embed = await _fills_embed(ka.group_fills(fills))
+                    user = self.bot.get_user(int(uid)) or await self.bot.fetch_user(int(uid))
+                    embed.set_author(name=user.display_name, icon_url=user.display_avatar.url)
                     channel = self.bot.get_channel(FILLS_CHANNEL_ID) or await self.bot.fetch_channel(FILLS_CHANNEL_ID)
-                    ping = f" <@&{self._fills_role_id}>" if self._fills_role_id else ""
-                    await channel.send(f"<@{uid}>{ping}", embed=embed,
-                                       allowed_mentions=discord.AllowedMentions(users=False, roles=True))
+                    await channel.send(embed=embed)
             except Exception:
                 log.warning("kalshi fills poll failed for %s", uid, exc_info=True)
 
@@ -199,13 +198,12 @@ class MarketsCog(commands.Cog):
         channel = self.bot.get_channel(FILLS_CHANNEL_ID) or await self.bot.fetch_channel(FILLS_CHANNEL_ID)
         role = discord.utils.get(channel.guild.roles, name=FILLS_ROLE_NAME) or await channel.guild.create_role(
             name=FILLS_ROLE_NAME, mentionable=True, reason="Kalshi live trade feed pings")
-        self._fills_role_id = role.id
         if await queries.get_bot_setting("kalshi_fills_panel"):
             return
         channel = self.bot.get_channel(ROLES_CHANNEL_ID) or await self.bot.fetch_channel(ROLES_CHANNEL_ID)
         msg = await channel.send(embed=discord.Embed(
             title="⚡ Kalshi trade alerts",
-            description=f"React ⚡ to get the {role.mention} role and be pinged on every new trade. Unreact to stop.",
+            description=f"React ⚡ to get the {role.mention} role for the Kalshi trade feed. Unreact to remove it.",
             color=0x3B82F6))
         await msg.add_reaction("⚡")
         await queries.add_reaction_role(str(msg.id), "⚡", str(role.id), str(channel.guild.id), str(channel.id))
