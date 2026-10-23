@@ -158,12 +158,16 @@ class MarketsCog(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def fills_loop(self) -> None:
+        channel = self.bot.get_channel(FILLS_CHANNEL_ID) or await self.bot.fetch_channel(FILLS_CHANNEL_ID)
+        settles_by_user, settle_since = {}, {}
         for uid in await queries.list_kalshi_account_users():
-            key = f"kalshi_fills_ts:{uid}"
+            fkey, skey = f"kalshi_fills_ts:{uid}", f"kalshi_settle_ts:{uid}"
             try:
-                last = await queries.get_bot_setting(key)
-                if last is None:  # first run: start the feed now, don't replay history
-                    await queries.set_bot_setting(key, str(int(time.time())))
+                last, last_settle = await queries.get_bot_setting(fkey), await queries.get_bot_setting(skey)
+                if last is None or last_settle is None:  # first run: start the feeds now, don't replay history
+                    now = str(int(time.time()))
+                    await queries.set_bot_setting(fkey, last or now)
+                    await queries.set_bot_setting(skey, last_settle or now)
                     continue
                 row = await queries.get_kalshi_account(uid)
                 if not row:
@@ -172,18 +176,30 @@ class MarketsCog(commands.Cog):
                 # ponytail: min_ts is whole seconds, so last+1 can skip a fill landing in the same second as the previous poll's newest
                 async with httpx.AsyncClient(timeout=20) as c:
                     fills = await ka._all(c, row[0], pem_key, f"/portfolio/fills?min_ts={int(last) + 1}", "fills")
+                    settles = await ka._all(c, row[0], pem_key,
+                                            f"/portfolio/settlements?min_ts={int(last_settle) + 1}", "settlements")
+                settles_by_user[uid], settle_since[uid] = settles, int(last_settle)
+                if settles:
+                    await queries.set_bot_setting(skey, str(max([int(last_settle)] + [
+                        ka._iso_ts(st.get("settled_time")) for st in settles])))
                 if not fills:
                     continue
-                await queries.set_bot_setting(key, str(max(int(ka._f(f.get("ts"))) for f in fills) or int(time.time())))
+                await queries.set_bot_setting(fkey, str(max(int(ka._f(f.get("ts"))) for f in fills) or int(time.time())))
                 fills = [f for f in fills if ka.sport(f["ticker"]) in ka.TRACKED]
                 if fills:
                     embed = await _fills_embed(ka.group_fills(fills))
                     user = self.bot.get_user(int(uid)) or await self.bot.fetch_user(int(uid))
                     embed.set_author(name=user.display_name, icon_url=user.display_avatar.url)
-                    channel = self.bot.get_channel(FILLS_CHANNEL_ID) or await self.bot.fetch_channel(FILLS_CHANNEL_ID)
                     await channel.send(embed=embed)
             except Exception:
                 log.warning("kalshi fills poll failed for %s", uid, exc_info=True)
+        try:
+            res = ka.resolutions(settles_by_user, settle_since)
+            if res:
+                for embed in await _resolution_embeds(self.bot, res):
+                    await channel.send(embed=embed)
+        except Exception:
+            log.warning("kalshi resolution post failed", exc_info=True)
 
     @fills_loop.before_loop
     async def _before_fills(self) -> None:
@@ -591,6 +607,24 @@ async def _fills_embed(rows: list[dict]) -> discord.Embed:
         f"@ {r['avg'] * 100:.0f}¢ (${r['cost']:,.2f}) · [{discord.utils.escape_markdown(titles.get(r['ticker'], r['ticker'])[:80]).replace(']', ')')}]({ka.market_url(r['ticker'])})"
         for r in rows)[:4000]
     return embed
+
+
+async def _resolution_embeds(bot: commands.Bot, res: dict[str, dict]) -> list[discord.Embed]:
+    try:
+        titles = await ka.market_titles(list(res))
+    except Exception:
+        titles = {}
+    out = []
+    for ticker, m in res.items():
+        names = []
+        for uid, side, pnl in m["holders"]:
+            u = bot.get_user(int(uid)) or await bot.fetch_user(int(uid))
+            names.append(f"{'🟢' if pnl >= 0 else '🔴'} **{discord.utils.escape_markdown(u.display_name)}** "
+                         f"held {side} · **{pnl:+,.2f}**")
+        out.append(discord.Embed(
+            title=f"🏁 Resolved {m['result']} — {titles.get(ticker, ticker)[:200]}", url=ka.market_url(ticker),
+            description="\n".join(names), color=0x22C55E if sum(h[2] for h in m["holders"]) >= 0 else 0xEF4444))
+    return out
 
 
 class _LinkModal(discord.ui.Modal, title="Link Kalshi (read-only key)"):
