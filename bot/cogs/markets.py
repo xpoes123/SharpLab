@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 _ET = ZoneInfo("America/New_York")
 _RECAP_TIME = dtime(hour=10, minute=0, tzinfo=_ET)  # daily slate recap
 RECAP_CHANNEL_ID = 1515214409079853116
+FILLS_CHANNEL_ID = 1563303484697350286  # live trade feed
 
 import discord
 import httpx
@@ -151,7 +152,7 @@ class MarketsCog(commands.Cog):
         self.recap_loop.cancel()
         self.fills_loop.cancel()
 
-    # ── Live trade feed: new Kalshi fills for linked accounts, polled every minute ──
+    # ── Live trade feed: new Kalshi fills for linked accounts, polled every minute (FILLS_CHANNEL_ID) ──
 
     @tasks.loop(minutes=1)
     async def fills_loop(self) -> None:
@@ -175,7 +176,7 @@ class MarketsCog(commands.Cog):
                 fills = [f for f in fills if ka.sport(f["ticker"]) in ka.TRACKED]
                 if fills:
                     embed = await _fills_embed(ka.group_fills(fills))
-                    channel = self.bot.get_channel(RECAP_CHANNEL_ID) or await self.bot.fetch_channel(RECAP_CHANNEL_ID)
+                    channel = self.bot.get_channel(FILLS_CHANNEL_ID) or await self.bot.fetch_channel(FILLS_CHANNEL_ID)
                     await channel.send(f"<@{uid}>", embed=embed, allowed_mentions=discord.AllowedMentions.none())
             except Exception:
                 log.warning("kalshi fills poll failed for %s", uid, exc_info=True)
