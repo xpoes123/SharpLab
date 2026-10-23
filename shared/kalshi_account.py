@@ -237,3 +237,9 @@ def group_fills(fills: list[dict]) -> list[dict]:
     for g in out.values():
         g["avg"] = g["cost"] / g["qty"] if g["qty"] else 0.0
     return list(out.values())
+
+
+def market_url(ticker: str) -> str:
+    """kalshi.com page for a market's event: KXNBAGAME-26OCT23LALGSW-LAL -> /markets/kxnbagame/kxnbagame-26oct23lalgsw."""
+    t = ticker.lower()
+    return f"https://kalshi.com/markets/{t.split('-')[0]}/{t.rsplit('-', 1)[0] if t.count('-') > 1 else t}"

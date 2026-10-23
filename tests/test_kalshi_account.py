@@ -86,3 +86,8 @@ def test_group_fills_weights_partials_and_handles_cent_prices():
     buy, sell = rows
     assert (buy["qty"], buy["avg"]) == (40, pytest.approx(0.55))
     assert (sell["action"], sell["side"], sell["avg"]) == ("sell", "no", pytest.approx(0.20))
+
+
+def test_market_url():
+    assert ka.market_url("KXNBAGAME-26OCT23LALGSW-LAL") == "https://kalshi.com/markets/kxnbagame/kxnbagame-26oct23lalgsw"
+    assert ka.market_url("KXNBA-26") == "https://kalshi.com/markets/kxnba/kxnba-26"
