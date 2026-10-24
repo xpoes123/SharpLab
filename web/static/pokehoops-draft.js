@@ -2,8 +2,9 @@
 // verifier (shared/pokehoops_cli.mjs runs this exact file under node). The sim itself is the TV cartridge's
 // engine, vendored unmodified in ./pokehoops/ (scripts/sync-pokehoops.sh).
 //
-// Draft: 5 picks, each offering 3 options; pick 1 is 3 of the 5 Legendaries, picks 2-5 come from the rest of
-// the dex minus what you already took. Every pack is derived from the draft seed alone (one mulberry32 stream,
+// Draft: 5 picks, each offering 3 options; pick 1 is 3 of the 5 Legendaries, picks 2-5 are the TV's "tiered"
+// packs (tierPack: three options from one random overall band, preferring distinct best positions) drawn from
+// the rest of the dex minus what you already took. Every pack is derived from the draft seed alone (one mulberry32 stream,
 // one shuffle per pick), so the server can replay seed + picks and check each pick was really offered.
 // Season: 82 games vs the fixed LEAGUE with a SEPARATE season seed the server only reveals after the picks are
 // locked in — so nobody can try all 243 pick paths offline and submit the luckiest.
@@ -13,6 +14,22 @@ import { POS, POOL, LEGENDS, bestLineup, bestPos, mon, ovr } from "./pokehoops/r
 export const PICKS = 5;
 export const PACK = 3;
 
+// Copied verbatim from the TV cartridge's game.js (not vendored: game.js is TV-bound); tests/test_pokehoops.py
+// checks this function's text against game.js at the vendored revision, so the offers can't drift.
+// three options from one tier (a random overall band), in different positions where possible: no dead packs, no
+// runaway best option, and position fit becomes part of the choice
+function tierPack(pool, rng) {
+  const target = 56 + rng.float() * 30;
+  for (let band = 6; band <= 40; band += 6) {
+    const near = rng.shuffle(pool.filter((n) => Math.abs(bestPos(n).ovr - target) <= band));
+    const pack = [];
+    for (const n of near) if (pack.length < 3 && !pack.some((m) => bestPos(m).pos === bestPos(n).pos)) pack.push(n);
+    for (const n of near) if (pack.length < 3 && !pack.includes(n)) pack.push(n);
+    if (pack.length === 3) return pack;
+  }
+  return rng.shuffle(pool.slice()).slice(0, 3);
+}
+
 /** Replay a draft. Returns {packs, picks, error}: packs[i] is what pick i offered (packs.length = picks + 1
  *  while drafting, 5 when done). error is set (and replay stops) at the first pick that wasn't offered. */
 export function replay(seed, picks = []) {
@@ -20,7 +37,7 @@ export function replay(seed, picks = []) {
   let pool = POOL.slice();
   if (!Array.isArray(picks) || picks.length > PICKS) return { packs, picks: [], error: "bad picks" };
   for (let i = 0; i < PICKS; i++) {
-    const pack = rng.shuffle((i === 0 ? LEGENDS : pool).slice()).slice(0, PACK);
+    const pack = i === 0 ? rng.shuffle(LEGENDS.slice()).slice(0, PACK) : tierPack(pool, rng);
     packs.push(pack);
     if (i >= picks.length) break;
     const n = picks[i];

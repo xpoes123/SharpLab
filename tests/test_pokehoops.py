@@ -189,3 +189,14 @@ def test_vendored_engine_is_unmodified_tv_revision():
     r = subprocess.run([str(ROOT / "scripts/sync-pokehoops.sh"), "--check"], capture_output=True, text=True,
                        env={**os.environ, "TV_REPO": str(TV)})
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+@pytest.mark.skipif(not (TV / ".git").exists(), reason="TV repo not checked out here")
+def test_tierpack_matches_tv_game_js():
+    # pack generation must be the TV's tierPack, character for character, at the vendored revision
+    import re
+    rev = (ROOT / "web/static/pokehoops/VERSION").read_text().strip()
+    tv = subprocess.run(["git", "-C", str(TV), "show", f"{rev}:games/pokehoops/game.js"],
+                        capture_output=True, text=True, check=True).stdout
+    grab = lambda src: re.search(r"^function tierPack\(.*?^}$", src, re.S | re.M).group(0)
+    assert grab((ROOT / "web/static/pokehoops-draft.js").read_text()) == grab(tv)
