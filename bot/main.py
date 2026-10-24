@@ -118,6 +118,7 @@ COGS = [
     "bot.cogs.mathsprint",
     "bot.cogs.pokemon",
     "bot.cogs.pokedle",
+    "bot.cogs.pokehoops",
     "bot.cogs.ratings",
     "bot.cogs.pickem",
     "bot.cogs.daily",

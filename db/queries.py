@@ -4984,6 +4984,7 @@ ACTIVITY_REWARDS = {
     "sequence_win": (20, 200),    # web arcade: guessed the next term in a number sequence
     "daily_play": (25, 25),       # daily games: participation, once/day on solving the daily
     "practice_solve": (10, 100),  # daily games: free-play solve (capped so it's not a coin farm)
+    "pokehoops_season": (25, 100),  # web arcade / Discord: finished a verified Poké Hoops season
     # (paper trades already stake coins — no reward, else you could farm the loop)
 }
 
@@ -6158,3 +6159,71 @@ async def list_kalshi_account_users() -> list[str]:
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT discord_user FROM kalshi_accounts") as cur:
             return [r[0] for r in await cur.fetchall()]
+
+
+# ── Poké Hoops (verified 82-game seasons; leaderboard = each player's best) ──────────
+
+
+async def insert_pokehoops_season(discord_user: str, source: str, seed: int, season_seed: int,
+                                  picks: list[int], summary: dict) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO pokehoops_seasons (discord_user, source, seed, season_seed, picks, lineup, wins, "
+            "losses, grade, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (discord_user, source, seed, season_seed, json.dumps(picks), json.dumps(summary["lineup"]),
+             summary["wins"], summary["losses"], summary["grade"], json.dumps(summary),
+             datetime.now(timezone.utc).isoformat()))
+        await db.commit()
+        return cur.lastrowid
+
+
+def _pokehoops_row(r) -> dict:
+    d = dict(r)
+    for k in ("picks", "lineup", "summary"):
+        if k in d and isinstance(d[k], str):
+            d[k] = json.loads(d[k])
+    return d
+
+
+async def get_pokehoops_season(season_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM pokehoops_seasons WHERE id = ?", (season_id,))
+        row = await cur.fetchone()
+        return _pokehoops_row(row) if row else None
+
+
+# Best season per player: most wins, ties to whoever got there first.
+_POKEHOOPS_BEST = (
+    "SELECT * FROM (SELECT s.*, "
+    "ROW_NUMBER() OVER (PARTITION BY discord_user ORDER BY wins DESC, id ASC) AS rn, "
+    "COUNT(*) OVER (PARTITION BY discord_user) AS runs FROM pokehoops_seasons s) "
+    "WHERE rn = 1 ORDER BY wins DESC, id ASC")
+
+
+async def get_pokehoops_leaderboard(limit: int = 50) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(_POKEHOOPS_BEST + " LIMIT ?", (limit,))
+        return [_pokehoops_row(r) for r in await cur.fetchall()]
+
+
+async def get_pokehoops_best(discord_user: str) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT *, (SELECT COUNT(*) FROM pokehoops_seasons WHERE discord_user = ?) AS runs "
+            "FROM pokehoops_seasons WHERE discord_user = ? ORDER BY wins DESC, id ASC LIMIT 1",
+            (discord_user, discord_user))
+        row = await cur.fetchone()
+        return _pokehoops_row(row) if row else None
+
+
+async def get_pokehoops_rank(discord_user: str) -> int | None:
+    """1-based leaderboard rank of the player's best season (None if they have none)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT pos FROM (SELECT discord_user, ROW_NUMBER() OVER (ORDER BY wins DESC, id ASC) AS pos "
+            "FROM (" + _POKEHOOPS_BEST + ")) WHERE discord_user = ?", (discord_user,))
+        row = await cur.fetchone()
+        return row[0] if row else None
