@@ -9,6 +9,7 @@ Private keys are Fernet-encrypted at rest with KALSHI_CRED_KEY (.env); GETs only
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 import time
@@ -172,8 +173,11 @@ async def fetch_account(key_id: str, pem: str, with_settlements: bool = True) ->
                                                               "limit": 200})
             r.raise_for_status()
             markets.update({m["ticker"]: m for m in r.json().get("markets") or []})
+        games = await event_titles(c, {m.get("event_ticker") for m in markets.values()} - {None})
     open_rows = sorted((mark_position(p, markets.get(p["ticker"], {})) for p in positions),
                        key=lambda r: -r["cost"])
+    for r in open_rows:
+        r["game"] = games.get(markets.get(r["ticker"], {}).get("event_ticker"), "")
     return {"balance": _balance(bal), "open": open_rows, "settlements": settles}
 
 
@@ -208,6 +212,24 @@ def slates(settles: list[dict]) -> dict[str, dict]:
         per[0] += 1; per[1] += p > 0; per[2] += p
         s["rows"].append((st["ticker"], p))
     return out
+
+
+_EVENT_TITLES: dict[str, str] = {}
+
+
+async def event_titles(c: httpx.AsyncClient, event_tickers: set[str]) -> dict[str, str]:
+    """Matchup per event ("Portland vs Los Angeles L") — market titles alone just say "Portland wins".
+    Cached forever (event titles don't change)."""
+    async def one(t: str) -> None:
+        try:
+            r = await c.get(f"{KALSHI_BASE}/events/{t}")
+            r.raise_for_status()
+            # "Golden State vs Phoenix: Total Points" -> "Golden State vs Phoenix"
+            _EVENT_TITLES[t] = (r.json()["event"].get("title") or "").split(":")[0].strip()
+        except (httpx.HTTPError, KeyError, ValueError):
+            pass  # no matchup is cosmetic; the market title still shows
+    await asyncio.gather(*(one(t) for t in event_tickers if t not in _EVENT_TITLES))
+    return {t: _EVENT_TITLES[t] for t in event_tickers if t in _EVENT_TITLES}
 
 
 async def market_titles(tickers: list[str]) -> dict[str, str]:
