@@ -76,6 +76,7 @@ GAME_LABELS: dict[str, str] = {
     "mathsprint": "Math Sprint",
     "pokemon": "Who's That Pokemon?",
     "pokedle": "Pokédle",
+    "pokehoops": "Poké Hoops",
     "tradingfloor": "Trading Floor",
     "quizbowl": "Quiz Bowl",
     "valorant": "Valorant Guess",
@@ -2377,6 +2378,15 @@ GAME_RULES: dict[str, str] = {
         "**Tip:** Use a checkerboard pattern to find ships efficiently, "
         "then target adjacent cells on a hit!"
     ),
+    "pokehoops": (
+        "**Pok\u00e9 Hoops** (solo)\n"
+        "Draft five Gen 1 Pok\u00e9mon and run an 82-game season against the league.\n\n"
+        "**How to play:** Five picks, three options each \u2014 pick 1 is a Legendary. Ratings, "
+        "type matchups and each Pok\u00e9mon's signature move all matter. Your five slot into "
+        "PG/SG/SF/PF/C automatically, then the season sims and gets graded.\n\n"
+        "**Leaderboard:** your best season, shared with sharplab.djiang.xyz/pokehoops.html.\n"
+        "**Goal:** 82-0."
+    ),
 }
 
 CASINO_GAMES: list[tuple[str, str, str, str]] = [
@@ -2436,6 +2446,7 @@ CASINO_GAMES: list[tuple[str, str, str, str]] = [
     ("mlbsim", "Simulated MLB game betting", "Sports Sim", "solo"),
     ("tennissim", "Simulated tennis match betting", "Sports Sim", "solo"),
     ("soccersim", "Simulated soccer match betting", "Sports Sim", "solo"),
+    ("pokehoops", "Pok\u00e9 Hoops \u2014 draft 5 Pok\u00e9mon, chase an 82-0 season", "Sports Sim", "solo"),
 ]
 
 
