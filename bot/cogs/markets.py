@@ -456,8 +456,9 @@ class MarketsCog(commands.Cog):
             else "No Kalshi account linked.", ephemeral=True)
 
     @kalshi_group.command(name="positions", description="Your open Kalshi positions, marked to market")
-    @app_commands.describe(public="Post in the channel instead of only to you")
-    async def kalshi_positions(self, interaction: discord.Interaction, public: bool = False) -> None:
+    @app_commands.describe(private="Show only to you instead of posting in the channel")
+    async def kalshi_positions(self, interaction: discord.Interaction, private: bool = False) -> None:
+        public = not private
         acct = await _load_account(interaction, public, with_settlements=False)
         if not acct:
             return
@@ -472,7 +473,10 @@ class MarketsCog(commands.Cog):
             return "Today" if gap == 0 else "Tmrw" if gap == 1 else datetime.fromisoformat(d).strftime("%a %-m/%-d")
 
         def line(r: dict, label: str = "") -> str:
-            return (f"`{r['side']:<3}` **{r['qty']:g}** × {r['title'][:60]}" + (f" · *{label}*" if label else "")
+            name = f"{r['game']} — {r['title']}" if r.get("game") else r["title"]
+            name = discord.utils.escape_markdown(name[:90]).replace("]", ")")
+            return (f"`{r['side']:<3}` **{r['qty']:g}** × [{name}]({ka.market_url(r['ticker'])})"
+                    + (f" · *{label}*" if label else "")
                     + f"\n  cost ${r['cost']:,.2f} · mark {r['mark']*100:.0f}¢ · **{r['unreal']:+,.2f}**")
 
         # Game markets carry a date in the ticker; futures (season/champion markets) don't.
@@ -487,7 +491,9 @@ class MarketsCog(commands.Cog):
             if len(group) > 10:
                 body.append(f"*+{len(group) - 10} more*")
             parts.append(f"**{head}** · {sum(r['unreal'] for r in group):+,.2f}\n" + "\n".join(body))
-        embed.description = "\n\n".join(parts)[:4000] or "No open positions."
+        desc = "\n\n".join(parts)
+        # links make lines long; cut on a line boundary so no link is left half-open
+        embed.description = (desc if len(desc) <= 4000 else desc[:4000].rsplit("\n", 1)[0]) or "No open positions."
         embed.add_field(name="Cash", value=f"${acct['balance']:,.2f}")
         embed.add_field(name="Open value", value=f"${sum(r['value'] for r in rows):,.2f}")
         embed.add_field(name="Unrealized", value=f"{unreal:+,.2f}")

@@ -106,3 +106,18 @@ def test_resolutions_groups_holders_and_skips_old_and_non_sports():
     }, {"a": cut, "b": cut})
     assert list(res) == ["KXNBAGAME-26OCT23LALGSW-LAL"]
     assert res["KXNBAGAME-26OCT23LALGSW-LAL"]["holders"] == [("a", "YES", pytest.approx(5)), ("b", "NO", pytest.approx(-2))]
+
+
+async def test_event_titles_strips_suffix_and_skips_failures():
+    import httpx
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        t = req.url.path.rsplit("/", 1)[-1]
+        if t == "BAD":
+            return httpx.Response(404)
+        return httpx.Response(200, json={"event": {"title": "Golden State vs Phoenix: Total Points"}})
+
+    ka._EVENT_TITLES.clear()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+        got = await ka.event_titles(c, {"KXNBATOTAL-26OCT24GSWPHX", "BAD"})
+    assert got == {"KXNBATOTAL-26OCT24GSWPHX": "Golden State vs Phoenix"}
