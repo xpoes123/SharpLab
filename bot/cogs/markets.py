@@ -455,16 +455,19 @@ class MarketsCog(commands.Cog):
             "🗑️ Key deleted. Revoke it on Kalshi too (Account → API Keys)." if gone
             else "No Kalshi account linked.", ephemeral=True)
 
-    @kalshi_group.command(name="positions", description="Your open Kalshi positions, marked to market")
-    @app_commands.describe(private="Show only to you instead of posting in the channel")
-    async def kalshi_positions(self, interaction: discord.Interaction, private: bool = False) -> None:
+    @kalshi_group.command(name="positions", description="Open Kalshi positions (yours or a tagged user's), marked to market")
+    @app_commands.describe(user="Whose positions to show (defaults to you)",
+                           private="Show only to you instead of posting in the channel")
+    async def kalshi_positions(self, interaction: discord.Interaction, user: discord.User | None = None,
+                               private: bool = False) -> None:
         public = not private
-        acct = await _load_account(interaction, public, with_settlements=False)
+        target = user or interaction.user
+        acct = await _load_account(interaction, public, with_settlements=False, target=target)
         if not acct:
             return
         rows = acct["open"]
         unreal = sum(r["unreal"] for r in rows)
-        embed = discord.Embed(title=f"📂 {interaction.user.display_name}'s Kalshi positions",
+        embed = discord.Embed(title=f"📂 {target.display_name}'s Kalshi positions",
                               color=0x22C55E if unreal >= 0 else 0xEF4444)
         today = datetime.now(_ET).date()
 
@@ -533,21 +536,26 @@ _ACCT_CACHE: dict[str, tuple[float, bool, dict]] = {}
 _ACCT_TTL = 60
 
 
-async def _load_account(interaction: discord.Interaction, public: bool, with_settlements: bool) -> dict | None:
-    """Defer, fetch the caller's Kalshi account (60s cache), or reply with why not."""
+async def _load_account(interaction: discord.Interaction, public: bool, with_settlements: bool,
+                        target: discord.abc.User | None = None) -> dict | None:
+    """Defer, fetch target's (default: caller's) Kalshi account (60s cache), or reply with why not."""
     await interaction.response.defer(ephemeral=not public, thinking=True)
-    uid = str(interaction.user.id)
+    target = target or interaction.user
+    mine = target.id == interaction.user.id
+    uid = str(target.id)
     hit = _ACCT_CACHE.get(uid)
     if hit and time.monotonic() - hit[0] < _ACCT_TTL and (hit[1] or not with_settlements):
         return hit[2]
     row = await queries.get_kalshi_account(uid)
     if not row:
-        await interaction.followup.send("No Kalshi account linked — run `/kalshi link` first.", ephemeral=True)
+        await interaction.followup.send("No Kalshi account linked — run `/kalshi link` first." if mine
+                                        else f"{target.display_name} hasn't linked a Kalshi account.", ephemeral=True)
         return None
     try:
         acct = await ka.fetch_account(row[0], ka.decrypt(row[1]), with_settlements)
     except ka.KalshiAuthError:
-        await interaction.followup.send("Kalshi rejected your key (revoked/expired?). Re-run `/kalshi link`.",
+        await interaction.followup.send("Kalshi rejected your key (revoked/expired?). Re-run `/kalshi link`." if mine
+                                        else f"{target.display_name}'s Kalshi key was rejected (revoked/expired?).",
                                         ephemeral=True)
         return None
     except Exception:
