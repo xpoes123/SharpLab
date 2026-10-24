@@ -6197,14 +6197,18 @@ async def get_pokehoops_season(season_id: int) -> dict | None:
 _POKEHOOPS_BEST = (
     "SELECT * FROM (SELECT s.*, "
     "ROW_NUMBER() OVER (PARTITION BY discord_user ORDER BY wins DESC, id ASC) AS rn, "
-    "COUNT(*) OVER (PARTITION BY discord_user) AS runs FROM pokehoops_seasons s) "
+    "COUNT(*) OVER (PARTITION BY discord_user) AS runs FROM pokehoops_seasons s{where}) "
     "WHERE rn = 1 ORDER BY wins DESC, id ASC")
 
 
-async def get_pokehoops_leaderboard(limit: int = 50) -> list[dict]:
+async def get_pokehoops_leaderboard(limit: int = 50, since: str | None = None) -> list[dict]:
+    """Each player's best season; `since` (ISO UTC) limits it to seasons played from then on."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        cur = await db.execute(_POKEHOOPS_BEST + " LIMIT ?", (limit,))
+        if since:
+            cur = await db.execute(_POKEHOOPS_BEST.format(where=" WHERE created_at >= ?") + " LIMIT ?", (since, limit))
+        else:
+            cur = await db.execute(_POKEHOOPS_BEST.format(where="") + " LIMIT ?", (limit,))
         return [_pokehoops_row(r) for r in await cur.fetchall()]
 
 
@@ -6224,6 +6228,6 @@ async def get_pokehoops_rank(discord_user: str) -> int | None:
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT pos FROM (SELECT discord_user, ROW_NUMBER() OVER (ORDER BY wins DESC, id ASC) AS pos "
-            "FROM (" + _POKEHOOPS_BEST + ")) WHERE discord_user = ?", (discord_user,))
+            "FROM (" + _POKEHOOPS_BEST.format(where="") + ")) WHERE discord_user = ?", (discord_user,))
         row = await cur.fetchone()
         return row[0] if row else None
