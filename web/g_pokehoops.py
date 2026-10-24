@@ -9,8 +9,12 @@ best season (pokehoops_seasons), shared with the Discord /play pokehoops draft."
 
 from __future__ import annotations
 
+import logging
+import os
 import time
+from datetime import datetime, timezone
 
+import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -19,9 +23,12 @@ from db import queries
 from shared import pokehoops
 from web import auth, gameround
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/arcade/pokehoops")
 
 DRAFT_TTL = 3600  # seconds a draft token stays good — drafting is unhurried
+SHARE_CHANNEL = os.getenv("POKEHOOPS_SHARE_CHANNEL_ID", "1496179308954259698")  # SharpLab #bot
+_shared: set[int] = set()  # ponytail: in-memory, a restart lets a season be posted once more; add a column if that matters
 
 
 def _uid(request: Request) -> str | None:
@@ -74,11 +81,14 @@ def _public(row: dict, name: str | None) -> dict:
 
 
 @router.get("/leaderboard")
-async def leaderboard(request: Request):
-    rows = await queries.get_pokehoops_leaderboard(50)
+async def leaderboard(request: Request, period: str = "all"):
+    since = None
+    if period == "day":
+        since = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    rows = await queries.get_pokehoops_leaderboard(50, since)
     names = await queries.get_display_names([r["discord_user"] for r in rows])
     me = _uid(request)
-    return {"game": "pokehoops",
+    return {"game": "pokehoops", "period": "day" if since else "all",
             "top": [{**_public(r, names.get(r["discord_user"])), "rank": i + 1, "runs": r["runs"],
                      "me": r["discord_user"] == me} for i, r in enumerate(rows)]}
 
@@ -91,3 +101,60 @@ async def season(season_id: int):
         return JSONResponse({"error": "no such season"}, status_code=404)
     names = await queries.get_display_names([row["discord_user"]])
     return _public(row, names.get(row["discord_user"]))
+
+
+def _share_embed(row: dict, cards: list[dict], name: str, rank: int | None) -> dict:
+    ts = row["summary"].get("top_scorer") or {}
+    five = "\n".join(f"`{pos:<2}` **{c['name']}** — {c['move']}" for pos, c in zip(("PG", "SG", "SF", "PF", "C"), cards))
+    embed = {
+        "title": f"🏀 {name} went {row['wins']}–{row['losses']} ({row['grade']})",
+        "url": f"{pokehoops.WEB_URL}?s={row['id']}",
+        "description": five,
+        "color": 0xF7D02C,
+        "thumbnail": {"url": pokehoops.SPRITE_URL.format(ts["n"])} if ts.get("n") else None,
+        "fields": [f for f in (
+            {"name": "Top scorer", "value": f"{ts['name']} — season-high {ts.get('high', '?')}", "inline": True} if ts.get("name") else None,
+            {"name": "Leaderboard", "value": f"#{rank}", "inline": True} if rank else None,
+        ) if f],
+        "footer": {"text": "Can your five go 82–0? Draft on SharpLab or /play pokehoops"},
+    }
+    return {k: v for k, v in embed.items() if v is not None}
+
+
+@router.post("/share/{season_id}")
+async def share(request: Request, season_id: int):
+    """Post one of your seasons to SharpLab's #bot channel (once per season)."""
+    uid = _uid(request)
+    if not uid:
+        return JSONResponse({"error": "sign in to share"}, status_code=401)
+    row = await queries.get_pokehoops_season(season_id)
+    if row is None or row["discord_user"] != uid:
+        return JSONResponse({"error": "not your season"}, status_code=404)
+    token = os.getenv("DISCORD_BOT_TOKEN")
+    if not token:
+        return JSONResponse({"error": "sharing is off"}, status_code=503)
+    if season_id in _shared:
+        return JSONResponse({"error": "already posted"}, status_code=409)
+    _shared.add(season_id)  # claim before awaiting so a double-click posts once
+    try:
+        await _post(token, row, uid)
+    except Exception:
+        log.exception("pokehoops share %s failed", season_id)
+        _shared.discard(season_id)
+        return JSONResponse({"error": "couldn't post to Discord — try again"}, status_code=502)
+    return {"ok": True}
+
+
+async def _post(token: str, row: dict, uid: str) -> None:
+    season_id = row["id"]
+    # the stored summary has dex numbers only; a replay (~0.1s) gives the full cards
+    cards = (await pokehoops.sim_season(row["seed"], row["picks"], row["season_seed"]))["lineup_cards"]
+    names = await queries.get_display_names([uid])
+    best = await queries.get_pokehoops_best(uid)
+    rank = await queries.get_pokehoops_rank(uid) if best and best["id"] == season_id else None
+    body = {"content": f"<@{uid}> shared a Poké Hoops season", "allowed_mentions": {"parse": []},
+            "embeds": [_share_embed(row, cards, names.get(uid) or f"user-{uid[-4:]}", rank)]}
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.post(f"https://discord.com/api/v10/channels/{SHARE_CHANNEL}/messages",
+                              headers={"Authorization": f"Bot {token}"}, json=body)
+    r.raise_for_status()

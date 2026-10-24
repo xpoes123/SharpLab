@@ -277,7 +277,8 @@ function finish() {
       <div class="phstat"><span>Points</span><b>${s.ppg}</b><small>allowed ${s.oppg}</small></div>
     </div>
     <div class="phactions">
-      ${s.id ? `<button class="btn primary" id="phShare">Share result</button>` : ""}
+      ${s.id && r.mine ? `<button class="btn primary" id="phPost">Post to #bot</button>` : ""}
+      ${s.id ? `<button class="btn ghost" id="phShare">Copy link</button>` : ""}
       ${state.me ? `<button class="btn${s.id ? " ghost" : " primary"}" id="phAgain">${r.mine ? "Draft again" : "Draft your own"}</button>`
                  : `<a class="btn" href="/api/v1/auth/discord/login">Sign in to draft your own</a>`}
     </div>`;
@@ -299,9 +300,21 @@ async function share() {
   catch { prompt("Copy your result:", text); }
 }
 
+async function postToDiscord(btn) {
+  const s = state.reveal?.sum;
+  if (!s?.id || btn.disabled) return;
+  btn.disabled = true; btn.textContent = "Posting…";
+  const res = await post(`/share/${s.id}`);
+  const ok = res && (res.ok || res.error === "already posted");
+  btn.textContent = ok ? "Posted ✓" : "Post to #bot";
+  btn.disabled = ok;
+  toast(ok ? "🏀 Posted to #bot" : res?.error || "Couldn't post — try again");
+}
+
 // ── Leaderboard ──────────────────────────────────────────────────────────────
-async function loadLeaderboard() {
-  const res = await getJSON(API + "/leaderboard");
+async function loadLeaderboard(period = state.lbPeriod || "all") {
+  state.lbPeriod = period;
+  const res = await getJSON(`${API}/leaderboard?period=${period}`);
   const el = $("phLb");
   if (!el) return;
   const top = (res && res.top) || [];
@@ -312,8 +325,9 @@ async function loadLeaderboard() {
       <span class="phlbrec">${r.wins}–${r.losses}</span>
       <span class="phlbgrade">${esc(r.grade)}</span>
     </a>`).join("");
-  el.innerHTML = `<div class="phlbhead">🏆 Best seasons</div>
-    ${top.length ? `<div class="phlblist">${rows}</div>` : `<div class="phlbempty">No seasons yet — be the first to chase 82–0.</div>`}`;
+  const tab = (p, label) => `<button class="phlbtab${p === period ? " on" : ""}" data-period="${p}">${label}</button>`;
+  el.innerHTML = `<div class="phlbhead">🏆 Best seasons <span class="phlbtabs">${tab("day", "Today")}${tab("all", "All-time")}</span></div>
+    ${top.length ? `<div class="phlblist">${rows}</div>` : `<div class="phlbempty">${period === "day" ? "Nobody's played today" : "No seasons yet"} — be the first to chase 82–0.</div>`}`;
 }
 
 async function openShared(id) {
@@ -330,6 +344,10 @@ app.addEventListener("click", (e) => {
   if (e.target.closest("#phPlay")) return playIt();
   if (e.target.closest("#phSkip")) return skip();
   if (e.target.closest("#phShare")) return share();
+  const pb = e.target.closest("#phPost");
+  if (pb) return postToDiscord(pb);
+  const tb = e.target.closest(".phlbtab");
+  if (tb) return loadLeaderboard(tb.dataset.period);
   if (e.target.closest("#phAgain")) { history.replaceState(null, "", location.pathname + (MOCK ? "?mock=1" : "")); return startDraft(); }
   const lb = e.target.closest(".phlbrow");
   if (lb) { e.preventDefault(); history.replaceState(null, "", `?s=${lb.dataset.sid}${MOCK ? "&mock=1" : ""}`); clearTimeout(state.reveal?.timer); openShared(lb.dataset.sid); scrollTo(0, 0); }
@@ -364,7 +382,8 @@ function mock(url, body) {
     const id = Number(url.split("/").pop()), row = mockDb.seasons.find((x) => x.id === id) || MOCK_LB[id - 101];
     return row ? { ...row, name: row.name || "davidj" } : { _status: 404, error: "no such season" };
   }
-  if (url.endsWith("/leaderboard")) {
+  if (url.includes("/share/")) return { ok: true };
+  if (url.includes("/leaderboard")) {
     const mine = mockDb.best ? [{ ...mockDb.best, name: "davidj", me: true }] : [];
     const top = [...MOCK_LB, ...mine].sort((a, b) => b.wins - a.wins).map((r, i) => ({ ...r, rank: i + 1 }));
     return { game: "pokehoops", top };

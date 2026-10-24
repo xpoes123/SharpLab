@@ -200,3 +200,49 @@ def test_tierpack_matches_tv_game_js():
                         capture_output=True, text=True, check=True).stdout
     grab = lambda src: re.search(r"^function tierPack\(.*?^}$", src, re.S | re.M).group(0)
     assert grab((ROOT / "web/static/pokehoops-draft.js").read_text()) == grab(tv)
+
+
+def test_share_posts_once_and_only_your_own(monkeypatch):
+    _fresh_db()
+    sent = []
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+    class _Client:
+        def __init__(self, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            pass
+
+        async def post(self, url, headers, json):
+            sent.append((url, json))
+            return _Resp()
+
+    async def go():
+        await sch.init_db()
+        gp._shared.clear()
+        monkeypatch.setenv("DISCORD_BOT_TOKEN", "x")
+        monkeypatch.setattr(gp.httpx, "AsyncClient", _Client)
+        monkeypatch.setattr(gp.auth, "read_session", lambda r: {"id": "p1"})
+        start = await gp.start(_Req())
+        res = await gp.submit(_Req(), gp.SubmitBody(token=start["token"], picks=await _draft(start["seed"])))
+        assert (await gp.share(_Req(), res["id"]))["ok"]
+        url, body = sent[0]
+        assert url.endswith(f"/channels/{gp.SHARE_CHANNEL}/messages")
+        emb = body["embeds"][0]
+        assert f"{res['wins']}–{res['losses']}" in emb["title"] and emb["url"].endswith(f"?s={res['id']}")
+        assert emb["description"].count("\n") == 4 and "#1" in str(emb["fields"])
+        assert (await gp.share(_Req(), res["id"])).status_code == 409      # once per season
+        monkeypatch.setattr(gp.auth, "read_session", lambda r: {"id": "mallory"})
+        assert (await gp.share(_Req(), res["id"])).status_code == 404      # not yours
+        assert len(sent) == 1
+        # Today board: today's season counts, an old one doesn't
+        assert len((await gp.leaderboard(_Req(), period="day"))["top"]) == 1
+        assert await q.get_pokehoops_leaderboard(since="2999-01-01") == []
+    _run(go())

@@ -151,3 +151,6 @@ img { image-rendering: pixelated; }
 @media (prefers-reduced-motion: reduce) {
   .phcard, .phrow, .pop { animation: none; }
 }
+.phlbtabs { display: inline-flex; gap: 4px; margin-left: 8px; vertical-align: middle; }
+.phlbtab { font: inherit; font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border, #333); background: none; color: var(--muted, #888); cursor: pointer; }
+.phlbtab.on { color: var(--fg); border-color: var(--accent); }
