@@ -43,6 +43,7 @@ from web.g_pokedle import router as pokedle_router
 from web.g_mastermind import router as mastermind_router
 from web.g_mathsprint import router as mathsprint_router
 from web.g_zetamac import router as zetamac_router
+from web.g_pokehoops import router as pokehoops_router
 from web.g_math24 import router as math24_router
 from web.g_countdown import router as countdown_router
 from web.g_nbaguess import router as nbaguess_router
@@ -194,6 +195,7 @@ app.include_router(pokedle_router)
 app.include_router(mastermind_router)
 app.include_router(mathsprint_router)
 app.include_router(zetamac_router)
+app.include_router(pokehoops_router)
 app.include_router(math24_router)
 app.include_router(countdown_router)
 app.include_router(nbaguess_router)
@@ -362,6 +364,7 @@ GAME_LABELS: dict[str, str] = {
     "beauty": "Beauty Contest",
     "pd": "Prisoner's Dilemma",
     "contraband": "Contraband",
+    "pokehoops": "Poké Hoops",
 }
 
 ALL_ACHIEVEMENTS = [

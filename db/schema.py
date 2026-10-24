@@ -1126,3 +1126,15 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        try:  # Poké Hoops: every verified 82-game season (server re-ran the draft + sim — see shared/pokehoops.py)
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS pokehoops_seasons ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, discord_user TEXT NOT NULL, source TEXT NOT NULL, "
+                "seed INTEGER NOT NULL, season_seed INTEGER NOT NULL, picks TEXT NOT NULL, "
+                "lineup TEXT NOT NULL, wins INTEGER NOT NULL, losses INTEGER NOT NULL, grade TEXT NOT NULL, "
+                "summary TEXT NOT NULL, created_at TEXT NOT NULL)")
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pokehoops_user ON pokehoops_seasons(discord_user, wins)")
+            await db.commit()
+        except Exception:
+            pass
