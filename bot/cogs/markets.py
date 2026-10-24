@@ -482,12 +482,12 @@ class MarketsCog(commands.Cog):
                     + (f" · *{label}*" if label else "")
                     + f"\n  cost ${r['cost']:,.2f} · mark {r['mark']*100:.0f}¢ · **{r['unreal']:+,.2f}**")
 
-        # Game markets carry a date in the ticker; futures (season/champion markets) don't.
+        # Game/daily markets carry a date in the ticker; futures (season/champion/long-dated) don't.
         games = sorted((r for r in rows if ka.slate_date(r["ticker"])),
                        key=lambda r: (ka.slate_date(r["ticker"]), -r["cost"]))
         futures = [r for r in rows if not ka.slate_date(r["ticker"])]
         parts = []
-        for head, group, dated in (("🎯 Games — now & upcoming", games, True), ("🔮 Futures", futures, False)):
+        for head, group, dated in (("🎯 Now & upcoming", games, True), ("🔮 Futures", futures, False)):
             if not group:
                 continue
             body = [line(r, when(ka.slate_date(r["ticker"])) if dated else "") for r in group[:10]]

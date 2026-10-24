@@ -39,7 +39,7 @@ def test_summarize_window():
           {"ticker": "KXMLBGAME-B", "revenue": 0, "yes_count_fp": "5", "no_count_fp": "0",
            "yes_total_cost_dollars": "2", "no_total_cost_dollars": "0", "fee_cost": "0",
            "settled_time": "2026-01-01T00:00:00Z"}]
-    s = ka.summarize(st + [dict(st[0], ticker="KXNHLGAME-X")], [{"unreal": 1.0}])  # NHL filtered out
+    s = ka.summarize(st + [dict(st[0], ticker="KXNHLGAME-X")], [{"unreal": 1.0, "sport": "NBA"}, {"unreal": 9.0, "sport": "Crypto"}])  # NHL/Crypto filtered out
     assert s["n"] == 2 and s["won"] == 1 and s["realized"] == pytest.approx(1.9) and s["unrealized"] == 1.0
     assert ka.summarize(st, [], since_iso="2026-10-01")["n"] == 1
 
