@@ -2,7 +2,8 @@
 // the TV cartridge, a web page or a Discord bot can all import this (plain ES module; rng = {float, int}).
 import { POS, POOL, skills, ovr, effectiveness, effectOf, bestLineup, bestPos } from "./ratings.js";
 
-const BASE = { three: 0.35, mid: 0.42, drive: 0.56, post: 0.5 };
+const BASE = { three: 0.33, mid: 0.41, drive: 0.62, post: 0.47 };   // tuned against NBA shot-type FG% (sim audit)
+const FT_PCT = 0.78, SLOPE = 0.16;   // SLOPE: make% per point of skill edge; lower = closer games
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 function weighted(rng, ws) { const tot = ws.reduce((a, b) => a + b, 0); let r = rng.float() * tot; for (let i = 0; i < ws.length; i++) { r -= ws[i]; if (r <= 0) return i; } return ws.length - 1; }
 
@@ -17,7 +18,8 @@ export function seeded(seed) {
  * Roll one possession into timed beats (the TV animates them; a headless sim just applies them).
  * off/def = lineups (dex numbers, PG..C); team = offense's team index (0/1), kept on beats.
  * ctx = {late, hot:{"team:i": true}}: late = 4th quarter/OT (CLUTCH), hot = made their last shot (HEAT_CHECK).
- * Beats: bring · pass{who,to} · drive{who} · shot{who,kind,made,pts,eff,block,ast,fx} · reb{who,off} · to{who,by,fx}; `next` = ball after.
+ * Beats: bring · pass{who,to} · drive{who} · shot{who,kind,made,pts,eff,block,ast,fx} · ft{who,n,made} · reb{who,off} · to{who,by,steal,fx};
+ * `next` (on the beat that ends the possession only) = who has the ball after.
  * fx names the signature-move effect that decided the play (for the play-by-play), or "".
  */
 export function genPoss(off, def, rng, team, holder = 0, depth = 0, ctx = { late: false, hot: {} }) {
@@ -25,16 +27,17 @@ export function genPoss(off, def, rng, team, holder = 0, depth = 0, ctx = { late
   const has = (arr, fx) => arr.includes(fx);
   if (depth === 0) beats.push({ k: "bring", d: 1.0, team, who: 0 });
   // turnovers: handle vs on-ball D; a floor general steadies it, a pickpocket or hypnotist on D makes it worse
-  const pTO = clamp(0.06 + 0.12 * (D[holder].perD - K[holder].handle) - (has(E, "FLOOR_GENERAL") ? 0.03 : 0)
-                    + (has(DE, "PICKPOCKET") ? 0.04 : 0) + (has(DE, "HYPNOTIST") ? 0.03 : 0), 0.02, 0.2);
-  const passes = depth ? 0 : rng.int(3);
+  const pTO = clamp(0.13 + 0.12 * (D[holder].perD - K[holder].handle) - (has(E, "FLOOR_GENERAL") ? 0.02 : 0)
+                    + (has(DE, "PICKPOCKET") ? 0.04 : 0) + (has(DE, "HYPNOTIST") ? 0.03 : 0), 0.05, 0.25);   // ≈ 14 TO per 100, like the NBA
+  const passes = depth ? 0 : 1 + rng.int(2);
   let passer = -1;
   for (let p = 0; p < passes; p++) {
     const to = weighted(rng, off.map((_, i) => (i === holder ? 0 : 1)));
     if (rng.float() < pTO / Math.max(1, passes)) {
       const thief = DE.indexOf("PICKPOCKET"), sleeper = DE.indexOf("HYPNOTIST");
       const by = thief >= 0 && rng.float() < 0.6 ? thief : sleeper >= 0 && rng.float() < 0.5 ? sleeper : to;
-      beats.push({ k: "to", d: 0.7, team, who: holder, by, fx: DE[by] === "PICKPOCKET" || DE[by] === "HYPNOTIST" ? DE[by] : "", next: 1 - team });
+      const special = DE[by] === "PICKPOCKET" || DE[by] === "HYPNOTIST";
+      beats.push({ k: "to", d: 0.7, team, who: holder, by, steal: special || rng.float() < 0.5, fx: special ? DE[by] : "", next: 1 - team });   // half of turnovers are steals
       return beats;
     }
     beats.push({ k: "pass", d: 0.45, team, who: holder, to }); passer = holder; holder = to;
@@ -43,8 +46,8 @@ export function genPoss(off, def, rng, team, holder = 0, depth = 0, ctx = { late
   if (shooter !== holder) { beats.push({ k: "pass", d: 0.45, team, who: holder, to: shooter }); passer = holder; }
   const k = K[shooter], fx = E[shooter];
   const kind = depth ? (k.finish > k.shoot ? "post" : "drive")
-    : ["three", "mid", "drive", "post"][weighted(rng, [k.shoot * k.shoot * (shooter <= 2 ? 1 : 0.35) * (fx === "SHARPSHOOTER" ? 1.6 : 1), 0.35,
-                                                       k.finish * k.handle * (fx === "SLASHER" ? 1.6 : 1), shooter >= 3 ? k.finish * 1.2 * (fx === "POSTERIZER" ? 1.4 : 1) : 0.1])];
+    : ["three", "mid", "drive", "post"][weighted(rng, [2.4 * k.shoot * k.shoot * (shooter <= 2 ? 1 : 0.5) * (fx === "SHARPSHOOTER" ? 1.6 : 1), 0.22,
+                                                       k.finish * k.handle * (fx === "SLASHER" ? 1.6 : 1), shooter >= 3 ? k.finish * 0.4 * (fx === "POSTERIZER" ? 1.4 : 1) : 0.1])];
   if (kind === "drive") beats.push({ k: "drive", d: 0.5, team, who: shooter });
   const rimIdx = D[3].intD >= D[4].intD ? 3 : 4, rimD = D[rimIdx].intD;
   const perimeter = kind === "three" || kind === "mid";
@@ -56,22 +59,31 @@ export function genPoss(off, def, rng, team, holder = 0, depth = 0, ctx = { late
   if (fx === "SHARPSHOOTER" && kind === "three") use(0.07, fx);
   if (fx === "SLASHER" && kind === "drive") use(0.06, fx);
   if (fx === "POSTERIZER" && !perimeter) use(0.06, fx);
-  if (fx === "CLUTCH" && ctx.late) use(0.07, fx);
+  if (fx === "CLUTCH" && ctx.late) use(0.12, fx);
   if (fx === "HEAT_CHECK" && ctx.hot[team + ":" + shooter]) use(0.08, fx);
-  if (has(E.filter((_, i) => i !== shooter), "FLOOR_GENERAL")) bonus += 0.015;
+  if (has(E.filter((_, i) => i !== shooter), "FLOOR_GENERAL")) bonus += 0.008;
   if (DE[shooter] === "LOCKDOWN" && perimeter) use(-0.06, "LOCKDOWN");
-  if (has(DE, "INTIMIDATOR") && !perimeter) use(-0.05, "INTIMIDATOR");
-  const p = clamp(BASE[kind] + 0.28 * (offSk - defSk) + (eff >= 2 ? 0.08 : eff === 0 ? -0.15 : eff < 1 ? -0.05 : 0) + bonus, 0.1, 0.85);
-  const blocker = DE.indexOf("RIM_PROTECTOR") >= 0 ? DE.indexOf("RIM_PROTECTOR") : rimIdx;
-  const blocked = !perimeter && rng.float() < 0.04 + 0.12 * D[blocker].intD - 0.05 * offSk + (DE[blocker] === "RIM_PROTECTOR" ? 0.06 : 0);
+  if (has(DE, "INTIMIDATOR") && !perimeter) use(-0.03, "INTIMIDATOR");
+  const p = clamp(BASE[kind] + SLOPE * (offSk - defSk) + (eff >= 2 ? 0.08 : eff === 0 ? -0.15 : eff < 1 ? -0.05 : 0) + bonus, 0.1, 0.85);
+  const blocker = [3, 4].find((i) => DE[i] === "RIM_PROTECTOR") ?? rimIdx;   // only a big protects the rim
+  const blocked = !perimeter && rng.float() < 0.04 + 0.12 * D[blocker].intD - 0.05 * offSk + (DE[blocker] === "RIM_PROTECTOR" ? 0.09 : 0);
   const made = !blocked && rng.float() < p;
   const ast = made && passer >= 0 && rng.float() < (has(E, "FLOOR_GENERAL") ? 0.85 : 0.7) ? passer : -1;
-  beats.push({ k: "shot", d: 0.95, team, who: shooter, kind, made, pts: kind === "three" ? 3 : 2, eff, block: blocked ? blocker : -1, ast,
-               fx: blocked ? (DE[blocker] === "RIM_PROTECTOR" ? "RIM_PROTECTOR" : "") : used, next: 1 - team });
-  if (made) return beats;
+  // fouls: mostly on drives and post-ups; a make gets the and-one, a miss goes to the line for two
+  const fouled = !blocked && rng.float() < (perimeter ? 0.03 : 0.22);
+  const shot = { k: "shot", d: 0.95, team, who: shooter, kind, made, pts: kind === "three" ? 3 : 2, eff, block: blocked ? blocker : -1, ast,
+                 fx: blocked ? (DE[blocker] === "RIM_PROTECTOR" ? "RIM_PROTECTOR" : "") : used };
+  beats.push(shot);
+  if (fouled) {
+    const n = made ? 1 : kind === "three" ? 3 : 2;
+    let hit = 0; for (let i = 0; i < n; i++) if (rng.float() < FT_PCT) hit++;
+    beats.push({ k: "ft", d: 0.5 + 0.3 * n, team, who: shooter, n, made: hit, andOne: made, next: 1 - team });
+    return beats;
+  }
+  if (made) { shot.next = 1 - team; return beats; }
   const glass = (S, Fx) => Math.max(...S.map((s) => s.reb)) + (has(Fx, "GLASS_CLEANER") ? 0.08 : 0);
   const rebW = (S, Fx) => S.map((s, i) => s.reb * s.reb * (Fx[i] === "GLASS_CLEANER" ? 1.8 : 1));
-  if (depth < 2 && rng.float() < clamp(0.22 + 0.35 * (glass(K, E) - glass(D, DE)), 0.08, 0.45)) {
+  if (depth < 2 && rng.float() < clamp(0.26 + 0.2 * (glass(K, E) - glass(D, DE)), 0.08, 0.45)) {
     const who = weighted(rng, rebW(K, E));
     beats.push({ k: "reb", d: 0.6, team, who, off: true, fx: E[who] === "GLASS_CLEANER" ? "GLASS_CLEANER" : "" });
     return beats.concat(genPoss(off, def, rng, team, who, depth + 1, ctx));
@@ -86,7 +98,8 @@ export const emptyBox = () => { const box = {}; for (const t of [0, 1]) for (let
 export function applyBeat(score, box, b, ctx = null) {
   if (ctx && b.k === "shot") { if (b.made) ctx.hot[b.team + ":" + b.who] = true; else delete ctx.hot[b.team + ":" + b.who]; }
   const bx = (team, i) => box[team + ":" + i];
-  if (b.k === "to") { bx(1 - b.team, b.by).stl++; return "steal"; }
+  if (b.k === "to") { if (b.steal) bx(1 - b.team, b.by).stl++; return b.steal ? "steal" : "turnover"; }
+  if (b.k === "ft") { score[b.team] += b.made; bx(b.team, b.who).pts += b.made; return "ft"; }
   if (b.k === "reb") { bx(b.team, b.who).reb++; return b.off ? "oreb" : "dreb"; }
   if (b.k === "shot") {
     if (b.block >= 0) { bx(1 - b.team, b.block).blk++; return "block"; }
@@ -102,7 +115,7 @@ export function simGame(a, b, rng, perQ = 50) {
   let team = rng.int(2);
   const play = (n) => { for (let i = 0; i < n; i++) for (const beat of genPoss(rosters[team], rosters[1 - team], rng, team, 0, 0, ctx)) { applyBeat(score, box, beat, ctx); if (beat.next !== undefined) team = beat.next; } };
   play(perQ * 3); ctx.late = true; play(perQ);
-  while (score[0] === score[1]) play(6);                          // overtime
+  while (score[0] === score[1]) play(20);                         // overtime: ~10 possessions a side
   return { score, box };
 }
 
@@ -111,9 +124,9 @@ export const LEAGUE = (() => {
   const r = seeded(1946), teams = [];
   for (let t = 0; t < 29; t++) {
     const pool = r.shuffle(POOL.slice()), five = [];
-    for (let i = 0; i < 5; i++) {                                              // a 3-option draft, no Legendary: take one of the better two
+    for (let i = 0; i < 5; i++) {                                              // a 3-option draft, no Legendary: take the best
       const opts = pool.slice(i * 3, i * 3 + 3).sort((x, y) => bestPos(y).ovr - bestPos(x).ovr);
-      five.push(opts[r.int(2)]);
+      five.push(opts[0]);
     }
     teams.push(bestLineup(five));
   }
