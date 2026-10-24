@@ -76,4 +76,4 @@ export function summarize(lineup, season) {
   };
 }
 
-export { POS, LEGENDS, bestPos, mon, ovr, LEAGUE };
+export { POS, LEGENDS, bestPos, bestLineup, mon, ovr, LEAGUE };
