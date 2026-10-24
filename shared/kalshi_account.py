@@ -26,7 +26,7 @@ KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 SPORT = {"NBA": "NBA", "WNBA": "WNBA", "NFL": "NFL", "MLB": "MLB", "NHL": "NHL", "NCAA": "NCAA",
          "VALORANT": "Esports", "CS2": "Esports", "DOTA2": "Esports", "LOL": "Esports",
          "ATP": "Tennis", "WTA": "Tennis", "ITF": "Tennis", "BTC": "Crypto", "ETH": "Crypto"}
-# ponytail: one global filter (David's ask, 2026-10-21; he's the only linked user) — per-user prefs if others link
+# ponytail: one global filter for PnL/recap/feed (positions show everything) (David's ask, 2026-10-21; he's the only linked user) — per-user prefs if others link
 TRACKED = {"NBA", "NFL", "MLB", "Esports"}
 
 
@@ -143,7 +143,7 @@ def summarize(settles: list[dict], open_rows: list[dict], since_iso: str | None 
         s = by_sport[sport(st["ticker"])]
         s[0] += 1; s[1] += p; s[2] += cost
     return {"realized": realized, "fees": fees, "n": n, "won": won,
-            "unrealized": sum(r["unreal"] for r in open_rows),
+            "unrealized": sum(r["unreal"] for r in open_rows if r["sport"] in TRACKED),
             "by_sport": sorted(([k, *v] for k, v in by_sport.items()), key=lambda r: -r[2])}
 
 
@@ -163,8 +163,8 @@ async def fetch_account(key_id: str, pem: str, with_settlements: bool = True) ->
     async with httpx.AsyncClient(timeout=20) as c:
         bal = await _get(c, key_id, key, "/portfolio/balance")
         positions = await _all(c, key_id, key, "/portfolio/positions", "market_positions")
-        positions = [p for p in positions
-                     if _f(p.get("position_fp") or p.get("position")) and sport(p["ticker"]) in TRACKED]
+        # every open market, not just TRACKED — /kalshi positions shows the whole book
+        positions = [p for p in positions if _f(p.get("position_fp") or p.get("position"))]
         settles = await _all(c, key_id, key, "/portfolio/settlements", "settlements") if with_settlements else []
         markets = {}
         tickers = [p["ticker"] for p in positions]
