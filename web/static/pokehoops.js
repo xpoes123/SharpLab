@@ -1,12 +1,13 @@
-// SharpLab HQ — Poké Hoops. Draft five Gen 1 Pokémon (3 options a pick, a Legendary first), then the
-// auto-lineup plays an 82-game season against the TV cartridge's league. 82-0 is the dream.
+// SharpLab HQ — Poké Hoops. Draft eight Gen 1–2 Pokémon (3 options a pick, a Legendary first), then coach:
+// five starters at PG..C + three reserves, each backing up a spot. Then an 82-game season against the TV
+// cartridge's league. 82-0 is the dream. Overall ratings are never shown — skills, positions, types, moves only.
 //
 // The draft runs here from a server-issued seed (POST /start); every pack comes from that seed via
 // pokehoops-draft.js, the same file the server replays to check the picks. POST /submit sends only
-// the token + picks: the server verifies them, sims the season under a season seed it draws only
+// the token + picks + team: the server verifies them, sims the season under a season seed it draws only
 // now, records it, and returns the summary + season seed. We then replay that exact season locally
 // (same vendored engine, same seeds) for the game-by-game reveal. ?s=<id> replays a shared season.
-import { nextPack, playSeason, summarize, teamName, POS, mon, bestPos, bestLineup, ovr, LEGENDS } from "./pokehoops-draft.js";
+import { nextPack, playSeason, summarize, teamName, defaultTeam, PICKS, POS, mon, bestPos, LEGENDS } from "./pokehoops-draft.js";
 import { profile, skills } from "./pokehoops/ratings.js";
 
 const app = document.getElementById("app");
@@ -79,10 +80,12 @@ function renderNav(user) {
 
 // ── Pieces ───────────────────────────────────────────────────────────────────
 const typeChips = (n) => mon(n).types.map((t) => `<span class="phtype" style="--tc:${TYPE_COL[t] || "#888"}">${t}</span>`).join("");
+const plays = (n) => (profile(n)?.pos || [bestPos(n).pos]).join("/");
+const fits = (n, spot) => (profile(n)?.pos || [bestPos(n).pos]).includes(POS[spot]);
 const fxLabel = (n) => { const e = profile(n)?.effect; return e && EFFECTS[e] ? EFFECTS[e] : null; };
 
 function optionCard(n, i) {
-  const m = mon(n), b = bestPos(n), p = profile(n) || {}, k = skills(n), fx = fxLabel(n);
+  const m = mon(n), p = profile(n) || {}, k = skills(n), fx = fxLabel(n);
   const bars = SKILLS.map(([key, lab]) => {
     const v = Math.round(k[key] * 99);
     return `<div class="phbar"><span>${lab}</span><i><b style="width:${v}%"></b></i><em>${v}</em></div>`;
@@ -90,7 +93,7 @@ function optionCard(n, i) {
   return `<button class="phcard${LEGENDS.includes(n) ? " legend" : ""}" data-n="${n}" style="--d:${i * 70}ms">
     <div class="phspr"><img src="${sprite(n)}" alt="" width="96" height="96"></div>
     <div class="phinfo">
-      <div class="phtop"><span class="phname">${esc(m.name)}</span><span class="phovr"><small>${b.pos}</small>${b.ovr}</span></div>
+      <div class="phtop"><span class="phname">${esc(m.name)}</span><span class="phplays">plays ${plays(n)}</span></div>
       <div class="phtypes">${typeChips(n)}</div>
       <div class="pharch">${esc(p.archetype || "")}</div>
       ${fx ? `<div class="phmove"><b>${esc(p.move)}</b> · <span class="phfx" title="${esc(fx[1])}">${esc(fx[0])}</span><div class="phfxd">${esc(fx[1])}</div></div>` : ""}
@@ -101,24 +104,11 @@ function optionCard(n, i) {
 }
 
 function pickSlots(picks) {
-  return `<div class="phslots">${[0, 1, 2, 3, 4].map((i) => {
+  return `<div class="phslots">${Array.from({ length: PICKS }, (_, i) => i).map((i) => {
     const n = picks[i];
     return n ? `<div class="phslot full"><img src="${sprite(n)}" alt="${esc(mon(n).name)}" title="${esc(mon(n).name)}"></div>`
              : `<div class="phslot${i === picks.length ? " next" : ""}">${i === 0 ? "★" : i + 1}</div>`;
   }).join("")}</div>`;
-}
-
-function lineupRows(lineup) {
-  return lineup.map((n, i) => {
-    const p = profile(n) || {}, fx = fxLabel(n);
-    return `<div class="phrow" style="--d:${i * 80}ms">
-      <span class="phrpos">${POS[i]}</span>
-      <img src="${sprite(n)}" alt="" width="56" height="56">
-      <div class="phrmain"><div class="phrname">${esc(mon(n).name)} ${typeChips(n)}</div>
-        <div class="phrsub">${esc(p.archetype || "")}${fx ? ` · <b>${esc(p.move)}</b>: ${esc(fx[0])}` : ""}</div></div>
-      <span class="phrovr">${ovr(n, POS[i])}</span>
-    </div>`;
-  }).join("");
 }
 
 const head = (sub = "") => `<div class="phhead"><h1>🏀 Poké Hoops</h1>${sub ? `<p>${sub}</p>` : ""}</div>`;
@@ -128,13 +118,14 @@ function renderIntro() {
   state.draft = null;
   const signedOut = !state.me ? `<p class="muted">Sign in with Discord to draft — your best season goes on the board.</p>
     <a class="btn big" href="/api/v1/auth/discord/login">Sign in with Discord</a>` : "";
-  app.innerHTML = `${head("Draft five Gen 1 Pokémon. Play 82 games against the league. Go 82–0.")}
+  app.innerHTML = `${head("Draft eight Pokémon. Coach the lineup. Play 82 games against the league. Go 82–0.")}
     <div class="card phintro">
       <div class="phlegends">${LEGENDS.map((n) => `<img src="${sprite(n)}" alt="">`).join("")}</div>
       <ol class="phrules">
-        <li><b>Pick 1</b> is a Legendary — three of the five are on offer.</li>
-        <li><b>Picks 2–5</b>: three options each, take one. Ratings, type and signature move all matter.</li>
-        <li>Your five slot into PG · SG · SF · PF · C automatically, then play an <b>82-game season</b>.</li>
+        <li><b>Pick 1</b> is a Legendary — three of the eleven are on offer.</li>
+        <li><b>Picks 2–8</b>: three options each, take one. Skills, type and signature move all matter.</li>
+        <li><b>You coach:</b> set your five at PG · SG · SF · PF · C and pick which spot each of your three reserves backs up.</li>
+        <li>Then play an <b>82-game season</b>.</li>
       </ol>
       ${state.me ? `<button class="btn big primary" id="phStart">Start the draft</button>` : signedOut}
       <p class="phfine">Same engine as the TV cartridge. The server re-checks every pick and sims the season itself.</p>
@@ -155,12 +146,12 @@ async function startDraft() {
 
 function renderDraft() {
   const d = state.draft, pack = nextPack(d.seed, d.picks);
-  if (!pack) return renderLineup();
+  if (!pack) { d.team = d.team || defaultTeam(d.picks); d.sel = null; return renderLineup(); }
   const i = d.picks.length;
   app.innerHTML = `${head()}
     <div class="phdraft">
       <div class="phdrafthead">
-        <div><div class="phstep">Pick ${i + 1} of 5${i === 0 ? " · Legendary" : ""}</div>
+        <div><div class="phstep">Pick ${i + 1} of ${PICKS}${i === 0 ? " · Legendary" : ""}</div>
           <div class="phprompt">${i === 0 ? "Choose your franchise Legendary" : "Take one"}</div></div>
         ${pickSlots(d.picks)}
       </div>
@@ -175,14 +166,55 @@ function pick(n) {
   renderDraft();
 }
 
+// ── Coaching: tap two players (or drag one onto another) to swap; each reserve picks a spot to back up ──
+// Roster slots 0-4 are the starters (PG..C), 5-7 the bench; a bench slot keeps its "backs up" choice on a swap.
+const slotGet = (t, k) => (k < 5 ? t.five[k] : t.bench[k - 5]);
+const slotSet = (t, k, n) => { if (k < 5) t.five[k] = n; else t.bench[k - 5] = n; };
+function swapSlots(a, b) {
+  const t = state.draft.team, na = slotGet(t, a);
+  slotSet(t, a, slotGet(t, b)); slotSet(t, b, na);
+}
+
+function coachRow(t, k, sel) {
+  const n = slotGet(t, k), p = profile(n) || {}, sk = skills(n), fx = fxLabel(n);
+  const spot = k < 5 ? k : t.backs[k - 5], fit = fits(n, spot);
+  const mini = SKILLS.map(([key, lab]) => `<span title="${lab} ${Math.round(sk[key] * 99)}"><i style="height:${Math.max(8, Math.round(sk[key] * 100))}%"></i><small>${lab.replace("‑D", "")}</small></span>`).join("");
+  const backs = k < 5 ? "" : `<div class="phbacks" role="group" aria-label="${esc(mon(n).name)} backs up">
+      <span>backs up</span>${POS.map((ps, s) => `<button class="phbk${t.backs[k - 5] === s ? " on" : ""}" data-bk="${k - 5}" data-s="${s}">${ps}</button>`).join("")}</div>`;
+  return `<div class="phcrow${sel === k ? " sel" : ""}${k >= 5 ? " bench" : ""}" data-k="${k}" draggable="true" tabindex="0" role="button" aria-pressed="${sel === k}">
+      <span class="phrpos">${k < 5 ? POS[k] : "B" + (k - 4)}</span>
+      <img src="${sprite(n)}" alt="" width="52" height="52">
+      <div class="phrmain">
+        <div class="phrname">${esc(mon(n).name)} ${typeChips(n)}</div>
+        <div class="phrsub"><span class="${fit ? "fit" : "off"}">plays ${plays(n)}</span>${fx ? ` · <b>${esc(p.move)}</b>: ${esc(fx[0])}` : ""}</div>
+      </div>
+      <div class="phmini">${mini}</div>
+      ${backs}
+    </div>`;
+}
+
 function renderLineup() {
-  const d = state.draft, lineup = bestLineup(d.picks), team = Math.round(lineup.reduce((a, n, i) => a + ovr(n, POS[i]), 0) / 5);
+  const d = state.draft, t = d.team;
+  const hint = d.sel == null ? "Tap a player, then another, to swap them (or drag one onto another)."
+                             : `Now tap who ${esc(mon(slotGet(t, d.sel)).name)} swaps with.`;
   app.innerHTML = `${head()}
     <div class="card phlineup">
-      <div class="phstep">Your starting five <span class="phteam">Team OVR ${team}</span></div>
-      <div class="phrows">${lineupRows(lineup)}</div>
-      <button class="btn big primary" id="phPlay">Play the 82-game season</button>
+      <div><div class="phstep">You're the coach</div>
+        <div class="phprompt">Set your lineup</div>
+        <div class="phmuted">${hint}</div></div>
+      <div class="phgroup">Starting five</div>
+      <div class="phrows">${[0, 1, 2, 3, 4].map((k) => coachRow(t, k, d.sel)).join("")}</div>
+      <div class="phgroup">Bench <small>subs in mid-quarter behind the spot it backs up · two at one spot split the minutes</small></div>
+      <div class="phrows">${[5, 6, 7].map((k) => coachRow(t, k, d.sel)).join("")}</div>
+      <button class="btn big primary" id="phPlay">Lock in &amp; play the season</button>
     </div>`;
+}
+
+function tapSlot(k) {
+  const d = state.draft;
+  if (d.sel == null) d.sel = k;
+  else { if (d.sel !== k) swapSlots(d.sel, k); d.sel = null; }
+  renderLineup();
 }
 
 async function playIt() {
@@ -191,22 +223,22 @@ async function playIt() {
   state.busy = true;
   const btn = $("phPlay");
   if (btn) { btn.disabled = true; btn.textContent = "Simming the season…"; }
-  const res = await post("/submit", { token: d.token, picks: d.picks });
+  const res = await post("/submit", { token: d.token, picks: d.picks, team: d.team });
   state.busy = false;
   if (res.error) {
     toast("❌ " + res.error);
     if (/expired|illegal/.test(res.error)) return renderIntro();
-    if (btn) { btn.disabled = false; btn.textContent = "Play the 82-game season"; }
+    if (btn) { btn.disabled = false; btn.textContent = "Lock in & play the season"; }
     return;
   }
   if (res.balance != null) { state.balance = res.balance; renderNav(state.me?.user); }
-  reveal(d.seed, d.picks, res, { mine: true });
+  reveal(d.seed, d.picks, d.team, res, { mine: true });
 }
 
 // Replay the season locally from the seeds the server used, and animate it game by game.
-function reveal(seed, picks, server, { mine = false, owner = null } = {}) {
-  const s = playSeason(seed, picks, server.season_seed);
-  const local = summarize(s.lineup, s);
+function reveal(seed, picks, team, server, { mine = false, owner = null } = {}) {
+  const s = playSeason(seed, picks, team, server.season_seed);
+  const local = summarize(s.team, s);
   if (server.strip && server.strip !== local.strip) console.warn("pokehoops: local replay differs from server", server, local);
   const sum = { ...local, ...server, games: s.games };
   state.reveal = { sum, mine, owner, timer: 0, g: 0, done: false };
@@ -216,7 +248,8 @@ function reveal(seed, picks, server, { mine = false, owner = null } = {}) {
       <div class="phrec"><span id="phW">0</span><i>–</i><span id="phL">0</span></div>
       <div class="phticker" id="phTick">Tip-off…</div>
       <div class="phstrip" id="phStrip">${sum.games.map(() => "<b></b>").join("")}</div>
-      <div class="phfive">${s.lineup.map((n, i) => `<img src="${sprite(n)}" alt="${esc(mon(n).name)}" title="${POS[i]} ${esc(mon(n).name)}">`).join("")}</div>
+      <div class="phfive">${s.team.five.map((n, i) => `<figure><img src="${sprite(n)}" alt="${esc(mon(n).name)}" title="${POS[i]} ${esc(mon(n).name)}"><figcaption>${POS[i]}</figcaption></figure>`).join("")}</div>
+      <div class="phbench">${s.team.bench.map((n, j) => `<figure><img src="${sprite(n)}" alt="" title="${esc(mon(n).name)} backs up ${POS[s.team.backs[j]]}"><figcaption>${esc(mon(n).name)} · backs ${POS[s.team.backs[j]]}</figcaption></figure>`).join("")}</div>
       <button class="btn ghost" id="phSkip">Skip to the end ⏭</button>
       <div id="phFinal"></div>
     </div>
@@ -271,7 +304,7 @@ function finish() {
     <div class="phgrade ${gradeCls}${REDUCE ? "" : " pop"}">${esc(s.grade)}</div>
     ${extras}
     <div class="phstats">
-      <div class="phstat"><span>Top scorer</span><div class="phts"><img src="${sprite(ts.n)}" alt=""><div><b>${esc(ts.name)}</b> <small>${ts.pos}</small><br>team-high in ${ts.led} games · season-high ${ts.high} pts</div></div></div>
+      <div class="phstat"><span>Top scorer</span><div class="phts"><img src="${sprite(ts.n)}" alt=""><div><b>${esc(ts.name)}</b> <small>${ts.bench ? "off the bench" : ts.pos}</small><br>team-high in ${ts.led} games · season-high ${ts.high} pts</div></div></div>
       <div class="phstat"><span>Best game</span><b>${bg ? `G${bg.g}: ${bg.us}–${bg.them}` : "—"}</b><small>${bg ? `vs ${esc(bg.opp_name)}` : "no wins"}</small></div>
       <div class="phstat"><span>Longest streak</span><b>${s.streak}</b><small>straight wins</small></div>
       <div class="phstat"><span>Points</span><b>${s.ppg}</b><small>allowed ${s.oppg}</small></div>
@@ -286,8 +319,9 @@ function finish() {
 }
 
 function shareText(s) {
-  const five = s.lineup.map((n) => mon(n).name).join(" · ");
-  return `🏀 Poké Hoops — ${s.wins}–${s.losses} (${s.grade})\n${five}\n${location.origin}/pokehoops.html?s=${s.id}`;
+  const five = s.team.five.map((n, i) => `${POS[i]} ${mon(n).name}`).join(" · ");
+  const bench = s.team.bench.map((n, j) => `${mon(n).name} (backs ${POS[s.team.backs[j]]})`).join(" · ");
+  return `🏀 Poké Hoops — ${s.wins}–${s.losses} (${s.grade})\n${five}\nBench: ${bench}\n${location.origin}/pokehoops.html?s=${s.id}`;
 }
 async function share() {
   const s = state.reveal?.sum;
@@ -332,14 +366,18 @@ async function loadLeaderboard(period = state.lbPeriod || "all") {
 
 async function openShared(id) {
   const res = await getJSON(`${API}/season/${encodeURIComponent(id)}`);
-  if (!res || res.error || res._status) { toast("That season link doesn't exist"); history.replaceState(null, "", location.pathname + (MOCK ? "?mock=1" : "")); return renderIntro(); }
-  reveal(res.seed, res.picks, { ...res, id: res.id }, { owner: res.name });
+  if (!res || res.error || res._status) { toast(res?._status === 410 ? "That's an old-rules season — it can't be replayed" : "That season link doesn't exist"); history.replaceState(null, "", location.pathname + (MOCK ? "?mock=1" : "")); return renderIntro(); }
+  reveal(res.seed, res.picks, res.team, { ...res, id: res.id }, { owner: res.name });
 }
 
 // ── Events ───────────────────────────────────────────────────────────────────
 app.addEventListener("click", (e) => {
   const card = e.target.closest(".phcard");
   if (card) return pick(Number(card.dataset.n));
+  const bk = e.target.closest(".phbk");
+  if (bk && state.draft?.team) { state.draft.team.backs[Number(bk.dataset.bk)] = Number(bk.dataset.s); return renderLineup(); }
+  const row = e.target.closest(".phcrow");
+  if (row) return tapSlot(Number(row.dataset.k));
   if (e.target.closest("#phStart")) return startDraft();
   if (e.target.closest("#phPlay")) return playIt();
   if (e.target.closest("#phSkip")) return skip();
@@ -351,6 +389,25 @@ app.addEventListener("click", (e) => {
   if (e.target.closest("#phAgain")) { history.replaceState(null, "", location.pathname + (MOCK ? "?mock=1" : "")); return startDraft(); }
   const lb = e.target.closest(".phlbrow");
   if (lb) { e.preventDefault(); history.replaceState(null, "", `?s=${lb.dataset.sid}${MOCK ? "&mock=1" : ""}`); clearTimeout(state.reveal?.timer); openShared(lb.dataset.sid); scrollTo(0, 0); }
+});
+
+app.addEventListener("keydown", (e) => {
+  const row = e.target.closest?.(".phcrow");
+  if (row && (e.key === "Enter" || e.key === " ") && e.target === row) { e.preventDefault(); tapSlot(Number(row.dataset.k)); }
+});
+// desktop drag-and-drop: drop one player onto another to swap them
+app.addEventListener("dragstart", (e) => {
+  const row = e.target.closest?.(".phcrow");
+  if (row) { e.dataTransfer.setData("text/plain", row.dataset.k); e.dataTransfer.effectAllowed = "move"; }
+});
+app.addEventListener("dragover", (e) => { if (e.target.closest?.(".phcrow")) e.preventDefault(); });
+app.addEventListener("drop", (e) => {
+  const row = e.target.closest?.(".phcrow"), raw = e.dataTransfer.getData("text/plain");
+  if (!row || raw === "" || !state.draft?.team) return;
+  e.preventDefault();
+  const from = Number(raw), to = Number(row.dataset.k);
+  if (from !== to) swapSlots(from, to);
+  state.draft.sel = null; renderLineup();
 });
 
 async function main() {
@@ -370,7 +427,7 @@ function mock(url, body) {
   const rnd = () => Math.floor(Math.random() * 2 ** 32);
   if (url.endsWith("/start")) return { token: "mock", seed: rnd() };
   if (url.endsWith("/submit")) {
-    const ss = rnd(), s = playSeason(state.draft.seed, body.picks, ss), sum = summarize(s.lineup, s);
+    const ss = rnd(), s = playSeason(state.draft.seed, body.picks, body.team, ss), sum = summarize(s.team, s);
     const prev = mockDb.best;
     const row = { ...sum, id: mockDb.seasons.length + 1, seed: state.draft.seed, season_seed: ss, picks: body.picks };
     mockDb.seasons.push(row);
@@ -380,6 +437,7 @@ function mock(url, body) {
   }
   if (url.includes("/season/")) {
     const id = Number(url.split("/").pop()), row = mockDb.seasons.find((x) => x.id === id) || MOCK_LB[id - 101];
+    if (id === 999) return { _status: 410, error: "old-rules season" };
     return row ? { ...row, name: row.name || "davidj" } : { _status: 404, error: "no such season" };
   }
   if (url.includes("/share/")) return { ok: true };
@@ -390,11 +448,11 @@ function mock(url, body) {
   }
   return {};
 }
-const MOCK_LB = ["steph", "nova", "rohan"].map((name, i) => {   // legal mock drafts: always take the best-rated option
+const MOCK_LB = ["steph", "nova", "rohan"].map((name, i) => {   // legal mock drafts, draft-order lineups
   const seed = 11 * (i + 1), picks = [];
-  for (let p; (p = nextPack(seed, picks)); ) picks.push(p.slice().sort((a, b) => bestPos(b).ovr - bestPos(a).ovr)[i % 2]);
-  const s = playSeason(seed, picks, 7 + i);
-  return { id: 101 + i, name, seed, picks, season_seed: 7 + i, ...summarize(s.lineup, s) };
+  for (let p; (p = nextPack(seed, picks)); ) picks.push(p[i % 3]);
+  const s = playSeason(seed, picks, defaultTeam(picks), 7 + i);
+  return { id: 101 + i, name, seed, picks, season_seed: 7 + i, ...summarize(s.team, s) };
 });
 
 main();

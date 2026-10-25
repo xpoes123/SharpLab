@@ -2,16 +2,18 @@
 // verifier (shared/pokehoops_cli.mjs runs this exact file under node). The sim itself is the TV cartridge's
 // engine, vendored unmodified in ./pokehoops/ (scripts/sync-pokehoops.sh).
 //
-// Draft: 5 picks, each offering 3 options; pick 1 is 3 of the 5 Legendaries, picks 2-5 are the TV's "tiered"
+// Draft: 8 picks, each offering 3 options; pick 1 is 3 of the 11 Legendaries, picks 2-8 are the TV's "tiered"
 // packs (tierPack: three options from one random overall band, preferring distinct best positions) drawn from
 // the rest of the dex minus what you already took. Every pack is derived from the draft seed alone (one mulberry32 stream,
 // one shuffle per pick), so the server can replay seed + picks and check each pick was really offered.
 // Season: 82 games vs the fixed LEAGUE with a SEPARATE season seed the server only reveals after the picks are
-// locked in — so nobody can try all 243 pick paths offline and submit the luckiest.
-import { simSeason, seeded, LEAGUE } from "./pokehoops/engine.js";
+// locked in — so nobody can try every pick path offline and submit the luckiest.
+// Lineup: after the draft the coach (the player) sets the team — five starters at PG..C plus a 3-man bench, each
+// reserve backing up one spot: {five: [5 dex], bench: [3 dex], backs: [3 spot indexes]}. Nothing is auto-arranged.
+import { simSeason, seeded, LEAGUE, BENCH, members, validTeam } from "./pokehoops/engine.js";
 import { POS, POOL, LEGENDS, bestLineup, bestPos, mon, ovr } from "./pokehoops/ratings.js";
 
-export const PICKS = 5;
+export const PICKS = 5 + BENCH;
 export const PACK = 3;
 
 // Copied verbatim from the TV cartridge's game.js (not vendored: game.js is TV-bound); tests/test_pokehoops.py
@@ -31,7 +33,7 @@ function tierPack(pool, rng) {
 }
 
 /** Replay a draft. Returns {packs, picks, error}: packs[i] is what pick i offered (packs.length = picks + 1
- *  while drafting, 5 when done). error is set (and replay stops) at the first pick that wasn't offered. */
+ *  while drafting, PICKS when done). error is set (and replay stops) at the first pick that wasn't offered. */
 export function replay(seed, picks = []) {
   const rng = seeded(seed >>> 0), packs = [];
   let pool = POOL.slice();
@@ -53,44 +55,60 @@ export function nextPack(seed, picks) {
   return r.error || picks.length >= PICKS ? null : r.packs[picks.length];
 }
 
-/** Season for a finished, legal draft: the auto-lineup (PG..C) and simSeason under the season seed. */
-export function playSeason(seed, picks, seasonSeed) {
+/** The coach's starting arrangement before they touch anything: draft order, bench backs PG, SG, SF. */
+export function defaultTeam(picks) {
+  return { five: picks.slice(0, 5), bench: picks.slice(5, PICKS), backs: [0, 1, 2].slice(0, BENCH) };
+}
+
+/** Normalize an untrusted team object (from JSON) to {five, bench, backs} of integers, or null if malformed. */
+export function cleanTeam(t) {
+  if (!t || typeof t !== "object") return null;
+  const ints = (a) => Array.isArray(a) && a.every((x) => Number.isInteger(x)) ? a.slice() : null;
+  const five = ints(t.five), bench = ints(t.bench), backs = ints(t.backs);
+  return five && bench && backs ? { five, bench, backs } : null;
+}
+
+/** Season for a finished, legal draft + a legal coach's team: simSeason under the season seed. */
+export function playSeason(seed, picks, team, seasonSeed) {
   const r = replay(seed, picks);
   if (r.error) throw new Error(r.error);
   if (picks.length !== PICKS) throw new Error("draft incomplete");
-  const lineup = bestLineup(picks);
-  const season = simSeason(lineup, seeded(seasonSeed >>> 0));
-  return { lineup, ...season };
+  const t = cleanTeam(team);
+  if (!t || !validTeam(t, picks)) throw new Error("illegal lineup: use each drafted player once, five starters + three bench backing up PG..C");
+  const season = simSeason(t, seeded(seasonSeed >>> 0));
+  return { team: t, lineup: t.five, ...season };
 }
 
-/** League team display name: named after its best player (LEAGUE teams are just five dex numbers). */
+/** League team display name: named after its best starter (LEAGUE entries are teams: {five, bench, backs}). */
 export function teamName(opp) {
-  const five = LEAGUE[opp];
+  const five = LEAGUE[opp].five;
   let best = five[0], bv = -1;
   five.forEach((n, i) => { const v = ovr(n, POS[i]); if (v > bv) { bv = v; best = n; } });
   return `Team ${mon(best).name}`;
 }
 
 /** The headline numbers from a season (what the server stores and the page / bot show). */
-export function summarize(lineup, season) {
+export function summarize(team, season) {
+  const roster = members(team), size = roster.length;
   const g = season.games;
   let best = -1, streak = 0, run = 0;
   g.forEach((x, i) => {
     if (x.win && (best < 0 || x.us - x.them > g[best].us - g[best].them)) best = i;
     run = x.win ? run + 1 : 0; streak = Math.max(streak, run);
   });
-  const led = [0, 0, 0, 0, 0], high = [0, 0, 0, 0, 0];
+  const led = Array(size).fill(0), high = Array(size).fill(0);
   for (const x of g) { led[x.top.i]++; high[x.top.i] = Math.max(high[x.top.i], x.top.pts); }
   const ti = led.indexOf(Math.max(...led));
   const ppg = Math.round((10 * g.reduce((a, x) => a + x.us, 0)) / g.length) / 10;
   const oppg = Math.round((10 * g.reduce((a, x) => a + x.them, 0)) / g.length) / 10;
   return {
-    wins: season.wins, losses: season.losses, grade: season.grade, lineup,
+    wins: season.wins, losses: season.losses, grade: season.grade, team, lineup: team.five,
     strip: g.map((x) => (x.win ? "W" : "L")).join(""),
     streak, ppg, oppg,
     best_game: best < 0 ? null : { g: best + 1, opp: g[best].opp, opp_name: teamName(g[best].opp), us: g[best].us, them: g[best].them },
-    top_scorer: { n: lineup[ti], name: mon(lineup[ti]).name, pos: POS[ti], led: led[ti], high: high[ti] },
+    top_scorer: { n: roster[ti], name: mon(roster[ti]).name, pos: ti < 5 ? POS[ti] : "bench",
+                  bench: ti >= 5, led: led[ti], high: high[ti] },
   };
 }
 
-export { POS, LEGENDS, bestPos, bestLineup, mon, ovr, LEAGUE };
+export { POS, LEGENDS, BENCH, bestPos, bestLineup, mon, ovr, LEAGUE, members, validTeam };

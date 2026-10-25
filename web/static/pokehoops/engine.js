@@ -92,12 +92,42 @@ export function genPoss(off, def, rng, team, holder = 0, depth = 0, ctx = { late
   return beats;
 }
 
-export const emptyBox = () => { const box = {}; for (const t of [0, 1]) for (let i = 0; i < 5; i++) box[t + ":" + i] = { pts: 0, reb: 0, ast: 0, stl: 0, blk: 0 }; return box; };
+// ---- teams: five starters (PG..C, placed by the coach) + a three-man bench, each backing up one spot ------------
+export const BENCH = 3;
+/** A team is {five: [PG,SG,SF,PF,C], bench: [3 dex], backs: [slot each bench player backs up]}. A bare 5-array = no bench. */
+export const asTeam = (t) => (Array.isArray(t) ? { five: t, bench: [], backs: [] } : t);
+export const members = (t) => [...asTeam(t).five, ...asTeam(t).bench];   // roster index 0-4 starters, 5-7 bench
+/** The coach's arrangement is legal: the same eight it drafted, each once, backs are spots 0-4. */
+export function validTeam(t, picks) {
+  const m = members(t);
+  return t.five.length === 5 && t.bench.length === picks.length - 5 && t.backs.length === t.bench.length && t.backs.every((s) => Number.isInteger(s) && s >= 0 && s < 5)
+    && m.length === picks.length && new Set(m).size === m.length && m.every((n) => picks.includes(n));
+}
+/** Who's on the floor (roster indexes, by spot) at fraction f of quarter q (5+ = OT). Starters open and close every
+ *  quarter; the bench plays the middle of Q1-Q3 and early Q4 (~15 min a night). Two backups at one spot split it. */
+export function onCourt(t, q, f) {
+  t = asTeam(t);
+  const [a, b] = q <= 3 ? [0.4, 0.8] : q === 4 ? [0.15, 0.4] : [0, 0], on = [0, 1, 2, 3, 4];
+  if (f < a || f >= b) return on;
+  for (let s = 0; s < 5; s++) {
+    const subs = t.backs.map((x, j) => (x === s ? j : -1)).filter((j) => j >= 0);
+    if (subs.length) on[s] = 5 + subs[Math.min(subs.length - 1, Math.floor(((f - a) / (b - a)) * subs.length))];
+  }
+  return on;
+}
+/** Starters + bench for a computer coach: best five in their best spots, each reserve backing up its natural spot. */
+export function autoTeam(picks) {
+  const byOvr = picks.slice().sort((x, y) => bestPos(y).ovr - bestPos(x).ovr), five = bestLineup(byOvr.slice(0, 5)), bench = byOvr.slice(5);
+  return { five, bench, backs: bench.map((n) => POS.indexOf(bestPos(n).pos)) };
+}
 
-/** Apply a finished beat to score + box score (+ who's hot in ctx). Returns what happened, for play-by-play. */
-export function applyBeat(score, box, b, ctx = null) {
+export const emptyBox = (size = 5 + BENCH) => { const box = {}; for (const t of [0, 1]) for (let i = 0; i < size; i++) box[t + ":" + i] = { pts: 0, reb: 0, ast: 0, stl: 0, blk: 0 }; return box; };
+
+/** Apply a finished beat to score + box score (+ who's hot in ctx). Returns what happened, for play-by-play.
+ *  Beats name spots 0-4; on = [team0, team1] spot → roster index maps (from onCourt) so the bench gets its stats. */
+export function applyBeat(score, box, b, ctx = null, on = [[0, 1, 2, 3, 4], [0, 1, 2, 3, 4]]) {
   if (ctx && b.k === "shot") { if (b.made) ctx.hot[b.team + ":" + b.who] = true; else delete ctx.hot[b.team + ":" + b.who]; }
-  const bx = (team, i) => box[team + ":" + i];
+  const bx = (team, i) => box[team + ":" + on[team][i]];
   if (b.k === "to") { if (b.steal) bx(1 - b.team, b.by).stl++; return b.steal ? "steal" : "turnover"; }
   if (b.k === "ft") { score[b.team] += b.made; bx(b.team, b.who).pts += b.made; return "ft"; }
   if (b.k === "reb") { bx(b.team, b.who).reb++; return b.off ? "oreb" : "dreb"; }
@@ -109,13 +139,21 @@ export function applyBeat(score, box, b, ctx = null) {
   return null;
 }
 
-/** A whole game, headless, between two lineups (PG..C). perQ = possessions per quarter (both teams; 50 ≈ an NBA game). */
+/** The five on the floor (dex numbers by spot) for a team at fraction f of quarter q, plus the roster-index map. */
+export function floor(t, q, f) { const on = onCourt(t, q, f), m = members(t); return { on, five: on.map((i) => m[i]) }; }
+
+/** A whole game, headless, between two teams (or bare PG..C lineups). perQ = possessions per quarter (both teams; 50 ≈ an NBA game). */
 export function simGame(a, b, rng, perQ = 50) {
-  const rosters = [a, b], score = [0, 0], box = emptyBox(), ctx = { late: false, hot: {} };
+  const teams = [asTeam(a), asTeam(b)], score = [0, 0], box = emptyBox(), ctx = { late: false, hot: {} };
   let team = rng.int(2);
-  const play = (n) => { for (let i = 0; i < n; i++) for (const beat of genPoss(rosters[team], rosters[1 - team], rng, team, 0, 0, ctx)) { applyBeat(score, box, beat, ctx); if (beat.next !== undefined) team = beat.next; } };
-  play(perQ * 3); ctx.late = true; play(perQ);
-  while (score[0] === score[1]) play(20);                         // overtime: ~10 possessions a side
+  const play = (q, n) => {
+    for (let i = 0; i < n; i++) {
+      const fl = teams.map((t) => floor(t, q, i / n)), on = fl.map((x) => x.on);
+      for (const beat of genPoss(fl[team].five, fl[1 - team].five, rng, team, 0, 0, ctx)) { applyBeat(score, box, beat, ctx, on); if (beat.next !== undefined) team = beat.next; }
+    }
+  };
+  for (let q = 1; q <= 4; q++) { ctx.late = q === 4; play(q, perQ); }
+  while (score[0] === score[1]) play(5, 20);                      // overtime: ~10 possessions a side
   return { score, box };
 }
 
@@ -123,12 +161,13 @@ export function simGame(a, b, rng, perQ = 50) {
 export const LEAGUE = (() => {
   const r = seeded(1946), teams = [];
   for (let t = 0; t < 29; t++) {
-    const pool = r.shuffle(POOL.slice()), five = [];
-    for (let i = 0; i < 5; i++) {                                              // a 3-option draft, no Legendary: take the best
+    const pool = r.shuffle(POOL.slice()), eight = [];
+    for (let i = 0; i < 5 + BENCH; i++) {                                      // a 3-option draft, no Legendary: take the best
       const opts = pool.slice(i * 3, i * 3 + 3).sort((x, y) => bestPos(y).ovr - bestPos(x).ovr);
-      five.push(opts[0]);
+      eight.push(opts[0]);
     }
-    teams.push(bestLineup(five));
+    const bench = eight.slice(5);                                              // first five start (league strength as tuned), next three are its bench
+    teams.push({ five: bestLineup(eight.slice(0, 5)), bench, backs: bench.map((n) => POS.indexOf(bestPos(n).pos)) });
   }
   return teams;
 })();
@@ -147,4 +186,4 @@ export function simSeason(roster, rng) {
   const wins = games.filter((x) => x.win).length;
   return { games, wins, losses: 82 - wins, grade: grade(wins) };
 }
-function topScorer(box) { let best = 0; for (let i = 1; i < 5; i++) if (box["0:" + i].pts > box["0:" + best].pts) best = i; return { i: best, pts: box["0:" + best].pts }; }
+function topScorer(box) { let best = 0; for (let i = 1; i < 5 + BENCH; i++) if (box["0:" + i].pts > box["0:" + best].pts) best = i; return { i: best, pts: box["0:" + best].pts }; }

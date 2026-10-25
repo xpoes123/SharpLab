@@ -2380,10 +2380,11 @@ GAME_RULES: dict[str, str] = {
     ),
     "pokehoops": (
         "**Pok\u00e9 Hoops** (solo)\n"
-        "Draft five Gen 1 Pok\u00e9mon and run an 82-game season against the league.\n\n"
-        "**How to play:** Five picks, three options each \u2014 pick 1 is a Legendary. Ratings, "
-        "type matchups and each Pok\u00e9mon's signature move all matter. Your five slot into "
-        "PG/SG/SF/PF/C automatically, then the season sims and gets graded.\n\n"
+        "Draft eight Gen 1\u20132 Pok\u00e9mon, set your lineup, and run an 82-game season against the league.\n\n"
+        "**How to play:** Eight picks, three options each \u2014 pick 1 is a Legendary. Skills, "
+        "type matchups and each Pok\u00e9mon's signature move all matter. Then you coach: put five "
+        "starters at PG/SG/SF/PF/C and pick which spot each of your three reserves backs up. "
+        "Then the season sims and gets graded.\n\n"
         "**Leaderboard:** your best season, shared with sharplab.djiang.xyz/pokehoops.html.\n"
         "**Goal:** 82-0."
     ),
@@ -2446,7 +2447,7 @@ CASINO_GAMES: list[tuple[str, str, str, str]] = [
     ("mlbsim", "Simulated MLB game betting", "Sports Sim", "solo"),
     ("tennissim", "Simulated tennis match betting", "Sports Sim", "solo"),
     ("soccersim", "Simulated soccer match betting", "Sports Sim", "solo"),
-    ("pokehoops", "Pok\u00e9 Hoops \u2014 draft 5 Pok\u00e9mon, chase an 82-0 season", "Sports Sim", "solo"),
+    ("pokehoops", "Pok\u00e9 Hoops \u2014 draft 8 Pok\u00e9mon, coach an 82-0 season", "Sports Sim", "solo"),
 ]
 
 

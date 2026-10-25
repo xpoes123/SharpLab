@@ -1,8 +1,10 @@
-"""Web arcade — Poké Hoops. Draft five Gen 1 Pokémon (3 options a pick, a Legendary first), then
-your auto-lineup plays an 82-game season against the TV cartridge's fixed league. 82-0 is the dream.
+"""Web arcade — Poké Hoops. Draft eight Gen 1–2 Pokémon (3 options a pick, a Legendary first), coach
+them into five starters (PG..C) + a three-man bench, then play an 82-game season against the TV
+cartridge's fixed league. 82-0 is the dream.
 
 The page drafts locally from a server-issued seed (packs derive from it deterministically) and
-submits only seed-token + picks; shared/pokehoops.py replays the draft, rejects illegal picks,
+submits only seed-token + picks + team; shared/pokehoops.py replays the draft, rejects illegal picks
+or an illegal team,
 sims the season itself under a fresh season seed, records it, and returns it. The page then
 replays that exact season (same engine, same seeds) for the reveal. Leaderboard = each player's
 best season (pokehoops_seasons), shared with the Discord /play pokehoops draft."""
@@ -46,9 +48,16 @@ async def start(request: Request):
     return {"token": token, "seed": seed}
 
 
+class TeamBody(BaseModel):
+    five: list[int]
+    bench: list[int]
+    backs: list[int]
+
+
 class SubmitBody(BaseModel):
     token: str
     picks: list[int]
+    team: TeamBody
 
 
 @router.post("/submit")
@@ -62,20 +71,22 @@ async def submit(request: Request, body: SubmitBody):
     if time.monotonic() - state["started"] > DRAFT_TTL:
         return JSONResponse({"error": "draft expired — start a new one"}, status_code=400)
     try:
-        res = await pokehoops.finish_season(uid, state["seed"], body.picks, "web")
+        res = await pokehoops.finish_season(uid, state["seed"], body.picks, body.team.model_dump(), "web")
     except pokehoops.IllegalDraft as e:
         return JSONResponse({"error": f"illegal draft: {e}"}, status_code=400)
     except pokehoops.EngineUnavailable:
         return JSONResponse({"error": "the sim engine is down — try again shortly"}, status_code=503)
     res.pop("lineup_cards", None)  # the page renders its own cards
+    res.pop("bench_cards", None)
     return res
 
 
 def _public(row: dict, name: str | None) -> dict:
     s = row["summary"]
+    team = row["lineup"] if isinstance(row["lineup"], dict) else {"five": row["lineup"], "bench": [], "backs": []}
     return {"id": row["id"], "name": name or f"user-{row['discord_user'][-4:]}",
             "wins": row["wins"], "losses": row["losses"], "grade": row["grade"],
-            "lineup": row["lineup"], "picks": row["picks"], "seed": row["seed"],
+            "lineup": team["five"], "team": team, "picks": row["picks"], "seed": row["seed"],
             "season_seed": row["season_seed"], "source": row["source"],
             "top_scorer": s.get("top_scorer"), "created_at": row["created_at"]}
 
@@ -99,13 +110,20 @@ async def season(season_id: int):
     row = await queries.get_pokehoops_season(season_id)
     if row is None:
         return JSONResponse({"error": "no such season"}, status_code=404)
+    if queries.pokehoops_is_legacy(row):
+        return JSONResponse({"error": "old-rules season — it can't be replayed under the current game"}, status_code=410)
     names = await queries.get_display_names([row["discord_user"]])
     return _public(row, names.get(row["discord_user"]))
 
 
-def _share_embed(row: dict, cards: list[dict], name: str, rank: int | None) -> dict:
+POS = ("PG", "SG", "SF", "PF", "C")
+
+
+def _share_embed(row: dict, cards: list[dict], bench: list[dict], backs: list[int], name: str, rank: int | None) -> dict:
     ts = row["summary"].get("top_scorer") or {}
-    five = "\n".join(f"`{pos:<2}` **{c['name']}** — {c['move']}" for pos, c in zip(("PG", "SG", "SF", "PF", "C"), cards))
+    five = "\n".join(f"`{pos:<2}` **{c['name']}** — {c['move']}" for pos, c in zip(POS, cards))
+    if bench:
+        five += "\nBench: " + " · ".join(f"{c['name']} (backs {POS[s]})" for c, s in zip(bench, backs))
     embed = {
         "title": f"🏀 {name} went {row['wins']}–{row['losses']} ({row['grade']})",
         "url": f"{pokehoops.WEB_URL}?s={row['id']}",
@@ -130,6 +148,8 @@ async def share(request: Request, season_id: int):
     row = await queries.get_pokehoops_season(season_id)
     if row is None or row["discord_user"] != uid:
         return JSONResponse({"error": "not your season"}, status_code=404)
+    if queries.pokehoops_is_legacy(row):
+        return JSONResponse({"error": "old-rules season"}, status_code=410)
     token = os.getenv("DISCORD_BOT_TOKEN")
     if not token:
         return JSONResponse({"error": "sharing is off"}, status_code=503)
@@ -148,12 +168,13 @@ async def share(request: Request, season_id: int):
 async def _post(token: str, row: dict, uid: str) -> None:
     season_id = row["id"]
     # the stored summary has dex numbers only; a replay (~0.1s) gives the full cards
-    cards = (await pokehoops.sim_season(row["seed"], row["picks"], row["season_seed"]))["lineup_cards"]
+    team = row["lineup"]
+    res = await pokehoops.sim_season(row["seed"], row["picks"], team, row["season_seed"])
     names = await queries.get_display_names([uid])
     best = await queries.get_pokehoops_best(uid)
     rank = await queries.get_pokehoops_rank(uid) if best and best["id"] == season_id else None
     body = {"content": f"<@{uid}> shared a Poké Hoops season", "allowed_mentions": {"parse": []},
-            "embeds": [_share_embed(row, cards, names.get(uid) or f"user-{uid[-4:]}", rank)]}
+            "embeds": [_share_embed(row, res["lineup_cards"], res["bench_cards"], team["backs"], names.get(uid) or f"user-{uid[-4:]}", rank)]}
     async with httpx.AsyncClient(timeout=10) as client:
         r = await client.post(f"https://discord.com/api/v10/channels/{SHARE_CHANNEL}/messages",
                               headers={"Authorization": f"Bot {token}"}, json=body)
