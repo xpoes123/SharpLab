@@ -322,6 +322,8 @@ def _new_seat(uid: str | None, name: str) -> dict:
 
 
 def _phase(r: dict) -> str:
+    if r["left"] is not None and r["result"] is None:
+        return "left"
     if r["seats"][1] is None:
         return "lobby"
     if len(r["picks"][0]) < pokehoops.PICKS:
@@ -355,7 +357,7 @@ def _view(r: dict, seat: int) -> dict:
         "opp_locked": r["teams"][opp] is not None,
         "line": line, "prices": [_price(line["series"]), _price(1 - line["series"])] if line else None,
         "ready": r["ready"], "bets": r["bets"],
-        "result": r["result"],
+        "result": r["result"], "left": r["left"],
     }
 
 
@@ -384,7 +386,7 @@ async def duel_create(request: Request, body: DuelBody):
     seat = _new_seat(uid, name)
     _duels[code] = {"code": code, "created": time.time(), "touched": time.time(), "lock": asyncio.Lock(), "seed": pokehoops.new_seed(),
                     "seats": [seat, None], "picks": [[], []], "pending": [None, None], "teams": [None, None],
-                    "line": None, "ready": [False, False], "bets": [None, None], "result": None}
+                    "line": None, "ready": [False, False], "bets": [None, None], "result": None, "left": None}
     return {"code": code, "key": seat["key"]}
 
 
@@ -474,12 +476,17 @@ async def duel_team(code: str, body: DuelBody):
 
 @router.post("/duel/{code}/ready")
 async def duel_ready(request: Request, code: str, body: DuelBody):
-    """Lock in for tip-off, optionally with a bet on either side of the series at the posted price."""
+    """Lock in for tip-off, optionally with a bet on either side of the series at the posted price. Coins move only
+    at tip-off (see _tip_off), so a room that dies before then never holds anyone's stake."""
     r, seat, err = _room(code, body.key)
     if err:
         return err
     async with r["lock"]:
-        if _phase(r) != "tip" or r["ready"][seat]:
+        ph = _phase(r)
+        if ph != "tip":
+            msg = {"done": "this series is already over", "left": "this room has closed"}.get(ph, "not tip-off yet")
+            return JSONResponse({"error": msg}, status_code=409)
+        if r["ready"][seat]:
             return JSONResponse({"error": "already locked in"}, status_code=409)
         uid = r["seats"][seat]["uid"]
         if body.stake:
@@ -487,31 +494,49 @@ async def duel_ready(request: Request, code: str, body: DuelBody):
                 return JSONResponse({"error": "sign in to bet coins"}, status_code=401)
             if body.side not in (0, 1) or not 1 <= body.stake <= MAX_STAKE:
                 return JSONResponse({"error": f"bet 1–{MAX_STAKE:,} coins on one side"}, status_code=400)
-            await queries.get_or_create_casino_wallet(uid)
-            try:
-                await queries.update_casino_balance(uid, -body.stake)
-            except ValueError as e:
-                return JSONResponse({"error": str(e)}, status_code=400)
+            if await queries.get_or_create_casino_wallet(uid) < body.stake:
+                return JSONResponse({"error": "not enough coins"}, status_code=400)
             p = r["line"]["series"] if body.side == 0 else 1 - r["line"]["series"]
             r["bets"][seat] = {"side": body.side, "stake": body.stake, "price": _price(p)}
         r["ready"][seat] = True
-        if all(r["ready"]):
-            await _tip_off(r)
+        if all(r["ready"]) and (err := await _tip_off(r)):
+            return err
         return _view(r, seat)
 
 
-async def _tip_off(r: dict) -> None:
-    """Both locked: draw the series seed only now (after every bet), sim, settle, record."""
+async def _tip_off(r: dict) -> JSONResponse | None:
+    """Both locked: debit both stakes, draw the series seed only now (after every bet), sim, settle, record.
+    If a stake can't be debited or the sim fails, whatever was debited goes back and both coaches un-ready."""
+    debited: list[tuple[str, int]] = []
+
+    async def undo(msg: str, status: int) -> JSONResponse:
+        for uid, stake in debited:
+            await queries.update_casino_balance(uid, stake)
+        r["ready"], r["bets"] = [False, False], [None, None]
+        return JSONResponse({"error": msg}, status_code=status)
+
+    for seat, bet in enumerate(r["bets"]):
+        if bet:
+            uid = r["seats"][seat]["uid"]
+            try:
+                await queries.update_casino_balance(uid, -bet["stake"])
+            except ValueError:
+                return await undo(f"{r['seats'][seat]['name']} no longer has {bet['stake']:,} coins — lock in again", 409)
+            debited.append((uid, bet["stake"]))
     series_seed = pokehoops.new_seed()
-    x = await pokehoops.duel_series(r["seed"], r["picks"], r["teams"], series_seed)
+    try:
+        x = await pokehoops.duel_series(r["seed"], r["picks"], r["teams"], series_seed)
+    except Exception:
+        log.exception("pokehoops duel %s: series sim failed", r["code"])
+        return await undo("the sim engine hiccuped — stakes refunded, lock in again", 503)
     winner = 0 if x["wins"][0] > x["wins"][1] else 1
     for seat, bet in enumerate(r["bets"]):
         if not bet:
             continue
         uid = r["seats"][seat]["uid"]
         bet["payout"] = int(bet["stake"] * bet["price"]) if bet["side"] == winner else 0
-        if bet["payout"]:
-            bet["balance"] = await queries.update_casino_balance(uid, bet["payout"])
+        bet["balance"] = await queries.update_casino_balance(uid, bet["payout"]) if bet["payout"] \
+            else await queries.get_casino_balance(uid)
         await queries.log_casino_result(uid, "pokehoops", bet["stake"], bet["payout"])
     a, b = r["seats"]
     did = await queries.insert_pokehoops_duel({
@@ -519,6 +544,23 @@ async def _tip_off(r: dict) -> None:
         "b_name": b["name"], "seed": r["seed"], "series_seed": series_seed, "picks": r["picks"], "teams": r["teams"],
         "wins_a": x["wins"][0], "wins_b": x["wins"][1], "line": r["line"], "bets": r["bets"]})
     r["result"] = {"id": did, "series_seed": series_seed, "wins": x["wins"]}
+    return None
+
+
+@router.post("/duel/{code}/leave")
+async def duel_leave(code: str, body: DuelBody):
+    """Walk out. A lobby just closes; mid-duel the other coach sees who left and heads home. No coins are ever
+    held before tip-off, so there's nothing to refund; a finished series is unaffected."""
+    r, seat, err = _room(code, body.key)
+    if err:
+        return err
+    async with r["lock"]:
+        ph = _phase(r)
+        if ph == "lobby":
+            _duels.pop(r["code"], None)
+        elif ph not in ("done", "left"):
+            r["left"] = seat
+        return {"ok": True}
 
 
 @router.get("/duels/{duel_id}")

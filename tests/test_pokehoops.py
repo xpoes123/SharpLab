@@ -415,7 +415,7 @@ def test_live_duel_room_draft_line_bets_and_series(monkeypatch):
         bal0 = await q.get_or_create_casino_wallet("dave")
         assert (await gp.duel_ready(_Req(), code, gp.DuelBody(key=ka, side=0, stake=10**9))).status_code == 400
         await gp.duel_ready(_Req(), code, gp.DuelBody(key=ka, side=0, stake=300))
-        assert await q.get_casino_balance("dave") == bal0 - 300
+        assert await q.get_casino_balance("dave") == bal0          # nothing moves until tip-off
         who["s"] = None
         st = await gp.duel_ready(_Req(), code, gp.DuelBody(key=kb))
         res = st["result"]
