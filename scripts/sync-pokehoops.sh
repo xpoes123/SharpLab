@@ -10,7 +10,7 @@ set -euo pipefail
 
 TV_REPO="${TV_REPO:-$HOME/code/tv}"
 DST="$(cd "$(dirname "$0")/.." && pwd)/web/static/pokehoops"
-FILES=(engine.js ratings.js dex.js profiles.js)
+FILES=(engine.js ratings.js dex.js profiles.js battle.js movesets.js)
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
 extract() {  # extract <rev> → $TMP/games/pokehoops

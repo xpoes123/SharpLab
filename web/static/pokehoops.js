@@ -158,6 +158,11 @@ function renderIntro() {
       ${state.me ? `<button class="btn big primary" id="phStart">Start the draft</button>` : signedOut}
       <p class="phfine">Same engine as the TV cartridge. The server re-checks every pick and sims the season itself.</p>
     </div>
+    <div class="card phduelcta pbcta">
+      <div class="phstep">⚔️ Battle · beta</div>
+      <p class="phmuted">The new game: 3v3, first to 11, played like a Pokémon battle. Every turn you and the opponent pick at once: shots, passes, screens, status moves, stat boosts, weather. Draft six, rotate three.</p>
+      <div class="phactions"><button class="btn primary" id="pbStart">Battle a bot</button></div>
+    </div>
     <div class="card phduelcta">
       <div class="phstep">🆚 Live duel · two phones, one table</div>
       <p class="phmuted">Draft at the same time from separate packs, coach your lineups, see the line, bet it, then play a best-of-7. No sign-in needed to play (betting coins needs one).</p>
@@ -831,7 +836,18 @@ async function challenge(vs) {
 }
 
 // ── Events ───────────────────────────────────────────────────────────────────
+let battle = null;   // the battle UI module, loaded on first use
+async function startBattle() {
+  battle ||= await import("./pokehoops-battle-ui.js");
+  clearTimeout(state.reveal?.timer); clearTimeout(state.live?.timer); state.live = null; state.duel = null;
+  battle.start({ app, head, toast, exit: () => { battle.stop(); renderIntro(); } });
+  scrollTo(0, 0);
+}
+
 app.addEventListener("click", (e) => {
+  if (e.target.closest("#pbStart")) return startBattle();
+  if (e.target.closest("#pbExit")) { battle?.stop(); return renderIntro(); }
+  if (battle?.active() && battle.handle(e)) return;
   const card = e.target.closest(".phcard");
   if (card) return state.duel?.view?.phase === "draft" ? duelPost("pick", { n: Number(card.dataset.n) }) : pick(Number(card.dataset.n));
   const bk = e.target.closest(".phbk");
