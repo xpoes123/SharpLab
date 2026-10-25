@@ -131,6 +131,16 @@ function logGame(a, b, rng) {
   return { score: G.score, box: G.box, flow, plays, periods: G.q + G.ot };
 }
 
+/** Game k of a recorded season, logged (box, score flow, big plays) like bestOf7's: replays simSeason's rng stream
+ *  up to it, so it's the very game the season had. Pure read: the season itself is still simSeason's. */
+export function seasonGame(team, seasonSeed, k) {
+  const rng = seeded(seasonSeed >>> 0);
+  for (let g = 0; g < k; g++) simGame(team, LEAGUE[g % LEAGUE.length], rng);
+  const opp = k % LEAGUE.length, g = logGame(team, LEAGUE[opp], rng), { score, box } = g;
+  return { opp, us: score[0], them: score[1], win: score[0] > score[1], top: [0, 1].map((s) => topOf(box, s)),
+           box, flow: g.flow, plays: g.plays, periods: g.periods };
+}
+
 const binom = (n, k) => { let r = 1; for (let i = 1; i <= k; i++) r = (r * (n - k + i)) / i; return r; };
 function hashOf(x) { let h = 2166136261; for (const c of JSON.stringify(x)) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; }
 const median = (a) => { const s = a.slice().sort((x, y) => x - y); return s[s.length >> 1]; };

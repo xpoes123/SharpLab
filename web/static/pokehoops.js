@@ -354,9 +354,9 @@ function finish() {
   const gradeCls = s.wins === 82 ? "perfect" : s.wins >= 64 ? "great" : s.wins >= 50 ? "good" : s.wins >= 35 ? "meh" : "bad";
   const bg = s.best_game, ts = s.top_scorer;
   const extras = r.mine ? `
-      ${s.is_new_best ? `<div class="phnew${REDUCE ? "" : " pop"}">🏆 New personal best${s.prev_best != null ? ` (was ${s.prev_best}–${82 - s.prev_best})` : ""}</div>`
-                      : s.prev_best != null ? `<div class="phmuted">Your best: ${s.prev_best}–${82 - s.prev_best}</div>` : ""}
-      ${s.rank ? `<div class="phrank">#${num(s.rank)} on the board</div>` : ""}
+      ${s.is_new_best ? `<div class="phnew${REDUCE ? "" : " pop"}">🏆 New personal best${s.prev_best != null ? ` (was ${s.prev_best}–${82 - s.prev_best})` : ""}</div>
+                         ${s.rank ? `<div class="phrank">#${num(s.rank)} on the board</div>` : ""}`
+                      : s.prev_best != null ? `<div class="phmuted">Your best is still ${s.prev_best}–${82 - s.prev_best}${s.rank ? ` · it's #${num(s.rank)} on the board` : ""}</div>` : ""}
       ${s.coins ? `<div class="phcoins">+${num(s.coins)} 🪙</div>` : ""}` : "";
   $("phFinal").innerHTML = `
     <div class="phgrade ${gradeCls}${REDUCE ? "" : " pop"}">${esc(s.grade)}</div>
@@ -513,8 +513,8 @@ function showSeries(o) {
 }
 
 const PLAY_TXT = { dunk: "throws it down 💥", three: "drills a three", block: "sends it back 🚫", steal: "picks his pocket", and1: "scores through contact — and one", clutch: "hits a clutch bucket 🧊" };
-function gameDetail(k) {
-  const o = state.reveal?.series, g = o?.games[k];
+function gameDetail(k, scroll = true, o = state.reveal?.series) {
+  const g = o?.games[k];
   if (!g) return;
   const ms = o.teams.map(members), qn = (q) => (q <= 4 ? `Q${q}` : `OT${q > 5 ? q - 4 : ""}`);
   const box = (s) => `<div class="phbox"><div class="phgroup">${esc(o.names[s])} <b>${s ? g.them : g.us}</b></div><div class="phboxscroll"><table>
@@ -537,7 +537,7 @@ function gameDetail(k) {
   $("phDetail").innerHTML = `<div class="phdetail"><div class="phdetailhead"><b>Game ${k + 1}</b> · ${esc(o.names[0])} ${g.us}–${g.them} ${esc(o.names[1])}<button class="btn ghost" id="phDetailX" aria-label="Close">✕</button></div>
     ${chart}${box(0)}${box(1)}${plays ? `<div class="phgroup">Big plays</div><ul class="phplays">${plays}</ul>` : ""}</div>`;
   document.querySelectorAll(".phgame").forEach((el) => el.classList.toggle("on", Number(el.dataset.g) === k));
-  $("phDetail").scrollIntoView({ behavior: REDUCE ? "auto" : "smooth", block: "start" });
+  if (scroll) $("phDetail").scrollIntoView({ behavior: REDUCE ? "auto" : "smooth", block: "start" });
 }
 
 // ── Live duel ────────────────────────────────────────────────────────────────
@@ -716,14 +716,14 @@ function startBotGame(level) {
 }
 
 function liveName(L, team, spot) { return mon(members(L.teams[team])[L.G.on[team][spot]]).name; }
-function liveSay(L, b, what) {
+function liveSay(L, b, what, pre) {
   const G = L.G, nm = (t, s) => esc(liveName(L, t, s)), coach = (t) => esc(L.names[t]);
   if (b.k === "call") {
     const X = esc(mon(members(L.teams[b.team])[b.ri]).name), T = esc(mon(members(L.teams[1 - b.team])[b.target]).name);
     const type = b.eff >= 2 ? ` It's super effective on ${T}!` : b.eff === 0 ? ` It has no effect on ${T}…` : b.eff < 1 ? ` Not very effective on ${T}…` : "";
     return [`📣 <b>${coach(b.team)} calls ${esc(b.move)}!</b> ${b.subFor >= 0 ? `${X} checks in. ` : ""}${CALL_SAYS[b.fx].replace("{X}", X).replace("{T}", T)}${b.run ? ` That ends the ${b.run[0]}-${b.run[1]} run.` : ""}${type}`, "call"];
   }
-  if (b.k === "timeout") return [`⏱ Timeout, ${coach(b.team)}${b.run && b.run[0] ? ` — stops a ${b.run[0]}-${b.run[1]} run` : ""}.`, "to"];
+  if (b.k === "timeout") return [`⏱ Timeout, ${coach(b.team)}${b.run && b.run[0] && pre?.run?.team === 1 - b.team ? ` — stops a ${b.run[0]}-${b.run[1]} run` : ""}.`, "to"];   // engine logs the run, not whose
   if (b.k === "break" && !b.press) return [`${nm(b.team, b.who)} out on the break!`, ""];
   if (what === "made") {
     const how = b.dunk ? "THROWS IT DOWN! 💥" : b.kind === "three" ? "drains a three" : b.kind === "post" ? "scores in the post" : b.kind === "drive" ? "finishes at the rim" : "hits the jumper";
@@ -755,7 +755,7 @@ function liveStep() {
     const pre = preplay(G), stamp = `${qLabel(G)} ${clock(pre.secLeft)}`;
     let dur = 0;
     for (const b of rollPoss(G, L.teams, L.rng, pre)) {
-      const what = playBeat(G, b), line = liveSay(L, b, what);
+      const what = playBeat(G, b), line = liveSay(L, b, what, pre);
       dur += b.d;
       if (line) L.feed.unshift([line[0], line[1], `${stamp} · ${G.score[0]}–${G.score[1]}`]);
       const q = G.q + G.ot, sc = [G.score[0], G.score[1]];
@@ -784,7 +784,7 @@ function renderLive() {
     return `<button class="phcall${st.ok ? "" : " off"}${st.why === "queued" ? " q" : ""}" data-call="${ri}" ${st.ok ? "" : "disabled"}>
       <img src="${sprite(n)}" alt=""><span><b>${esc(st.move)}</b><small>${esc(fx ? fx[1] : "")}</small><small>${st.bench ? "subs in · " : ""}${eff}${st.ok ? "" : WHY[st.why] || ""}</small></span></button>`;
   }).join("");
-  const over = L.done;
+  const over = L.done, run = G.ctx.run, ownRun = run.team === 0 && run.pts - run.opp >= 5;
   box.innerHTML = `
     <div class="phsb">
       <div><small>${esc(L.names[0])}</small><b>${G.score[0]}</b></div>
@@ -794,9 +794,9 @@ function renderLive() {
     <div class="phfloor"><div>${onFloor(0)}${act(0)}</div><div>${onFloor(1)}${act(1)}</div></div>
     ${over ? `<div id="phLiveEnd"></div>` : `<div class="phgroup">Your playbook <small>one call at a time · starts next possession</small></div>
     <div class="phbook">${book}</div>
-    <div class="phactions"><button class="btn ghost" id="phTO" ${G.ctx.tos[0] > 0 && !C.timeout[0] ? "" : "disabled"}>⏱ Timeout${C.timeout[0] ? " (next dead ball)" : ""}</button>
+    <div class="phactions"><button class="btn ghost${ownRun ? " warn" : ""}" id="phTO" ${G.ctx.tos[0] > 0 && !C.timeout[0] ? "" : "disabled"}>⏱ Timeout${C.timeout[0] ? " (next dead ball)" : ownRun ? ` (ends your own ${run.pts}-${run.opp} run)` : ""}</button>
       <button class="btn ghost${L.speed === 1 ? " on" : ""}" data-speed="1">1×</button><button class="btn ghost${L.speed === 3 ? " on" : ""}" data-speed="3">3×</button>
-      <button class="btn ghost" data-speed="99">Sim to end ⏭</button></div>`}
+      <button class="btn ghost" data-speed="99">Sim to end ⏭</button><button class="btn ghost" id="phLeave">Leave game</button></div>`}
     <ul class="phfeed">${L.feed.slice(0, over ? 12 : 30).map(([t, c, st]) => `<li class="${c}">${st ? `<span>${st}</span>` : ""}${t}</li>`).join("")}</ul>`;
   if (over) liveEndPanel();
 }
@@ -819,7 +819,7 @@ function liveEndPanel() {
       <button class="btn ghost" id="phBackLineup">Change lineup</button>
       ${state.draft?.token ? `<button class="btn primary" id="phPlayFromLive">Play the season with this team</button>` : ""}</div>
     <div id="phDetail"></div>`;
-  gameDetail(0);
+  gameDetail(0, false);
 }
 
 async function openSeries(id) {
@@ -862,8 +862,14 @@ app.addEventListener("click", (e) => {
   if (call && state.live && !state.live.done) { if (queueCall(state.live.G, state.live.teams, 0, Number(call.dataset.call))) { toast("📣 Called — it starts next possession"); renderLive(); } return; }
   if (e.target.closest("#phTO") && state.live) { if (queueTimeout(state.live.G, 0)) renderLive(); return; }
   const sp = e.target.closest("[data-speed]");
-  if (sp && state.live && !state.live.done) { state.live.speed = Number(sp.dataset.speed); clearTimeout(state.live.timer); return liveStep(); }
-  if (e.target.closest("#phBackLineup") || e.target.closest("#phPlayFromLive")) {
+  if (sp && state.live && !state.live.done) {   // reschedule, don't step: a tap must never skip a possession
+    const L = state.live, v = Number(sp.dataset.speed);
+    if (v === L.speed) return;
+    L.speed = v; clearTimeout(L.timer);
+    if (v >= 99) return liveStep();
+    renderLive(); L.timer = setTimeout(liveStep, 600 / v); return;
+  }
+  if (e.target.closest("#phBackLineup") || e.target.closest("#phLeave") || e.target.closest("#phPlayFromLive")) {
     clearTimeout(state.live?.timer); state.live = null; state.reveal = null;
     if (e.target.closest("#phPlayFromLive")) return playIt();
     return renderLineup();
