@@ -408,7 +408,14 @@ def test_live_duel_room_draft_line_bets_and_series(monkeypatch):
         assert st["phase"] == "tip" and st["opp_team"] == _team(pa) and 0 < line["series"] < 1
         assert abs(sum(line["exact"].values()) - 1) < 1e-9 and all(
             st["prices"][s] < 1 / pr or st["prices"][s] == 1.0 for s, pr in ((0, line["series"]), (1, 1 - line["series"])))
-        assert gp._price(0.999) == 1.0 and gp._price(0.5) < 2 and gp._price(0.01) < 100   # never above fair
+        h = gp.VIG / 2
+        assert gp._price(0.999, h) == 1.0 and gp._price(0.5, h) < 2 and gp._price(0.01, h) < 100   # never above fair
+        # the hold covers the Monte Carlo noise: ≥ 2 se of the series estimate per side, never less than VIG/2
+        assert line["n"] >= 4000
+        for n, wide in ((100, True), (10**7, False)):
+            pr = gp._prices({"p": 0.5, "series": 0.5, "n": n, "se": (0.25 / n) ** 0.5})
+            se_s = 140 / 64 * (0.25 / n) ** 0.5
+            assert all(1 / x - 0.5 >= max(h, 2 * se_s) - 1e-3 for x in pr) and (1 / pr[0] - 0.5 > h + 0.01) == wide
         # the guest can't bet; Dave bets 300 on himself
         assert (await gp.duel_ready(_Req(), code, gp.DuelBody(key=kb, side=1, stake=50))).status_code == 401
         who["s"] = {"id": "dave", "username": "Dave"}

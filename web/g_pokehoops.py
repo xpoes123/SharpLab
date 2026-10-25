@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import asyncio
+import math
 import os
 import re
 import secrets
@@ -339,10 +340,22 @@ def _seat_of(r: dict, key: str | None) -> int | None:
     return next((i for i, st in enumerate(r["seats"]) if st and key and secrets.compare_digest(st["key"], key)), None)
 
 
-def _price(p: float) -> float:
-    """Decimal odds the book offers on an outcome the model gives probability p (fair + half the hold). Always below
-    fair (1/p), rounded down; a lock bottoms out at 1.0 (stake back) rather than ever paying +EV."""
-    return max(1.0, int(1000 / (p + VIG / 2)) / 1000)
+def _price(p: float, half: float) -> float:
+    """Decimal odds the book offers on an outcome the model gives probability p, holding `half` on this side. Always
+    below fair (1/p), rounded down; a lock bottoms out at 1.0 (stake back) rather than ever paying +EV."""
+    return max(1.0, int(1000 / (p + half)) / 1000)
+
+
+def _prices(line: dict) -> list[float]:
+    """Both sides' series prices. The line is a Monte Carlo estimate (and a client can re-run it for longer), so each
+    side's hold is at least 2 standard errors of the series estimate: half = max(VIG/2, 2·se_series). se_series comes
+    from the game-level se via dS/dp = (2k-1)!/((k-1)!)² · (pq)^(k-1) for a first-to-k series."""
+    k = pokehoops.SERIES_WINS
+    p = line["p"]
+    se = line.get("se") or (p * (1 - p) / line["n"]) ** 0.5
+    se_series = math.factorial(2 * k - 1) / math.factorial(k - 1) ** 2 * (p * (1 - p)) ** (k - 1) * se
+    half = max(VIG / 2, 2 * se_series)
+    return [_price(line["series"], half), _price(1 - line["series"], half)]
 
 
 def _view(r: dict, seat: int) -> dict:
@@ -355,7 +368,7 @@ def _view(r: dict, seat: int) -> dict:
         "picks": r["picks"], "pending": r["pending"][seat], "opp_pending": r["pending"][opp] is not None,
         "team": r["teams"][seat], "opp_team": r["teams"][opp] if ph in ("tip", "done") else None,
         "opp_locked": r["teams"][opp] is not None,
-        "line": line, "prices": [_price(line["series"]), _price(1 - line["series"])] if line else None,
+        "line": line, "prices": _prices(line) if line else None,
         "ready": r["ready"], "bets": r["bets"],
         "result": r["result"], "left": r["left"],
     }
@@ -496,8 +509,7 @@ async def duel_ready(request: Request, code: str, body: DuelBody):
                 return JSONResponse({"error": f"bet 1–{MAX_STAKE:,} coins on one side"}, status_code=400)
             if await queries.get_or_create_casino_wallet(uid) < body.stake:
                 return JSONResponse({"error": "not enough coins"}, status_code=400)
-            p = r["line"]["series"] if body.side == 0 else 1 - r["line"]["series"]
-            r["bets"][seat] = {"side": body.side, "stake": body.stake, "price": _price(p)}
+            r["bets"][seat] = {"side": body.side, "stake": body.stake, "price": _prices(r["line"])[body.side]}
         r["ready"][seat] = True
         if all(r["ready"]) and (err := await _tip_off(r)):
             return err
