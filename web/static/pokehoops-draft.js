@@ -197,6 +197,10 @@ export function duelTeams(seed, picks, teams) {
 }
 function topOf(box, side) { let best = 0; for (let i = 1; i < 5 + BENCH; i++) if (box[`${side}:${i}`].pts > box[`${side}:${best}`].pts) best = i; return { i: best, pts: box[`${side}:${best}`].pts }; }
 
+/** League team indexes, weakest starting five first (bot difficulty for a single game; never shown as a number). */
+export const LEAGUE_BY_STRENGTH = LEAGUE.map((t, i) => [i, t.five.reduce((a, n, k) => a + ovr(n, POS[k]), 0)])
+  .sort((a, b) => a[1] - b[1]).map(([i]) => i);
+
 /** League team display name: named after its best starter (LEAGUE entries are teams: {five, bench, backs}). */
 export function teamName(opp) {
   const five = LEAGUE[opp].five;
