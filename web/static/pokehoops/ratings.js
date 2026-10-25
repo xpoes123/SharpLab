@@ -59,6 +59,8 @@ const CHART = {
   steel: ["ice rock fairy", "fire water electric steel", ""], fairy: ["fighting dragon dark", "fire poison steel", ""],
 };
 const eff1 = (a, d) => { const [se, nv, im] = CHART[a].map((x) => x.split(" ")); return im.includes(d) ? 0 : se.includes(d) ? 2 : nv.includes(d) ? 0.5 : 1; };
+/** One move type against a defender's types (0, 0.25 … 4) — Poké Hoops battle moves. */
+export const typeEff = (type, defN) => mon(defN).types.reduce((m, d) => m * eff1(type, d), 1);
 /** Best multiplier any of the shooter's types gets against the defender's types (0, 0.25 … 4). */
 export function effectiveness(attN, defN) {
   const a = mon(attN).types, d = mon(defN).types;
