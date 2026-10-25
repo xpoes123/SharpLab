@@ -20,16 +20,16 @@ export const PACK = 3;
 // checks this function's text against game.js at the vendored revision, so the offers can't drift.
 // three options from one tier (a random overall band), in different positions where possible: no dead packs, no
 // runaway best option, and position fit becomes part of the choice
-function tierPack(pool, rng) {
+function tierPack(pool, rng, k = 3) {
   const target = 56 + rng.float() * 30;
   for (let band = 6; band <= 40; band += 6) {
     const near = rng.shuffle(pool.filter((n) => Math.abs(bestPos(n).ovr - target) <= band));
     const pack = [];
-    for (const n of near) if (pack.length < 3 && !pack.some((m) => bestPos(m).pos === bestPos(n).pos)) pack.push(n);
-    for (const n of near) if (pack.length < 3 && !pack.includes(n)) pack.push(n);
-    if (pack.length === 3) return pack;
+    for (const n of near) if (pack.length < k && !pack.some((m) => bestPos(m).pos === bestPos(n).pos)) pack.push(n);
+    for (const n of near) if (pack.length < k && !pack.includes(n)) pack.push(n);
+    if (pack.length === k) return pack;
   }
-  return rng.shuffle(pool.slice()).slice(0, 3);
+  return rng.shuffle(pool.slice()).slice(0, k);
 }
 
 /** Replay a draft. Returns {packs, picks, error}: packs[i] is what pick i offered (packs.length = picks + 1
