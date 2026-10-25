@@ -73,7 +73,7 @@ function card(n, i) {
 
 function renderDraft() {
   const pack = S.picks.length < ROSTER ? nextPack(S.seed, S.picks) : null;
-  if (!pack) { S.phase = "setup"; S.starters = [0, 1, 2]; return render(); }
+  if (!pack) { S.phase = "setup"; S.starters = [0, 1, 2]; render(); return scrollTo(0, 0); }
   ctx.app.innerHTML = `${ctx.head("⚔️ Battle · 3v3 to 11")}<div class="phdraft"><button class="btn ghost pbexit" id="pbExit">← Exit</button>
     <div class="phdrafthead"><div><div class="phstep">Pick ${S.picks.length + 1} of ${ROSTER}${S.picks.length ? "" : " · Legendary"}</div>
       <div class="phprompt">${S.picks.length ? "Take one" : "Choose your Legendary"}</div>
@@ -88,13 +88,14 @@ function renderSetup() {
   const lvl = LEVELS.map((l, i) => `<button class="btn ghost${S.level === i ? " on" : ""}" data-blevel="${i}">${l.name}</button>`).join("");
   const courts = Object.entries(COURTS).map(([k, v]) => `<button class="btn ghost${S.court === k ? " on" : ""}" data-bcourt="${k}">${WX_ICON[k] || "🏟"} ${v}</button>`).join("");
   ctx.app.innerHTML = `${ctx.head("⚔️ Battle · 3v3 to 11")}<div class="card pbsetup"><button class="btn ghost pbexit" id="pbExit">← Exit</button>
-    <div class="phstep">Your starting three</div><div class="phmuted">Tap to choose three. The other three are your subs (swap at any dead ball; resting cures status but loses boosts).</div>
-    <div class="pbroster">${S.picks.map((n, i) => `<button class="pbmini pick${S.starters.includes(i) ? " on" : ""}" data-bstart="${i}"><img src="${sprite(n)}" alt=""><div><b>${esc(mon(n).name)}</b> ${mon(n).types.map(chip).join("")} <small>SPE ${mon(n).spe}</small><div class="pbmoves">${movesOf(n).map(moveChip).join("")}</div></div></button>`).join("")}</div>
+    <div class="phstep">Your starting three · ${S.starters.length}/${ON} picked</div><div class="phmuted">Tap to choose three. The other three are your subs (swap at any dead ball; resting cures status but loses boosts).</div>
+    <div class="pbroster">${S.picks.map((n, i) => `<button class="pbmini pick${S.starters.includes(i) ? " on" : ""}" data-bstart="${i}"><img src="${sprite(n)}" alt=""><div>${S.starters.includes(i) ? `<span class="pbbadge">Starter</span> ` : ""}<b>${esc(mon(n).name)}</b> ${mon(n).types.map(chip).join("")} <small>SPE ${mon(n).spe}</small><div class="pbmoves">${movesOf(n).map(moveChip).join("")}</div></div></button>`).join("")}</div>
     <div class="phgroup">Court</div><div class="phlevels">${courts}</div>
     <div class="phmuted">${S.court === "clear" ? "No weather. Weather moves still change it for a few turns." : esc(WEATHER[S.court])}</div>
     <div class="phgroup">Opponent</div><div class="phlevels">${lvl}</div>
-    <label class="pbhint"><input type="checkbox" id="pbHints" ${S.hints ? "checked" : ""}> Show type-effectiveness hints <small>(off = you need to know the chart)</small></label>
-    <button class="btn big primary" id="pbGo" ${S.starters.length === ON ? "" : "disabled"}>Tip off</button>
+    <label class="pbhint"><input type="checkbox" id="pbHints" ${S.hints ? "checked" : ""}> Show hints: type matchups and make % <small>(off = you need to know the chart)</small></label>
+    <div class="phmuted pblegend">SHT deep shooting · FIN finishing at the rim · HND handles (passes, steals) · PER-D perimeter D · RIM-D rim protection · REB rebounding · SPE speed (who acts first)</div>
+    <button class="btn big primary" id="pbGo" ${S.starters.length === ON ? "" : "disabled"}>${S.starters.length === ON ? "Tip off" : `Pick ${ON - S.starters.length} more starter${ON - S.starters.length > 1 ? "s" : ""}`}</button>
   </div>`;
 }
 
@@ -103,14 +104,16 @@ function tipOff() {
   const order = [...S.starters, ...S.picks.map((_, i) => i).filter((i) => !S.starters.includes(i))];
   S.rng = rng; S.phase = "battle"; S.log = []; S.sel = null; S.botName = `${L.name} bot`;
   S.B = newBattle([order.map((i) => S.picks[i]), bot.picks], [[0, 1, 2], bot.starters], rng, S.court);
-  S.log.unshift({ t: `Tip-off on a ${COURTS[S.court].toLowerCase()} court. ${S.B.off === 0 ? "You" : "They"} get the ball first.`, c: "q" });
+  S.pts = [{}, {}];
+  S.last = [{ t: `Tip-off on a ${COURTS[S.court].toLowerCase()} court. ${S.B.off === 0 ? "You get" : "They get"} the ball first.`, c: "q" }];
+  S.log.unshift(S.last);
   render(); scrollTo(0, 0);
 }
 
 // ── the battle ──
 const nm = (side, ri) => esc(mon(S.B.rosters[side][ri]).name);
 const onNm = (side, slot) => nm(side, S.B.on[side][slot]);
-function effWord(e) { return e >= 2 ? "It's super effective!" : e === 0 ? "It doesn't affect the defender…" : e < 1 ? "It's not very effective…" : ""; }
+function effWord(e) { return e >= 2 ? "It's super effective!" : e === 0 ? "It barely affects the defender…" : e < 1 ? "It's not very effective…" : ""; }
 
 function narrate(ev) {
   const B = S.B, lines = [];
@@ -123,12 +126,12 @@ function narrate(ev) {
         if (p.kind === "heave") return `${onNm(s, p.slot)} heaves it`;
         if (p.kind === "hold") return "holds";
         const m = movesOf(B.rosters[s][B.on[s][p.slot]])[p.mi];
-        return `${onNm(s, p.slot)} uses <b>${esc(m.name)}</b>${p.to !== undefined ? ` → ${onNm(s, p.to)}` : ""}`;
+        return `${onNm(s, p.slot)} uses <b>${esc(m.name)}</b>${["deep", "rim"].includes(m.cat) ? "" : ` <small>(${CAT[m.cat]})</small>`}${p.to !== undefined ? ` → ${onNm(s, p.to)}` : ""}`;
       };
       lines.push({ t: `<span class="pbo">${side(o)}:</span> ${describe(o, e.off)} &nbsp;·&nbsp; <span class="pbd">${side(1 - o)}:</span> ${describe(1 - o, e.def)}`, c: "pick" });
     } else if (e.k === "shot") {
       const who = onNm(B.off, e.slot), w = effWord(e.eff);
-      lines.push({ t: `${w ? `<i>${w}</i> ` : ""}${e.made ? `<b>${who} scores!</b> +${e.pts}${e.andOne ? " (and one!)" : e.ft ? " (free throw)" : ""}` : `${who} misses${e.fouled ? " (fouled — misses the free throw)" : ""}.`}`, c: e.made ? "big" : "dim" });
+      lines.push({ t: `${w ? `<i>${w}</i> ` : ""}${e.ft ? `${who} misses but draws the foul — <b>hits the free throw</b> +${e.pts}` : e.made ? `<b>${who} scores!</b> +${e.pts}${e.andOne ? " (and one!)" : ""}` : `${who} misses${e.fouled ? " (fouled — misses the free throw)" : ""}.`}`, c: e.made ? "big" : "dim" });
     } else if (e.k === "pass") lines.push({ t: `${onNm(B.off, e.to)} catches it${e.gain >= 2 ? " wide open" : e.gain ? " with room" : ", covered"}.`, c: "" });
     else if (e.k === "screen") lines.push({ t: e.switched ? `They switch the screen — mismatch!` : `The screen frees ${onNm(B.off, B.ball)}${e.gain >= 2 ? " completely" : ""}.`, c: "" });
     else if (e.k === "turnover") lines.push({ t: e.why === "steal" ? `<b>Stolen!</b>` : e.why === "confused" ? `${onNm(B.off, e.slot)} is confused… throws it away!` : "Turnover.", c: "neg" });
@@ -157,14 +160,16 @@ function act(myPick) {
   S.B = before;   // narrate with the pre-turn floor (names by slot), then advance
   const lines = narrate(ev);
   S.B = next;
-  if (next.off !== before.off || next.dead) lines.push({ t: `${next.score[0]}–${next.score[1]} · ${next.off === 0 ? "your ball" : "their ball"}`, c: "q" });
-  S.log.unshift(...lines.reverse());
-  S.log.length = Math.min(S.log.length, 80);
-  S.last = lines.slice().reverse();
+  if (next.winner < 0 && (next.off !== before.off || next.dead)) lines.push({ t: `${next.score[0]}–${next.score[1]} · ${next.off === 0 ? "your ball" : "their ball"}`, c: "q" });
+  for (const e of ev) if (e.k === "shot" && e.made) { const ri = before.on[before.off][e.slot]; S.pts[before.off][ri] = (S.pts[before.off][ri] || 0) + e.pts; }
+  S.log.unshift(lines);
+  S.log.length = Math.min(S.log.length, 60);
+  S.last = lines;
   if (S.B.dead && S.B.winner < 0) S.B = botSubs(S.B, 1);
   if (S.B.winner >= 0) { S.record[S.B.winner === 0 ? 0 : 1]++; pref("record", S.record); }
   S.sel = null;
   render();
+  document.querySelector(".pblast")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
 function playerCard(side, slot) {
@@ -175,9 +180,9 @@ function playerCard(side, slot) {
     ${ball ? `<span class="pbball">🏀</span>` : ""}<img src="${sprite(n)}" alt="">
     <div class="pbpn"><b>${esc(mon(n).name)}</b>${st ? ` ${ST_ICON[st.k]}` : ""}</div>
     <div class="pbtypes">${mon(n).types.map(chip).join("")}</div>
-    <div class="pbstam"><i style="width:${B.stam[side][ri]}%"></i></div>
+    <div class="pbstam" title="stamina ${Math.round(B.stam[side][ri])}%"><i style="width:${B.stam[side][ri]}%"></i></div>
     ${stages ? `<div class="pbstg">${stages}</div>` : ""}
-    ${off ? `<div class="pbopen">${"●".repeat(B.open[slot])}${"○".repeat(3 - B.open[slot])}</div>` : ""}
+    ${off ? `<div class="pbopen" title="how open: each ● makes the next shot better">open ${"●".repeat(B.open[slot])}${"○".repeat(3 - B.open[slot])}</div>` : ""}
     <small class="pbguard">${off ? `guarded by ${onNm(1 - side, guard)}` : `on ${onNm(1 - side, guard)}`}</small>
   </div>`;
 }
@@ -204,11 +209,12 @@ function optBtn(op) {
   if (op.kind === "pass") return `<button class="pbopt" data-bopt="${op.id}"><b>Pass → ${onNm(0, op.to)}</b><small>basic pass</small></button>`;
   if (op.kind === "heave") return `<button class="pbopt" data-bopt="${op.id}"><b>Heave it</b><small>out of shot PP</small></button>`;
   if (op.kind === "hold") return `<button class="pbopt" data-bopt="${op.id}"><b>Hold</b></button>`;
-  const side = B.off === 0 ? 0 : 0, ri = B.on[side][op.slot], m = movesOf(B.rosters[side][ri])[op.mi], pp = B.pp[side][ri][op.mi];
+  const side = 0, ri = B.on[side][op.slot], m = movesOf(B.rosters[side][ri])[op.mi], pp = B.pp[side][ri][op.mi];
   let hint = "";
   if (S.hints && (m.cat === "deep" || m.cat === "rim")) {
     const e = typeEff(m.type, B.rosters[1][B.on[1][B.guard[B.ball]]]);
-    hint = e >= 2 ? `<em class="pos">super effective</em>` : e === 0 ? `<em class="neg">no effect</em>` : e < 1 ? `<em class="neg">not very effective</em>` : "";
+    const pct = (sc) => Math.round(100 * shotChance(B, m, sc));
+    hint = `<em>${pct("man")}% vs man</em> ` + (e >= 2 ? `<em class="pos">super effective</em>` : e === 0 ? `<em class="neg">barely affects (−15%)</em>` : e < 1 ? `<em class="neg">not very effective</em>` : "");
   }
   return `<button class="pbopt mv" style="--tc:${TYPE_COL[m.type] || "#888"}" data-bopt="${op.id}"><b>${esc(m.name)}${op.to !== undefined ? ` → ${onNm(0, op.to)}` : ""}</b>
     <small>${m.type} · ${CAT[m.cat]}${m.boost ? ` (${Object.entries(m.boost).map(([k, v]) => `${STAT_LAB[k]} ${v > 0 ? "+" : ""}${v}`).join(" ")})` : m.drop ? ` (${Object.entries(m.drop).map(([k, v]) => `${STAT_LAB[k]} ${v}`).join(" ")})` : m.st ? ` (${STATUS_TXT[m.st]})` : ""} · PP ${pp}/${m.pp}</small>${hint}</button>`;
@@ -220,25 +226,27 @@ function renderBattle() {
   const bench = (side) => S.B.rosters[side].map((n, ri) => [n, ri]).filter(([, ri]) => !B.on[side].includes(ri));
   ctx.app.innerHTML = `${ctx.head()}<div class="card pbbattle"><button class="btn ghost pbexit" id="pbExit">← Exit</button>
     <div class="phsb"><div><small>You</small><b>${B.score[0]}</b></div>
-      <div class="phclock">to ${TO}${wx ? ` · ${WX_ICON[wx]}` : ""}<small>${over ? "FINAL" : B.dead ? "dead ball" : `${mineBall ? "your ball" : "on defense"}`}</small>${over ? "" : `<span class="pbclock" title="shot clock">${clock}</span>`}</div>
+      <div class="phclock">to ${TO}${wx ? ` · ${WX_ICON[wx]}` : ""}<small>${over ? "FINAL" : B.dead ? "dead ball" : `${mineBall ? "your ball" : "on defense"}`}</small>${over ? "" : `<span class="pbclock" title="shot clock: actions left">${clock}</span><small>shot clock</small>`}</div>
       <div><small>${esc(S.botName)}</small><b>${B.score[1]}</b></div></div>
     ${wx ? `<div class="phmuted pbwx">${WX_ICON[wx]} ${esc(WEATHER[wx])}${B.weather ? ` (${B.weather.t} turns)` : " (the court)"}</div>` : ""}
-    <div class="pbcourt"><div class="pbrow them">${[0, 1, 2].map((s) => playerCard(1, s)).join("")}</div>
-      <div class="pbrow us">${[0, 1, 2].map((s) => playerCard(0, s)).join("")}</div></div>
+    <div class="pbcourt"><div class="pbside">${esc(S.botName)}</div><div class="pbrow them">${[0, 1, 2].map((s) => playerCard(1, s)).join("")}</div>
+      <div class="pbside">You</div><div class="pbrow us">${[0, 1, 2].map((s) => playerCard(0, s)).join("")}</div></div>
     ${S.last?.length ? `<div class="pblast">${S.last.map((l) => `<div class="${l.c}">${l.t}</div>`).join("")}</div>` : ""}
     ${over ? `<div class="phgrade ${B.winner === 0 ? "great" : "bad"} pop">${B.winner === 0 ? "You win" : `${esc(S.botName)} wins`} ${Math.max(...B.score)}–${Math.min(...B.score)}</div>
+        <div class="pbrecap">${[0, 1].map((sd) => `<div><div class="phgroup">${sd ? esc(S.botName) : "You"}</div>${Object.entries(S.pts[sd]).sort((a, b) => b[1] - a[1]).map(([ri, p]) => `<div class="pbscorer"><img src="${sprite(B.rosters[sd][ri])}" alt=""> ${nm(sd, ri)} <b>${p}</b></div>`).join("") || `<div class="phmuted">no points</div>`}</div>`).join("")}</div>
         <div class="phmuted">You're ${S.record[0]}–${S.record[1]} in battles.</div>
-        <div class="phactions"><button class="btn primary" id="pbAgain">Rematch</button><button class="btn ghost" id="pbNew">New draft</button></div>`
+        <div class="phactions"><button class="btn primary" id="pbAgain">Rematch (same six)</button><button class="btn ghost" id="pbNew">New draft</button></div>`
       : `${B.dead ? `<details class="pbsubs"${S.sel != null ? " open" : ""}><summary>🔁 Dead ball: make a sub? <small>tap a player on the floor, then who comes in</small></summary>
           <div class="pbroster">${bench(0).map(([n, ri]) => `<button class="pbmini pick" data-bbench="${ri}"><img src="${sprite(n)}" alt=""><div><b>${esc(mon(n).name)}</b> ${mon(n).types.map(chip).join("")}<div class="pbstam"><i style="width:${B.stam[0][ri]}%"></i></div></div></button>`).join("")}</div></details>` : ""}
         <div class="pbchoose"><div class="phstep">${mineBall ? "Your call on offense" : "Your call on defense"}</div>${optionButtons()}</div>`}
-    <details class="pblog"><summary>Play-by-play</summary>${S.log.map((l) => `<div class="${l.c}">${l.t}</div>`).join("")}</details>
+    <details class="pblog"><summary>Play-by-play</summary>${S.log.map((turn) => `<div class="pbturn">${turn.map((l) => `<div class="${l.c}">${l.t}</div>`).join("")}</div>`).join("")}</details>
     <details class="pbhelp"><summary>How it works</summary><ul>
       <li>Both coaches pick at the same time. Offense: shoot (rim = 1, deep = 2), pass, or a teammate's screen / status / boost / weather move. Defense: a scheme, or a defender's move.</li>
       <li>Deep beats <b>Pack the paint</b>; the rim beats <b>Deny</b>; passes and screens beat the <b>Press</b>; <b>Deny</b> steals passes; <b>Switch</b> kills screens but can leave a mismatch.</li>
       <li>Open (●) makes the next shot better. Shot clock: ${CLOCK} actions; an offensive board resets it.</li>
-      <li>Type matchups vs the defender count on every shot (and STAB). Faster Pokémon act first with status moves. Weather boosts Water or Fire; sandstorm wears down everyone not Rock/Ground/Steel.</li>
-      <li>Tired legs miss. Subs only at dead balls: resting cures status but resets boosts.</li></ul></details>
+      <li>Type matchups vs the defender count on every shot (and STAB). A defender's status or debuff move lands before the handler acts if the defender is faster. Rain powers Water and weakens Fire, sun the reverse; sandstorm wears down everyone not Rock/Ground/Steel.</li>
+      <li>Rim attacks can draw a foul: and-one on a make, a free throw on a miss. The press doubles your own defenders' stamina drain.</li>
+      <li>Tired legs miss. Subs only at dead balls (after a make or a violation): resting cures status but resets boosts.</li></ul></details>
   </div>`;
 }
 
@@ -257,7 +265,7 @@ export function handle(e) {
   if ((el = t("[data-bbench]")) && S.B?.dead) {
     if (S.sel == null) { ctx.toast("Tap the player coming off first"); return true; }
     const nb = sub(S.B, 0, S.sel, Number(el.dataset.bbench));
-    if (nb) { S.log.unshift({ t: `Sub: ${nm(0, Number(el.dataset.bbench))} in for ${onNm(0, S.sel)}.`, c: "to" }); S.B = nb; }
+    if (nb) { S.log.unshift([{ t: `Sub: ${nm(0, Number(el.dataset.bbench))} in for ${onNm(0, S.sel)}.`, c: "to" }]); S.B = nb; }
     S.sel = null; render(); return true;
   }
   if (t("#pbAgain")) { tipOff(); return true; }

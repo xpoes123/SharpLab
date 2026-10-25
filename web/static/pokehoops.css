@@ -112,6 +112,7 @@ img { image-rendering: pixelated; }
 .phstrip b { aspect-ratio: 1; border-radius: 2px; background: var(--panel2); transition: background .15s; }
 .phstrip b.w { background: var(--green); }
 .phstrip b.l { background: var(--red); }
+.phstrip b.w, .phstrip b.l { cursor: pointer; } .phstrip b.on { outline: 2px solid var(--fg); outline-offset: 1px; }
 .phfive, .phbench { display: flex; justify-content: center; gap: 4px; flex-wrap: wrap; }
 .phfive figure, .phbench figure { margin: 0; display: flex; flex-direction: column; align-items: center; }
 .phfive img { width: 56px; height: 56px; }
@@ -120,7 +121,7 @@ img { image-rendering: pixelated; }
 .phbench figcaption { font-size: 11px; color: var(--muted); max-width: 120px; text-align: center; }
 .phbench { gap: 10px; margin-top: -6px; }
 
-.phgrade { font-size: 54px; font-weight: 900; line-height: 1.1; margin: 6px 0 2px; }
+.phgrade { font-size: clamp(32px, 9vw, 54px); font-weight: 900; line-height: 1.1; margin: 6px 0 2px; }
 .phgrade.perfect { background: linear-gradient(90deg, var(--gold), var(--accent2), var(--accent)); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .phgrade.great { color: var(--gold); }
 .phgrade.good { color: var(--green); }
@@ -271,7 +272,7 @@ button.phgame { color: var(--fg); font: inherit; text-align: left; cursor: point
 /* ── one game vs a bot ── */
 .phlevels { display: flex; flex-wrap: wrap; gap: 8px; }
 .phlive { display: grid; gap: 12px; }
-.phsb { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; text-align: center; background: var(--panel2); border-radius: var(--r-lg); padding: 10px; position: sticky; top: 0; z-index: 2; }
+.phsb { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; text-align: center; background: var(--panel2); border-radius: var(--r-lg); padding: 10px; position: sticky; top: 0; z-index: 60; }
 .phsb b { display: block; font-size: 40px; font-weight: 800; font-family: var(--font-mono); } .phsb small { color: var(--muted); font-size: 12px; }
 .phclock { font-family: var(--font-mono); font-weight: 800; color: var(--accent); } .phclock small { display: block; font-weight: 400; font-size: 10px; margin-top: 4px; }
 .phfloor { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; } .phfloor > div { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px; align-items: center; }
@@ -283,22 +284,25 @@ button.phgame { color: var(--fg); font: inherit; text-align: left; cursor: point
 .phcall.off { opacity: .45; cursor: default; } .phcall.q { border-color: var(--gold); opacity: 1; }
 .phcall:not(.off):hover { border-color: var(--accent); }
 .btn.on { border-color: var(--accent); color: var(--accent); }
+.btn.warn { border-color: var(--gold); color: var(--gold); }
 .phfeed { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 420px; overflow-y: auto; }
 .phfeed li { font-size: 14px; padding: 4px 8px; border-radius: 6px; } .phfeed li span { display: block; font-family: var(--font-mono); font-size: 10px; color: var(--faint); }
 .phfeed li.dim { color: var(--muted); } .phfeed li.big { background: var(--accent-soft); } .phfeed li.call { background: color-mix(in srgb, var(--gold) 16%, transparent); }
+.phfeed li.s0, .phfeed li.s1 { border-left: 3px solid var(--accent); } .phfeed li.s1 { border-left-color: var(--accent2); }
+.phsb .s0 small { color: var(--accent); } .phsb .s1 small { color: var(--accent2); }
 .phfeed li.to { color: var(--accent2); } .phfeed li.q { text-align: center; color: var(--accent); font-weight: 700; }
 @media (max-width: 400px) { .phbook { grid-template-columns: 1fr; } }
 
 /* ── battle (beta) ── */
 .pbcta { border: 1px solid color-mix(in srgb, var(--gold) 45%, var(--line)); }
-.pbexit { justify-self: start; padding: 4px 10px; font-size: 13px; }
+.pbexit { justify-self: start; padding: 4px 14px; font-size: 13px; min-height: 40px; }
 .pbmoves { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
 .pbmv { display: inline-grid; padding: 2px 7px; border-radius: 6px; border-left: 3px solid var(--tc); background: var(--panel2); line-height: 1.15; }
 .pbmv b { font-size: 12px; } .pbmv small { font-size: 10px; color: var(--muted); }
 .pbroster { display: grid; gap: 6px; }
 .pbmini { display: grid; grid-template-columns: 44px 1fr; gap: 8px; align-items: center; text-align: left; background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r); padding: 6px 8px; color: var(--fg); font: inherit; }
 .pbmini img { width: 44px; height: 44px; image-rendering: pixelated; } .pbmini small { color: var(--muted); }
-.pbmini.pick { cursor: pointer; } .pbmini.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--ring); }
+.pbmini.pick { cursor: pointer; } .pbmini.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--ring); background: color-mix(in srgb, var(--accent) 14%, var(--panel2)); }
 .pbsetup, .pbbattle { display: grid; gap: 12px; }
 .pbhint { font-size: 14px; display: flex; gap: 8px; align-items: center; } .pbhint small { color: var(--muted); }
 .pbclock { display: flex; gap: 3px; justify-content: center; margin-top: 4px; } .pbclock i { width: 10px; height: 10px; border-radius: 50%; background: var(--panel); border: 1px solid var(--line-strong); }
@@ -327,7 +331,20 @@ button.phgame { color: var(--fg); font: inherit; text-align: left; cursor: point
 .pbopt.mv { border-left: 4px solid var(--tc); } .pbopt b { font-size: 14px; } .pbopt small { font-size: 11px; color: var(--muted); line-height: 1.25; }
 .pbopt em { font-style: normal; font-size: 11px; font-weight: 700; } .pbopt:hover { border-color: var(--accent); }
 .pbsubs { display: grid; gap: 8px; }
-.pblog summary, .pbhelp summary { cursor: pointer; color: var(--fg-2); padding: 4px 0; }
-.pblog { font-size: 13px; } .pblog > div { padding: 2px 0; border-bottom: 1px solid var(--line); }
+.pblog summary, .pbhelp summary, .pbsubs summary { cursor: pointer; color: var(--fg-2); padding: 10px 0; min-height: 24px; }
+.pblog { font-size: 13px; } .pbturn { padding: 4px 0; border-bottom: 1px solid var(--line); display: grid; gap: 1px; }
 .pbhelp ul { margin: 0; padding-left: 18px; font-size: 13px; color: var(--fg-2); line-height: 1.5; }
 @media (max-width: 380px) { .pbopts { grid-template-columns: 1fr; } }
+/* header scrolls away on game screens so the scoreboard can stick */
+body:has(.phsb) header { position: static; }
+.pbhint input { width: 20px; height: 20px; accent-color: var(--accent); }
+.pbbadge { font-size: 10px; font-weight: 800; text-transform: uppercase; background: var(--accent); color: #11121a; border-radius: 4px; padding: 1px 5px; }
+.pbside { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; padding-left: 4px; }
+.pblegend { font-size: 12px; }
+.phclock > small + .pbclock + small, .phclock .pbclock + small { display: block; font-size: 10px; }
+.pbrecap { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.pbscorer { display: flex; align-items: center; gap: 6px; font-size: 14px; } .pbscorer img { width: 28px; height: 28px; image-rendering: pixelated; } .pbscorer b { margin-left: auto; font-family: var(--font-mono); }
+.phfive.named { gap: 6px; } .phfive.named figure { width: 58px; }
+.phfive.named figcaption { text-align: center; line-height: 1.15; max-width: 58px; }
+.phfive.named figcaption small { display: block; font-family: system-ui, sans-serif; font-weight: 600; font-size: 10px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.phvsline { margin: 4px 0; }

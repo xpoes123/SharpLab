@@ -91,6 +91,21 @@ async def start(request: Request):
     return {"token": token, "seed": seed}
 
 
+class TouchBody(BaseModel):
+    token: str
+
+
+@router.post("/touch")
+async def touch(request: Request, body: TouchBody):
+    """Keep an open draft alive (the page calls this on reload and between bot games): resets its TTL clock."""
+    state = gameround.peek(body.token)
+    if not isinstance(state, dict) or state.get("game") != "pokehoops" or state.get("uid") != _uid(request) \
+            or time.monotonic() - state["started"] > DRAFT_TTL:
+        return JSONResponse({"error": "draft expired — start a new one"}, status_code=400)
+    state["started"] = time.monotonic()
+    return {"ok": True}
+
+
 class TeamBody(BaseModel):
     five: list[int]
     bench: list[int]

@@ -189,6 +189,9 @@ def test_web_start_submit_flow(monkeypatch):
         await sch.init_db()
         monkeypatch.setattr(gp.auth, "read_session", lambda r: {"id": "p1"})
         start = await gp.start(_Req())
+        gp.gameround.peek(start["token"])["started"] -= gp.DRAFT_TTL - 5   # nearly expired: a touch resets the clock
+        assert (await gp.touch(_Req(), gp.TouchBody(token=start["token"]))) == {"ok": True}
+        assert gp.gameround.peek(start["token"])["started"] > gp.time.monotonic() - 5
         picks = await _draft(start["seed"], choose=1)
         team = {"five": picks[3:8], "bench": picks[:3], "backs": [2, 2, 4]}   # a coach's own arrangement
         res = await gp.submit(_Req(), gp.SubmitBody(token=start["token"], picks=picks, team=team))
@@ -198,6 +201,7 @@ def test_web_start_submit_flow(monkeypatch):
         assert (await ph.sim_season(start["seed"], picks, team, res["season_seed"]))["strip"] == res["strip"]
         again = await gp.submit(_Req(), gp.SubmitBody(token=start["token"], picks=picks, team=team))
         assert again.status_code == 400                     # single-use token
+        assert (await gp.touch(_Req(), gp.TouchBody(token=start["token"]))).status_code == 400   # spent: nothing to keep alive
         lb = await gp.leaderboard(_Req())
         assert lb["top"][0]["me"] and lb["top"][0]["wins"] == res["wins"]
         share = await gp.season(_Req(), res["id"])

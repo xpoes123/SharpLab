@@ -9,7 +9,7 @@
 // (same vendored engine, same seeds) for the game-by-game reveal. ?s=<id> replays a shared season.
 // Two-player: any recorded season's team can be challenged — draft your own eight, then a best-of-seven against
 // it (POST /submit with vs=<season id>), simmed server-side the same way. ?x=<id> replays a shared series.
-import { nextPack, playSeason, playSeries, bestOf7, duelReplay, SERIES_WINS, summarize, teamName, defaultTeam, PICKS, POS, mon, bestPos, LEGENDS, LEAGUE, LEAGUE_BY_STRENGTH } from "./pokehoops-draft.js";
+import { nextPack, matchLine, seasonGame, playSeason, playSeries, bestOf7, duelReplay, SERIES_WINS, summarize, teamName, defaultTeam, PICKS, POS, mon, bestPos, LEGENDS, LEAGUE, LEAGUE_BY_STRENGTH } from "./pokehoops-draft.js";
 import { profile, skills } from "./pokehoops/ratings.js";
 import { members, asTeam, seeded, newGame, quarterDone, gameDone, nextQuarter, rollPoss, playBeat, preplay, botCall, queueCall,
   queueTimeout, callStatus, CALLS } from "./pokehoops/engine.js";
@@ -138,15 +138,37 @@ function pickSlots(picks) {
 
 const head = (sub = "") => `<div class="phhead"><h1>🏀 Poké Hoops</h1>${sub ? `<p>${sub}</p>` : ""}</div>`;
 
+// The solo / challenge draft survives a refresh: kept in sessionStorage (per tab), dropped once played or abandoned.
+const DKEY = "phdraft";
+function saveDraft() {
+  const d = state.draft;
+  try { if (d && !d.duel) sessionStorage.setItem(DKEY, JSON.stringify({ ...d, sel: null, vsLine: null, uid: state.me?.user?.id })); else sessionStorage.removeItem(DKEY); } catch { /* fine */ }
+}
+function loadDraft() {
+  try { const d = JSON.parse(sessionStorage.getItem(DKEY) || "null"); return d?.token && d.uid === state.me?.user?.id ? d : null; } catch { return null; }
+}
+// Ask the server to keep the draft's token alive; if it's gone (TTL, restart) the picks stay, only the season is off.
+const touchDraft = (d) => d?.token && !d.expired && post("/touch", { token: d.token }).then((r) => {
+  if (!r.error || state.draft !== d || !/expired/.test(r.error)) return;
+  d.expired = true; saveDraft();
+  if (!state.live && !battle?.active() && ($("phPlay") || document.querySelector(".phpack"))) renderDraft();
+});
+
 // ── Views ────────────────────────────────────────────────────────────────────
 function renderIntro() {
-  state.draft = null;
+  state.draft = null; saveDraft();
   const signedOut = !state.me ? `<p class="muted">Play as a guest (just a name; your seasons still go on the board), or sign in with Discord to earn and bet coins.</p>
     <div class="phactions"><input id="phGuestName" class="phinput" maxlength="20" placeholder="Your name" autocomplete="nickname" aria-label="Guest name">
       <button class="btn big primary" id="phGuest">Play as guest</button></div>
     <a class="btn ghost" href="/api/v1/auth/discord/login">Sign in with Discord</a>` : "";
-  app.innerHTML = `${head("Draft eight Pokémon. Coach the lineup. Play 82 games against the league. Go 82–0.")}
+  app.innerHTML = `${head("Draft Pokémon. Coach them. Beat a bot, a friend, or the whole league.")}
+    <div class="card phduelcta pbcta">
+      <div class="phstep">⚔️ New · Battle (beta)</div>
+      <p class="phmuted">The new game: 3v3, first to 11, played like a Pokémon battle. Every turn you and the opponent pick at once: shots, passes, screens, status moves, stat boosts, weather. Draft six, rotate three.</p>
+      <div class="phactions"><button class="btn primary" id="pbStart">Battle a bot</button></div>
+    </div>
     <div class="card phintro">
+      <div class="phstep">🏆 82-game season</div>
       <div class="phlegends">${LEGENDS.map((n) => `<img src="${sprite(n)}" alt="">`).join("")}</div>
       <ol class="phrules">
         <li><b>Pick 1</b> is a Legendary — three of the eleven are on offer.</li>
@@ -157,11 +179,6 @@ function renderIntro() {
       </ol>
       ${state.me ? `<button class="btn big primary" id="phStart">Start the draft</button>` : signedOut}
       <p class="phfine">Same engine as the TV cartridge. The server re-checks every pick and sims the season itself.</p>
-    </div>
-    <div class="card phduelcta pbcta">
-      <div class="phstep">⚔️ Battle · beta</div>
-      <p class="phmuted">The new game: 3v3, first to 11, played like a Pokémon battle. Every turn you and the opponent pick at once: shots, passes, screens, status moves, stat boosts, weather. Draft six, rotate three.</p>
-      <div class="phactions"><button class="btn primary" id="pbStart">Battle a bot</button></div>
     </div>
     <div class="card phduelcta">
       <div class="phstep">🆚 Live duel · two phones, one table</div>
@@ -188,6 +205,7 @@ async function startDraft(vs = null) {
 
 function renderDraft() {
   const d = state.draft, pack = nextPack(d.seed, d.picks);
+  saveDraft();
   if (!pack) { d.team = d.team || defaultTeam(d.picks); d.sel = null; return renderLineup(); }
   const i = d.picks.length;
   app.innerHTML = `${head()}
@@ -195,7 +213,8 @@ function renderDraft() {
       <div class="phdrafthead">
         <div><div class="phstep">Pick ${i + 1} of ${PICKS}${i === 0 ? " · Legendary" : ""}</div>
           <div class="phprompt">${i === 0 ? "Choose your franchise Legendary" : "Take one"}</div>
-          ${d.vs ? `<div class="phmuted">⚔️ Drafting to take on ${esc(d.vs.name)}'s team</div>` : ""}</div>
+          ${d.vs ? `<div class="phmuted">⚔️ Drafting to take on ${esc(d.vs.name)}'s team</div>` : ""}
+          ${d.expired ? `<div class="phmuted">⌛ This draft timed out on the server (bot games only now). <button class="btn ghost" id="phRedraft">Start a new one</button></div>` : ""}</div>
         ${pickSlots(d.picks)}
       </div>
       <div class="phpack">${pack.map(optionCard).join("")}</div>
@@ -241,6 +260,8 @@ function renderLineup() {
   const d = state.draft, t = d.team;
   const hint = d.sel == null ? "Tap a player, then another, to swap them (or drag one onto another)."
                              : `Now tap who ${esc(mon(slotGet(t, d.sel)).name)} swaps with.`;
+  if (d.vs) vsLineSoon(d);
+  saveDraft();
   app.innerHTML = `${head()}
     <div class="card phlineup">
       <div><div class="phstep">You're the coach</div>
@@ -250,9 +271,11 @@ function renderLineup() {
       <div class="phrows">${[0, 1, 2, 3, 4].map((k) => coachRow(t, k, d.sel)).join("")}</div>
       <div class="phgroup">Bench <small>subs in mid-quarter behind the spot it backs up · two at one spot split the minutes</small></div>
       <div class="phrows">${[5, 6, 7].map((k) => coachRow(t, k, d.sel)).join("")}</div>
-      ${d.vs ? `<div class="phgroup">vs ${esc(d.vs.name)}</div>${teamStrip(d.vs.team)}` : ""}
+      ${d.vs ? `<div class="phgroup">vs ${esc(d.vs.name)}</div>${teamStrip(d.vs.team, true)}<div id="phVsLine" class="phvsline">${vsLineHTML(d)}</div>` : ""}
       ${d.duel ? `<p class="phmuted" id="phOppStat">${oppLineupStat()}</p>` : ""}
-      <button class="btn big primary" id="phPlay">${playLabel(d)}</button>
+      ${d.expired ? `<p class="phmuted">⌛ This draft timed out on the server, so it can't play ${d.vs ? "the series" : "a season"} any more. Bot games below still work.</p>
+        <button class="btn big primary" id="phRedraft">Start a new draft</button>`
+        : `<button class="btn big primary" id="phPlay">${playLabel(d)}</button>`}
       ${!d.vs && !d.duel ? `<div class="phgroup">Or play one game first <small>you coach it live: call plays, call timeouts. Doesn't use up the draft.</small></div>
         <div class="phlevels">${BOT_LEVELS.map((l, i) => `<button class="btn ghost" data-bot="${i}">🎮 vs ${l.name}</button>`).join("")}</div>` : ""}
     </div>`;
@@ -261,8 +284,28 @@ function renderLineup() {
 const oppLineupStat = () => { const v = state.duel?.view, n = esc(v?.names[1 - v.seat] || "");
   return v?.opp_locked ? `${n} has locked their lineup ✓` : `${n} is setting their lineup…`; };
 const playLabel = (d) => (d.duel ? "Lock in my lineup" : d.vs ? `Lock in &amp; play ${esc(d.vs.name)} · best of 7` : "Lock in &amp; play the season");
-const teamStrip = (t) => `<div class="phfive">${t.five.map((n, i) => `<figure><img src="${sprite(n)}" alt="${esc(mon(n).name)}" title="${POS[i]} ${esc(mon(n).name)}"><figcaption>${POS[i]}</figcaption></figure>`).join("")}
-  ${t.bench.map((n) => `<figure class="phbenchfig"><img src="${sprite(n)}" alt="" title="${esc(mon(n).name)} (bench)"><figcaption>B</figcaption></figure>`).join("")}</div>`;
+const nameCap = (named, n) => (named ? `<small>${esc(mon(n).name)}</small>` : "");
+const teamStrip = (t, named = false) => `<div class="phfive${named ? " named" : ""}">${t.five.map((n, i) => `<figure><img src="${sprite(n)}" alt="${esc(mon(n).name)}" title="${POS[i]} ${esc(mon(n).name)}"><figcaption>${POS[i]}${nameCap(named, n)}</figcaption></figure>`).join("")}
+  ${t.bench.map((n, j) => `<figure class="phbenchfig"><img src="${sprite(n)}" alt="" title="${esc(mon(n).name)} (bench)"><figcaption>${named && t.backs ? `B·${POS[t.backs[j]]}` : "B"}${nameCap(named, n)}</figcaption></figure>`).join("")}</div>`;
+
+// Challenge lineup: the engine's line on this exact matchup, recomputed (debounced, small n so a phone keeps up) as you coach
+const vsKey = (d) => JSON.stringify([d.team, d.vs.team]);
+function vsLineHTML(d) {
+  const c = d.vsLine;
+  if (!c || c.key !== vsKey(d)) return `<span class="phmuted">📈 Working out the line…</span>`;
+  const names = [state.me?.user?.username || "You", d.vs.name], l = c.line, fav = l.series >= 0.5 ? 0 : 1;
+  return `<details class="phlinewrap"><summary>Pregame line: ${esc(names[fav])} ${american(Math.max(l.series, 1 - l.series))} · you win ${pct(l.p)} of games</summary>${lineCard(l, names, [d.team, d.vs.team])}</details>`;
+}
+function vsLineSoon(d) {
+  clearTimeout(state.vsTimer);
+  if (d.vsLine?.key === vsKey(d)) return;
+  state.vsTimer = setTimeout(() => {
+    if (state.draft !== d || !d.vs) return;
+    d.vsLine = { key: vsKey(d), line: matchLine(d.team, d.vs.team, 400) };
+    const el = $("phVsLine"), open = el?.querySelector("details")?.open;
+    if (el) { el.innerHTML = vsLineHTML(d); if (open) el.querySelector("details").open = true; }
+  }, 400);
+}
 
 function tapSlot(k) {
   const d = state.draft;
@@ -282,10 +325,13 @@ async function playIt() {
   state.busy = false;
   if (res.error) {
     toast("❌ " + res.error);
-    if (/expired|illegal/.test(res.error)) return renderIntro();
+    if (/expired/.test(res.error)) { d.expired = true; return renderLineup(); }   // keep the picks: bot games still work
+    if (/illegal/.test(res.error)) return renderIntro();
     if (btn) { btn.disabled = false; btn.innerHTML = playLabel(d); }
     return;
   }
+  state.draft = null; saveDraft();
+  if (res.id) history.replaceState(null, "", `?${d.vs ? "x" : "s"}=${res.id}${MOCK ? "&mock=1" : ""}`);
   if (d.vs) return revealSeries({ ...res, name: state.me?.user?.username || "You", opp_name: d.vs.name, opp_team: d.vs.team }, true);
   if (res.balance != null) { state.balance = res.balance; renderNav(state.me?.user); }
   reveal(d.seed, d.picks, d.team, res, { mine: true });
@@ -297,13 +343,14 @@ function reveal(seed, picks, team, server, { mine = false, owner = null, me = fa
   const local = summarize(s.team, s);
   if (server.strip && server.strip !== local.strip) console.warn("pokehoops: local replay differs from server", server, local);
   const sum = { ...local, ...server, games: s.games };
-  state.reveal = { sum, mine: mine || me, posted: mine, owner, timer: 0, g: 0, done: false };
+  state.reveal = { sum, mine: mine || me, posted: mine, owner, timer: 0, g: 0, done: false, team: s.team, seasonSeed: server.season_seed };
   app.innerHTML = `${head()}
     <div class="card phseason">
       <div class="phstep">${owner ? `${esc(owner)}'s season` : "The season"}</div>
       <div class="phrec"><span id="phW">0</span><i>–</i><span id="phL">0</span></div>
       <div class="phticker" id="phTick">Tip-off…</div>
-      <div class="phstrip" id="phStrip">${sum.games.map(() => "<b></b>").join("")}</div>
+      <div class="phstrip" id="phStrip">${sum.games.map((_, k) => `<b data-sg="${k}"></b>`).join("")}</div>
+      <div id="phDetail"></div>
       <div class="phfive">${s.team.five.map((n, i) => `<figure><img src="${sprite(n)}" alt="${esc(mon(n).name)}" title="${POS[i]} ${esc(mon(n).name)}"><figcaption>${POS[i]}</figcaption></figure>`).join("")}</div>
       <div class="phbench">${s.team.bench.map((n, j) => `<figure><img src="${sprite(n)}" alt="" title="${esc(mon(n).name)} backs up ${POS[s.team.backs[j]]}"><figcaption>${esc(mon(n).name)} · backs ${POS[s.team.backs[j]]}</figcaption></figure>`).join("")}</div>
       <button class="btn ghost" id="phSkip">Skip to the end ⏭</button>
@@ -353,9 +400,9 @@ function finish() {
   const gradeCls = s.wins === 82 ? "perfect" : s.wins >= 64 ? "great" : s.wins >= 50 ? "good" : s.wins >= 35 ? "meh" : "bad";
   const bg = s.best_game, ts = s.top_scorer;
   const extras = r.mine ? `
-      ${s.is_new_best ? `<div class="phnew${REDUCE ? "" : " pop"}">🏆 New personal best${s.prev_best != null ? ` (was ${s.prev_best}–${82 - s.prev_best})` : ""}</div>`
-                      : s.prev_best != null ? `<div class="phmuted">Your best: ${s.prev_best}–${82 - s.prev_best}</div>` : ""}
-      ${s.rank ? `<div class="phrank">#${num(s.rank)} on the board</div>` : ""}
+      ${s.is_new_best ? `<div class="phnew${REDUCE ? "" : " pop"}">🏆 New personal best${s.prev_best != null ? ` (was ${s.prev_best}–${82 - s.prev_best})` : ""}</div>
+                         ${s.rank ? `<div class="phrank">#${num(s.rank)} on the board</div>` : ""}`
+                      : s.prev_best != null ? `<div class="phmuted">Your best is still ${s.prev_best}–${82 - s.prev_best}${s.rank ? ` · it's #${num(s.rank)} on the board` : ""}</div>` : ""}
       ${s.coins ? `<div class="phcoins">+${num(s.coins)} 🪙</div>` : ""}` : "";
   $("phFinal").innerHTML = `
     <div class="phgrade ${gradeCls}${REDUCE ? "" : " pop"}">${esc(s.grade)}</div>
@@ -512,8 +559,8 @@ function showSeries(o) {
 }
 
 const PLAY_TXT = { dunk: "throws it down 💥", three: "drills a three", block: "sends it back 🚫", steal: "picks his pocket", and1: "scores through contact — and one", clutch: "hits a clutch bucket 🧊" };
-function gameDetail(k) {
-  const o = state.reveal?.series, g = o?.games[k];
+function gameDetail(k, scroll = true, o = state.reveal?.series) {
+  const g = o?.games[k];
   if (!g) return;
   const ms = o.teams.map(members), qn = (q) => (q <= 4 ? `Q${q}` : `OT${q > 5 ? q - 4 : ""}`);
   const box = (s) => `<div class="phbox"><div class="phgroup">${esc(o.names[s])} <b>${s ? g.them : g.us}</b></div><div class="phboxscroll"><table>
@@ -536,7 +583,7 @@ function gameDetail(k) {
   $("phDetail").innerHTML = `<div class="phdetail"><div class="phdetailhead"><b>Game ${k + 1}</b> · ${esc(o.names[0])} ${g.us}–${g.them} ${esc(o.names[1])}<button class="btn ghost" id="phDetailX" aria-label="Close">✕</button></div>
     ${chart}${box(0)}${box(1)}${plays ? `<div class="phgroup">Big plays</div><ul class="phplays">${plays}</ul>` : ""}</div>`;
   document.querySelectorAll(".phgame").forEach((el) => el.classList.toggle("on", Number(el.dataset.g) === k));
-  $("phDetail").scrollIntoView({ behavior: REDUCE ? "auto" : "smooth", block: "start" });
+  if (scroll) $("phDetail").scrollIntoView({ behavior: REDUCE ? "auto" : "smooth", block: "start" });
 }
 
 // ── Live duel ────────────────────────────────────────────────────────────────
@@ -707,7 +754,7 @@ function startBotGame(level) {
   const d = state.draft, b = BOT_LEVELS[level], lo = Math.floor(b.band[0] * LEAGUE.length), hi = Math.floor(b.band[1] * LEAGUE.length);
   const opp = LEAGUE_BY_STRENGTH[lo + Math.floor(Math.random() * (hi - lo))];
   const teams = [asTeam(JSON.parse(JSON.stringify(d.team))), LEAGUE[opp]], rng = seeded((Math.random() * 2 ** 32) >>> 0);
-  clearTimeout(state.live?.timer);
+  clearTimeout(state.live?.timer); touchDraft(d);
   state.live = { G: newGame(rng), teams, rng, level, names: [state.me?.user?.username || "You", teamName(opp)], feed: [], flow: [[0, 0, 1]], plays: [],
                  speed: 1, timer: 0, done: false };
   renderLive(); scrollTo(0, 0);
@@ -715,14 +762,14 @@ function startBotGame(level) {
 }
 
 function liveName(L, team, spot) { return mon(members(L.teams[team])[L.G.on[team][spot]]).name; }
-function liveSay(L, b, what) {
+function liveSay(L, b, what, pre) {
   const G = L.G, nm = (t, s) => esc(liveName(L, t, s)), coach = (t) => esc(L.names[t]);
   if (b.k === "call") {
     const X = esc(mon(members(L.teams[b.team])[b.ri]).name), T = esc(mon(members(L.teams[1 - b.team])[b.target]).name);
     const type = b.eff >= 2 ? ` It's super effective on ${T}!` : b.eff === 0 ? ` It has no effect on ${T}…` : b.eff < 1 ? ` Not very effective on ${T}…` : "";
     return [`📣 <b>${coach(b.team)} calls ${esc(b.move)}!</b> ${b.subFor >= 0 ? `${X} checks in. ` : ""}${CALL_SAYS[b.fx].replace("{X}", X).replace("{T}", T)}${b.run ? ` That ends the ${b.run[0]}-${b.run[1]} run.` : ""}${type}`, "call"];
   }
-  if (b.k === "timeout") return [`⏱ Timeout, ${coach(b.team)}${b.run && b.run[0] ? ` — stops a ${b.run[0]}-${b.run[1]} run` : ""}.`, "to"];
+  if (b.k === "timeout") return [`⏱ Timeout, ${coach(b.team)}${b.run && b.run[0] && pre?.run?.team === 1 - b.team ? ` — stops a ${b.run[0]}-${b.run[1]} run` : ""}.`, "to"];   // engine logs the run, not whose
   if (b.k === "break" && !b.press) return [`${nm(b.team, b.who)} out on the break!`, ""];
   if (what === "made") {
     const how = b.dunk ? "THROWS IT DOWN! 💥" : b.kind === "three" ? "drains a three" : b.kind === "post" ? "scores in the post" : b.kind === "drive" ? "finishes at the rim" : "hits the jumper";
@@ -754,9 +801,9 @@ function liveStep() {
     const pre = preplay(G), stamp = `${qLabel(G)} ${clock(pre.secLeft)}`;
     let dur = 0;
     for (const b of rollPoss(G, L.teams, L.rng, pre)) {
-      const what = playBeat(G, b), line = liveSay(L, b, what);
+      const what = playBeat(G, b), line = liveSay(L, b, what, pre);
       dur += b.d;
-      if (line) L.feed.unshift([line[0], line[1], `${stamp} · ${G.score[0]}–${G.score[1]}`]);
+      if (line) L.feed.unshift([line[0], line[1], `${stamp} · ${G.score[0]}–${G.score[1]}`, what === "block" || what === "steal" || what === "foul" ? 1 - b.team : b.team]);
       const q = G.q + G.ot, sc = [G.score[0], G.score[1]];
       if (what === "made" && (b.dunk || b.kind === "three" || b.foul >= 0)) L.plays.push([q, b.team, members(L.teams[b.team])[G.on[b.team][b.who]], b.dunk ? "dunk" : b.foul >= 0 ? "and1" : "three", ...sc]);
       else if (what === "block") L.plays.push([q, 1 - b.team, members(L.teams[1 - b.team])[G.on[1 - b.team][b.block]], "block", ...sc]);
@@ -783,20 +830,20 @@ function renderLive() {
     return `<button class="phcall${st.ok ? "" : " off"}${st.why === "queued" ? " q" : ""}" data-call="${ri}" ${st.ok ? "" : "disabled"}>
       <img src="${sprite(n)}" alt=""><span><b>${esc(st.move)}</b><small>${esc(fx ? fx[1] : "")}</small><small>${st.bench ? "subs in · " : ""}${eff}${st.ok ? "" : WHY[st.why] || ""}</small></span></button>`;
   }).join("");
-  const over = L.done;
+  const over = L.done, run = G.ctx.run, ownRun = run.team === 0 && run.pts - run.opp >= 5;
   box.innerHTML = `
     <div class="phsb">
-      <div><small>${esc(L.names[0])}</small><b>${G.score[0]}</b></div>
+      <div class="s0"><small>${esc(L.names[0])}</small><b>${G.score[0]}</b></div>
       <div class="phclock">${over ? "FINAL" : `${qLabel(G)} ${clock(pre.secLeft)}`}<small>TO ${G.ctx.tos[0]} · calls ${C.left[0]} &nbsp;|&nbsp; calls ${C.left[1]} · TO ${G.ctx.tos[1]}</small></div>
-      <div><small>${esc(L.names[1])}</small><b>${G.score[1]}</b></div>
+      <div class="s1"><small>${esc(L.names[1])}</small><b>${G.score[1]}</b></div>
     </div>
     <div class="phfloor"><div>${onFloor(0)}${act(0)}</div><div>${onFloor(1)}${act(1)}</div></div>
     ${over ? `<div id="phLiveEnd"></div>` : `<div class="phgroup">Your playbook <small>one call at a time · starts next possession</small></div>
     <div class="phbook">${book}</div>
-    <div class="phactions"><button class="btn ghost" id="phTO" ${G.ctx.tos[0] > 0 && !C.timeout[0] ? "" : "disabled"}>⏱ Timeout${C.timeout[0] ? " (next dead ball)" : ""}</button>
+    <div class="phactions"><button class="btn ghost${ownRun ? " warn" : ""}" id="phTO" ${G.ctx.tos[0] > 0 && !C.timeout[0] ? "" : "disabled"}>⏱ Timeout${C.timeout[0] ? " (next dead ball)" : ownRun ? ` (ends your own ${run.pts}-${run.opp} run)` : ""}</button>
       <button class="btn ghost${L.speed === 1 ? " on" : ""}" data-speed="1">1×</button><button class="btn ghost${L.speed === 3 ? " on" : ""}" data-speed="3">3×</button>
-      <button class="btn ghost" data-speed="99">Sim to end ⏭</button></div>`}
-    <ul class="phfeed">${L.feed.slice(0, over ? 12 : 30).map(([t, c, st]) => `<li class="${c}">${st ? `<span>${st}</span>` : ""}${t}</li>`).join("")}</ul>`;
+      <button class="btn ghost" data-speed="99">Sim to end ⏭</button><button class="btn ghost" id="phLeave">Leave game</button></div>`}
+    <ul class="phfeed">${L.feed.slice(0, over ? 12 : 30).map(([t, c, st, side]) => `<li class="${c}${side != null ? ` s${side}` : ""}">${st ? `<span>${st}${side != null ? ` · ${esc(L.names[side])}` : ""}</span>` : ""}${t}</li>`).join("")}</ul>`;
   if (over) liveEndPanel();
 }
 
@@ -816,9 +863,9 @@ function liveEndPanel() {
     <div class="phmuted">You're ${L.record[0]}–${L.record[1]} against bots.</div>
     <div class="phactions"><button class="btn ghost" data-bot="${L.level}">Rematch (new ${BOT_LEVELS[L.level].name} team)</button>
       <button class="btn ghost" id="phBackLineup">Change lineup</button>
-      ${state.draft?.token ? `<button class="btn primary" id="phPlayFromLive">Play the season with this team</button>` : ""}</div>
+      ${state.draft?.token && !state.draft.expired ? `<button class="btn primary" id="phPlayFromLive">Play the season with this team</button>` : ""}</div>
     <div id="phDetail"></div>`;
-  gameDetail(0);
+  gameDetail(0, false);
 }
 
 async function openSeries(id) {
@@ -857,12 +904,19 @@ app.addEventListener("click", (e) => {
   if (e.target.closest("#phStart")) return startDraft();
   const bot = e.target.closest("[data-bot]");
   if (bot) return startBotGame(Number(bot.dataset.bot));
+  if (e.target.closest("#phRedraft")) return startDraft(state.draft?.vs || null);
   const call = e.target.closest(".phcall");
   if (call && state.live && !state.live.done) { if (queueCall(state.live.G, state.live.teams, 0, Number(call.dataset.call))) { toast("📣 Called — it starts next possession"); renderLive(); } return; }
   if (e.target.closest("#phTO") && state.live) { if (queueTimeout(state.live.G, 0)) renderLive(); return; }
   const sp = e.target.closest("[data-speed]");
-  if (sp && state.live && !state.live.done) { state.live.speed = Number(sp.dataset.speed); clearTimeout(state.live.timer); return liveStep(); }
-  if (e.target.closest("#phBackLineup") || e.target.closest("#phPlayFromLive")) {
+  if (sp && state.live && !state.live.done) {   // reschedule, don't step: a tap must never skip a possession
+    const L = state.live, v = Number(sp.dataset.speed);
+    if (v === L.speed) return;
+    L.speed = v; clearTimeout(L.timer);
+    if (v >= 99) return liveStep();
+    renderLive(); L.timer = setTimeout(liveStep, 600 / v); return;
+  }
+  if (e.target.closest("#phBackLineup") || e.target.closest("#phLeave") || e.target.closest("#phPlayFromLive")) {
     clearTimeout(state.live?.timer); state.live = null; state.reveal = null;
     if (e.target.closest("#phPlayFromLive")) return playIt();
     return renderLineup();
@@ -879,9 +933,16 @@ app.addEventListener("click", (e) => {
     const text = `🏀 Poké Hoops — ${o.names[w]} beat ${o.names[1 - w]} ${Math.max(...o.wins)}–${Math.min(...o.wins)}\n${o.share.url}`;
     return navigator.clipboard.writeText(text).then(() => toast("📋 Copied — paste it anywhere"), () => prompt("Copy the series:", text));
   }
+  const sg = e.target.closest("[data-sg]"), r = state.reveal;
+  if (sg && r?.sum && Number(sg.dataset.sg) < r.g) {   // a season game already revealed: replay it logged for its box score
+    const k = Number(sg.dataset.sg), g = seasonGame(r.team, r.seasonSeed, k), games = [];
+    games[k] = g;
+    gameDetail(k, true, { names: [r.owner || state.me?.user?.username || "You", teamName(g.opp)], teams: [r.team, LEAGUE[g.opp]], games });
+    return document.querySelectorAll("[data-sg]").forEach((el) => el.classList.toggle("on", el === sg));
+  }
   const gm = e.target.closest(".phgame");
   if (gm) return gameDetail(Number(gm.dataset.g));
-  if (e.target.closest("#phDetailX")) { $("phDetail").innerHTML = ""; return document.querySelectorAll(".phgame.on").forEach((el) => el.classList.remove("on")); }
+  if (e.target.closest("#phDetailX")) { $("phDetail").innerHTML = ""; return document.querySelectorAll(".phgame.on, [data-sg].on").forEach((el) => el.classList.remove("on")); }
   if (e.target.closest("#phDuelNew")) return duelOpen("", true);
   if (e.target.closest("#phDuelJoin")) { const c = $("phCode")?.value.trim(); return c ? duelOpen(c) : toast("Enter the room code"); }
   const go = e.target.closest("#phDuelGo");
@@ -969,6 +1030,8 @@ async function main() {
   if (qs.get("d")) return openDuelRecord(qs.get("d"));
   if (qs.get("x")) return openSeries(qs.get("x"));
   if (qs.get("s")) return openShared(qs.get("s"));
+  const saved = loadDraft();
+  if (saved) { state.draft = saved; touchDraft(saved); return renderDraft(); }
   renderIntro();
 }
 
