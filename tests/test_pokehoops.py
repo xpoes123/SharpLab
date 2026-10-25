@@ -368,3 +368,62 @@ def test_two_player_challenge_best_of_seven(monkeypatch):
         bob = await _draft(start["seed"])
         assert (await gp.submit(_Req(), gp.SubmitBody(token=start["token"], picks=bob, team=_team(bob), vs=999999))).status_code == 400
     _run(go())
+
+
+def test_live_duel_room_draft_line_bets_and_series(monkeypatch):
+    _fresh_db()
+
+    async def go():
+        await sch.init_db()
+        who = {"s": {"id": "dave", "username": "Dave"}}
+        monkeypatch.setattr(gp.auth, "read_session", lambda r: who["s"])
+        host = await gp.duel_create(_Req(), gp.DuelBody())
+        code, ka = host["code"], host["key"]
+        who["s"] = None                                                     # the friend joins as a guest
+        assert (await gp.duel_join(_Req(), code, gp.DuelBody())).status_code == 400   # needs a name
+        kb = (await gp.duel_join(_Req(), code, gp.DuelBody(name="Ash")))["key"]
+        assert (await gp.duel_join(_Req(), code, gp.DuelBody(name="Gary"))).status_code == 409
+        assert (await gp.duel_state(code, "nope")).status_code == 403
+        st = await gp.duel_state(code, kb)
+        assert st["phase"] == "draft" and st["names"] == ["Dave", "Ash"] and not st["can_bet"]
+        seed = st["seed"]
+        while (packs := await ph.duel_packs(seed, st["picks"])) is not None:
+            assert not set(packs[0]) & set(packs[1])                        # never offered the same Pokémon
+            assert (await gp.duel_pick(code, gp.DuelBody(key=ka, n=packs[1][0]))).status_code == 400   # not your pack
+            a = await gp.duel_pick(code, gp.DuelBody(key=ka, n=packs[0][0]))
+            assert a["pending"] == packs[0][0] and len(a["picks"][0]) == len(st["picks"][0])         # waits for Ash
+            assert (await gp.duel_pick(code, gp.DuelBody(key=ka, n=packs[0][1]))).status_code == 409
+            st = await gp.duel_pick(code, gp.DuelBody(key=kb, n=packs[1][2]))
+        assert st["phase"] == "lineup" and st["opp_team"] is None
+        pa, pb = st["picks"]
+        bad = {"five": [pa[0]] * 5, "bench": pa[5:], "backs": [0, 1, 2]}
+        assert (await gp.duel_team(code, gp.DuelBody(key=ka, team=bad))).status_code == 400
+        await gp.duel_team(code, gp.DuelBody(key=ka, team=_team(pa)))
+        st = await gp.duel_team(code, gp.DuelBody(key=kb, team=_team(pb)))
+        line = st["line"]
+        assert st["phase"] == "tip" and st["opp_team"] == _team(pa) and 0 < line["series"] < 1
+        assert abs(sum(line["exact"].values()) - 1) < 1e-9 and all(
+            st["prices"][s] < 1 / pr or st["prices"][s] == 1.0 for s, pr in ((0, line["series"]), (1, 1 - line["series"])))
+        assert gp._price(0.999) == 1.0 and gp._price(0.5) < 2 and gp._price(0.01) < 100   # never above fair
+        # the guest can't bet; Dave bets 300 on himself
+        assert (await gp.duel_ready(_Req(), code, gp.DuelBody(key=kb, side=1, stake=50))).status_code == 401
+        who["s"] = {"id": "dave", "username": "Dave"}
+        bal0 = await q.get_or_create_casino_wallet("dave")
+        assert (await gp.duel_ready(_Req(), code, gp.DuelBody(key=ka, side=0, stake=10**9))).status_code == 400
+        await gp.duel_ready(_Req(), code, gp.DuelBody(key=ka, side=0, stake=300))
+        assert await q.get_casino_balance("dave") == bal0 - 300
+        who["s"] = None
+        st = await gp.duel_ready(_Req(), code, gp.DuelBody(key=kb))
+        res = st["result"]
+        assert st["phase"] == "done" and max(res["wins"]) == 4
+        bet = st["bets"][0]
+        won = res["wins"][0] == 4
+        assert bet["payout"] == (int(300 * st["prices"][0]) if won else 0)
+        assert await q.get_casino_balance("dave") == bal0 - 300 + bet["payout"]
+        rec = await gp.duel_record(res["id"])
+        assert rec["names"] == ["Dave", "Ash"] and rec["wins"] == res["wins"] and rec["line"] == line
+        again = await ph.duel_series(rec["seed"], rec["picks"], rec["teams"], rec["series_seed"])
+        assert again["wins"] == res["wins"]
+        assert (await gp.duel_record(424242)).status_code == 404
+        assert (await gp.duel_join(_Req(), "ZZZZ", gp.DuelBody(name="x"))).status_code == 404
+    _run(go())

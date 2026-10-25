@@ -1135,6 +1135,12 @@ async def init_db() -> None:
                 "summary TEXT NOT NULL, created_at TEXT NOT NULL)")
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_pokehoops_user ON pokehoops_seasons(discord_user, wins)")
+            await db.execute(  # live duels: two coaches drafted at once, then a best-of-seven (+ the pregame line)
+                "CREATE TABLE IF NOT EXISTS pokehoops_duels ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, a TEXT NOT NULL, b TEXT NOT NULL, a_name TEXT NOT NULL, "
+                "b_name TEXT NOT NULL, seed INTEGER NOT NULL, series_seed INTEGER NOT NULL, picks TEXT NOT NULL, "
+                "teams TEXT NOT NULL, wins_a INTEGER NOT NULL, wins_b INTEGER NOT NULL, line TEXT NOT NULL, "
+                "bets TEXT NOT NULL, created_at TEXT NOT NULL)")
             await db.execute(  # head-to-head best-of-sevens: a challenger's fresh draft vs a recorded season's team
                 "CREATE TABLE IF NOT EXISTS pokehoops_series ("
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, challenger TEXT NOT NULL, vs_season INTEGER NOT NULL, "
