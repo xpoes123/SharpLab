@@ -467,3 +467,169 @@ def test_guest_mode_plays_without_discord(monkeypatch):
         st = await gp.duel_state(room["code"], room["key"])
         assert st["names"][0] == "Ash Ketchum" and not st["can_bet"]
     _run(go())
+
+
+def _tip_room(r: dict) -> None:
+    """Fast-forward a joined room to tip-off with a fixed line (the draft itself is covered above)."""
+    r["picks"], r["teams"] = [[1] * 8, [2] * 8], [{"five": [1]}, {"five": [2]}]
+    r["line"] = {"n": 4000, "p": 0.5, "series": 0.5, "se": (0.25 / 4000) ** 0.5}
+
+
+def test_duel_rooms_cap_codes_and_rate_limit(monkeypatch):
+    _fresh_db()
+    monkeypatch.setattr(gp.auth, "read_session", lambda r: None)
+    monkeypatch.setattr(gp, "_duels", {})
+    monkeypatch.setattr(gp, "_hits", gp.defaultdict(list))
+
+    async def go():
+        room = await gp.duel_create(_Req(), gp.DuelBody(name="Misty"))
+        assert len(room["code"]) == gp.CODE_LEN == 5
+        # every candidate code taken: bounded retry → 503, not an infinite loop
+        choice = gp.secrets.choice
+        monkeypatch.setattr(gp.secrets, "choice", lambda chars: chars[0])
+        gp._duels["A" * 5] = gp._duels[room["code"]]
+        assert (await gp.duel_create(_Req(), gp.DuelBody(name="Z"))).status_code == 503
+        monkeypatch.setattr(gp.secrets, "choice", choice)
+        # room cap
+        live = dict(gp._duels[room["code"]], touched=gp.time.time())
+        for i in range(gp.MAX_ROOMS):
+            gp._duels[f"X{i}"] = live
+        assert (await gp.duel_create(_Req(), gp.DuelBody(name="Z"))).status_code == 503
+        gp._duels.clear()
+        # per-IP create limit
+        gp._hits.clear()
+        n, _ = gp.LIMITS["create"]
+        for _ in range(n):
+            assert "code" in await gp.duel_create(_Req(), gp.DuelBody(name="Z"))
+        assert (await gp.duel_create(_Req(), gp.DuelBody(name="Z"))).status_code == 429
+        # an idle lobby is swept after IDLE_TTL; an in-progress room isn't
+        gp._hits.clear()
+        lobby = await gp.duel_create(_Req(), gp.DuelBody(name="L"))
+        busy = await gp.duel_create(_Req(), gp.DuelBody(name="B"))
+        await gp.duel_join(_Req(), busy["code"], gp.DuelBody(name="C"))
+        for c in (lobby["code"], busy["code"]):
+            gp._duels[c]["touched"] -= gp.IDLE_TTL + 1
+        gp._sweep()
+        assert lobby["code"] not in gp._duels and busy["code"] in gp._duels
+    _run(go())
+
+
+def test_duel_join_engine_failure_leaves_seat_open(monkeypatch):
+    _fresh_db()
+    monkeypatch.setattr(gp.auth, "read_session", lambda r: None)
+    monkeypatch.setattr(gp, "_hits", gp.defaultdict(list))
+
+    async def go():
+        room = await gp.duel_create(_Req(), gp.DuelBody(name="Misty"))
+        real = ph.duel_packs
+
+        async def down(*a):
+            raise ph.EngineUnavailable("timed out")
+        monkeypatch.setattr(ph, "duel_packs", down)
+        assert (await gp.duel_join(_Req(), room["code"], gp.DuelBody(name="Brock"))).status_code == 503
+        assert gp._duels[room["code"]]["seats"][1] is None
+        peek = await gp.duel_peek(_Req(), room["code"])
+        assert peek["open"] and peek["host"] == "Misty"
+        monkeypatch.setattr(ph, "duel_packs", real)
+        kb = (await gp.duel_join(_Req(), room["code"], gp.DuelBody(name="Brock")))["key"]
+        st = await gp.duel_state(room["code"], x_duel_key=kb)          # seat key in the header
+        assert st["phase"] == "draft" and st["seat"] == 1
+        assert not (await gp.duel_peek(_Req(), room["code"]))["open"]  # a third visitor sees it's full up front
+        # a draft-round engine failure leaves the round as it was
+        pk = gp._duels[room["code"]]["packs"]
+        await gp.duel_pick(room["code"], gp.DuelBody(n=pk[0][0]), x_duel_key=room["key"])
+        monkeypatch.setattr(ph, "duel_packs", down)
+        assert (await gp.duel_pick(room["code"], gp.DuelBody(n=pk[1][0]), x_duel_key=kb)).status_code == 503
+        r = gp._duels[room["code"]]
+        assert r["picks"] == [[], []] and r["pending"] == [pk[0][0], None]
+        monkeypatch.setattr(ph, "duel_packs", real)
+        st = await gp.duel_pick(room["code"], gp.DuelBody(n=pk[1][0]), x_duel_key=kb)
+        assert st["picks"] == [[pk[0][0]], [pk[1][0]]]
+    _run(go())
+
+
+def test_duel_stakes_move_only_at_tip_off_and_survive_failures(monkeypatch):
+    _fresh_db()
+    who = {"s": None}
+    monkeypatch.setattr(gp.auth, "read_session", lambda r: who["s"])
+    monkeypatch.setattr(gp, "_hits", gp.defaultdict(list))
+
+    async def go():
+        await sch.init_db()
+        dave = {"id": "dave", "username": "Dave"}
+        who["s"] = dave
+        room = await gp.duel_create(_Req(), gp.DuelBody())
+        code, ka = room["code"], room["key"]
+        who["s"] = None
+        kb = (await gp.duel_join(_Req(), code, gp.DuelBody(name="Ash")))["key"]
+        who["s"] = dave
+        bal0 = await q.get_or_create_casino_wallet("dave")
+        res = await gp.duel_ready(_Req(), code, gp.DuelBody(key=ka))
+        assert res.status_code == 409 and "not tip-off yet" in res.body.decode()
+        _tip_room(gp._duels[code])
+        with pytest.raises(Exception):
+            gp.DuelBody(stake="300")                                   # strict ints
+        with pytest.raises(Exception):
+            gp.DuelBody(side=True)
+        assert (await gp.duel_ready(_Req(), code, gp.DuelBody(key=ka, side=0, stake=bal0 + 1 if bal0 < 5000 else 5001))).status_code == 400
+        await gp.duel_ready(_Req(), code, gp.DuelBody(key=ka, side=0, stake=300))
+        assert await q.get_casino_balance("dave") == bal0
+        assert (await gp.duel_ready(_Req(), code, gp.DuelBody(key=ka))).status_code == 409   # already locked in
+
+        # the sim dies at tip-off: stake refunded, both un-readied, no result
+        async def down(*a):
+            raise ph.EngineUnavailable("timed out")
+        monkeypatch.setattr(ph, "duel_series", down)
+        who["s"] = None
+        assert (await gp.duel_ready(_Req(), code, gp.DuelBody(key=kb))).status_code == 503
+        r = gp._duels[code]
+        assert await q.get_casino_balance("dave") == bal0 and r["ready"] == [False, False] and r["bets"] == [None, None]
+        assert r["result"] is None and gp._phase(r) == "tip"
+
+        # dave spends his coins between ready and tip-off: nobody is debited, both re-lock
+        who["s"] = dave
+        await gp.duel_ready(_Req(), code, gp.DuelBody(key=ka, side=0, stake=300))
+        await q.update_casino_balance("dave", -(bal0 - 100))
+        who["s"] = None
+        res = await gp.duel_ready(_Req(), code, gp.DuelBody(key=kb))
+        assert res.status_code == 409 and "no longer has" in res.body.decode()
+        assert await q.get_casino_balance("dave") == 100 and r["ready"] == [False, False]
+
+        # a good tip-off debits then settles once
+        async def series(*a):
+            return {"wins": [4, 2], "games": []}
+        monkeypatch.setattr(ph, "duel_series", series)
+        who["s"] = dave
+        await gp.duel_ready(_Req(), code, gp.DuelBody(key=ka, side=1, stake=50))
+        who["s"] = None
+        st = await gp.duel_ready(_Req(), code, gp.DuelBody(key=kb))
+        assert st["phase"] == "done" and st["bets"][0]["payout"] == 0
+        assert await q.get_casino_balance("dave") == 50 == st["bets"][0]["balance"]
+        res = await gp.duel_ready(_Req(), code, gp.DuelBody(key=kb))
+        assert res.status_code == 409 and "over" in res.body.decode()
+    _run(go())
+
+
+def test_duel_leave(monkeypatch):
+    _fresh_db()
+    monkeypatch.setattr(gp.auth, "read_session", lambda r: None)
+    monkeypatch.setattr(gp, "_hits", gp.defaultdict(list))
+
+    async def go():
+        lobby = await gp.duel_create(_Req(), gp.DuelBody(name="Misty"))
+        assert (await gp.duel_leave(lobby["code"], gp.DuelBody(), x_duel_key=lobby["key"]))["ok"]
+        assert lobby["code"] not in gp._duels                            # an empty lobby just closes
+        room = await gp.duel_create(_Req(), gp.DuelBody(name="Misty"))
+        code = room["code"]
+        kb = (await gp.duel_join(_Req(), code, gp.DuelBody(name="Brock")))["key"]
+        _tip_room(gp._duels[code])
+        await gp.duel_ready(_Req(), code, gp.DuelBody(key=room["key"]))
+        assert (await gp.duel_leave(code, gp.DuelBody(key=kb)))["ok"]     # legacy body key still works
+        st = await gp.duel_state(code, room["key"])
+        assert st["phase"] == "left" and st["left"] == 1 and st["names"][1] == "Brock" and st["result"] is None
+        assert (await gp.duel_ready(_Req(), code, gp.DuelBody(key=room["key"]))).status_code == 409
+        assert (await gp.duel_peek(_Req(), code)).status_code == 404
+        gp._duels[code]["touched"] -= gp.IDLE_TTL + 1
+        gp._sweep()
+        assert code not in gp._duels
+    _run(go())
