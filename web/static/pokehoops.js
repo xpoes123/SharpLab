@@ -145,8 +145,14 @@ function renderIntro() {
     <div class="phactions"><input id="phGuestName" class="phinput" maxlength="20" placeholder="Your name" autocomplete="nickname" aria-label="Guest name">
       <button class="btn big primary" id="phGuest">Play as guest</button></div>
     <a class="btn ghost" href="/api/v1/auth/discord/login">Sign in with Discord</a>` : "";
-  app.innerHTML = `${head("Draft eight Pokémon. Coach the lineup. Play 82 games against the league. Go 82–0.")}
+  app.innerHTML = `${head("Draft Pokémon. Coach them. Beat a bot, a friend, or the whole league.")}
+    <div class="card phduelcta pbcta">
+      <div class="phstep">⚔️ New · Battle (beta)</div>
+      <p class="phmuted">The new game: 3v3, first to 11, played like a Pokémon battle. Every turn you and the opponent pick at once: shots, passes, screens, status moves, stat boosts, weather. Draft six, rotate three.</p>
+      <div class="phactions"><button class="btn primary" id="pbStart">Battle a bot</button></div>
+    </div>
     <div class="card phintro">
+      <div class="phstep">🏆 82-game season</div>
       <div class="phlegends">${LEGENDS.map((n) => `<img src="${sprite(n)}" alt="">`).join("")}</div>
       <ol class="phrules">
         <li><b>Pick 1</b> is a Legendary — three of the eleven are on offer.</li>
@@ -157,11 +163,6 @@ function renderIntro() {
       </ol>
       ${state.me ? `<button class="btn big primary" id="phStart">Start the draft</button>` : signedOut}
       <p class="phfine">Same engine as the TV cartridge. The server re-checks every pick and sims the season itself.</p>
-    </div>
-    <div class="card phduelcta pbcta">
-      <div class="phstep">⚔️ Battle · beta</div>
-      <p class="phmuted">The new game: 3v3, first to 11, played like a Pokémon battle. Every turn you and the opponent pick at once: shots, passes, screens, status moves, stat boosts, weather. Draft six, rotate three.</p>
-      <div class="phactions"><button class="btn primary" id="pbStart">Battle a bot</button></div>
     </div>
     <div class="card phduelcta">
       <div class="phstep">🆚 Live duel · two phones, one table</div>
