@@ -9,7 +9,7 @@
 // (same vendored engine, same seeds) for the game-by-game reveal. ?s=<id> replays a shared season.
 // Two-player: any recorded season's team can be challenged — draft your own eight, then a best-of-seven against
 // it (POST /submit with vs=<season id>), simmed server-side the same way. ?x=<id> replays a shared series.
-import { nextPack, playSeason, playSeries, bestOf7, duelReplay, SERIES_WINS, summarize, teamName, defaultTeam, PICKS, POS, mon, bestPos, LEGENDS, LEAGUE, LEAGUE_BY_STRENGTH } from "./pokehoops-draft.js";
+import { nextPack, matchLine, seasonGame, playSeason, playSeries, bestOf7, duelReplay, SERIES_WINS, summarize, teamName, defaultTeam, PICKS, POS, mon, bestPos, LEGENDS, LEAGUE, LEAGUE_BY_STRENGTH } from "./pokehoops-draft.js";
 import { profile, skills } from "./pokehoops/ratings.js";
 import { members, asTeam, seeded, newGame, quarterDone, gameDone, nextQuarter, rollPoss, playBeat, preplay, botCall, queueCall,
   queueTimeout, callStatus, CALLS } from "./pokehoops/engine.js";
@@ -242,6 +242,7 @@ function renderLineup() {
   const d = state.draft, t = d.team;
   const hint = d.sel == null ? "Tap a player, then another, to swap them (or drag one onto another)."
                              : `Now tap who ${esc(mon(slotGet(t, d.sel)).name)} swaps with.`;
+  if (d.vs) vsLineSoon(d);
   app.innerHTML = `${head()}
     <div class="card phlineup">
       <div><div class="phstep">You're the coach</div>
@@ -251,7 +252,7 @@ function renderLineup() {
       <div class="phrows">${[0, 1, 2, 3, 4].map((k) => coachRow(t, k, d.sel)).join("")}</div>
       <div class="phgroup">Bench <small>subs in mid-quarter behind the spot it backs up · two at one spot split the minutes</small></div>
       <div class="phrows">${[5, 6, 7].map((k) => coachRow(t, k, d.sel)).join("")}</div>
-      ${d.vs ? `<div class="phgroup">vs ${esc(d.vs.name)}</div>${teamStrip(d.vs.team)}` : ""}
+      ${d.vs ? `<div class="phgroup">vs ${esc(d.vs.name)}</div>${teamStrip(d.vs.team, true)}<div id="phVsLine" class="phvsline">${vsLineHTML(d)}</div>` : ""}
       ${d.duel ? `<p class="phmuted" id="phOppStat">${oppLineupStat()}</p>` : ""}
       <button class="btn big primary" id="phPlay">${playLabel(d)}</button>
       ${!d.vs && !d.duel ? `<div class="phgroup">Or play one game first <small>you coach it live: call plays, call timeouts. Doesn't use up the draft.</small></div>
@@ -262,8 +263,28 @@ function renderLineup() {
 const oppLineupStat = () => { const v = state.duel?.view, n = esc(v?.names[1 - v.seat] || "");
   return v?.opp_locked ? `${n} has locked their lineup ✓` : `${n} is setting their lineup…`; };
 const playLabel = (d) => (d.duel ? "Lock in my lineup" : d.vs ? `Lock in &amp; play ${esc(d.vs.name)} · best of 7` : "Lock in &amp; play the season");
-const teamStrip = (t) => `<div class="phfive">${t.five.map((n, i) => `<figure><img src="${sprite(n)}" alt="${esc(mon(n).name)}" title="${POS[i]} ${esc(mon(n).name)}"><figcaption>${POS[i]}</figcaption></figure>`).join("")}
-  ${t.bench.map((n) => `<figure class="phbenchfig"><img src="${sprite(n)}" alt="" title="${esc(mon(n).name)} (bench)"><figcaption>B</figcaption></figure>`).join("")}</div>`;
+const nameCap = (named, n) => (named ? `<small>${esc(mon(n).name)}</small>` : "");
+const teamStrip = (t, named = false) => `<div class="phfive${named ? " named" : ""}">${t.five.map((n, i) => `<figure><img src="${sprite(n)}" alt="${esc(mon(n).name)}" title="${POS[i]} ${esc(mon(n).name)}"><figcaption>${POS[i]}${nameCap(named, n)}</figcaption></figure>`).join("")}
+  ${t.bench.map((n, j) => `<figure class="phbenchfig"><img src="${sprite(n)}" alt="" title="${esc(mon(n).name)} (bench)"><figcaption>${named && t.backs ? `B·${POS[t.backs[j]]}` : "B"}${nameCap(named, n)}</figcaption></figure>`).join("")}</div>`;
+
+// Challenge lineup: the engine's line on this exact matchup, recomputed (debounced, small n so a phone keeps up) as you coach
+const vsKey = (d) => JSON.stringify([d.team, d.vs.team]);
+function vsLineHTML(d) {
+  const c = d.vsLine;
+  if (!c || c.key !== vsKey(d)) return `<span class="phmuted">📈 Working out the line…</span>`;
+  const names = [state.me?.user?.username || "You", d.vs.name], l = c.line, fav = l.series >= 0.5 ? 0 : 1;
+  return `<details class="phlinewrap"><summary>Pregame line: ${esc(names[fav])} ${american(Math.max(l.series, 1 - l.series))} · you win ${pct(l.p)} of games</summary>${lineCard(l, names, [d.team, d.vs.team])}</details>`;
+}
+function vsLineSoon(d) {
+  clearTimeout(state.vsTimer);
+  if (d.vsLine?.key === vsKey(d)) return;
+  state.vsTimer = setTimeout(() => {
+    if (state.draft !== d || !d.vs) return;
+    d.vsLine = { key: vsKey(d), line: matchLine(d.team, d.vs.team, 400) };
+    const el = $("phVsLine"), open = el?.querySelector("details")?.open;
+    if (el) { el.innerHTML = vsLineHTML(d); if (open) el.querySelector("details").open = true; }
+  }, 400);
+}
 
 function tapSlot(k) {
   const d = state.draft;
