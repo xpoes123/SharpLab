@@ -20,11 +20,12 @@ import secrets
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
+from typing import Annotated
 
 import httpx
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictInt
 
 from db import queries
 from shared import pokehoops
@@ -299,12 +300,15 @@ def _limited(request: Request, bucket: str) -> JSONResponse | None:
 
 
 class DuelBody(BaseModel):
-    key: str | None = None
+    key: str | None = None      # legacy: the seat key now rides in the X-Duel-Key header (DuelKey)
     name: str | None = None
-    n: int | None = None
+    n: StrictInt | None = None
     team: TeamBody | None = None
-    side: int | None = None
-    stake: int | None = None
+    side: StrictInt | None = None
+    stake: StrictInt | None = None
+
+
+DuelKey = Annotated[str | None, Header(alias="X-Duel-Key")]
 
 
 def _seat_name(request: Request, name: str | None) -> tuple[str | None, str | None]:
@@ -427,6 +431,17 @@ async def duel_join(request: Request, code: str, body: DuelBody):
         return {"code": r["code"], "key": r["seats"][1]["key"]}
 
 
+@router.get("/duel/{code}/peek")
+async def duel_peek(request: Request, code: str):
+    """Before asking a visitor's name: is there a seat for them? (Signed-in seat-holders re-open via /join.)"""
+    if err := _limited(request, "join"):
+        return err
+    r = _duels.get(code.upper())
+    if r is None or _phase(r) == "left":
+        return JSONResponse({"error": "that room has closed"}, status_code=404)
+    return {"code": r["code"], "host": r["seats"][0]["name"], "open": r["seats"][1] is None}
+
+
 def _room(code: str, key: str | None) -> tuple[dict | None, int | None, JSONResponse | None]:
     r = _duels.get(code.upper())
     if r is None:
@@ -439,14 +454,14 @@ def _room(code: str, key: str | None) -> tuple[dict | None, int | None, JSONResp
 
 
 @router.get("/duel/{code}")
-async def duel_state(code: str, key: str = ""):
-    r, seat, err = _room(code, key)
+async def duel_state(code: str, key: str = "", x_duel_key: DuelKey = None):
+    r, seat, err = _room(code, x_duel_key or key)
     return err or _view(r, seat)
 
 
 @router.post("/duel/{code}/pick")
-async def duel_pick(code: str, body: DuelBody):
-    r, seat, err = _room(code, body.key)
+async def duel_pick(code: str, body: DuelBody, x_duel_key: DuelKey = None):
+    r, seat, err = _room(code, x_duel_key or body.key)
     if err:
         return err
     async with r["lock"]:
@@ -467,8 +482,8 @@ async def duel_pick(code: str, body: DuelBody):
 
 
 @router.post("/duel/{code}/team")
-async def duel_team(code: str, body: DuelBody):
-    r, seat, err = _room(code, body.key)
+async def duel_team(code: str, body: DuelBody, x_duel_key: DuelKey = None):
+    r, seat, err = _room(code, x_duel_key or body.key)
     if err:
         return err
     async with r["lock"]:
@@ -488,10 +503,10 @@ async def duel_team(code: str, body: DuelBody):
 
 
 @router.post("/duel/{code}/ready")
-async def duel_ready(request: Request, code: str, body: DuelBody):
+async def duel_ready(request: Request, code: str, body: DuelBody, x_duel_key: DuelKey = None):
     """Lock in for tip-off, optionally with a bet on either side of the series at the posted price. Coins move only
     at tip-off (see _tip_off), so a room that dies before then never holds anyone's stake."""
-    r, seat, err = _room(code, body.key)
+    r, seat, err = _room(code, x_duel_key or body.key)
     if err:
         return err
     async with r["lock"]:
@@ -560,10 +575,10 @@ async def _tip_off(r: dict) -> JSONResponse | None:
 
 
 @router.post("/duel/{code}/leave")
-async def duel_leave(code: str, body: DuelBody):
+async def duel_leave(code: str, body: DuelBody, x_duel_key: DuelKey = None):
     """Walk out. A lobby just closes; mid-duel the other coach sees who left and heads home. No coins are ever
     held before tip-off, so there's nothing to refund; a finished series is unaffected."""
-    r, seat, err = _room(code, body.key)
+    r, seat, err = _room(code, x_duel_key or body.key)
     if err:
         return err
     async with r["lock"]:
