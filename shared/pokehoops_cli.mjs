@@ -4,7 +4,7 @@
 //   {"op":"pack","seed":S,"picks":[...]}                              → {"pack":[card...], "pick": k} | {"done":true}
 //   {"op":"series","seed":S,"picks":[8],"team":{...},"opp":{...},"series_seed":T} → best-of-7 {wins, losses, games}
 //   {"op":"duel_packs","seed":S,"picks":[[a],[b]]}                    → {"packs":[[n,n,n],[n,n,n]]} | {"done":true}
-//   {"op":"duel_line","seed":S,"picks":[[8],[8]],"teams":[t,t]}       → matchLine (side 0's view)
+//   {"op":"duel_line","seed":S,"picks":[[8],[8]],"teams":[t,t]}       → matchLine over LINE_GAMES (side 0's view)
 //   {"op":"duel_series","seed":S,"picks":..,"teams":..,"series_seed":T} → {wins:[a,b], games}
 //   {"op":"season","seed":S,"picks":[8],"team":{five,bench,backs},"season_seed":T} → summarize() output + cards
 // A card never carries an overall rating — players see skills, natural positions, types, archetype, move, blurb.
@@ -55,7 +55,7 @@ function handle(req) {
   if (req.op === "duel_line" || req.op === "duel_series") {
     let teams;
     try { teams = duelTeams(seed, req.picks, req.teams); } catch (e) { return { error: String(e.message || e) }; }
-    if (req.op === "duel_line") return matchLine(teams[0], teams[1]);
+    if (req.op === "duel_line") return matchLine(teams[0], teams[1], LINE_GAMES);
     const ss = Number(req.series_seed);
     if (!Number.isInteger(ss) || ss < 0 || ss > 0xffffffff) return { error: "bad series seed" };
     const x = bestOf7(teams[0], teams[1], ss);
@@ -63,6 +63,10 @@ function handle(req) {
   }
   return { error: "unknown op" };
 }
+
+// Games simmed for a duel's betting line: ~1.1 ms each on the VPS, so 4000 ≈ 5 s while both coaches wait.
+// The leftover Monte Carlo noise is priced in by web/g_pokehoops.py (_prices widens the hold with the line's se).
+const LINE_GAMES = 4000;
 
 let buf = "";
 process.stdin.setEncoding("utf8");

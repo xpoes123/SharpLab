@@ -25,8 +25,10 @@ from db import queries
 
 CLI = Path(__file__).with_name("pokehoops_cli.mjs")
 NODE_TIMEOUT = 15  # seconds; a season is ~60ms of sim + ~50ms node startup
+LINE_TIMEOUT = 40  # a duel line sims thousands of games (~5 s on the VPS)
 PICKS = 8
 BENCH = 3
+SERIES_WINS = 4    # best of seven (pokehoops-draft.js SERIES_WINS)
 WEB_URL = "https://sharplab.djiang.xyz/pokehoops.html"
 SPRITE_URL = "https://sharplab.djiang.xyz/pokehoops/sprites/{}.png"
 
@@ -47,7 +49,7 @@ def new_seed() -> int:
     return secrets.randbits(32)
 
 
-async def _call(req: dict) -> dict:
+async def _call(req: dict, timeout: float = NODE_TIMEOUT) -> dict:
     try:
         proc = await asyncio.create_subprocess_exec(
             _node(), str(CLI), stdin=asyncio.subprocess.PIPE,
@@ -55,7 +57,7 @@ async def _call(req: dict) -> dict:
     except OSError as e:
         raise EngineUnavailable(f"can't start node: {e}") from e
     try:
-        out, err = await asyncio.wait_for(proc.communicate(json.dumps(req).encode()), NODE_TIMEOUT)
+        out, err = await asyncio.wait_for(proc.communicate(json.dumps(req).encode()), timeout)
     except asyncio.TimeoutError as e:
         proc.kill()
         raise EngineUnavailable("engine timed out") from e
@@ -155,7 +157,7 @@ async def duel_packs(seed: int, picks: list[list[int]]) -> list[list[int]] | Non
 
 
 async def duel_line(seed: int, picks: list[list[int]], teams: list[dict]) -> dict:
-    return await _call({"op": "duel_line", "seed": seed, "picks": picks, "teams": teams})
+    return await _call({"op": "duel_line", "seed": seed, "picks": picks, "teams": teams}, LINE_TIMEOUT)
 
 
 async def duel_series(seed: int, picks: list[list[int]], teams: list[dict], series_seed: int) -> dict:

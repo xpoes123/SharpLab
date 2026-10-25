@@ -49,19 +49,19 @@ const SKILLS = [["shoot", "SHT"], ["finish", "FIN"], ["handle", "HND"], ["perD",
 const state = { me: null, balance: 0, draft: null, busy: false, reveal: null };
 
 // ── IO ───────────────────────────────────────────────────────────────────────
-async function getJSON(url) {
+async function getJSON(url, headers = {}) {
   if (MOCK) return mock(url);
   try {
-    const r = await fetch(url, { credentials: "include" });
+    const r = await fetch(url, { credentials: "include", headers });
     if (!r.ok) return { _status: r.status, ...(await r.json().catch(() => ({}))) };
     return r.json();
   } catch { return { _status: 0, error: "offline" }; }
 }
-async function post(path, body) {
+async function post(path, body, headers = {}) {
   if (MOCK) return mock(API + path, body);
   try {
     const r = await fetch(API + path, { method: "POST", credentials: "include",
-      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+      headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body || {}) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok && j.error == null) j.error = r.status === 401 ? "sign in to play" : `error ${r.status}`;
     return j;
@@ -185,7 +185,7 @@ function renderIntro() {
       <p class="phmuted">Draft at the same time from separate packs, coach your lineups, see the line, bet it, then play a best-of-7. No sign-in needed to play (betting coins needs one).</p>
       ${state.me ? "" : `<input id="phName" class="phinput" maxlength="20" placeholder="Your name" autocomplete="nickname">`}
       <div class="phactions"><button class="btn primary" id="phDuelNew">Start a room</button>
-        <input id="phCode" class="phinput code" maxlength="4" placeholder="CODE" autocapitalize="characters" aria-label="Room code"><button class="btn ghost" id="phDuelJoin">Join</button></div>
+        <input id="phCode" class="phinput code" maxlength="5" placeholder="CODE" autocapitalize="characters" aria-label="Room code"><button class="btn ghost" id="phDuelJoin">Join</button></div>
     </div>
     <div class="phlb" id="phLb"></div>`;
   loadLeaderboard();
@@ -272,7 +272,7 @@ function renderLineup() {
       <div class="phgroup">Bench <small>subs in mid-quarter behind the spot it backs up · two at one spot split the minutes</small></div>
       <div class="phrows">${[5, 6, 7].map((k) => coachRow(t, k, d.sel)).join("")}</div>
       ${d.vs ? `<div class="phgroup">vs ${esc(d.vs.name)}</div>${teamStrip(d.vs.team, true)}<div id="phVsLine" class="phvsline">${vsLineHTML(d)}</div>` : ""}
-      ${d.duel ? `<p class="phmuted" id="phOppStat">${oppLineupStat()}</p>` : ""}
+      ${d.duel ? `<p class="phmuted" id="phOppStat">${oppLineupStat()}</p>${leaveBtn()}` : ""}
       ${d.expired ? `<p class="phmuted">⌛ This draft timed out on the server, so it can't play ${d.vs ? "the series" : "a season"} any more. Bot games below still work.</p>
         <button class="btn big primary" id="phRedraft">Start a new draft</button>`
         : `<button class="btn big primary" id="phPlay">${playLabel(d)}</button>`}
@@ -596,9 +596,14 @@ async function duelOpen(code, create = false) {
   code = (code || "").toUpperCase();
   let key = create ? null : duelKey(code);
   if (!key) {
+    if (!create) {   // a third visitor learns the room is full (or gone) before being asked for a name
+      const pk = await getJSON(`${API}/duel/${encodeURIComponent(code)}/peek`);
+      if (pk._status === 404) return renderDuelGone("That room has closed — check the code.");
+      if (pk.open === false && !state.me) return renderDuelGone(`Room ${code} is full — ${pk.host} already has an opponent.`);
+    }
     if (!state.me && !name) { state.duelName = ""; return renderDuelJoin(code, create); }
     const res = await post(create ? "/duel" : `/duel/${code}/join`, { name });
-    if (res.error) return toast("❌ " + res.error);
+    if (res.error) return /full/.test(res.error) ? renderDuelGone(`Room ${code} is full.`) : toast("❌ " + res.error);
     code = res.code; key = duelKey(code, res.key);
   }
   clearTimeout(state.reveal?.timer); state.reveal = null;
@@ -606,6 +611,12 @@ async function duelOpen(code, create = false) {
   state.draft = null;
   history.replaceState(null, "", `?duel=${code}${MOCK ? "&mock=1" : ""}`);
   duelPoll();
+}
+
+function renderDuelGone(msg) {
+  history.replaceState(null, "", location.pathname + (MOCK ? "?mock=1" : ""));
+  app.innerHTML = `${head()}<div class="card phlobby"><div class="phstep">Live duel</div><p>${esc(msg)}</p>
+    <div class="phactions"><button class="btn primary" id="phDuelNew">Start your own room</button><button class="btn ghost" id="phHome">Home</button></div></div>`;
 }
 
 function renderDuelJoin(code, create) {
@@ -616,35 +627,71 @@ function renderDuelJoin(code, create) {
       <a class="btn ghost" href="/api/v1/auth/discord/login">Sign in instead (to bet coins)</a></div></div>`;
 }
 
+// "Reconnecting…" pill, outside #app so re-renders don't wipe it
+function netPill(on) {
+  let el = $("phNet");
+  if (!el && on) { el = document.createElement("div"); el.id = "phNet"; el.className = "phnet"; el.textContent = "Reconnecting…"; document.body.appendChild(el); }
+  if (el) el.hidden = !on;
+}
+
+const duelHeaders = (d) => ({ "X-Duel-Key": d.key });
+
+function duelForget(d) {
+  try { localStorage.removeItem("phduel:" + d.code); } catch { /* fine */ }
+  clearTimeout(d.timer); netPill(false);
+  state.duel = null; state.draft = null;
+}
+
 async function duelPoll() {
   const d = state.duel;
   if (!d) return;
   clearTimeout(d.timer);
-  const v = await getJSON(`${API}/duel/${d.code}?key=${encodeURIComponent(d.key)}`);
-  if (state.duel !== d) return;
-  if (v._status === 403 || v._status === 404) {
-    try { localStorage.removeItem("phduel:" + d.code); } catch { /* fine */ }
-    state.duel = null; toast(v.error || "That room has closed");
-    history.replaceState(null, "", location.pathname + (MOCK ? "?mock=1" : ""));
-    return renderIntro();
+  let v = null;
+  try {
+    v = await getJSON(`${API}/duel/${d.code}`, duelHeaders(d));
+    if (state.duel !== d) return;
+    if (v._status === 403 || v._status === 404) {
+      duelForget(d); toast(v.error || "That room has closed");
+      history.replaceState(null, "", location.pathname + (MOCK ? "?mock=1" : ""));
+      return renderIntro();
+    }
+    const good = !v._status && !v.error && typeof v.phase === "string";   // a flaky-wifi error never becomes the view
+    netPill(!good);
+    if (good) duelRender(v);
+  } catch (e) {
+    console.warn("pokehoops: duel poll", e);
+  } finally {
+    const phase = v && !v._status ? v.phase : d.view?.phase;
+    if (state.duel === d && phase !== "done" && phase !== "left") d.timer = setTimeout(duelPoll, document.hidden ? 4000 : 1000);
   }
-  if (!v._status) duelRender(v);
-  if (v.phase !== "done") d.timer = setTimeout(duelPoll, document.hidden ? 4000 : 1000);
 }
 
 async function duelPost(path, body = {}) {
   const d = state.duel;
   if (!d || state.busy) return;
   state.busy = true;
-  const v = await post(`/duel/${d.code}/${path}`, { key: d.key, ...body });
+  const v = await post(`/duel/${d.code}/${path}`, body, duelHeaders(d));
   state.busy = false;
   if (v.error) return toast("❌ " + v.error);
-  duelRender(v);
+  if (state.duel === d && typeof v.phase === "string") duelRender(v);
 }
+
+async function duelLeave() {
+  const d = state.duel, v = d?.view;
+  if (!d) return renderIntro();
+  if (v && v.phase !== "lobby" && v.phase !== "done" && v.phase !== "left"
+      && !confirm(`Leave the duel? ${v.names[1 - v.seat] || "Your opponent"} will see you left. No coins are taken.`)) return;
+  if (v?.phase !== "left" && v?.phase !== "done") await post(`/duel/${d.code}/leave`, {}, duelHeaders(d));
+  duelForget(d);
+  history.replaceState(null, "", location.pathname + (MOCK ? "?mock=1" : ""));
+  renderIntro();
+}
+
+const leaveBtn = () => `<button class="btn ghost phduelleave" id="phDuelLeave">Leave room</button>`;
 
 function duelRender(v) {
   const d = state.duel, prev = d.view;
-  const sig = JSON.stringify([v.phase, v.picks, v.pending, v.opp_pending, v.team, v.opp_locked, v.ready, v.bets, v.result, v.names]);
+  const sig = JSON.stringify([v.phase, v.picks, v.pending, v.opp_pending, v.team, v.opp_locked, v.ready, v.bets, v.result, v.names, v.left]);
   if (sig === d.sig) return;
   d.sig = sig; d.view = v;
   const me = v.seat, op = 1 - me, them = esc(v.names[op] || "your opponent");
@@ -652,13 +699,22 @@ function duelRender(v) {
     const n = v.picks[op][v.picks[op].length - 1];
     toast(`${v.names[op]} took ${mon(n).name}`);
   }
+  if (v.phase === "left") {
+    const who = v.left === me ? "You" : esc(v.names[v.left] || "Your opponent");
+    duelForget(d);
+    history.replaceState(null, "", location.pathname + (MOCK ? "?mock=1" : ""));
+    app.innerHTML = `${head()}<div class="card phlobby"><div class="phstep">Room ${esc(v.code)} closed</div>
+      <p><b>${who}</b> left the duel. No coins changed hands.</p>
+      <div class="phactions"><button class="btn primary" id="phDuelNew">New room</button><button class="btn ghost" id="phHome">Home</button></div></div>`;
+    return;
+  }
   if (v.phase === "lobby") {
     const link = `${location.origin}/pokehoops.html?duel=${v.code}`;
     app.innerHTML = `${head()}<div class="card phlobby">
       <div class="phstep">Room</div><div class="phcodebig">${esc(v.code)}</div>
       <p class="phmuted">Have your opponent open <b>${esc(location.host)}/pokehoops.html</b> and enter the code, or send them the link.</p>
       <div class="phactions"><button class="btn primary" id="phDuelLink" data-link="${esc(link)}">Share link</button></div>
-      <p class="phwait">Waiting for an opponent<span class="phdots"></span></p></div>`;
+      <p class="phwait">Waiting for an opponent<span class="phdots"></span></p>${leaveBtn()}</div>`;
     return;
   }
   if (v.phase === "draft") {
@@ -675,7 +731,8 @@ function duelRender(v) {
         <div class="phduelslots"><div><small>${esc(v.names[me])}</small>${pickSlots(v.picks[me])}</div><div><small>${them}</small>${pickSlots(v.picks[op])}</div></div>
       </div>${body}
       ${rosterPanel(v.picks[me])}
-      ${v.picks[op].length ? `<details class="phroster"><summary>${them}'s picks</summary>${rosterPanel(v.picks[op], `${them}'s picks`)}</details>` : ""}</div>`;
+      ${v.picks[op].length ? `<details class="phroster"><summary>${them}'s picks</summary>${rosterPanel(v.picks[op], `${them}'s picks`)}</details>` : ""}
+      ${leaveBtn()}</div>`;
     return;
   }
   if (v.phase === "lineup") {
@@ -688,7 +745,7 @@ function duelRender(v) {
     }
     app.innerHTML = `${head()}<div class="card phlobby"><div class="phstep">Lineup locked</div>${teamStrip(v.team)}
       <p class="phwait">${them} is setting their lineup<span class="phdots"></span></p>
-      <div class="phgroup">${them}'s eight</div>${teamStrip({ five: v.picks[op].slice(0, 5), bench: v.picks[op].slice(5) })}</div>`;
+      <div class="phgroup">${them}'s eight</div>${teamStrip({ five: v.picks[op].slice(0, 5), bench: v.picks[op].slice(5) })}${leaveBtn()}</div>`;
     return;
   }
   const teams = me === 0 ? [v.team, v.opp_team] : [v.opp_team, v.team];
@@ -709,6 +766,7 @@ function duelRender(v) {
       ${lineCard(v.line, v.names, teams, v.prices)}
       ${betUI}
       <p class="phmuted">${v.ready[op] ? `${them} is ready${oppBet ? ` (${num(oppBet.stake)} on ${esc(v.names[oppBet.side])})` : ""} ✓` : `${them} is looking at the line<span class="phdots"></span>`}</p>
+      ${v.ready[me] ? "" : leaveBtn()}
     </div>`;
     payoutHint();
     return;
@@ -943,7 +1001,9 @@ app.addEventListener("click", (e) => {
   const gm = e.target.closest(".phgame");
   if (gm) return gameDetail(Number(gm.dataset.g));
   if (e.target.closest("#phDetailX")) { $("phDetail").innerHTML = ""; return document.querySelectorAll(".phgame.on, [data-sg].on").forEach((el) => el.classList.remove("on")); }
-  if (e.target.closest("#phDuelNew")) return duelOpen("", true);
+  if (e.target.closest("#phDuelLeave")) return duelLeave();
+  if (e.target.closest("#phHome")) return renderIntro();
+  if (e.target.closest("#phDuelNew")) { if (state.duel) duelForget(state.duel); return duelOpen("", true); }
   if (e.target.closest("#phDuelJoin")) { const c = $("phCode")?.value.trim(); return c ? duelOpen(c) : toast("Enter the room code"); }
   const go = e.target.closest("#phDuelGo");
   if (go) return duelOpen(go.dataset.code);

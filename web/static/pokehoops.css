@@ -348,3 +348,7 @@ body:has(.phsb) header { position: static; }
 .phfive.named figcaption { text-align: center; line-height: 1.15; max-width: 58px; }
 .phfive.named figcaption small { display: block; font-family: system-ui, sans-serif; font-weight: 600; font-size: 10px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .phvsline { margin: 4px 0; }
+.phduelleave { margin-top: 14px; font-size: 13px; }
+.phnet { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 60; padding: 5px 12px; border-radius: 999px;
+  background: var(--panel2); border: 1px solid var(--gold); color: var(--gold); font-size: 12px; pointer-events: none; }
+.phnet[hidden] { display: none; }
