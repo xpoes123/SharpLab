@@ -17,6 +17,7 @@ import os
 import re
 import secrets
 import time
+from collections import defaultdict
 from datetime import datetime, timezone
 
 import httpx
@@ -266,10 +267,34 @@ async def _post(token: str, row: dict, uid: str) -> None:
 # ponytail: rooms are in memory — a web restart ends live duels (finished ones are saved in pokehoops_duels)
 
 DUEL_TTL = 6 * 3600
+IDLE_TTL = 30 * 60    # a room nobody is drafting/betting in (lobby, or finished) closes after this long untouched
+MAX_ROOMS = 500
+CODE_LEN = 5          # 24^5 ≈ 8M codes vs ≤500 open rooms, and joins are rate-limited
 VIG = 0.045           # the book's hold on series bets, split across both sides
 MAX_STAKE = 5000
 _duels: dict[str, dict] = {}
 _CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+_hits: dict[tuple[str, str], list[float]] = defaultdict(list)   # (bucket, ip) → recent timestamps
+LIMITS = {"create": (10, 600), "join": (30, 60)}                  # bucket → (max calls, per seconds)
+
+
+def _ip(request: Request) -> str:
+    """Client IP behind Caddy (it sets X-Forwarded-For), same as the analytics endpoint."""
+    fwd = getattr(request, "headers", {}).get("x-forwarded-for", "")
+    client = getattr(request, "client", None)
+    return fwd.split(",")[0].strip() if fwd else (client.host if client else "")
+
+
+def _limited(request: Request, bucket: str) -> JSONResponse | None:
+    """Sliding-window per-IP limit (in memory, like web/api.py's analytics limiter). Returns a 429 when over."""
+    n, window = LIMITS[bucket]
+    now, k = time.time(), (bucket, _ip(request))
+    recent = [t for t in _hits[k] if now - t < window]
+    if len(recent) >= n:
+        _hits[k] = recent
+        return JSONResponse({"error": "slow down — try again in a minute"}, status_code=429)
+    _hits[k] = recent + [now]
+    return None
 
 
 class DuelBody(BaseModel):
@@ -336,8 +361,12 @@ def _view(r: dict, seat: int) -> dict:
 
 def _sweep():
     now = time.time()
-    for c in [c for c, r in _duels.items() if now - r["created"] > DUEL_TTL]:
+    for c in [c for c, r in _duels.items() if now - r["created"] > DUEL_TTL
+              or (now - r["touched"] > IDLE_TTL and _phase(r) in ("lobby", "done", "left"))]:
         _duels.pop(c, None)
+    longest = max(w for _, w in LIMITS.values())
+    for k in [k for k, ts in _hits.items() if not ts or now - ts[-1] > longest]:
+        _hits.pop(k, None)
 
 
 @router.post("/duel")
@@ -345,12 +374,15 @@ async def duel_create(request: Request, body: DuelBody):
     uid, name = _seat_name(request, body.name)
     if not name:
         return JSONResponse({"error": "pick a name"}, status_code=400)
+    if err := _limited(request, "create"):
+        return err
     _sweep()
-    code = "".join(secrets.choice(_CODE_CHARS) for _ in range(4))
-    while code in _duels:
-        code = "".join(secrets.choice(_CODE_CHARS) for _ in range(4))
+    code = next((c for c in ("".join(secrets.choice(_CODE_CHARS) for _ in range(CODE_LEN)) for _ in range(20))
+                 if c not in _duels), None)
+    if code is None or len(_duels) >= MAX_ROOMS:
+        return JSONResponse({"error": "too many rooms open right now — try again shortly"}, status_code=503)
     seat = _new_seat(uid, name)
-    _duels[code] = {"code": code, "created": time.time(), "lock": asyncio.Lock(), "seed": pokehoops.new_seed(),
+    _duels[code] = {"code": code, "created": time.time(), "touched": time.time(), "lock": asyncio.Lock(), "seed": pokehoops.new_seed(),
                     "seats": [seat, None], "picks": [[], []], "pending": [None, None], "teams": [None, None],
                     "line": None, "ready": [False, False], "bets": [None, None], "result": None}
     return {"code": code, "key": seat["key"]}
@@ -358,6 +390,8 @@ async def duel_create(request: Request, body: DuelBody):
 
 @router.post("/duel/{code}/join")
 async def duel_join(request: Request, code: str, body: DuelBody):
+    if err := _limited(request, "join"):
+        return err
     r = _duels.get(code.upper())
     if r is None:
         return JSONResponse({"error": "no such room — check the code"}, status_code=404)
@@ -380,6 +414,7 @@ def _room(code: str, key: str | None) -> tuple[dict | None, int | None, JSONResp
     seat = _seat_of(r, key)
     if seat is None:
         return None, None, JSONResponse({"error": "you're not in this room"}, status_code=403)
+    r["touched"] = time.time()
     return r, seat, None
 
 
