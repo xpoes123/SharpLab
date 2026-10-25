@@ -116,13 +116,14 @@ async def finish_season(uid: str, seed: int, picks: list[int], team: dict, sourc
     store = {k: v for k, v in summary.items() if k not in ("lineup_cards", "bench_cards")}
     sid = await queries.insert_pokehoops_season(uid, source, seed, season_seed, picks, store)
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    coins = await queries.grant_activity_reward(uid, "pokehoops_season", day)
+    guest = uid.startswith("guest:")   # guests play for the board only: no coins
+    coins = 0 if guest else await queries.grant_activity_reward(uid, "pokehoops_season", day)
     return {
         **summary, "id": sid, "seed": seed, "season_seed": season_seed, "picks": picks,
         "prev_best": prev["wins"] if prev else None,
         "is_new_best": prev is None or summary["wins"] > prev["wins"],
         "rank": await queries.get_pokehoops_rank(uid),
-        "coins": coins, "balance": await queries.get_casino_balance(uid) or 0,
+        "coins": coins, "balance": 0 if guest else await queries.get_casino_balance(uid) or 0,
     }
 
 

@@ -73,6 +73,11 @@ function toast(msg) {
 }
 function renderNav(user) {
   if (!user) { navRight.innerHTML = `<a class="btn" href="/api/v1/auth/discord/login">Sign in with Discord</a>`; return; }
+  if (state.me?.guest) {
+    navRight.innerHTML = `<div class="userbar"><span class="phuser">${esc(user.username)} <small class="phmuted">guest</small></span>
+      <button class="btn ghost" id="phGuestOut">Sign out</button></div>`;
+    return;
+  }
   const av = user.avatar ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png` : null;
   navRight.innerHTML = `<div class="userbar">
     ${av ? `<img class="avatar" src="${av}" alt="">` : `<div class="avatar"></div>`}
@@ -119,8 +124,10 @@ const head = (sub = "") => `<div class="phhead"><h1>🏀 Poké Hoops</h1>${sub ?
 // ── Views ────────────────────────────────────────────────────────────────────
 function renderIntro() {
   state.draft = null;
-  const signedOut = !state.me ? `<p class="muted">Sign in with Discord to draft — your best season goes on the board.</p>
-    <a class="btn big" href="/api/v1/auth/discord/login">Sign in with Discord</a>` : "";
+  const signedOut = !state.me ? `<p class="muted">Play as a guest (just a name; your seasons still go on the board), or sign in with Discord to earn and bet coins.</p>
+    <div class="phactions"><input id="phGuestName" class="phinput" maxlength="20" placeholder="Your name" autocomplete="nickname" aria-label="Guest name">
+      <button class="btn big primary" id="phGuest">Play as guest</button></div>
+    <a class="btn ghost" href="/api/v1/auth/discord/login">Sign in with Discord</a>` : "";
   app.innerHTML = `${head("Draft eight Pokémon. Coach the lineup. Play 82 games against the league. Go 82–0.")}
     <div class="card phintro">
       <div class="phlegends">${LEGENDS.map((n) => `<img src="${sprite(n)}" alt="">`).join("")}</div>
@@ -335,7 +342,7 @@ function finish() {
       <div class="phstat"><span>Points</span><b>${s.ppg}</b><small>allowed ${s.oppg}</small></div>
     </div>
     <div class="phactions">
-      ${s.id && r.posted ? `<button class="btn primary" id="phPost">Post to #bot</button>` : ""}
+      ${s.id && r.posted && !state.me?.guest ? `<button class="btn primary" id="phPost">Post to #bot</button>` : ""}
       ${s.id && state.me && !r.mine ? `<button class="btn primary" id="phChallenge">⚔️ Challenge this team</button>` : ""}
       ${s.id ? `<button class="btn ghost" id="phShare">Copy link</button>` : ""}
       ${state.me ? `<button class="btn${s.id ? " ghost" : " primary"}" id="phAgain">${r.mine ? "Draft again" : "Draft your own"}</button>`
@@ -679,6 +686,7 @@ app.addEventListener("click", (e) => {
   const row = e.target.closest(".phcrow");
   if (row) return tapSlot(Number(row.dataset.k));
   if (e.target.closest("#phStart")) return startDraft();
+  if (e.target.closest("#phGuest")) return playAsGuest();
   if (e.target.closest("#phPlay")) return playIt();
   if (e.target.closest("#phSkip")) return skip();
   if (e.target.closest("#phShare")) return share();
@@ -745,10 +753,35 @@ app.addEventListener("drop", (e) => {
   state.draft.sel = null; renderLineup();
 });
 
+// Guest mode: the server's ph_guest cookie ("<token>:<name>") is the identity; we only read the name off it.
+function guestMe() {
+  const m = document.cookie.match(/(?:^|; )ph_guest=([^;]*)/);
+  if (!m) return null;
+  const v = decodeURIComponent(m[1]).replace(/^"|"$/g, ""), name = v.slice(v.indexOf(":") + 1);
+  return name ? { guest: true, authenticated: false, user: { id: "guest", username: name, avatar: null } } : null;
+}
+
+async function playAsGuest() {
+  const name = $("phGuestName")?.value.trim();
+  if (!name) return toast("Enter a name");
+  const res = await post("/guest", { name });
+  if (res.error) return toast("❌ " + res.error);
+  state.me = MOCK ? { guest: true, user: { id: "guest", username: res.name, avatar: null } } : guestMe();
+  if (!state.me) return toast("Couldn't save your guest name — are cookies blocked?");
+  renderNav(state.me.user);
+  renderIntro();
+}
+
+navRight.addEventListener("click", (e) => {
+  if (!e.target.closest("#phGuestOut")) return;
+  document.cookie = "ph_guest=; Max-Age=0; path=/";
+  state.me = null; renderNav(null); renderIntro();
+});
+
 async function main() {
   const me = await getJSON("/api/v1/hq/me");
-  state.me = me && me.authenticated ? me : null;
-  state.balance = state.me ? me.balance || 0 : 0;
+  state.me = me && me.authenticated ? me : guestMe();
+  state.balance = state.me && !state.me.guest ? me.balance || 0 : 0;
   renderNav(state.me && state.me.user);
   const qs = new URLSearchParams(location.search);
   if (qs.get("duel")) return duelOpen(qs.get("duel"));
@@ -788,6 +821,7 @@ function mock(url, body) {
     return row ? { ...row, name: row.name || "davidj", me: !row.name, challenges: mockDb.series.filter((x) => x.vs === id).map((x) => ({ id: x.id, name: x.name, wins: x.wins, losses: x.losses })) } : { _status: 404, error: "no such season" };
   }
   if (url.includes("/share/")) return { ok: true };
+  if (url.endsWith("/guest")) return { name: body.name };
   if (url.includes("/leaderboard")) {
     const mine = mockDb.best ? [{ ...mockDb.best, name: "davidj", me: true }] : [];
     const top = [...MOCK_LB, ...mine].sort((a, b) => b.wins - a.wins).map((r, i) => ({ ...r, rank: i + 1 }));
