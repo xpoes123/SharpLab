@@ -396,15 +396,20 @@ async def duel_join(request: Request, code: str, body: DuelBody):
     if r is None:
         return JSONResponse({"error": "no such room — check the code"}, status_code=404)
     uid, name = _seat_name(request, body.name)
-    if uid and any(st and st["uid"] == uid for st in r["seats"]):    # signed-in user re-opening their own room
-        return {"code": r["code"], "key": next(st["key"] for st in r["seats"] if st and st["uid"] == uid)}
-    if not name:
-        return JSONResponse({"error": "pick a name"}, status_code=400)
-    if r["seats"][1] is not None:
-        return JSONResponse({"error": "that room is full"}, status_code=409)
-    r["seats"][1] = _new_seat(uid, name)
-    r["packs"] = await pokehoops.duel_packs(r["seed"], r["picks"])
-    return {"code": r["code"], "key": r["seats"][1]["key"]}
+    async with r["lock"]:
+        if uid and any(st and st["uid"] == uid for st in r["seats"]):    # signed-in user re-opening their own room
+            return {"code": r["code"], "key": next(st["key"] for st in r["seats"] if st and st["uid"] == uid)}
+        if not name:
+            return JSONResponse({"error": "pick a name"}, status_code=400)
+        if r["seats"][1] is not None:
+            return JSONResponse({"error": "that room is full"}, status_code=409)
+        try:        # deal round one before taking the seat, so an engine hiccup leaves the room joinable
+            r["packs"] = await pokehoops.duel_packs(r["seed"], r["picks"])
+        except pokehoops.EngineUnavailable:
+            return JSONResponse({"error": "the sim engine is down — try again shortly"}, status_code=503)
+        r["seats"][1] = _new_seat(uid, name)
+        r["touched"] = time.time()
+        return {"code": r["code"], "key": r["seats"][1]["key"]}
 
 
 def _room(code: str, key: str | None) -> tuple[dict | None, int | None, JSONResponse | None]:
