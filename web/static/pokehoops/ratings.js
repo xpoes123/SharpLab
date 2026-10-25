@@ -65,7 +65,7 @@ export function effectiveness(attN, defN) {
   return Math.max(...a.map((t) => d.reduce((m, dt) => m * eff1(t, dt), 1)));
 }
 
-export const LEGENDS = [144, 145, 146, 150, 151];
+export const LEGENDS = [144, 145, 146, 150, 151, 243, 244, 245, 249, 250, 251];
 export const POOL = DEX.map((r) => r[0]).filter((n) => !LEGENDS.includes(n));   // everyone but the Legendaries
 
 /** Best position at which a Pokémon plays, and its overall there. */

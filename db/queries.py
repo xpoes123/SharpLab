@@ -6170,7 +6170,7 @@ async def insert_pokehoops_season(discord_user: str, source: str, seed: int, sea
         cur = await db.execute(
             "INSERT INTO pokehoops_seasons (discord_user, source, seed, season_seed, picks, lineup, wins, "
             "losses, grade, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (discord_user, source, seed, season_seed, json.dumps(picks), json.dumps(summary["lineup"]),
+            (discord_user, source, seed, season_seed, json.dumps(picks), json.dumps(summary["team"]),
              summary["wins"], summary["losses"], summary["grade"], json.dumps(summary),
              datetime.now(timezone.utc).isoformat()))
         await db.commit()
@@ -6193,11 +6193,20 @@ async def get_pokehoops_season(season_id: int) -> dict | None:
         return _pokehoops_row(row) if row else None
 
 
+# Current-rules seasons only: 8-pick drafts with a coach-set team. Legacy 5-pick rows stay in the table but can't
+# replay under the new engine, so they're off the board, out of ranks / personal bests, and 410 on share links.
+POKEHOOPS_CURRENT = "json_array_length(picks) = 8"
+
+
+def pokehoops_is_legacy(row: dict) -> bool:
+    return len(row.get("picks") or []) != 8
+
+
 # Best season per player: most wins, ties to whoever got there first.
 _POKEHOOPS_BEST = (
     "SELECT * FROM (SELECT s.*, "
     "ROW_NUMBER() OVER (PARTITION BY discord_user ORDER BY wins DESC, id ASC) AS rn, "
-    "COUNT(*) OVER (PARTITION BY discord_user) AS runs FROM pokehoops_seasons s{where}) "
+    "COUNT(*) OVER (PARTITION BY discord_user) AS runs FROM pokehoops_seasons s WHERE " + POKEHOOPS_CURRENT + "{where}) "
     "WHERE rn = 1 ORDER BY wins DESC, id ASC")
 
 
@@ -6206,7 +6215,7 @@ async def get_pokehoops_leaderboard(limit: int = 50, since: str | None = None) -
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         if since:
-            cur = await db.execute(_POKEHOOPS_BEST.format(where=" WHERE created_at >= ?") + " LIMIT ?", (since, limit))
+            cur = await db.execute(_POKEHOOPS_BEST.format(where=" AND created_at >= ?") + " LIMIT ?", (since, limit))
         else:
             cur = await db.execute(_POKEHOOPS_BEST.format(where="") + " LIMIT ?", (limit,))
         return [_pokehoops_row(r) for r in await cur.fetchall()]
@@ -6216,8 +6225,8 @@ async def get_pokehoops_best(discord_user: str) -> dict | None:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT *, (SELECT COUNT(*) FROM pokehoops_seasons WHERE discord_user = ?) AS runs "
-            "FROM pokehoops_seasons WHERE discord_user = ? ORDER BY wins DESC, id ASC LIMIT 1",
+            "SELECT *, (SELECT COUNT(*) FROM pokehoops_seasons WHERE discord_user = ? AND " + POKEHOOPS_CURRENT + ") AS runs "
+            "FROM pokehoops_seasons WHERE discord_user = ? AND " + POKEHOOPS_CURRENT + " ORDER BY wins DESC, id ASC LIMIT 1",
             (discord_user, discord_user))
         row = await cur.fetchone()
         return _pokehoops_row(row) if row else None

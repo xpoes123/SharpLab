@@ -6,7 +6,8 @@ shared/pokehoops_cli.mjs — never ported, so the browser, the bot and the serve
 
 Anti-cheat: the server issues the draft seed; every 3-option pack is a pure function of that seed
 and the earlier picks, so finish_season() replays seed + picks and rejects any pick that wasn't
-offered. The season itself is simmed HERE under a fresh season seed drawn only after the picks are
+offered, and that the coach's team (five starters PG..C + three bench, each backing up a spot) uses
+exactly the eight drafted players. The season itself is simmed HERE under a fresh season seed drawn only after the picks are
 final, so a client can't brute-force the 243 pick paths offline for the luckiest season. The
 season seed is returned (and stored) so the page can replay the exact same season for its reveal."""
 
@@ -24,13 +25,14 @@ from db import queries
 
 CLI = Path(__file__).with_name("pokehoops_cli.mjs")
 NODE_TIMEOUT = 15  # seconds; a season is ~60ms of sim + ~50ms node startup
-PICKS = 5
+PICKS = 8
+BENCH = 3
 WEB_URL = "https://sharplab.djiang.xyz/pokehoops.html"
 SPRITE_URL = "https://sharplab.djiang.xyz/pokehoops/sprites/{}.png"
 
 
 class IllegalDraft(ValueError):
-    """The submitted picks don't replay from the seed (or are malformed)."""
+    """The submitted picks don't replay from the seed, or the team isn't a legal arrangement of them."""
 
 
 class EngineUnavailable(RuntimeError):
@@ -72,26 +74,46 @@ def _clean_picks(picks) -> list[int]:
     return picks
 
 
+def _clean_team(team) -> dict:
+    """Shape check only (lists of ints); legality vs the picks is the engine's validTeam."""
+    if not isinstance(team, dict):
+        raise IllegalDraft("team must be {five, bench, backs}")
+    out = {}
+    for k in ("five", "bench", "backs"):
+        v = team.get(k)
+        if not isinstance(v, list) or not all(isinstance(n, int) and not isinstance(n, bool) for n in v):
+            raise IllegalDraft(f"team.{k} must be a list of integers")
+        out[k] = v
+    return out
+
+
+def default_team(picks: list[int]) -> dict:
+    """The arrangement before the coach touches it: draft order, bench backing up PG, SG, SF."""
+    return {"five": picks[:5], "bench": picks[5:PICKS], "backs": [0, 1, 2][:BENCH]}
+
+
 async def next_pack(seed: int, picks: list[int]) -> list[dict] | None:
-    """The 3 option cards for the next pick (None once all 5 are in). Raises IllegalDraft."""
+    """The 3 option cards for the next pick (None once all 8 are in). Raises IllegalDraft."""
     res = await _call({"op": "pack", "seed": seed, "picks": _clean_picks(picks)})
     return None if res.get("done") else res["pack"]
 
 
-async def sim_season(seed: int, picks: list[int], season_seed: int) -> dict:
-    return await _call({"op": "season", "seed": seed, "picks": _clean_picks(picks), "season_seed": season_seed})
+async def sim_season(seed: int, picks: list[int], team: dict, season_seed: int) -> dict:
+    return await _call({"op": "season", "seed": seed, "picks": _clean_picks(picks), "team": _clean_team(team),
+                        "season_seed": season_seed})
 
 
-async def finish_season(uid: str, seed: int, picks: list[int], source: str) -> dict:
-    """Verify a finished draft, sim its season server-side, record it, pay the capped reward.
+async def finish_season(uid: str, seed: int, picks: list[int], team: dict, source: str) -> dict:
+    """Verify a finished draft + the coach's team, sim its season server-side, record it, pay the capped reward.
     Returns the season summary plus id / season_seed / is_new_best / prev_best / rank / coins / balance."""
     picks = _clean_picks(picks)
     if len(picks) != PICKS:
         raise IllegalDraft("draft incomplete")
+    team = _clean_team(team)
     season_seed = new_seed()
-    summary = await sim_season(seed, picks, season_seed)
+    summary = await sim_season(seed, picks, team, season_seed)
     prev = await queries.get_pokehoops_best(uid)
-    store = {k: v for k, v in summary.items() if k != "lineup_cards"}
+    store = {k: v for k, v in summary.items() if k not in ("lineup_cards", "bench_cards")}
     sid = await queries.insert_pokehoops_season(uid, source, seed, season_seed, picks, store)
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     coins = await queries.grant_activity_reward(uid, "pokehoops_season", day)
