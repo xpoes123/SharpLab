@@ -439,12 +439,15 @@ async def duel_pick(code: str, body: DuelBody):
             return JSONResponse({"error": "not your pick right now"}, status_code=409)
         if body.n not in r["packs"][seat]:
             return JSONResponse({"error": "that one wasn't in your pack"}, status_code=400)
-        r["pending"][seat] = body.n
-        if None not in r["pending"]:                     # both in: reveal the round, deal the next packs
-            for s in (0, 1):
-                r["picks"][s].append(r["pending"][s])
-            r["pending"] = [None, None]
-            r["packs"] = await pokehoops.duel_packs(r["seed"], r["picks"])
+        pending = [body.n if s == seat else r["pending"][s] for s in (0, 1)]
+        if None not in pending:                          # both in: reveal the round, deal the next packs
+            picks = [r["picks"][s] + [pending[s]] for s in (0, 1)]
+            try:                                         # deal first, so a failure leaves the round as it was
+                r["packs"] = await pokehoops.duel_packs(r["seed"], picks)
+            except pokehoops.EngineUnavailable:
+                return JSONResponse({"error": "the sim engine is down — try again shortly"}, status_code=503)
+            r["picks"], pending = picks, [None, None]
+        r["pending"] = pending
         return _view(r, seat)
 
 
