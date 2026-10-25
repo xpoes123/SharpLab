@@ -36,9 +36,49 @@ SHARE_CHANNEL = os.getenv("POKEHOOPS_SHARE_CHANNEL_ID", "1496179308954259698")  
 _shared: set[int] = set()  # ponytail: in-memory, a restart lets a season be posted once more; add a column if that matters
 
 
+GUEST_COOKIE = "ph_guest"   # "<token>:<name>" — play without Discord (no coins, no #bot posts)
+_GUEST_RE = re.compile(r"^[A-Za-z0-9_-]{16}:[\w .'-]{1,20}$")
+
+
+def _clean_name(name: str | None) -> str:
+    return re.sub(r"[^\w .'-]", "", (name or "")).strip()[:20]
+
+
+def _guest(request: Request) -> str | None:
+    """Guest uid "guest:<token>:<name>" from the cookie, if it's well-formed. The 16-char random token is the secret."""
+    raw = request.cookies.get(GUEST_COOKIE) if hasattr(request, "cookies") else None
+    return f"guest:{raw}" if raw and _GUEST_RE.match(raw) else None
+
+
+def is_guest(uid: str | None) -> bool:
+    return bool(uid) and uid.startswith("guest:")
+
+
 def _uid(request: Request) -> str | None:
     sess = auth.read_session(request)
-    return sess["id"] if sess else None
+    return sess["id"] if sess else _guest(request)
+
+
+def _name(uid: str, names: dict) -> str:
+    if is_guest(uid):
+        return uid.split(":", 2)[2] + " (guest)"
+    return names.get(uid) or f"user-{uid[-4:]}"
+
+
+class GuestBody(BaseModel):
+    name: str
+
+
+@router.post("/guest")
+async def guest(body: GuestBody):
+    """Start (or rename) a guest identity: sets the cookie the rest of the API reads. Renaming = a fresh guest."""
+    name = _clean_name(body.name)
+    if not name:
+        return JSONResponse({"error": "pick a name"}, status_code=400)
+    token = secrets.token_urlsafe(12)[:16]
+    res = JSONResponse({"name": name})
+    res.set_cookie(GUEST_COOKIE, f"{token}:{name}", max_age=365 * 86400, samesite="lax", secure=True, path="/")
+    return res
 
 
 @router.post("/start")
@@ -90,7 +130,7 @@ async def submit(request: Request, body: SubmitBody):
 def _public(row: dict, name: str | None) -> dict:
     s = row["summary"]
     team = row["lineup"] if isinstance(row["lineup"], dict) else {"five": row["lineup"], "bench": [], "backs": []}
-    return {"id": row["id"], "name": name or f"user-{row['discord_user'][-4:]}",
+    return {"id": row["id"], "name": name or _name(row["discord_user"], {}),
             "wins": row["wins"], "losses": row["losses"], "grade": row["grade"],
             "lineup": team["five"], "team": team, "picks": row["picks"], "seed": row["seed"],
             "season_seed": row["season_seed"], "source": row["source"],
@@ -120,7 +160,7 @@ async def season(request: Request, season_id: int):
         return JSONResponse({"error": "old-rules season — it can't be replayed under the current game"}, status_code=410)
     challenges = await queries.get_pokehoops_challenges(season_id)
     names = await queries.get_display_names([row["discord_user"]] + [c["challenger"] for c in challenges])
-    nm = lambda u: names.get(u) or f"user-{u[-4:]}"  # noqa: E731
+    nm = lambda u: _name(u, names)  # noqa: E731
     return {**_public(row, names.get(row["discord_user"])), "me": row["discord_user"] == _uid(request),
             "challenges": [{"id": c["id"], "name": nm(c["challenger"]), "wins": c["wins"], "losses": c["losses"]}
                            for c in challenges]}
@@ -134,7 +174,7 @@ async def series(series_id: int):
         return JSONResponse({"error": "no such series"}, status_code=404)
     opp = await queries.get_pokehoops_season(row["vs_season"])
     names = await queries.get_display_names([row["challenger"], opp["discord_user"]])
-    nm = lambda u: names.get(u) or f"user-{u[-4:]}"  # noqa: E731
+    nm = lambda u: _name(u, names)  # noqa: E731
     return {"id": row["id"], "vs": row["vs_season"], "seed": row["seed"], "series_seed": row["series_seed"],
             "picks": row["picks"], "team": row["team"], "wins": row["wins"], "losses": row["losses"],
             "name": nm(row["challenger"]), "opp_name": nm(opp["discord_user"]), "opp_team": opp["lineup"]}
@@ -167,8 +207,8 @@ def _share_embed(row: dict, cards: list[dict], bench: list[dict], backs: list[in
 async def share(request: Request, season_id: int):
     """Post one of your seasons to SharpLab's #bot channel (once per season)."""
     uid = _uid(request)
-    if not uid:
-        return JSONResponse({"error": "sign in to share"}, status_code=401)
+    if not uid or is_guest(uid):
+        return JSONResponse({"error": "sign in with Discord to post to #bot"}, status_code=401)
     row = await queries.get_pokehoops_season(season_id)
     if row is None or row["discord_user"] != uid:
         return JSONResponse({"error": "not your season"}, status_code=404)
@@ -231,8 +271,10 @@ def _seat_name(request: Request, name: str | None) -> tuple[str | None, str | No
     sess = auth.read_session(request)
     if sess:
         return sess["id"], sess.get("username") or sess.get("name") or "Coach"
-    name = re.sub(r"[^\w .'-]", "", (name or "")).strip()[:20]
-    return None, name or None
+    g = _guest(request)
+    if g:
+        return g, g.split(":", 2)[2]
+    return None, _clean_name(name) or None
 
 
 def _new_seat(uid: str | None, name: str) -> dict:
@@ -267,7 +309,7 @@ def _view(r: dict, seat: int) -> dict:
     return {
         "code": r["code"], "seat": seat, "phase": ph, "seed": r["seed"],
         "names": [st["name"] if st else None for st in r["seats"]],
-        "can_bet": bool(r["seats"][seat]["uid"]),
+        "can_bet": bool(r["seats"][seat]["uid"]) and not is_guest(r["seats"][seat]["uid"]),
         "picks": r["picks"], "pending": r["pending"][seat], "opp_pending": r["pending"][opp] is not None,
         "team": r["teams"][seat], "opp_team": r["teams"][opp] if ph in ("tip", "done") else None,
         "opp_locked": r["teams"][opp] is not None,
@@ -383,7 +425,7 @@ async def duel_ready(request: Request, code: str, body: DuelBody):
             return JSONResponse({"error": "already locked in"}, status_code=409)
         uid = r["seats"][seat]["uid"]
         if body.stake:
-            if not uid or _uid(request) != uid:
+            if not uid or is_guest(uid) or _uid(request) != uid:
                 return JSONResponse({"error": "sign in to bet coins"}, status_code=401)
             if body.side not in (0, 1) or not 1 <= body.stake <= MAX_STAKE:
                 return JSONResponse({"error": f"bet 1–{MAX_STAKE:,} coins on one side"}, status_code=400)
@@ -415,7 +457,7 @@ async def _tip_off(r: dict) -> None:
         await queries.log_casino_result(uid, "pokehoops", bet["stake"], bet["payout"])
     a, b = r["seats"]
     did = await queries.insert_pokehoops_duel({
-        "a": a["uid"] or f"guest:{a['name']}", "b": b["uid"] or f"guest:{b['name']}", "a_name": a["name"],
+        "a": a["uid"] or f"guest:-:{a['name']}", "b": b["uid"] or f"guest:-:{b['name']}", "a_name": a["name"],
         "b_name": b["name"], "seed": r["seed"], "series_seed": series_seed, "picks": r["picks"], "teams": r["teams"],
         "wins_a": x["wins"][0], "wins_b": x["wins"][1], "line": r["line"], "bets": r["bets"]})
     r["result"] = {"id": did, "series_seed": series_seed, "wins": x["wins"]}

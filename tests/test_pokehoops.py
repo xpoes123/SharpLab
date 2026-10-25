@@ -427,3 +427,32 @@ def test_live_duel_room_draft_line_bets_and_series(monkeypatch):
         assert (await gp.duel_record(424242)).status_code == 404
         assert (await gp.duel_join(_Req(), "ZZZZ", gp.DuelBody(name="x"))).status_code == 404
     _run(go())
+
+
+def test_guest_mode_plays_without_discord(monkeypatch):
+    _fresh_db()
+
+    class _G:
+        def __init__(self, cookie):
+            self.cookies = {gp.GUEST_COOKIE: cookie} if cookie else {}
+
+    async def go():
+        await sch.init_db()
+        monkeypatch.setattr(gp.auth, "read_session", lambda r: None)
+        assert (await gp.guest(gp.GuestBody(name="  <> "))).status_code == 400
+        res = await gp.guest(gp.GuestBody(name="Ash Ketchum"))
+        cookie = res.headers["set-cookie"].split(";")[0].split("=", 1)[1].strip('"')
+        req = _G(cookie)
+        assert gp._uid(_G("forged")) is None and gp._uid(req).startswith("guest:")
+        start = await gp.start(req)
+        picks = await _draft(start["seed"])
+        season = await gp.submit(req, gp.SubmitBody(token=start["token"], picks=picks, team=_team(picks)))
+        assert season["coins"] == 0 and season["balance"] == 0          # no coins for guests
+        lb = await gp.leaderboard(req)
+        assert lb["top"][0]["name"] == "Ash Ketchum (guest)" and lb["top"][0]["me"]
+        assert (await gp.share(req, season["id"])).status_code == 401  # no #bot posts
+        # a guest's duel seat takes the cookie's name and can't bet
+        room = await gp.duel_create(req, gp.DuelBody())
+        st = await gp.duel_state(room["code"], room["key"])
+        assert st["names"][0] == "Ash Ketchum" and not st["can_bet"]
+    _run(go())
