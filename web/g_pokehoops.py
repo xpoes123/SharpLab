@@ -12,7 +12,10 @@ best season (pokehoops_seasons), shared with the Discord /play pokehoops draft."
 from __future__ import annotations
 
 import logging
+import asyncio
 import os
+import re
+import secrets
 import time
 from datetime import datetime, timezone
 
@@ -200,3 +203,230 @@ async def _post(token: str, row: dict, uid: str) -> None:
         r = await client.post(f"https://discord.com/api/v10/channels/{SHARE_CHANNEL}/messages",
                               headers={"Authorization": f"Bot {token}"}, json=body)
     r.raise_for_status()
+
+
+# ── Live duel: two phones, one room. Both coaches draft at once (separate packs, lockstep rounds), set lineups,
+# see the line (Monte Carlo of the exact matchup), optionally bet coins on it, then a best-of-seven simmed here.
+# Players act with a per-seat key (no sign-in needed — guests can join by name; betting needs a SharpLab account).
+# ponytail: rooms are in memory — a web restart ends live duels (finished ones are saved in pokehoops_duels)
+
+DUEL_TTL = 6 * 3600
+VIG = 0.045           # the book's hold on series bets, split across both sides
+MAX_STAKE = 5000
+_duels: dict[str, dict] = {}
+_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+
+
+class DuelBody(BaseModel):
+    key: str | None = None
+    name: str | None = None
+    n: int | None = None
+    team: TeamBody | None = None
+    side: int | None = None
+    stake: int | None = None
+
+
+def _seat_name(request: Request, name: str | None) -> tuple[str | None, str | None]:
+    """(uid, display name): signed-in users keep their Discord name; guests must give one."""
+    sess = auth.read_session(request)
+    if sess:
+        return sess["id"], sess.get("username") or sess.get("name") or "Coach"
+    name = re.sub(r"[^\w .'-]", "", (name or "")).strip()[:20]
+    return None, name or None
+
+
+def _new_seat(uid: str | None, name: str) -> dict:
+    return {"key": secrets.token_urlsafe(12), "uid": uid, "name": name}
+
+
+def _phase(r: dict) -> str:
+    if r["seats"][1] is None:
+        return "lobby"
+    if len(r["picks"][0]) < pokehoops.PICKS:
+        return "draft"
+    if None in r["teams"] or r["line"] is None:     # tip-off waits for the line (computed after both lock)
+        return "lineup"
+    if r["result"] is None:
+        return "tip"
+    return "done"
+
+
+def _seat_of(r: dict, key: str | None) -> int | None:
+    return next((i for i, st in enumerate(r["seats"]) if st and key and secrets.compare_digest(st["key"], key)), None)
+
+
+def _price(p: float) -> float:
+    """Decimal odds the book offers on an outcome the model gives probability p (fair + half the hold). Always below
+    fair (1/p), rounded down; a lock bottoms out at 1.0 (stake back) rather than ever paying +EV."""
+    return max(1.0, int(1000 / (p + VIG / 2)) / 1000)
+
+
+def _view(r: dict, seat: int) -> dict:
+    ph, opp = _phase(r), 1 - seat
+    line = r["line"]
+    return {
+        "code": r["code"], "seat": seat, "phase": ph, "seed": r["seed"],
+        "names": [st["name"] if st else None for st in r["seats"]],
+        "can_bet": bool(r["seats"][seat]["uid"]),
+        "picks": r["picks"], "pending": r["pending"][seat], "opp_pending": r["pending"][opp] is not None,
+        "team": r["teams"][seat], "opp_team": r["teams"][opp] if ph in ("tip", "done") else None,
+        "opp_locked": r["teams"][opp] is not None,
+        "line": line, "prices": [_price(line["series"]), _price(1 - line["series"])] if line else None,
+        "ready": r["ready"], "bets": r["bets"],
+        "result": r["result"],
+    }
+
+
+def _sweep():
+    now = time.time()
+    for c in [c for c, r in _duels.items() if now - r["created"] > DUEL_TTL]:
+        _duels.pop(c, None)
+
+
+@router.post("/duel")
+async def duel_create(request: Request, body: DuelBody):
+    uid, name = _seat_name(request, body.name)
+    if not name:
+        return JSONResponse({"error": "pick a name"}, status_code=400)
+    _sweep()
+    code = "".join(secrets.choice(_CODE_CHARS) for _ in range(4))
+    while code in _duels:
+        code = "".join(secrets.choice(_CODE_CHARS) for _ in range(4))
+    seat = _new_seat(uid, name)
+    _duels[code] = {"code": code, "created": time.time(), "lock": asyncio.Lock(), "seed": pokehoops.new_seed(),
+                    "seats": [seat, None], "picks": [[], []], "pending": [None, None], "teams": [None, None],
+                    "line": None, "ready": [False, False], "bets": [None, None], "result": None}
+    return {"code": code, "key": seat["key"]}
+
+
+@router.post("/duel/{code}/join")
+async def duel_join(request: Request, code: str, body: DuelBody):
+    r = _duels.get(code.upper())
+    if r is None:
+        return JSONResponse({"error": "no such room — check the code"}, status_code=404)
+    uid, name = _seat_name(request, body.name)
+    if uid and any(st and st["uid"] == uid for st in r["seats"]):    # signed-in user re-opening their own room
+        return {"code": r["code"], "key": next(st["key"] for st in r["seats"] if st and st["uid"] == uid)}
+    if not name:
+        return JSONResponse({"error": "pick a name"}, status_code=400)
+    if r["seats"][1] is not None:
+        return JSONResponse({"error": "that room is full"}, status_code=409)
+    r["seats"][1] = _new_seat(uid, name)
+    r["packs"] = await pokehoops.duel_packs(r["seed"], r["picks"])
+    return {"code": r["code"], "key": r["seats"][1]["key"]}
+
+
+def _room(code: str, key: str | None) -> tuple[dict | None, int | None, JSONResponse | None]:
+    r = _duels.get(code.upper())
+    if r is None:
+        return None, None, JSONResponse({"error": "that room has closed"}, status_code=404)
+    seat = _seat_of(r, key)
+    if seat is None:
+        return None, None, JSONResponse({"error": "you're not in this room"}, status_code=403)
+    return r, seat, None
+
+
+@router.get("/duel/{code}")
+async def duel_state(code: str, key: str = ""):
+    r, seat, err = _room(code, key)
+    return err or _view(r, seat)
+
+
+@router.post("/duel/{code}/pick")
+async def duel_pick(code: str, body: DuelBody):
+    r, seat, err = _room(code, body.key)
+    if err:
+        return err
+    async with r["lock"]:
+        if _phase(r) != "draft" or r["pending"][seat] is not None:
+            return JSONResponse({"error": "not your pick right now"}, status_code=409)
+        if body.n not in r["packs"][seat]:
+            return JSONResponse({"error": "that one wasn't in your pack"}, status_code=400)
+        r["pending"][seat] = body.n
+        if None not in r["pending"]:                     # both in: reveal the round, deal the next packs
+            for s in (0, 1):
+                r["picks"][s].append(r["pending"][s])
+            r["pending"] = [None, None]
+            r["packs"] = await pokehoops.duel_packs(r["seed"], r["picks"])
+        return _view(r, seat)
+
+
+@router.post("/duel/{code}/team")
+async def duel_team(code: str, body: DuelBody):
+    r, seat, err = _room(code, body.key)
+    if err:
+        return err
+    async with r["lock"]:
+        if _phase(r) != "lineup" or r["teams"][seat] is not None:
+            return JSONResponse({"error": "lineups are locked"}, status_code=409)
+        team = body.team.model_dump() if body.team else {}
+        if not pokehoops.legal_team(team, r["picks"][seat]):
+            return JSONResponse({"error": "illegal lineup: each of your eight once, five starters + three bench"}, status_code=400)
+        r["teams"][seat] = team
+        if None not in r["teams"]:
+            try:
+                r["line"] = await pokehoops.duel_line(r["seed"], r["picks"], r["teams"])
+            except pokehoops.EngineUnavailable:
+                r["teams"][seat] = None
+                return JSONResponse({"error": "the sim engine is down — try again shortly"}, status_code=503)
+        return _view(r, seat)
+
+
+@router.post("/duel/{code}/ready")
+async def duel_ready(request: Request, code: str, body: DuelBody):
+    """Lock in for tip-off, optionally with a bet on either side of the series at the posted price."""
+    r, seat, err = _room(code, body.key)
+    if err:
+        return err
+    async with r["lock"]:
+        if _phase(r) != "tip" or r["ready"][seat]:
+            return JSONResponse({"error": "already locked in"}, status_code=409)
+        uid = r["seats"][seat]["uid"]
+        if body.stake:
+            if not uid or _uid(request) != uid:
+                return JSONResponse({"error": "sign in to bet coins"}, status_code=401)
+            if body.side not in (0, 1) or not 1 <= body.stake <= MAX_STAKE:
+                return JSONResponse({"error": f"bet 1–{MAX_STAKE:,} coins on one side"}, status_code=400)
+            await queries.get_or_create_casino_wallet(uid)
+            try:
+                await queries.update_casino_balance(uid, -body.stake)
+            except ValueError as e:
+                return JSONResponse({"error": str(e)}, status_code=400)
+            p = r["line"]["series"] if body.side == 0 else 1 - r["line"]["series"]
+            r["bets"][seat] = {"side": body.side, "stake": body.stake, "price": _price(p)}
+        r["ready"][seat] = True
+        if all(r["ready"]):
+            await _tip_off(r)
+        return _view(r, seat)
+
+
+async def _tip_off(r: dict) -> None:
+    """Both locked: draw the series seed only now (after every bet), sim, settle, record."""
+    series_seed = pokehoops.new_seed()
+    x = await pokehoops.duel_series(r["seed"], r["picks"], r["teams"], series_seed)
+    winner = 0 if x["wins"][0] > x["wins"][1] else 1
+    for seat, bet in enumerate(r["bets"]):
+        if not bet:
+            continue
+        uid = r["seats"][seat]["uid"]
+        bet["payout"] = int(bet["stake"] * bet["price"]) if bet["side"] == winner else 0
+        if bet["payout"]:
+            bet["balance"] = await queries.update_casino_balance(uid, bet["payout"])
+        await queries.log_casino_result(uid, "pokehoops", bet["stake"], bet["payout"])
+    a, b = r["seats"]
+    did = await queries.insert_pokehoops_duel({
+        "a": a["uid"] or f"guest:{a['name']}", "b": b["uid"] or f"guest:{b['name']}", "a_name": a["name"],
+        "b_name": b["name"], "seed": r["seed"], "series_seed": series_seed, "picks": r["picks"], "teams": r["teams"],
+        "wins_a": x["wins"][0], "wins_b": x["wins"][1], "line": r["line"], "bets": r["bets"]})
+    r["result"] = {"id": did, "series_seed": series_seed, "wins": x["wins"]}
+
+
+@router.get("/duels/{duel_id}")
+async def duel_record(duel_id: int):
+    """A finished duel, for share links — the page replays it from the seeds."""
+    d = await queries.get_pokehoops_duel(duel_id)
+    if d is None:
+        return JSONResponse({"error": "no such duel"}, status_code=404)
+    return {"id": d["id"], "names": [d["a_name"], d["b_name"]], "seed": d["seed"], "series_seed": d["series_seed"],
+            "picks": d["picks"], "teams": d["teams"], "wins": [d["wins_a"], d["wins_b"]], "line": d["line"],
+            "bets": d["bets"]}

@@ -3,10 +3,13 @@
 // the vendored TV engine), so the server's verdict and the page's reveal can't drift.
 //   {"op":"pack","seed":S,"picks":[...]}                              → {"pack":[card...], "pick": k} | {"done":true}
 //   {"op":"series","seed":S,"picks":[8],"team":{...},"opp":{...},"series_seed":T} → best-of-7 {wins, losses, games}
+//   {"op":"duel_packs","seed":S,"picks":[[a],[b]]}                    → {"packs":[[n,n,n],[n,n,n]]} | {"done":true}
+//   {"op":"duel_line","seed":S,"picks":[[8],[8]],"teams":[t,t]}       → matchLine (side 0's view)
+//   {"op":"duel_series","seed":S,"picks":..,"teams":..,"series_seed":T} → {wins:[a,b], games}
 //   {"op":"season","seed":S,"picks":[8],"team":{five,bench,backs},"season_seed":T} → summarize() output + cards
 // A card never carries an overall rating — players see skills, natural positions, types, archetype, move, blurb.
 // Errors: {"error": "..."} and exit code 1.
-import { replay, nextPack, playSeason, playSeries, summarize, mon } from "../web/static/pokehoops-draft.js";
+import { replay, nextPack, playSeason, playSeries, summarize, mon, matchLine, duelReplay, duelTeams, bestOf7 } from "../web/static/pokehoops-draft.js";
 import { profile, skills } from "../web/static/pokehoops/ratings.js";
 
 function card(n) {
@@ -42,7 +45,21 @@ function handle(req) {
     if (!Number.isInteger(ss) || ss < 0 || ss > 0xffffffff) return { error: "bad series seed" };
     let s;
     try { s = playSeries(seed, picks, req.team, req.opp, ss); } catch (e) { return { error: String(e.message || e) }; }
-    return { wins: s.wins, losses: s.losses, team: s.team, games: s.games };
+    return { wins: s.wins, losses: s.losses, team: s.team, games: s.games, line: matchLine(s.team, s.opp) };
+  }
+  if (req.op === "duel_packs") {
+    const r = duelReplay(seed, req.picks);
+    if (r.error) return { error: r.error };
+    return r.rounds.length > req.picks[0].length ? { packs: r.rounds[req.picks[0].length] } : { done: true };
+  }
+  if (req.op === "duel_line" || req.op === "duel_series") {
+    let teams;
+    try { teams = duelTeams(seed, req.picks, req.teams); } catch (e) { return { error: String(e.message || e) }; }
+    if (req.op === "duel_line") return matchLine(teams[0], teams[1]);
+    const ss = Number(req.series_seed);
+    if (!Number.isInteger(ss) || ss < 0 || ss > 0xffffffff) return { error: "bad series seed" };
+    const x = bestOf7(teams[0], teams[1], ss);
+    return { wins: [x.wins, x.losses], games: x.games };
   }
   return { error: "unknown op" };
 }

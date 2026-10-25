@@ -200,3 +200,64 @@ img { image-rendering: pixelated; }
 @keyframes phin { from { opacity: 0; transform: translateY(6px); } }
 @media (max-width: 560px) { .phvs { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .phgame { animation: none; } }
+
+/* ── live duel ── */
+.phduelcta { display: grid; gap: 10px; margin-top: 14px; }
+.phinput { background: var(--panel2); border: 1px solid var(--line-strong); color: var(--fg); border-radius: var(--r); padding: 10px 12px; font: inherit; min-width: 0; }
+.phinput.code { width: 92px; text-transform: uppercase; letter-spacing: .2em; font-family: var(--font-mono); text-align: center; }
+.phlobby { display: grid; gap: 12px; text-align: center; justify-items: center; }
+.phcodebig { font-family: var(--font-mono); font-size: 64px; font-weight: 800; letter-spacing: .25em; color: var(--accent); }
+.phwait { color: var(--muted); } .phok { color: var(--green); }
+.phdots::after { content: "…"; animation: phdots 1.2s steps(4) infinite; display: inline-block; width: 1.2em; text-align: left; overflow: hidden; vertical-align: bottom; }
+@keyframes phdots { 0% { width: 0 } 100% { width: 1.2em } }
+.phduelslots { display: grid; gap: 4px; } .phduelslots small { color: var(--muted); font-size: 11px; }
+.phduelslots .phslot { width: 32px; height: 32px; }
+.phlocked { display: flex; gap: 16px; align-items: center; justify-content: center; padding: 24px; background: var(--panel); border-radius: var(--r-lg); }
+.phline { background: var(--panel2); border-radius: var(--r-lg); padding: 14px; display: grid; gap: 10px; text-align: left; }
+.phlinehead { font-weight: 800; } .phlinehead small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; }
+.phodds { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 14px; }
+.phodds th { color: var(--muted); font-weight: 600; font-size: 11px; text-align: right; } .phodds th:first-child { text-align: left; }
+.phodds td { padding: 6px 0; text-align: right; border-top: 1px solid var(--line); } .phodds td:first-child { text-align: left; font-family: inherit; }
+.phodds .phbook { color: var(--gold); font-weight: 800; }
+.phlinemeta { color: var(--fg-2); font-size: 13px; }
+.phlinecols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.phex { display: grid; grid-template-columns: 34px 1fr 38px; gap: 6px; align-items: center; font-size: 12px; font-family: var(--font-mono); }
+.phex i { height: 8px; background: var(--panel); border-radius: 4px; overflow: hidden; } .phex b { display: block; height: 100%; }
+.phex.a b { background: var(--accent); } .phex.b b { background: var(--accent2); } .phex em { font-style: normal; text-align: right; color: var(--muted); }
+.phmvp { display: grid; grid-template-columns: 30px 1fr auto; gap: 6px; align-items: center; font-size: 13px; }
+.phmvp img { width: 30px; height: 30px; image-rendering: pixelated; } .phmvp small { color: var(--muted); } .phmvp em { font-style: normal; font-family: var(--font-mono); }
+.phbetbox { display: grid; gap: 10px; }
+.phsides { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.phside { background: var(--panel2); border: 2px solid var(--line); border-radius: var(--r); padding: 10px; color: var(--fg); display: grid; gap: 2px; cursor: pointer; font: inherit; }
+.phside span { font-family: var(--font-mono); font-size: 20px; color: var(--gold); font-weight: 800; } .phside.on { border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+.phlinewrap summary { cursor: pointer; color: var(--fg-2); font-size: 14px; padding: 6px 0; }
+.phyou { background: var(--accent-soft); color: var(--accent); border-radius: var(--r-pill); padding: 1px 8px; font-size: 11px; }
+.phbet { font-size: 14px; } .phbet.pos { color: var(--green); } .phbet.neg { color: var(--red); }
+button.phgame { color: var(--fg); font: inherit; text-align: left; cursor: pointer; border-top: 0; border-right: 0; border-bottom: 0; }
+.phgame em { display: block; font-style: normal; font-size: 11px; color: var(--accent); margin-top: 4px; }
+.phgame.on { box-shadow: 0 0 0 2px var(--accent); }
+.phdetail { background: var(--panel2); border-radius: var(--r-lg); padding: 12px; display: grid; gap: 12px; text-align: left; scroll-margin-top: 12px; }
+.phdetailhead { display: flex; align-items: center; gap: 8px; } .phdetailhead button { margin-left: auto; padding: 4px 10px; }
+.phflow { width: 100%; height: 150px; background: var(--panel); border-radius: var(--r); }
+.phflow .z { stroke: var(--line-strong); stroke-width: 1; } .phflow .q { stroke: var(--line); stroke-dasharray: 3 4; }
+.phflow .a { fill: color-mix(in srgb, var(--accent) 55%, transparent); } .phflow .b { fill: color-mix(in srgb, var(--accent2) 55%, transparent); }
+.phflowkey { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); } .phflowkey .a { color: var(--accent); } .phflowkey .b { color: var(--accent2); }
+.phboxscroll { overflow-x: auto; }
+.phbox table { width: 100%; border-collapse: collapse; font-size: 13px; font-family: var(--font-mono); white-space: nowrap; }
+.phbox th { color: var(--muted); font-size: 11px; font-weight: 600; text-align: right; padding: 4px 6px; }
+.phbox td { text-align: right; padding: 4px 6px; border-top: 1px solid var(--line); }
+.phbox td:first-child { text-align: left; font-family: system-ui, sans-serif; display: flex; align-items: center; gap: 4px; }
+.phbox td img { width: 24px; height: 24px; image-rendering: pixelated; } .phbox td small { color: var(--muted); } .phbox tr.bn td { color: var(--fg-2); }
+.phplays { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.phplays li { display: grid; grid-template-columns: 34px 28px 1fr auto; gap: 6px; align-items: center; font-size: 13px; padding: 4px 8px; border-left: 3px solid var(--accent); background: var(--panel); border-radius: 6px; }
+.phplays li.s1 { border-color: var(--accent2); } .phplays img { width: 28px; height: 28px; image-rendering: pixelated; }
+.phplays li > span:first-child { color: var(--muted); font-family: var(--font-mono); font-size: 11px; } .phplays em { font-style: normal; font-family: var(--font-mono); color: var(--muted); }
+@media (max-width: 560px) { .phlinecols { grid-template-columns: 1fr; } .phcodebig { font-size: 48px; } }
+/* keep the drill-down inside the card on phones: grid children default to min-width:auto and stretch to the table */
+.phseries > *, .phdetail, .phdetail > *, .phbox { min-width: 0; max-width: 100%; }
+.phdetail { overflow: hidden; }
+.phplays li span { font-family: system-ui, sans-serif; white-space: normal; }
+.phplays li > span:first-child { font-family: var(--font-mono); }
+.phvs .phfive, .phtip .phfive, .phlobby .phfive { gap: 3px; flex-wrap: nowrap; }
+.phvs .phfive img, .phtip .phfive img, .phlobby .phfive img { width: 34px; height: 34px; }
+.phvs .phfive figure, .phlobby .phfive figure { margin: 0; min-width: 0; }

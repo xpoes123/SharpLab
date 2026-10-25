@@ -143,3 +143,27 @@ async def finish_series(uid: str, seed: int, picks: list[int], team: dict, vs: i
                        "series_seed": series_seed})
     sid = await queries.insert_pokehoops_series(uid, vs, seed, series_seed, picks, res["team"], res["wins"], res["losses"])
     return {**res, "id": sid, "vs": vs, "seed": seed, "series_seed": series_seed, "picks": picks}
+
+
+# ── Live duels: the engine side (the room itself lives in web/g_pokehoops.py) ──
+
+async def duel_packs(seed: int, picks: list[list[int]]) -> list[list[int]] | None:
+    """This round's two packs ([side 0's three, side 1's three]), None once both have eight. Raises IllegalDraft."""
+    res = await _call({"op": "duel_packs", "seed": seed, "picks": picks})
+    return None if res.get("done") else res["packs"]
+
+
+async def duel_line(seed: int, picks: list[list[int]], teams: list[dict]) -> dict:
+    return await _call({"op": "duel_line", "seed": seed, "picks": picks, "teams": teams})
+
+
+async def duel_series(seed: int, picks: list[list[int]], teams: list[dict], series_seed: int) -> dict:
+    return await _call({"op": "duel_series", "seed": seed, "picks": picks, "teams": teams, "series_seed": series_seed})
+
+
+def legal_team(team: dict, picks: list[int]) -> bool:
+    """Python mirror of the engine's validTeam, so a bad lineup bounces before both coaches are waiting on it."""
+    five, bench, backs = team.get("five", []), team.get("bench", []), team.get("backs", [])
+    roster = five + bench
+    return (len(five) == 5 and len(bench) == PICKS - 5 and len(backs) == len(bench)
+            and all(0 <= b < 5 for b in backs) and sorted(roster) == sorted(picks))

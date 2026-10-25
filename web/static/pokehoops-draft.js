@@ -10,7 +10,7 @@
 // locked in — so nobody can try every pick path offline and submit the luckiest.
 // Lineup: after the draft the coach (the player) sets the team — five starters at PG..C plus a 3-man bench, each
 // reserve backing up one spot: {five: [5 dex], bench: [3 dex], backs: [3 spot indexes]}. Nothing is auto-arranged.
-import { simSeason, simGame, seeded, LEAGUE, BENCH, members, validTeam } from "./pokehoops/engine.js";
+import { simSeason, simGame, seeded, LEAGUE, BENCH, members, validTeam, newGame, quarterDone, gameDone, nextQuarter, rollPoss, playBeat } from "./pokehoops/engine.js";
 import { POS, POOL, LEGENDS, bestLineup, bestPos, mon, ovr } from "./pokehoops/ratings.js";
 
 export const PICKS = 5 + BENCH;
@@ -89,18 +89,111 @@ export const SERIES_WINS = 4;   // head-to-head: best of seven
 
 /** A head-to-head best-of-seven: your verified draft + team vs another coach's recorded team, under a series seed.
  *  games[i] = {us, them, win, top: [{i, pts} ours, {i, pts} theirs]} (top.i indexes members(team)). */
-export function playSeries(seed, picks, team, opp, seriesSeed) {
+export function playSeries(seed, picks, team, opp, seriesSeed, log = false) {
   const t = checked(seed, picks, team), o = cleanTeam(opp);
   if (!o || !validTeam(o, members(o))) throw new Error("bad opponent team");
+  return { team: t, opp: o, ...bestOf7(t, o, seriesSeed, log) };
+}
+
+/** Best of seven between two legal teams under a series seed. log=true adds each game's box, score flow and big plays
+ *  (same rng stream either way, so a logged replay matches the server's unlogged sim). */
+export function bestOf7(t, o, seriesSeed, log = false) {
   const rng = seeded(seriesSeed >>> 0), games = [];
   let wins = 0, losses = 0;
   while (wins < SERIES_WINS && losses < SERIES_WINS) {
-    const { score, box } = simGame(t, o, rng);
+    const g = log ? logGame(t, o, rng) : simGame(t, o, rng), { score, box } = g;
     const win = score[0] > score[1];
-    games.push({ us: score[0], them: score[1], win, top: [0, 1].map((s) => topOf(box, s)) });
+    games.push({ us: score[0], them: score[1], win, top: [0, 1].map((s) => topOf(box, s)),
+                 ...(log ? { box, flow: g.flow, plays: g.plays, periods: g.periods } : {}) });
     if (win) wins++; else losses++;
   }
-  return { team: t, opp: o, games, wins, losses };
+  return { games, wins, losses };
+}
+
+// simGame's exact loop (same rng draws), watching each possession: the score after it, and the plays worth showing.
+// plays: [q, team, dex, what, score0, score1]. what: dunk | three | block | steal | and1 | clutch
+function logGame(a, b, rng) {
+  const teams = [a, b], m = [members(a), members(b)], G = newGame(rng), flow = [[0, 0, 1]], plays = [];
+  const dex = (team, spot) => m[team][G.on[team][spot]];
+  for (;;) {
+    if (quarterDone(G)) { if (gameDone(G)) break; nextQuarter(G); }
+    for (const bt of rollPoss(G, teams, rng)) {
+      const what = playBeat(G, bt), q = G.q + G.ot, sc = [G.score[0], G.score[1]];
+      const clutch = q >= 4 && Math.abs(sc[0] - sc[1]) <= 5 && G.i / (G.ot ? 20 : G.perQ) > 0.75;
+      if (what === "made") {
+        const k = clutch ? "clutch" : bt.dunk ? "dunk" : bt.foul >= 0 ? "and1" : bt.kind === "three" ? "three" : null;
+        if (k) plays.push([q, bt.team, dex(bt.team, bt.who), k, ...sc]);
+      } else if (what === "block") plays.push([q, 1 - bt.team, dex(1 - bt.team, bt.block), "block", ...sc]);
+      else if (what === "steal") plays.push([q, 1 - bt.team, dex(1 - bt.team, bt.by), "steal", ...sc]);
+    }
+    flow.push([G.score[0], G.score[1], G.q + G.ot]);
+  }
+  return { score: G.score, box: G.box, flow, plays, periods: G.q + G.ot };
+}
+
+const binom = (n, k) => { let r = 1; for (let i = 1; i <= k; i++) r = (r * (n - k + i)) / i; return r; };
+function hashOf(x) { let h = 2166136261; for (const c of JSON.stringify(x)) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; }
+const median = (a) => { const s = a.slice().sort((x, y) => x - y); return s[s.length >> 1]; };
+
+/** The pregame line: Monte Carlo n games of exactly this matchup (fixed seed per matchup, so it's reproducible).
+ *  Games in a series are independent draws, so the series price is binomial in the single-game p.
+ *  p: game win prob (team a) · series: P(a wins the series) · exact: {"4-0": p, ... "0-4": p} from a's side ·
+ *  spread: median margin (a − b) · total: median points · mvp: top single-game scorers [{side, dex, p}] */
+export function matchLine(a, b, n = 2000) {
+  const rng = seeded(hashOf([a, b])), margins = [], totals = [], tops = {}, ma = members(a), mb = members(b);
+  let w = 0;
+  for (let i = 0; i < n; i++) {
+    const { score, box } = simGame(a, b, rng);
+    if (score[0] > score[1]) w++;
+    margins.push(score[0] - score[1]); totals.push(score[0] + score[1]);
+    const ta = topOf(box, 0), tb = topOf(box, 1), k = ta.pts >= tb.pts ? `0:${ma[ta.i]}` : `1:${mb[tb.i]}`;
+    tops[k] = (tops[k] || 0) + 1;
+  }
+  const p = w / n, q = 1 - p, exact = {};
+  for (let k = 0; k < SERIES_WINS; k++) {
+    exact[`${SERIES_WINS}-${k}`] = binom(SERIES_WINS - 1 + k, k) * p ** SERIES_WINS * q ** k;
+    exact[`${k}-${SERIES_WINS}`] = binom(SERIES_WINS - 1 + k, k) * q ** SERIES_WINS * p ** k;
+  }
+  const series = Object.entries(exact).filter(([r]) => r.startsWith(`${SERIES_WINS}-`)).reduce((s, [, v]) => s + v, 0);
+  const mvp = Object.entries(tops).sort((x, y) => y[1] - x[1]).slice(0, 4)
+    .map(([k, c]) => ({ side: Number(k[0]), dex: Number(k.slice(2)), p: c / n }));
+  return { n, p, series, exact, spread: median(margins), total: median(totals), mvp,
+           se: Math.sqrt((p * q) / n) };
+}
+
+// ── Duel: two coaches draft at the same time from separate packs (the TV's "together" mode), lockstep by round.
+// Round i offers each side its own three: pick 1 splits six of the Legendaries, picks 2-8 are tierPacks where the
+// second side's pack excludes the first's, so nobody is ever offered the same Pokémon. Both picks leave the pool.
+/** Replay a duel draft: picks = [[side 0...], [side 1...]] (equal length = completed rounds).
+ *  Returns {rounds, error}: rounds[i] = [pack0, pack1]; one more round than picks while drafting. */
+export function duelReplay(seed, picks) {
+  const rng = seeded((seed ^ 0x9e3779b9) >>> 0), rounds = [];
+  if (!Array.isArray(picks) || picks.length !== 2 || !picks.every(Array.isArray)) return { rounds, error: "bad picks" };
+  const n = picks[0].length;
+  if (picks[1].length !== n || n > PICKS) return { rounds, error: "bad picks" };
+  let pool = POOL.slice();
+  for (let i = 0; i < PICKS; i++) {
+    let a, b;
+    if (i === 0) { const L = rng.shuffle(LEGENDS.slice()); a = L.slice(0, PACK); b = L.slice(PACK, 2 * PACK); }
+    else { a = tierPack(pool, rng); b = tierPack(pool.filter((x) => !a.includes(x)), rng); }
+    rounds.push([a, b]);
+    if (i >= n) break;
+    for (const s of [0, 1]) if (!rounds[i][s].includes(picks[s][i])) return { rounds, error: `pick ${i + 1} (${picks[s][i]}) was not offered` };
+    pool = pool.filter((x) => x !== picks[0][i] && x !== picks[1][i]);
+  }
+  return { rounds, error: null };
+}
+
+/** Both teams legal for a finished duel draft, or throw. */
+export function duelTeams(seed, picks, teams) {
+  const r = duelReplay(seed, picks);
+  if (r.error) throw new Error(r.error);
+  if (picks[0].length !== PICKS) throw new Error("draft incomplete");
+  return [0, 1].map((s) => {
+    const t = cleanTeam(teams?.[s]);
+    if (!t || !validTeam(t, picks[s])) throw new Error("illegal lineup");
+    return t;
+  });
 }
 function topOf(box, side) { let best = 0; for (let i = 1; i < 5 + BENCH; i++) if (box[`${side}:${i}`].pts > box[`${side}:${best}`].pts) best = i; return { i: best, pts: box[`${side}:${best}`].pts }; }
 

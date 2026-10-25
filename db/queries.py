@@ -6265,6 +6265,31 @@ async def get_pokehoops_challenges(vs_season: int, limit: int = 20) -> list[dict
         return [dict(r) for r in await cur.fetchall()]
 
 
+async def insert_pokehoops_duel(d: dict) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO pokehoops_duels (a, b, a_name, b_name, seed, series_seed, picks, teams, wins_a, wins_b, line, "
+            "bets, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (d["a"], d["b"], d["a_name"], d["b_name"], d["seed"], d["series_seed"], json.dumps(d["picks"]),
+             json.dumps(d["teams"]), d["wins_a"], d["wins_b"], json.dumps(d["line"]), json.dumps(d["bets"]),
+             datetime.now(timezone.utc).isoformat()))
+        await db.commit()
+        return cur.lastrowid
+
+
+async def get_pokehoops_duel(duel_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM pokehoops_duels WHERE id = ?", (duel_id,))
+        row = await cur.fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    for k in ("picks", "teams", "line", "bets"):
+        d[k] = json.loads(d[k])
+    return d
+
+
 async def get_pokehoops_rank(discord_user: str) -> int | None:
     """1-based leaderboard rank of the player's best season (None if they have none)."""
     async with aiosqlite.connect(DB_PATH) as db:
