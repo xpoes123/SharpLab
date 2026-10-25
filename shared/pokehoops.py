@@ -124,3 +124,22 @@ async def finish_season(uid: str, seed: int, picks: list[int], team: dict, sourc
         "rank": await queries.get_pokehoops_rank(uid),
         "coins": coins, "balance": await queries.get_casino_balance(uid) or 0,
     }
+
+
+async def finish_series(uid: str, seed: int, picks: list[int], team: dict, vs: int) -> dict:
+    """Head-to-head: your verified draft + team vs the team from recorded season `vs`, best of seven, simmed here
+    under a fresh series seed. Recorded (no coins, so it can't be farmed). Raises IllegalDraft for a bad target."""
+    picks = _clean_picks(picks)
+    if len(picks) != PICKS:
+        raise IllegalDraft("draft incomplete")
+    team = _clean_team(team)
+    opp = await queries.get_pokehoops_season(vs)
+    if opp is None or queries.pokehoops_is_legacy(opp):
+        raise IllegalDraft("that team can't be challenged")
+    if opp["discord_user"] == uid:
+        raise IllegalDraft("that's your own team — send the link to a friend")
+    series_seed = new_seed()
+    res = await _call({"op": "series", "seed": seed, "picks": picks, "team": team, "opp": opp["lineup"],
+                       "series_seed": series_seed})
+    sid = await queries.insert_pokehoops_series(uid, vs, seed, series_seed, picks, res["team"], res["wins"], res["losses"])
+    return {**res, "id": sid, "vs": vs, "seed": seed, "series_seed": series_seed, "picks": picks}

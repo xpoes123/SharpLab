@@ -10,7 +10,7 @@
 // locked in — so nobody can try every pick path offline and submit the luckiest.
 // Lineup: after the draft the coach (the player) sets the team — five starters at PG..C plus a 3-man bench, each
 // reserve backing up one spot: {five: [5 dex], bench: [3 dex], backs: [3 spot indexes]}. Nothing is auto-arranged.
-import { simSeason, seeded, LEAGUE, BENCH, members, validTeam } from "./pokehoops/engine.js";
+import { simSeason, simGame, seeded, LEAGUE, BENCH, members, validTeam } from "./pokehoops/engine.js";
 import { POS, POOL, LEGENDS, bestLineup, bestPos, mon, ovr } from "./pokehoops/ratings.js";
 
 export const PICKS = 5 + BENCH;
@@ -68,16 +68,41 @@ export function cleanTeam(t) {
   return five && bench && backs ? { five, bench, backs } : null;
 }
 
-/** Season for a finished, legal draft + a legal coach's team: simSeason under the season seed. */
-export function playSeason(seed, picks, team, seasonSeed) {
+// A finished, legal draft + a legal coach's team, or throw.
+function checked(seed, picks, team) {
   const r = replay(seed, picks);
   if (r.error) throw new Error(r.error);
   if (picks.length !== PICKS) throw new Error("draft incomplete");
   const t = cleanTeam(team);
   if (!t || !validTeam(t, picks)) throw new Error("illegal lineup: use each drafted player once, five starters + three bench backing up PG..C");
+  return t;
+}
+
+/** Season for a finished, legal draft + a legal coach's team: simSeason under the season seed. */
+export function playSeason(seed, picks, team, seasonSeed) {
+  const t = checked(seed, picks, team);
   const season = simSeason(t, seeded(seasonSeed >>> 0));
   return { team: t, lineup: t.five, ...season };
 }
+
+export const SERIES_WINS = 4;   // head-to-head: best of seven
+
+/** A head-to-head best-of-seven: your verified draft + team vs another coach's recorded team, under a series seed.
+ *  games[i] = {us, them, win, top: [{i, pts} ours, {i, pts} theirs]} (top.i indexes members(team)). */
+export function playSeries(seed, picks, team, opp, seriesSeed) {
+  const t = checked(seed, picks, team), o = cleanTeam(opp);
+  if (!o || !validTeam(o, members(o))) throw new Error("bad opponent team");
+  const rng = seeded(seriesSeed >>> 0), games = [];
+  let wins = 0, losses = 0;
+  while (wins < SERIES_WINS && losses < SERIES_WINS) {
+    const { score, box } = simGame(t, o, rng);
+    const win = score[0] > score[1];
+    games.push({ us: score[0], them: score[1], win, top: [0, 1].map((s) => topOf(box, s)) });
+    if (win) wins++; else losses++;
+  }
+  return { team: t, opp: o, games, wins, losses };
+}
+function topOf(box, side) { let best = 0; for (let i = 1; i < 5 + BENCH; i++) if (box[`${side}:${i}`].pts > box[`${side}:${best}`].pts) best = i; return { i: best, pts: box[`${side}:${best}`].pts }; }
 
 /** League team display name: named after its best starter (LEAGUE entries are teams: {five, bench, backs}). */
 export function teamName(opp) {

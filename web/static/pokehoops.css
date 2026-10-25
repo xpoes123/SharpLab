@@ -183,3 +183,20 @@ img { image-rendering: pixelated; }
 .phlbtabs { display: inline-flex; gap: 4px; margin-left: 8px; vertical-align: middle; }
 .phlbtab { font: inherit; font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border, #333); background: none; color: var(--muted, #888); cursor: pointer; }
 .phlbtab.on { color: var(--fg); border-color: var(--accent); }
+
+/* ── head-to-head ── */
+.phvs { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center; text-align: center; }
+.phvs > i { font-style: normal; font-weight: 800; opacity: .6; }
+.phvs .phfive { flex-wrap: wrap; justify-content: center; }
+.phvs .phfive img { width: 40px; height: 40px; }
+.phbenchfig { opacity: .7; }
+.phgames { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin: 10px 0; }
+.phgame { border-radius: 10px; padding: 8px 10px; background: var(--panel2); border-left: 4px solid; animation: phin .35s ease-out; }
+.phgame.w { border-color: var(--green, #9ece6a); } .phgame.l { border-color: var(--red, #f7768e); }
+.phgame span { font-size: 12px; opacity: .7; margin-right: 6px; } .phgame b { font-size: 18px; }
+.phgame small { display: block; font-size: 11px; opacity: .7; margin-top: 2px; }
+.phchals { display: flex; flex-wrap: wrap; gap: 6px; }
+.phchal { padding: 4px 10px; border-radius: 999px; background: var(--panel2); font-size: 13px; text-decoration: none; }
+@keyframes phin { from { opacity: 0; transform: translateY(6px); } }
+@media (max-width: 560px) { .phvs { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .phgame { animation: none; } }

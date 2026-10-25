@@ -171,7 +171,7 @@ def test_legacy_five_pick_seasons_are_off_the_board(monkeypatch):
         old_id = await q.insert_pokehoops_season("carol", "web", 1, 2, [150, 1, 4, 7, 25], old)
         assert await q.get_pokehoops_leaderboard() == []
         assert await q.get_pokehoops_rank("carol") is None and await q.get_pokehoops_best("carol") is None
-        assert (await gp.season(old_id)).status_code == 410
+        assert (await gp.season(_Req(), old_id)).status_code == 410
         monkeypatch.setattr(gp.auth, "read_session", lambda r: {"id": "carol"})
         assert (await gp.share(_Req(), old_id)).status_code == 410
         picks = await _draft(3)
@@ -200,10 +200,10 @@ def test_web_start_submit_flow(monkeypatch):
         assert again.status_code == 400                     # single-use token
         lb = await gp.leaderboard(_Req())
         assert lb["top"][0]["me"] and lb["top"][0]["wins"] == res["wins"]
-        share = await gp.season(res["id"])
+        share = await gp.season(_Req(), res["id"])
         assert share["season_seed"] == res["season_seed"] and share["lineup"] == team["five"] and share["team"] == team
         assert lb["top"][0]["team"] == team and "ovr" not in str(lb)
-        assert (await gp.season(999999)).status_code == 404
+        assert (await gp.season(_Req(), 999999)).status_code == 404
     _run(go())
 
 
@@ -327,3 +327,44 @@ def test_no_overall_ratings_in_player_facing_code():
     for f in ("web/static/pokehoops.js", "bot/cogs/pokehoops.py", "web/g_pokehoops.py", "shared/pokehoops_cli.mjs"):
         src = (ROOT / f).read_text()
         assert not re.search(r"\bovr\b|OVR", src.replace("bestPos(n).pos", "")), f
+
+
+def test_two_player_challenge_best_of_seven(monkeypatch):
+    _fresh_db()
+
+    async def go():
+        await sch.init_db()
+        user = {"id": "alice"}
+        monkeypatch.setattr(gp.auth, "read_session", lambda r: user)
+        start = await gp.start(_Req())
+        picks = await _draft(start["seed"])
+        season = await gp.submit(_Req(), gp.SubmitBody(token=start["token"], picks=picks, team=_team(picks)))
+        # alice can't challenge her own team
+        start = await gp.start(_Req())
+        mine = await _draft(start["seed"], choose=2)
+        res = await gp.submit(_Req(), gp.SubmitBody(token=start["token"], picks=mine, team=_team(mine), vs=season["id"]))
+        assert res.status_code == 400 and "own team" in res.body.decode()
+        # bob drafts his own eight and plays alice's team, best of seven
+        user["id"] = "bob"
+        start = await gp.start(_Req())
+        bob = await _draft(start["seed"], choose=1)
+        team = {"five": bob[3:8], "bench": bob[:3], "backs": [0, 4, 4]}
+        x = await gp.submit(_Req(), gp.SubmitBody(token=start["token"], picks=bob, team=team, vs=season["id"]))
+        assert max(x["wins"], x["losses"]) == 4 and min(x["wins"], x["losses"]) < 4
+        assert len(x["games"]) == x["wins"] + x["losses"] and [g["win"] for g in x["games"]].count(True) == x["wins"]
+        assert x["team"] == team and x["vs"] == season["id"]
+        # the share link replays the same series from the stored seeds + both teams
+        got = await gp.series(x["id"])
+        assert got["opp_team"] == season["team"] and got["series_seed"] == x["series_seed"]
+        again = await ph._call({"op": "series", "seed": got["seed"], "picks": got["picks"], "team": got["team"],
+                                "opp": got["opp_team"], "series_seed": got["series_seed"]})
+        assert again["games"] == x["games"]
+        # the challenged season lists it; challenges don't touch the season board
+        seen = await gp.season(_Req(), season["id"])
+        assert seen["challenges"][0]["id"] == x["id"] and not seen["me"]
+        assert len((await gp.leaderboard(_Req()))["top"]) == 1
+        assert (await gp.series(999999)).status_code == 404
+        start = await gp.start(_Req())
+        bob = await _draft(start["seed"])
+        assert (await gp.submit(_Req(), gp.SubmitBody(token=start["token"], picks=bob, team=_team(bob), vs=999999))).status_code == 400
+    _run(go())

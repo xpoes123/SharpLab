@@ -58,6 +58,7 @@ class SubmitBody(BaseModel):
     token: str
     picks: list[int]
     team: TeamBody
+    vs: int | None = None  # a recorded season id: play its team best-of-seven instead of the 82-game season
 
 
 @router.post("/submit")
@@ -71,6 +72,8 @@ async def submit(request: Request, body: SubmitBody):
     if time.monotonic() - state["started"] > DRAFT_TTL:
         return JSONResponse({"error": "draft expired — start a new one"}, status_code=400)
     try:
+        if body.vs is not None:
+            return await pokehoops.finish_series(uid, state["seed"], body.picks, body.team.model_dump(), body.vs)
         res = await pokehoops.finish_season(uid, state["seed"], body.picks, body.team.model_dump(), "web")
     except pokehoops.IllegalDraft as e:
         return JSONResponse({"error": f"illegal draft: {e}"}, status_code=400)
@@ -105,15 +108,33 @@ async def leaderboard(request: Request, period: str = "all"):
 
 
 @router.get("/season/{season_id}")
-async def season(season_id: int):
+async def season(request: Request, season_id: int):
     """A recorded season, for share links — the page replays it from the seeds."""
     row = await queries.get_pokehoops_season(season_id)
     if row is None:
         return JSONResponse({"error": "no such season"}, status_code=404)
     if queries.pokehoops_is_legacy(row):
         return JSONResponse({"error": "old-rules season — it can't be replayed under the current game"}, status_code=410)
-    names = await queries.get_display_names([row["discord_user"]])
-    return _public(row, names.get(row["discord_user"]))
+    challenges = await queries.get_pokehoops_challenges(season_id)
+    names = await queries.get_display_names([row["discord_user"]] + [c["challenger"] for c in challenges])
+    nm = lambda u: names.get(u) or f"user-{u[-4:]}"  # noqa: E731
+    return {**_public(row, names.get(row["discord_user"])), "me": row["discord_user"] == _uid(request),
+            "challenges": [{"id": c["id"], "name": nm(c["challenger"]), "wins": c["wins"], "losses": c["losses"]}
+                           for c in challenges]}
+
+
+@router.get("/series/{series_id}")
+async def series(series_id: int):
+    """A recorded head-to-head, for share links — the page replays it from the seeds and both teams."""
+    row = await queries.get_pokehoops_series(series_id)
+    if row is None:
+        return JSONResponse({"error": "no such series"}, status_code=404)
+    opp = await queries.get_pokehoops_season(row["vs_season"])
+    names = await queries.get_display_names([row["challenger"], opp["discord_user"]])
+    nm = lambda u: names.get(u) or f"user-{u[-4:]}"  # noqa: E731
+    return {"id": row["id"], "vs": row["vs_season"], "seed": row["seed"], "series_seed": row["series_seed"],
+            "picks": row["picks"], "team": row["team"], "wins": row["wins"], "losses": row["losses"],
+            "name": nm(row["challenger"]), "opp_name": nm(opp["discord_user"]), "opp_team": opp["lineup"]}
 
 
 POS = ("PG", "SG", "SF", "PF", "C")
