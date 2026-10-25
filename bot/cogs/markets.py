@@ -500,6 +500,12 @@ class MarketsCog(commands.Cog):
         embed.add_field(name="Cash", value=f"${acct['balance']:,.2f}")
         embed.add_field(name="Open value", value=f"${sum(r['value'] for r in rows):,.2f}")
         embed.add_field(name="Unrealized", value=f"{unreal:+,.2f}")
+        t = acct["today"]
+        embed.add_field(name="Today", inline=False, value=(
+            f"**{t['total']:+,.2f}** · settled {t['settled']:+,.2f} ({t['n_settled']} mkts)"
+            f" · open move {t['open_move']:+,.2f}"))
+        embed.set_footer(text="Today = markets settled since midnight ET + open positions' ~24h move "
+                              "(cost basis if traded today)")
         await interaction.followup.send(embed=embed, ephemeral=not public)
 
     @kalshi_group.command(name="pnl", description="Your realized + unrealized Kalshi PnL")

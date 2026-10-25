@@ -121,3 +121,15 @@ async def test_event_titles_strips_suffix_and_skips_failures():
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
         got = await ka.event_titles(c, {"KXNBATOTAL-26OCT24GSWPHX", "BAD"})
     assert got == {"KXNBATOTAL-26OCT24GSWPHX": "Golden State vs Phoenix"}
+
+
+def test_today_pnl():
+    held = {"ticker": "A", "qty": 10, "mark": 0.6, "prev_mark": 0.5, "unreal": 3.0}   # held overnight: 24h move
+    new = {"ticker": "B", "qty": 10, "mark": 0.6, "prev_mark": 0.0, "unreal": -1.0}   # new market: cost basis
+    traded = {"ticker": "C", "qty": 5, "mark": 0.4, "prev_mark": 0.3, "unreal": 0.25}  # bought today: cost basis
+    st = {"revenue": 1000, "yes_count_fp": "10", "no_count_fp": "0", "yes_total_cost_dollars": "6",
+          "no_total_cost_dollars": "0", "fee_cost": "0"}
+    t = ka.today_pnl([held, new, traded], [st], {"C"})
+    assert t["open_move"] == pytest.approx(1.0 - 1.0 + 0.25)
+    assert t["settled"] == pytest.approx(4.0) and t["n_settled"] == 1
+    assert t["total"] == pytest.approx(4.25)
