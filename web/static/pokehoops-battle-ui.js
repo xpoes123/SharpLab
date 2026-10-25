@@ -2,10 +2,10 @@
 // from the TV repo). Draft six, pick your three starters and the court, then every turn you and the bot choose at the
 // same time and it resolves. Runs entirely in the browser: nothing's at stake, so no server.
 import { newBattle, resolve, options, botPick, botSubs, sub, movesOf, shotChance, speedOf, weatherOf, SCHEMES, CAT, COURTS, WEATHER,
-  STATUS_TXT, TO, ON, CLOCK } from "./pokehoops/battle.js";
+  STATUS_TXT, TO, ON, CLOCK, NO_BATTLE } from "./pokehoops/battle.js";
 import { seeded } from "./pokehoops/engine.js";
-import { nextPack, mon, LEGENDS } from "./pokehoops-draft.js";
-import { profile, skills, typeEff } from "./pokehoops/ratings.js";
+import { mon, LEGENDS } from "./pokehoops-draft.js";
+import { profile, skills, typeEff, POOL } from "./pokehoops/ratings.js";
 
 const ROSTER = 6;
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -31,8 +31,17 @@ export function start(c) {
   render();
 }
 
-// ── draft six (same seeded packs as the season draft, stopped at six) ──
+// ── draft six: a Legendary first, then three of similar strength from the battle pool (no moveset-less Pokémon).
+// Its own packs, not the season's: nothing here is replayed by the server. Seeded per pick, so re-renders agree. ──
 const skillSum = (n) => Object.values(skills(n)).reduce((a, b) => a + b, 0);
+const BATTLE_POOL = POOL.filter((n) => !NO_BATTLE.has(n));
+function nextPack(seed, picks) {
+  if (picks.length >= ROSTER) return null;
+  const rng = seeded((seed + 7919 * picks.length) >>> 0);
+  if (!picks.length) return rng.shuffle(LEGENDS.slice()).slice(0, 3);
+  const pool = BATTLE_POOL.filter((n) => !picks.includes(n)), target = skillSum(pool[rng.int(pool.length)]);
+  return rng.shuffle(pool.slice().sort((a, b) => Math.abs(skillSum(a) - target) - Math.abs(skillSum(b) - target)).slice(0, 8)).slice(0, 3);
+}
 function botDraft(rng, draftSkill) {
   const seed = (rng.float() * 2 ** 32) >>> 0, picks = [];
   while (picks.length < ROSTER) {

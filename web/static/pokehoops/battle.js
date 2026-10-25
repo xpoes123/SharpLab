@@ -58,6 +58,8 @@ const PP = { deep: 6, rim: 6, pass: 5, screen: 5, status: 3, weather: 2 };
 /** A Pokémon's four battle moves: {name, type, cat, pp, sig?, st?, wx?}. Two shots, a setup, and a status / weather / setup. */
 const MOVE_CACHE = {};
 export function movesOf(n) { return (MOVE_CACHE[n] ||= MOVESETS[n] ? realMoves(n) : buildMoves(n)); }
+/** Pokémon that can't legally learn four moves in Gen 1–2 (their sets pad with Struggle): not drafted in battles. */
+export const NO_BATTLE = new Set(Object.keys(MOVESETS).filter((n) => MOVESETS[n].includes("Struggle")).map(Number));
 const norm = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 // the curated Gen 1–2 set (movesets.js); the profile's signature move, when it's in the set, gets the signature bump
 function realMoves(n) {
