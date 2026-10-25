@@ -15,6 +15,7 @@ import os
 import time
 from datetime import datetime
 from collections import defaultdict
+from zoneinfo import ZoneInfo
 from urllib.parse import urlsplit
 
 import httpx
@@ -27,6 +28,7 @@ SPORT = {"NBA": "NBA", "WNBA": "WNBA", "NFL": "NFL", "MLB": "MLB", "NHL": "NHL",
          "VALORANT": "Esports", "CS2": "Esports", "DOTA2": "Esports", "LOL": "Esports",
          "ATP": "Tennis", "WTA": "Tennis", "ITF": "Tennis", "BTC": "Crypto", "ETH": "Crypto"}
 # ponytail: one global filter for PnL/recap/feed (positions show everything) (David's ask, 2026-10-21; he's the only linked user) — per-user prefs if others link
+ET = ZoneInfo("America/New_York")
 TRACKED = {"NBA", "NFL", "MLB", "Esports"}
 
 
@@ -115,13 +117,16 @@ def mark_position(mp: dict, market: dict) -> dict:
     # position > 0 = long YES, < 0 = long NO
     if q > 0:
         mark = _f(market.get("yes_bid_dollars"))
+        prev = _f(market.get("previous_yes_bid_dollars"))
     else:
         ask = _f(market.get("yes_ask_dollars"))
         mark = 1 - ask if ask else 0.0
+        prev_ask = _f(market.get("previous_yes_ask_dollars"))
+        prev = 1 - prev_ask if prev_ask else 0.0
     cost = _f(mp.get("market_exposure_dollars"))
     value = abs(q) * mark
     return {"ticker": mp["ticker"], "title": market.get("title") or mp["ticker"], "sport": sport(mp["ticker"]),
-            "side": "YES" if q > 0 else "NO", "qty": abs(q), "cost": cost, "mark": mark,
+            "side": "YES" if q > 0 else "NO", "qty": abs(q), "cost": cost, "mark": mark, "prev_mark": prev,
             "value": value, "unreal": value - cost}
 
 
@@ -158,14 +163,28 @@ def _balance(bal: dict) -> float:
     return _f(bal["balance_dollars"]) if "balance_dollars" in bal else _f(bal.get("balance")) / 100
 
 
+def today_pnl(open_rows: list[dict], settled_today: list[dict], traded_today: set[str]) -> dict:
+    """Settled-today PnL + open positions' ~24h move (Kalshi's previous_* prices are "a day ago").
+    Positions traded today, or with no prior price (new market), count from cost basis instead."""
+    move = sum(r["unreal"] if r["ticker"] in traded_today or not r.get("prev_mark")
+               else r["qty"] * (r["mark"] - r["prev_mark"]) for r in open_rows)
+    settled = sum(settled_pnl(st) for st in settled_today)
+    # ponytail: positions sold (not settled) today aren't counted — add fills-based realized if it matters
+    return {"settled": settled, "n_settled": len(settled_today), "open_move": move, "total": settled + move}
+
+
 async def fetch_account(key_id: str, pem: str, with_settlements: bool = True) -> dict:
     key = load_key(pem)
+    midnight = datetime.now(ET).replace(hour=0, minute=0, second=0, microsecond=0)
+    since = f"?min_ts={int(midnight.timestamp())}"
     async with httpx.AsyncClient(timeout=20) as c:
         bal = await _get(c, key_id, key, "/portfolio/balance")
         positions = await _all(c, key_id, key, "/portfolio/positions", "market_positions")
         # every open market, not just TRACKED — /kalshi positions shows the whole book
         positions = [p for p in positions if _f(p.get("position_fp") or p.get("position"))]
         settles = await _all(c, key_id, key, "/portfolio/settlements", "settlements") if with_settlements else []
+        settled_today = await _all(c, key_id, key, "/portfolio/settlements" + since, "settlements")
+        traded_today = {f["ticker"] for f in await _all(c, key_id, key, "/portfolio/fills" + since, "fills")}
         markets = {}
         tickers = [p["ticker"] for p in positions]
         for i in range(0, len(tickers), 100):
@@ -178,7 +197,8 @@ async def fetch_account(key_id: str, pem: str, with_settlements: bool = True) ->
                        key=lambda r: -r["cost"])
     for r in open_rows:
         r["game"] = games.get(markets.get(r["ticker"], {}).get("event_ticker"), "")
-    return {"balance": _balance(bal), "open": open_rows, "settlements": settles}
+    return {"balance": _balance(bal), "open": open_rows, "settlements": settles,
+            "today": today_pnl(open_rows, settled_today, traded_today)}
 
 
 _MONTHS = {m: i for i, m in enumerate(
