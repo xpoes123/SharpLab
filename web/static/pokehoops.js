@@ -757,7 +757,7 @@ function liveStep() {
     for (const b of rollPoss(G, L.teams, L.rng, pre)) {
       const what = playBeat(G, b), line = liveSay(L, b, what, pre);
       dur += b.d;
-      if (line) L.feed.unshift([line[0], line[1], `${stamp} · ${G.score[0]}–${G.score[1]}`]);
+      if (line) L.feed.unshift([line[0], line[1], `${stamp} · ${G.score[0]}–${G.score[1]}`, what === "block" || what === "steal" || what === "foul" ? 1 - b.team : b.team]);
       const q = G.q + G.ot, sc = [G.score[0], G.score[1]];
       if (what === "made" && (b.dunk || b.kind === "three" || b.foul >= 0)) L.plays.push([q, b.team, members(L.teams[b.team])[G.on[b.team][b.who]], b.dunk ? "dunk" : b.foul >= 0 ? "and1" : "three", ...sc]);
       else if (what === "block") L.plays.push([q, 1 - b.team, members(L.teams[1 - b.team])[G.on[1 - b.team][b.block]], "block", ...sc]);
@@ -787,9 +787,9 @@ function renderLive() {
   const over = L.done, run = G.ctx.run, ownRun = run.team === 0 && run.pts - run.opp >= 5;
   box.innerHTML = `
     <div class="phsb">
-      <div><small>${esc(L.names[0])}</small><b>${G.score[0]}</b></div>
+      <div class="s0"><small>${esc(L.names[0])}</small><b>${G.score[0]}</b></div>
       <div class="phclock">${over ? "FINAL" : `${qLabel(G)} ${clock(pre.secLeft)}`}<small>TO ${G.ctx.tos[0]} · calls ${C.left[0]} &nbsp;|&nbsp; calls ${C.left[1]} · TO ${G.ctx.tos[1]}</small></div>
-      <div><small>${esc(L.names[1])}</small><b>${G.score[1]}</b></div>
+      <div class="s1"><small>${esc(L.names[1])}</small><b>${G.score[1]}</b></div>
     </div>
     <div class="phfloor"><div>${onFloor(0)}${act(0)}</div><div>${onFloor(1)}${act(1)}</div></div>
     ${over ? `<div id="phLiveEnd"></div>` : `<div class="phgroup">Your playbook <small>one call at a time · starts next possession</small></div>
@@ -797,7 +797,7 @@ function renderLive() {
     <div class="phactions"><button class="btn ghost${ownRun ? " warn" : ""}" id="phTO" ${G.ctx.tos[0] > 0 && !C.timeout[0] ? "" : "disabled"}>⏱ Timeout${C.timeout[0] ? " (next dead ball)" : ownRun ? ` (ends your own ${run.pts}-${run.opp} run)` : ""}</button>
       <button class="btn ghost${L.speed === 1 ? " on" : ""}" data-speed="1">1×</button><button class="btn ghost${L.speed === 3 ? " on" : ""}" data-speed="3">3×</button>
       <button class="btn ghost" data-speed="99">Sim to end ⏭</button><button class="btn ghost" id="phLeave">Leave game</button></div>`}
-    <ul class="phfeed">${L.feed.slice(0, over ? 12 : 30).map(([t, c, st]) => `<li class="${c}">${st ? `<span>${st}</span>` : ""}${t}</li>`).join("")}</ul>`;
+    <ul class="phfeed">${L.feed.slice(0, over ? 12 : 30).map(([t, c, st, side]) => `<li class="${c}${side != null ? ` s${side}` : ""}">${st ? `<span>${st}${side != null ? ` · ${esc(L.names[side])}` : ""}</span>` : ""}${t}</li>`).join("")}</ul>`;
   if (over) liveEndPanel();
 }
 

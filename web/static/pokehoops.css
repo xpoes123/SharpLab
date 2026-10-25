@@ -287,6 +287,8 @@ button.phgame { color: var(--fg); font: inherit; text-align: left; cursor: point
 .phfeed { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 420px; overflow-y: auto; }
 .phfeed li { font-size: 14px; padding: 4px 8px; border-radius: 6px; } .phfeed li span { display: block; font-family: var(--font-mono); font-size: 10px; color: var(--faint); }
 .phfeed li.dim { color: var(--muted); } .phfeed li.big { background: var(--accent-soft); } .phfeed li.call { background: color-mix(in srgb, var(--gold) 16%, transparent); }
+.phfeed li.s0, .phfeed li.s1 { border-left: 3px solid var(--accent); } .phfeed li.s1 { border-left-color: var(--accent2); }
+.phsb .s0 small { color: var(--accent); } .phsb .s1 small { color: var(--accent2); }
 .phfeed li.to { color: var(--accent2); } .phfeed li.q { text-align: center; color: var(--accent); font-weight: 700; }
 @media (max-width: 400px) { .phbook { grid-template-columns: 1fr; } }
 
