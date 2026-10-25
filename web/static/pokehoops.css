@@ -112,6 +112,7 @@ img { image-rendering: pixelated; }
 .phstrip b { aspect-ratio: 1; border-radius: 2px; background: var(--panel2); transition: background .15s; }
 .phstrip b.w { background: var(--green); }
 .phstrip b.l { background: var(--red); }
+.phstrip b.w, .phstrip b.l { cursor: pointer; } .phstrip b.on { outline: 2px solid var(--fg); outline-offset: 1px; }
 .phfive, .phbench { display: flex; justify-content: center; gap: 4px; flex-wrap: wrap; }
 .phfive figure, .phbench figure { margin: 0; display: flex; flex-direction: column; align-items: center; }
 .phfive img { width: 56px; height: 56px; }
