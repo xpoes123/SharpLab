@@ -7,8 +7,11 @@
 // the token + picks + team: the server verifies them, sims the season under a season seed it draws only
 // now, records it, and returns the summary + season seed. We then replay that exact season locally
 // (same vendored engine, same seeds) for the game-by-game reveal. ?s=<id> replays a shared season.
-import { nextPack, playSeason, summarize, teamName, defaultTeam, PICKS, POS, mon, bestPos, LEGENDS } from "./pokehoops-draft.js";
+// Two-player: any recorded season's team can be challenged — draft your own eight, then a best-of-seven against
+// it (POST /submit with vs=<season id>), simmed server-side the same way. ?x=<id> replays a shared series.
+import { nextPack, playSeason, playSeries, SERIES_WINS, summarize, teamName, defaultTeam, PICKS, POS, mon, bestPos, LEGENDS } from "./pokehoops-draft.js";
 import { profile, skills } from "./pokehoops/ratings.js";
+import { members } from "./pokehoops/engine.js";
 
 const app = document.getElementById("app");
 const navRight = document.getElementById("navRight");
@@ -126,6 +129,7 @@ function renderIntro() {
         <li><b>Picks 2–8</b>: three options each, take one. Skills, type and signature move all matter.</li>
         <li><b>You coach:</b> set your five at PG · SG · SF · PF · C and pick which spot each of your three reserves backs up.</li>
         <li>Then play an <b>82-game season</b>.</li>
+        <li><b>Two-player:</b> open anyone's season (the board below, or a link a friend sends) and hit <b>⚔️ Challenge</b> — draft your own eight and play their team, best of 7.</li>
       </ol>
       ${state.me ? `<button class="btn big primary" id="phStart">Start the draft</button>` : signedOut}
       <p class="phfine">Same engine as the TV cartridge. The server re-checks every pick and sims the season itself.</p>
@@ -134,13 +138,15 @@ function renderIntro() {
   loadLeaderboard();
 }
 
-async function startDraft() {
+async function startDraft(vs = null) {
   if (state.busy) return;
   state.busy = true;
+  clearTimeout(state.reveal?.timer);
   const res = await post("/start", {});
   state.busy = false;
   if (res.error) return toast("❌ " + res.error);
-  state.draft = { token: res.token, seed: res.seed, picks: [] };
+  state.draft = { token: res.token, seed: res.seed, picks: [], vs };   // vs: {id, name, team} when challenging
+  scrollTo(0, 0);
   renderDraft();
 }
 
@@ -152,7 +158,8 @@ function renderDraft() {
     <div class="phdraft">
       <div class="phdrafthead">
         <div><div class="phstep">Pick ${i + 1} of ${PICKS}${i === 0 ? " · Legendary" : ""}</div>
-          <div class="phprompt">${i === 0 ? "Choose your franchise Legendary" : "Take one"}</div></div>
+          <div class="phprompt">${i === 0 ? "Choose your franchise Legendary" : "Take one"}</div>
+          ${d.vs ? `<div class="phmuted">⚔️ Drafting to take on ${esc(d.vs.name)}'s team</div>` : ""}</div>
         ${pickSlots(d.picks)}
       </div>
       <div class="phpack">${pack.map(optionCard).join("")}</div>
@@ -206,9 +213,14 @@ function renderLineup() {
       <div class="phrows">${[0, 1, 2, 3, 4].map((k) => coachRow(t, k, d.sel)).join("")}</div>
       <div class="phgroup">Bench <small>subs in mid-quarter behind the spot it backs up · two at one spot split the minutes</small></div>
       <div class="phrows">${[5, 6, 7].map((k) => coachRow(t, k, d.sel)).join("")}</div>
-      <button class="btn big primary" id="phPlay">Lock in &amp; play the season</button>
+      ${d.vs ? `<div class="phgroup">vs ${esc(d.vs.name)}</div>${teamStrip(d.vs.team)}` : ""}
+      <button class="btn big primary" id="phPlay">${playLabel(d)}</button>
     </div>`;
 }
+
+const playLabel = (d) => (d.vs ? `Lock in &amp; play ${esc(d.vs.name)} · best of 7` : "Lock in &amp; play the season");
+const teamStrip = (t) => `<div class="phfive">${t.five.map((n, i) => `<figure><img src="${sprite(n)}" alt="${esc(mon(n).name)}" title="${POS[i]} ${esc(mon(n).name)}"><figcaption>${POS[i]}</figcaption></figure>`).join("")}
+  ${t.bench.map((n) => `<figure class="phbenchfig"><img src="${sprite(n)}" alt="" title="${esc(mon(n).name)} (bench)"><figcaption>B</figcaption></figure>`).join("")}</div>`;
 
 function tapSlot(k) {
   const d = state.draft;
@@ -222,26 +234,27 @@ async function playIt() {
   const d = state.draft;
   state.busy = true;
   const btn = $("phPlay");
-  if (btn) { btn.disabled = true; btn.textContent = "Simming the season…"; }
-  const res = await post("/submit", { token: d.token, picks: d.picks, team: d.team });
+  if (btn) { btn.disabled = true; btn.textContent = d.vs ? "Simming the series…" : "Simming the season…"; }
+  const res = await post("/submit", { token: d.token, picks: d.picks, team: d.team, vs: d.vs?.id ?? null });
   state.busy = false;
   if (res.error) {
     toast("❌ " + res.error);
     if (/expired|illegal/.test(res.error)) return renderIntro();
-    if (btn) { btn.disabled = false; btn.textContent = "Lock in & play the season"; }
+    if (btn) { btn.disabled = false; btn.innerHTML = playLabel(d); }
     return;
   }
+  if (d.vs) return revealSeries({ ...res, name: state.me?.user?.username || "You", opp_name: d.vs.name, opp_team: d.vs.team }, true);
   if (res.balance != null) { state.balance = res.balance; renderNav(state.me?.user); }
   reveal(d.seed, d.picks, d.team, res, { mine: true });
 }
 
 // Replay the season locally from the seeds the server used, and animate it game by game.
-function reveal(seed, picks, team, server, { mine = false, owner = null } = {}) {
+function reveal(seed, picks, team, server, { mine = false, owner = null, me = false } = {}) {
   const s = playSeason(seed, picks, team, server.season_seed);
   const local = summarize(s.team, s);
   if (server.strip && server.strip !== local.strip) console.warn("pokehoops: local replay differs from server", server, local);
   const sum = { ...local, ...server, games: s.games };
-  state.reveal = { sum, mine, owner, timer: 0, g: 0, done: false };
+  state.reveal = { sum, mine: mine || me, posted: mine, owner, timer: 0, g: 0, done: false };
   app.innerHTML = `${head()}
     <div class="card phseason">
       <div class="phstep">${owner ? `${esc(owner)}'s season` : "The season"}</div>
@@ -279,6 +292,7 @@ function step() {
 function skip() {
   const r = state.reveal;
   if (!r || r.done) return;
+  if (r.skip) return r.skip();
   clearTimeout(r.timer);
   const cells = $("phStrip").children;
   r.sum.games.forEach((g, i) => { cells[i].className = g.win ? "w" : "l"; });
@@ -310,11 +324,15 @@ function finish() {
       <div class="phstat"><span>Points</span><b>${s.ppg}</b><small>allowed ${s.oppg}</small></div>
     </div>
     <div class="phactions">
-      ${s.id && r.mine ? `<button class="btn primary" id="phPost">Post to #bot</button>` : ""}
+      ${s.id && r.posted ? `<button class="btn primary" id="phPost">Post to #bot</button>` : ""}
+      ${s.id && state.me && !r.mine ? `<button class="btn primary" id="phChallenge">⚔️ Challenge this team</button>` : ""}
       ${s.id ? `<button class="btn ghost" id="phShare">Copy link</button>` : ""}
       ${state.me ? `<button class="btn${s.id ? " ghost" : " primary"}" id="phAgain">${r.mine ? "Draft again" : "Draft your own"}</button>`
                  : `<a class="btn" href="/api/v1/auth/discord/login">Sign in to draft your own</a>`}
-    </div>`;
+    </div>
+    ${s.id && r.mine ? `<p class="phmuted">Two-player: send a friend the link — they draft their own eight and take this team on, best of 7.</p>` : ""}
+    ${(s.challenges || []).length ? `<div class="phgroup">Challenges</div><div class="phchals">${s.challenges.map((c) =>
+      `<a href="?x=${c.id}" data-xid="${c.id}" class="phchal ${c.wins > c.losses ? "neg" : "pos"}">${esc(c.name)} ${c.wins > c.losses ? "beat it" : "lost"} ${c.wins}–${c.losses}</a>`).join("")}</div>` : ""}`;
   loadLeaderboard();
 }
 
@@ -367,7 +385,61 @@ async function loadLeaderboard(period = state.lbPeriod || "all") {
 async function openShared(id) {
   const res = await getJSON(`${API}/season/${encodeURIComponent(id)}`);
   if (!res || res.error || res._status) { toast(res?._status === 410 ? "That's an old-rules season — it can't be replayed" : "That season link doesn't exist"); history.replaceState(null, "", location.pathname + (MOCK ? "?mock=1" : "")); return renderIntro(); }
-  reveal(res.seed, res.picks, res.team, { ...res, id: res.id }, { owner: res.name });
+  reveal(res.seed, res.picks, res.team, { ...res, id: res.id }, { owner: res.name, me: !!res.me });
+}
+
+// ── Head-to-head: replay the best-of-seven from its seeds, one game at a time ──
+function revealSeries(server, mine = false) {
+  const x = playSeries(server.seed, server.picks, server.team, server.opp_team, server.series_seed);
+  if (x.wins !== server.wins || x.losses !== server.losses) console.warn("pokehoops: local series replay differs from server", server, x);
+  const us = members(x.team), them = members(x.opp);
+  state.reveal = { series: { ...server, games: x.games }, mine, timer: 0, g: 0, done: false };
+  app.innerHTML = `${head()}
+    <div class="card phseason phseries">
+      <div class="phstep">Best of ${2 * SERIES_WINS - 1}</div>
+      <div class="phvs"><div><b>${esc(server.name)}</b>${teamStrip(x.team)}</div><i>vs</i><div><b>${esc(server.opp_name)}</b>${teamStrip(x.opp)}</div></div>
+      <div class="phrec"><span id="phW">0</span><i>–</i><span id="phL">0</span></div>
+      <div class="phgames" id="phGames"></div>
+      <button class="btn ghost" id="phSkip">Skip to the end ⏭</button>
+      <div id="phFinal"></div>
+    </div>`;
+  const cell = (g, k) => `<div class="phgame ${g.win ? "w" : "l"}"><span>G${k + 1}</span><b>${g.us}–${g.them}</b>
+    <small>${esc(mon(us[g.top[0].i]).name)} ${g.top[0].pts} · ${esc(mon(them[g.top[1].i]).name)} ${g.top[1].pts}</small></div>`;
+  const tally = (k) => { const w = x.games.slice(0, k).filter((g) => g.win).length; $("phW").textContent = w; $("phL").textContent = k - w; };
+  const end = () => {
+    const r = state.reveal; r.done = true; $("phSkip")?.remove();
+    const won = server.wins > server.losses;
+    $("phFinal").innerHTML = `<div class="phgrade ${won ? "great" : "bad"}${REDUCE ? "" : " pop"}">${esc(won ? server.name : server.opp_name)} wins ${Math.max(server.wins, server.losses)}–${Math.min(server.wins, server.losses)}</div>
+      <div class="phactions">
+        ${server.id ? `<button class="btn ghost" id="phXShare">Copy link</button>` : ""}
+        ${state.me && server.vs ? `<button class="btn primary" id="phRematch" data-vs="${server.vs}">${mine ? "Run it back" : "Take this team on yourself"}</button>` : ""}
+        ${server.vs ? `<a class="btn ghost" href="?s=${server.vs}">See ${esc(server.opp_name)}'s season</a>` : ""}
+      </div>`;
+  };
+  const tick = () => {
+    const r = state.reveal;
+    if (!r?.series || r.done) return;
+    $("phGames").insertAdjacentHTML("beforeend", cell(x.games[r.g], r.g));
+    tally(++r.g);
+    if (r.g >= x.games.length) return end();
+    r.timer = setTimeout(tick, REDUCE ? 0 : 900);
+  };
+  state.reveal.skip = () => { const r = state.reveal; clearTimeout(r.timer); for (; r.g < x.games.length; r.g++) $("phGames").insertAdjacentHTML("beforeend", cell(x.games[r.g], r.g)); tally(r.g); end(); };
+  tick();
+}
+
+async function openSeries(id) {
+  const res = await getJSON(`${API}/series/${encodeURIComponent(id)}`);
+  if (!res || res.error || res._status) { toast("That series link doesn't exist"); history.replaceState(null, "", location.pathname + (MOCK ? "?mock=1" : "")); return renderIntro(); }
+  revealSeries(res);
+}
+
+async function challenge(vs) {
+  const res = await getJSON(`${API}/season/${encodeURIComponent(vs)}`);
+  if (!res || res.error || res._status) return toast("That team can't be challenged");
+  if (res.me) return toast("That's your own team — send the link to a friend");
+  history.replaceState(null, "", location.pathname + (MOCK ? "?mock=1" : ""));
+  startDraft({ id: res.id, name: res.name, team: res.team });
 }
 
 // ── Events ───────────────────────────────────────────────────────────────────
@@ -382,6 +454,16 @@ app.addEventListener("click", (e) => {
   if (e.target.closest("#phPlay")) return playIt();
   if (e.target.closest("#phSkip")) return skip();
   if (e.target.closest("#phShare")) return share();
+  if (e.target.closest("#phChallenge")) return challenge(state.reveal.sum.id);
+  const rm = e.target.closest("#phRematch");
+  if (rm) return challenge(Number(rm.dataset.vs));
+  if (e.target.closest("#phXShare")) {
+    const x = state.reveal.series, url = `${location.origin}/pokehoops.html?x=${x.id}`;
+    const won = x.wins > x.losses, text = `🏀 Poké Hoops — ${x.name} ${won ? "beat" : "lost to"} ${x.opp_name}'s team ${x.wins}–${x.losses}\n${url}`;
+    return navigator.clipboard.writeText(text).then(() => toast("📋 Copied — paste it anywhere"), () => prompt("Copy the series:", text));
+  }
+  const xl = e.target.closest(".phchal");
+  if (xl) { e.preventDefault(); history.replaceState(null, "", `?x=${xl.dataset.xid}${MOCK ? "&mock=1" : ""}`); clearTimeout(state.reveal?.timer); scrollTo(0, 0); return openSeries(xl.dataset.xid); }
   const pb = e.target.closest("#phPost");
   if (pb) return postToDiscord(pb);
   const tb = e.target.closest(".phlbtab");
@@ -415,17 +497,27 @@ async function main() {
   state.me = me && me.authenticated ? me : null;
   state.balance = state.me ? me.balance || 0 : 0;
   renderNav(state.me && state.me.user);
-  const sid = new URLSearchParams(location.search).get("s");
-  if (sid) return openShared(sid);
+  const qs = new URLSearchParams(location.search);
+  if (qs.get("x")) return openSeries(qs.get("x"));
+  if (qs.get("s")) return openShared(qs.get("s"));
   renderIntro();
 }
 
 // ── Mock mode (?mock=1): local seeds + local season so the page runs without the API ──
-const mockDb = { seasons: [], best: null };
+const mockDb = { seasons: [], best: null, series: [] };
 function mock(url, body) {
   if (url.startsWith("/api/v1/hq/me")) return { authenticated: true, user: { id: "1", username: "davidj", avatar: null }, balance: 12500 };
   const rnd = () => Math.floor(Math.random() * 2 ** 32);
   if (url.endsWith("/start")) return { token: "mock", seed: rnd() };
+  if (url.endsWith("/submit") && body.vs != null) {
+    const ss = rnd(), opp = [...mockDb.seasons, ...MOCK_LB].find((r) => r.id === body.vs);
+    const x = playSeries(state.draft.seed, body.picks, body.team, opp.team, ss);
+    const row = { id: mockDb.series.length + 1, vs: body.vs, seed: state.draft.seed, series_seed: ss, picks: body.picks, team: x.team,
+                  wins: x.wins, losses: x.losses, name: "davidj", opp_name: opp.name || "davidj", opp_team: opp.team };
+    mockDb.series.push(row);
+    return row;
+  }
+  if (url.includes("/series/")) return mockDb.series.find((x) => x.id === Number(url.split("/").pop())) || { _status: 404, error: "no such series" };
   if (url.endsWith("/submit")) {
     const ss = rnd(), s = playSeason(state.draft.seed, body.picks, body.team, ss), sum = summarize(s.team, s);
     const prev = mockDb.best;
@@ -438,7 +530,7 @@ function mock(url, body) {
   if (url.includes("/season/")) {
     const id = Number(url.split("/").pop()), row = mockDb.seasons.find((x) => x.id === id) || MOCK_LB[id - 101];
     if (id === 999) return { _status: 410, error: "old-rules season" };
-    return row ? { ...row, name: row.name || "davidj" } : { _status: 404, error: "no such season" };
+    return row ? { ...row, name: row.name || "davidj", me: !row.name, challenges: mockDb.series.filter((x) => x.vs === id).map((x) => ({ id: x.id, name: x.name, wins: x.wins, losses: x.losses })) } : { _status: 404, error: "no such season" };
   }
   if (url.includes("/share/")) return { ok: true };
   if (url.includes("/leaderboard")) {

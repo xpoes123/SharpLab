@@ -6232,6 +6232,39 @@ async def get_pokehoops_best(discord_user: str) -> dict | None:
         return _pokehoops_row(row) if row else None
 
 
+async def insert_pokehoops_series(challenger: str, vs_season: int, seed: int, series_seed: int,
+                                  picks: list[int], team: dict, wins: int, losses: int) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO pokehoops_series (challenger, vs_season, seed, series_seed, picks, team, wins, losses, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (challenger, vs_season, seed, series_seed, json.dumps(picks), json.dumps(team), wins, losses,
+             datetime.now(timezone.utc).isoformat()))
+        await db.commit()
+        return cur.lastrowid
+
+
+async def get_pokehoops_series(series_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM pokehoops_series WHERE id = ?", (series_id,))
+        row = await cur.fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["picks"], d["team"] = json.loads(d["picks"]), json.loads(d["team"])
+    return d
+
+
+async def get_pokehoops_challenges(vs_season: int, limit: int = 20) -> list[dict]:
+    """Recent series played against one recorded team, newest first."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT id, challenger, wins, losses, created_at FROM pokehoops_series "
+                               "WHERE vs_season = ? ORDER BY id DESC LIMIT ?", (vs_season, limit))
+        return [dict(r) for r in await cur.fetchall()]
+
+
 async def get_pokehoops_rank(discord_user: str) -> int | None:
     """1-based leaderboard rank of the player's best season (None if they have none)."""
     async with aiosqlite.connect(DB_PATH) as db:
