@@ -356,3 +356,30 @@ body:has(.phsb) header { position: static; }
 .pbcode { font: 800 44px/1 var(--font-mono); letter-spacing: 6px; text-align: center; color: var(--gold); }
 .pbwait { text-align: center; padding: 18px; background: var(--panel2); border-radius: var(--r); color: var(--fg-2); }
 .pbready { color: var(--green); font-weight: 600; text-transform: none; letter-spacing: 0; }
+/* turn replay */
+.pbcourt { position: relative; overflow: visible; }
+.pbfly { position: absolute; left: 0; top: 0; font-size: 22px; pointer-events: none; z-index: 5; filter: drop-shadow(0 2px 2px rgba(0,0,0,.4)); }
+.pbplaying .pbball { visibility: hidden; }
+.pbfloat { position: absolute; z-index: 6; pointer-events: none; white-space: nowrap; font-weight: 800; font-size: 13px; padding: 2px 8px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); opacity: 0; }
+.pbfloat.mv { background: var(--tc); color: #11121a; border: 0; }
+.pbfloat.sch { color: var(--accent); } .pbfloat.good { color: var(--green); } .pbfloat.bad { color: var(--red); } .pbfloat.up { color: var(--accent); } .pbfloat.dim { color: var(--muted); }
+.pbfloat.big { font-size: 20px; background: none; border: 0; }
+.pbin { animation: pbin .25s ease-out; } @keyframes pbin { from { opacity: 0; transform: translateY(4px); } }
+.pbskip { justify-self: end; padding: 4px 14px; min-height: 36px; font-size: 13px; }
+/* the floor: top-down half court */
+.pbfloor { position: relative; aspect-ratio: 10 / 9; border-radius: var(--r-lg); overflow: hidden; background: linear-gradient(180deg, #8a6236, #a8773f 60%, #8a6236); box-shadow: inset 0 0 0 3px rgba(255,255,255,.55); touch-action: manipulation; }
+.pbfloor svg { position: absolute; inset: 0; width: 100%; height: 100%; fill: none; stroke: rgba(255,255,255,.6); stroke-width: .6; }
+.pbfloor svg .paint { fill: rgba(122,162,247,.22); } .pbfloor svg .board { stroke: #fff; stroke-width: 1.2; }
+.pbhoop { position: absolute; width: 26px; height: 14px; border: 3px solid #ff9e64; border-radius: 50%; transform: translate(-50%, -50%); }
+.pbtok { position: absolute; width: 48px; display: grid; justify-items: center; transform: translate(-50%, -50%); z-index: 2; }
+.pbtok img { width: 44px; height: 44px; image-rendering: pixelated; border-radius: 50%; background: rgba(17,18,26,.55); box-shadow: 0 0 0 3px var(--ring-c), 0 3px 6px rgba(0,0,0,.4); }
+.pbtok.me { --ring-c: #7aa2f7; } .pbtok.op { --ring-c: #f7768e; }
+.pbtok b { font-size: 10px; line-height: 1.1; color: #fff; text-shadow: 0 1px 2px #000, 0 0 3px #000; white-space: nowrap; margin-top: 2px; }
+.pbtok .pbball { position: absolute; right: -6px; top: 26px; font-size: 18px; } .pbtok .pbst { position: absolute; left: -4px; top: -4px; font-style: normal; font-size: 14px; }
+.pbtok.ball img { box-shadow: 0 0 0 3px var(--ring-c), 0 0 0 6px #e0af68, 0 3px 6px rgba(0,0,0,.4); }
+.pbtag { position: absolute; transform: translateY(-50%); font-size: 11px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px #000; }
+.pbplaying .pbtok .pbball { visibility: hidden; }
+.pbtok em { font-style: normal; font-size: 9px; font-weight: 800; line-height: 1.2; padding: 0 3px; border-radius: 3px; margin-top: 1px; white-space: nowrap; }
+.pbtok em.up { background: #7aa2f7; color: #11121a; } .pbtok em.dn { background: #f7768e; color: #11121a; }
+.pbcards > summary { cursor: pointer; color: var(--fg-2); padding: 8px 0; }
+.pblast .read, .pblog .read { font-size: 13px; } .pblast .pos, .pblog .pos { color: var(--green); } .pblast .neg.read, .pblog .neg.read { color: var(--red); }
