@@ -118,10 +118,24 @@ const nm = (side, ri) => esc(mon(S.B.rosters[side][ri]).name);
 const onNm = (side, slot) => nm(side, S.B.on[side][slot]);
 function effWord(e) { return e >= 2 ? "It's super effective!" : e === 0 ? "It barely affects the defender…" : e < 1 ? "It's not very effective…" : ""; }
 
+// which side the defensive scheme favours against this kind of play (mirrors the engine's VS table, in words)
+const READ = {
+  deep: { press: [-1, "the press runs at the shooter"], pack: [1, "packing the paint leaves the deep shot open"], deny: [1, "denying lanes leaves room outside"] },
+  rim: { press: [1, "the drive gets past the press"], pack: [-1, "that's a drive into a packed paint"], deny: [1, "denying passes leaves the lane open"] },
+  pass: { press: [1, "a quick pass beats the press"], deny: [-1, "they're jumping the passing lanes (steal risk)"] },
+  screen: { press: [1, "a screen beats the press"], switch: [-1, "switching kills the screen"] },
+  iso: { deny: [1, "lane-jumping defenders can't help on an iso"], switch: [1, "switching hands over the matchup"] },
+};
+function readOf(B, p, scheme) {
+  const cat = p.kind === "move" ? movesOf(B.rosters[B.off][B.on[B.off][p.slot ?? B.ball]])[p.mi].cat : p.kind;
+  return READ[cat]?.[scheme];
+}
+
 function narrate(ev) {
   const B = S.B, lines = [];
   const side = (s) => (s === ME() ? "You" : esc(S.botName));
   for (const e of ev) {
+    const n0 = lines.length;
     if (e.k === "pick") {
       const o = B.off, describe = (s, p) => {
         if (p.kind === "scheme") return `${SCHEMES[p.scheme].name}`;
@@ -133,6 +147,8 @@ function narrate(ev) {
         return `${onNm(s, p.slot)} uses <b>${esc(m.name)}</b>${["deep", "rim"].includes(m.cat) ? "" : ` <small>(${CAT[m.cat]})</small>`}${p.to !== undefined ? ` → ${onNm(s, p.to)}` : ""}`;
       };
       lines.push({ t: `<span class="pbo">${side(o)}:</span> ${describe(o, e.off)} &nbsp;·&nbsp; <span class="pbd">${side(1 - o)}:</span> ${describe(1 - o, e.def)}`, c: "pick" });
+      const r = readOf(B, e.off, e.scheme);
+      if (r) lines.push({ t: `📋 ${r[0] > 0 ? "Offense" : "Defense"} wins the call: ${r[1]}.`, c: (r[0] > 0) === (o === ME()) ? "pos read" : "neg read" });
     } else if (e.k === "shot") {
       const who = onNm(B.off, e.slot), w = effWord(e.eff);
       lines.push({ t: `${w ? `<i>${w}</i> ` : ""}${e.made ? `<b>${who} scores!</b> +${e.pts}${e.andOne ? " (and one!)" : ""}` : e.ft ? `${who} misses but draws the foul — <b>hits the free throw</b> +${e.pts}` : `${who} misses${e.fouled ? " (fouled — misses the free throw)" : ""}.`}`, c: e.scored ? "big" : "dim" });
@@ -155,6 +171,7 @@ function narrate(ev) {
     else if (e.k === "fullyPar") lines.push({ t: `${onNm(B.off, e.slot)} is paralyzed! It can't move!`, c: "dim" });
     else if (e.k === "violation") lines.push({ t: "Shot-clock violation!", c: "neg" });
     else if (e.k === "cured") lines.push({ t: `${nm(e.side, e.ri)} ${e.st === "slp" ? "woke up" : "snapped out of it"}.`, c: "dim" });
+    for (let i = n0; i < lines.length; i++) lines[i].e = e;
   }
   return lines;
 }
@@ -171,24 +188,145 @@ function step(offPick, defPick, pre = []) {
   S.log.length = Math.min(S.log.length, 60);
   S.last = lines;
   if (next.winner >= 0) S.record[next.winner === ME() ? 0 : 1]++;
+  return { before, lines };
 }
 const scrollLast = () => document.querySelector(".pblast")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
 
 function act(myPick) {
   if (S.room) return roomMove(myPick);
   const B = S.B, botP = botPick(B, 1, S.rng, LEVELS[S.level].temp, LEVELS[S.level].depth || 0);
-  step(B.off === 0 ? myPick : botP, B.off === 0 ? botP : myPick);
+  const turn = step(B.off === 0 ? myPick : botP, B.off === 0 ? botP : myPick);
   if (S.B.dead && S.B.winner < 0) S.B = botSubs(S.B, 1);
   if (S.B.winner >= 0) pref("record", S.record);
   S.sel = null;
+  play(turn);
+}
+
+// ── turn replay: redraw the floor as it was, then play each narrated line with its effect on the court ──
+const wait = (ms) => new Promise((r) => { if (S.skip) return r(); S.wake = r; setTimeout(r, ms); });
+const PACE = { pick: 1000, shot: 1300, iso: 1000, weather: 900, pass: 750, oreb: 700, dreb: 700, turnover: 800 };
+async function play({ before, lines }) {
+  const run = S, after = S.B, last = S.last;
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) { render(); return scrollLast(); }
+  S.playing = true; S.skip = false; S.B = before; S.last = [];
+  render();
+  const court = document.querySelector(".pbfloor"), box = document.querySelector(".pblast"), sb = document.querySelector(".phsb");
+  scrollBy({ top: court.getBoundingClientRect().top - (sb ? sb.getBoundingClientRect().height + 8 : 8), behavior: "smooth" });   // whole floor below the sticky scoreboard
+  const P = { court, o: before.off, B: before, guard: [...before.guard], score: [...before.score] };
+  fly(court, cardEl(court, P.o, before.ball), cardEl(court, P.o, before.ball), 1);
+  for (const l of lines) {
+    if (S !== run || S.skip || !court.isConnected) break;
+    const div = document.createElement("div");
+    div.className = `${l.c} pbin`; div.innerHTML = l.t; box.append(div);
+    fx(l.e, P);
+    await wait(l.e ? PACE[l.e.k] || 650 : 450);
+  }
+  if (S !== run) return;   // left mid-replay
+  S.playing = false; S.B = after; S.last = last;
   render(); scrollLast();
+}
+const cardEl = (court, side, slot) => court.querySelector(`[data-s="${side}${slot}"]`);
+function center(court, el) {
+  const r0 = court.getBoundingClientRect(), r = el.getBoundingClientRect();
+  return [r.left - r0.left + r.width / 2, r.top - r0.top + r.height / 2];
+}
+function fly(court, a, b, ms = 600, h = 30) {   // the ball stays where it lands until the next flight
+  if (!a || !b) return;
+  court.querySelector(".pbfly")?.remove();
+  const [x0, y0] = center(court, a), [x1, y1] = center(court, b), ball = document.createElement("span"), t = (x, y) => `translate(${x}px, ${y}px) translate(-50%, -50%)`;
+  ball.className = "pbfly"; ball.textContent = "🏀"; court.append(ball);
+  ball.animate([{ transform: t(x0, y0) }, { transform: t((x0 + x1) / 2, Math.min(y0, y1) - h) }, { transform: t(x1, y1) }], { duration: ms, easing: "ease-in-out", fill: "forwards" });
+}
+function pop(court, el, html, cls = "", style = "") {   // a label that floats up off a card
+  if (!el) return;
+  const [x, y] = center(court, el), f = document.createElement("div");
+  f.className = `pbfloat ${cls}`; f.innerHTML = html; f.style.cssText = `left:${x}px;top:${y - 20}px;${style}`;
+  court.append(f);
+  const k = (o, dy, sc) => ({ opacity: o, transform: `translate(-50%, ${dy}px) scale(${sc})` });
+  f.animate([k(0, 6, 0.7), k(1, -6, 1.08), k(1, -10, 1), k(0, -34, 1)], { duration: 1400, easing: "ease-out" }).finished.then(() => f.remove());
+}
+const shake = (el, px = 6) => el?.animate([0, -px, px, -px / 2, px / 2, 0].map((x) => (el.classList.contains("pbtok") ? T(x) : { transform: `translateX(${x}px)` })), { duration: 420 });
+const glow = (el, col, ms = 800) => el?.animate([{ boxShadow: `0 0 0 0 ${col}` }, { boxShadow: `0 0 22px 6px ${col}` }, { boxShadow: `0 0 0 0 ${col}` }], { duration: ms });
+const T = (dx = 0, dy = 0, sc = 1) => ({ transform: `translate(-50%, -50%) translate(${dx}px, ${dy}px) scale(${sc})` });
+const lunge = (el) => el?.animate([T(), T(0, -6, 1.15), T()], { duration: 500, easing: "ease-out" });
+function slide(court, el, to, ms = 700, back = true) {   // run a token toward another token (or a point) and, by default, back
+  if (!el || !to) return;
+  const [x0, y0] = center(court, el), [x1, y1] = Array.isArray(to) ? to : center(court, to), dx = x1 - x0, dy = y1 - y0;
+  el.animate(back ? [T(), T(dx, dy), T(dx, dy), T()] : [T(), T(dx, dy)], { duration: ms, easing: "ease-in-out", fill: back ? "none" : "forwards" });
+}
+const PACK = [[38, 30], [50, 38], [62, 30]];
+function formation({ court, o, B }, scheme) {
+  const d = 1 - o, w = court.clientWidth, h = court.clientHeight, c = (s, sl) => cardEl(court, s, sl);
+  const toward = (a, b, k) => { const [x0, y0] = center(court, a), [x1, y1] = center(court, b); return [x0 + (x1 - x0) * k, y0 + (y1 - y0) * k]; };
+  for (let j = 0; j < 3; j++) {
+    const el = c(d, j), man = c(o, B.guard.indexOf(j));
+    if (!el) continue;
+    if (scheme === "pack") slide(court, el, [PACK[j][0] * w / 100, PACK[j][1] * h / 100], 600, false);
+    else if (scheme === "press" && man) slide(court, el, toward(el, man, 0.75), 500, false);
+    else if (scheme === "deny" && man && B.guard.indexOf(j) !== B.ball) slide(court, el, toward(man, c(o, B.ball), 0.4), 600, false);
+    else if (scheme === "switch") pop(court, el, "↔", "sch");
+  }
+}
+function fx(e, P) {
+  if (!e) return;
+  const { court, o, B } = P, d = 1 - o, c = (s, sl) => cardEl(court, s, sl), hoop = court.querySelector(".pbhoop");
+  const callout = (side, p) => {   // "Kingler used Crabhammer!" over the card, in the move's type colour
+    if (p.kind === "scheme") { formation(P, p.scheme); return pop(court, hoop, esc(SCHEMES[p.scheme].name), "sch"); }
+    const slot = p.slot ?? B.ball, el = c(side, slot);
+    lunge(el);
+    if (p.kind !== "move") return;
+    const m = movesOf(B.rosters[side][B.on[side][slot]])[p.mi], col = TYPE_COL[m.type] || "#888";
+    pop(court, el, esc(m.name), "mv", `--tc:${col}`); glow(el, col);
+  };
+  if (e.k === "pick") { callout(o, e.off); setTimeout(() => court.isConnected && callout(d, e.def), 350); }
+  else if (e.k === "pass") fly(court, c(o, e.from), c(o, e.to), 600, 26);
+  else if (e.k === "screen") { const g = c(d, P.guard[B.ball]); slide(court, c(o, e.slot), g, 1000); glow(g, "#7aa2f7"); pop(court, c(o, e.slot), "🛡 screen"); }
+  else if (e.k === "iso") {
+    // clear out: everyone else drifts to the far corners, the called-for defender switches onto the ball
+    const w = court.clientWidth;
+    for (let s = 0; s < 3; s++) if (s !== e.slot) { const dx = (SPOT[s][0] < 50 ? -1 : SPOT[s][0] > 50 ? 1 : 0) * w * 0.1, dy = s === 1 ? 20 : -40; c(o, s)?.animate([T(), T(dx, dy)], { duration: 700, fill: "forwards" }); }
+    for (let j = 0; j < 3; j++) if (j !== e.g) c(d, j)?.animate([T(), T(0, -30)], { duration: 700, fill: "forwards" });
+    slide(court, c(d, e.g), c(o, e.slot), 700, false);
+    if (e.eff >= 2) { glow(c(d, e.g), "#f7d02c"); pop(court, c(d, e.g), "mismatch!", "sch"); }
+    P.guard[e.slot] = e.g;
+  } else if (e.k === "shot") {
+    const shooter = c(o, e.slot), def = c(d, P.guard[e.slot]);
+    if (e.cat === "rim") slide(court, shooter, hoop, 900); else lunge(shooter);   // drive vs pull-up
+    fly(court, shooter, hoop, 650, e.cat === "deep" ? 70 : 30);
+    if (e.eff >= 2) { shake(def, 8); glow(def, TYPE_COL[e.type] || "#fff", 600); }
+    else if (e.eff < 1) pop(court, def, e.eff === 0 ? "barely…" : "not very effective", "dim");
+    setTimeout(() => {
+      if (!court.isConnected) return;
+      if (!e.scored) return shake(hoop, 4);
+      P.score[o] += e.pts;
+      hoop.animate([{ transform: "scale(1)" }, { transform: "scale(1.5)" }, { transform: "scale(1)" }], { duration: 450 });
+      glow(hoop, "#9ece6a", 600);
+      pop(court, shooter, `+${e.pts}`, "good big");
+      const sb = document.querySelectorAll(".phsb > div > b"), el = sb[o === ME() ? 0 : 1];
+      if (el) { el.textContent = P.score[o]; el.animate([{ transform: "scale(1)" }, { transform: "scale(1.6)", color: "#9ece6a" }, { transform: "scale(1)" }], { duration: 600 }); }
+    }, 650);
+  } else if (e.k === "oreb") { slide(court, c(o, e.slot), hoop, 700); fly(court, hoop, c(o, e.slot), 500, 20); pop(court, c(o, e.slot), "board!", "good"); }
+  else if (e.k === "dreb") { slide(court, c(d, e.slot), hoop, 700); fly(court, hoop, c(d, e.slot), 500, 20); }
+  else if (e.k === "turnover") {
+    const to = c(d, e.by >= 0 ? e.by : P.guard[e.slot]);
+    if (e.why === "steal") { slide(court, to, c(o, e.slot), 500); fly(court, c(o, e.slot), to, 400, 10); pop(court, to, "Stolen!", "bad"); } else shake(c(o, e.slot));
+  } else if (e.k === "fastBreak") { slide(court, c(e.side, e.slot), [court.clientWidth / 2, court.clientHeight * 0.95], 700); pop(court, c(e.side, e.slot), "💨 fast break"); }
+  else if (e.k === "status") { shake(c(e.tSide, e.tSlot), 4); pop(court, c(e.tSide, e.tSlot), ST_ICON[e.st], "big"); }
+  else if (e.k === "statusMiss") pop(court, c(e.tSide, e.tSlot), e.immune ? "immune" : e.failed ? "failed" : "missed", "dim");
+  else if (e.k === "boost") pop(court, c(e.side, e.slot), Object.entries(e.got).map(([k, v]) => `${STAT_LAB[k]} ${v > 0 ? "▲".repeat(v) : "▼".repeat(-v)}`).join(" ") || "max!", "up");
+  else if (e.k === "debuff") { shake(c(e.tSide, e.tSlot), 3); pop(court, c(e.tSide, e.tSlot), Object.entries(e.got).map(([k, v]) => `${STAT_LAB[k]} ${"▼".repeat(-v)}`).join(" ") || "min!", "bad"); }
+  else if (e.k === "weather") court.animate([{ boxShadow: "inset 0 0 0 0 transparent" }, { boxShadow: `inset 0 0 60px 10px ${{ sun: "#ff9e64", rain: "#7aa2f7", sand: "#e0af68" }[e.wx]}` }, { boxShadow: "inset 0 0 0 0 transparent" }], { duration: 1200 });
+  else if (e.k === "asleep") pop(court, c(o, e.slot), "💤", "big");
+  else if (e.k === "fullyPar") { shake(c(o, e.slot), 3); pop(court, c(o, e.slot), "⚡", "big"); }
+  else if (e.k === "confusedSelf") { shake(c(o, e.slot)); pop(court, c(o, e.slot), "💫", "big"); }
+  else if (e.k === "violation") { shake(document.querySelector(".pbclock")); pop(court, hoop, "⏱ shot clock!", "bad"); }
 }
 
 function playerCard(side, slot) {
   const B = S.B, ri = B.on[side][slot], n = B.rosters[side][ri], st = B.status[side][ri], stg = B.stage[side][ri], off = side === B.off;
   const ball = off && B.ball === slot, guard = off ? B.guard[slot] : B.guard.indexOf(slot);
   const stages = Object.entries(stg).filter(([, v]) => v).map(([k, v]) => `<span class="${v > 0 ? "up" : "dn"}">${STAT_LAB[k]} ${v > 0 ? "+" : ""}${v}</span>`).join("");
-  return `<div class="pbp${ball ? " ball" : ""}${side === ME() && S.sel === slot ? " sel" : ""}" ${side === ME() && B.dead && B.winner < 0 && !S.room?.waiting ? `data-bcourtslot="${slot}"` : ""}>
+  return `<div class="pbp${ball ? " ball" : ""}${side === ME() && S.sel === slot ? " sel" : ""}" ${side === ME() && B.dead && B.winner < 0 && !S.room?.waiting && !S.playing ? `data-bcourtslot="${slot}"` : ""}>
     ${ball ? `<span class="pbball">🏀</span>` : ""}<img src="${sprite(n)}" alt="">
     <div class="pbpn"><b>${esc(mon(n).name)}</b>${st ? ` ${ST_ICON[st.k]}` : ""}</div>
     <div class="pbtypes">${mon(n).types.map(chip).join("")}</div>
@@ -197,6 +335,31 @@ function playerCard(side, slot) {
     ${off ? `<div class="pbopen" title="how open: each ● makes the next shot better">open ${"●".repeat(B.open[slot])}${"○".repeat(3 - B.open[slot])}</div>` : ""}
     <small class="pbguard">${off ? `guarded by ${onNm(1 - side, guard)}` : `on ${onNm(1 - side, guard)}`}</small>
   </div>`;
+}
+
+const SPOT = [[17, 50], [50, 74], [83, 50]], HOOP = [50, 13];
+function floor() {
+  const B = S.B, o = B.off, d = 1 - o, at = [], mine = (side) => (side === ME() ? "me" : "op");
+  const tok = (side, slot, [x, y]) => {
+    const ri = B.on[side][slot], n = B.rosters[side][ri], st = B.status[side][ri], ball = side === o && slot === B.ball;
+    const stg = Object.entries(B.stage[side][ri]).filter(([, v]) => v).map(([k, v]) => `<em class="${v > 0 ? "up" : "dn"}">${STAT_LAB[k]}${v > 0 ? "▲" : "▼"}${Math.abs(v) > 1 ? Math.abs(v) : ""}</em>`).join("");
+    return `<div class="pbtok ${mine(side)}${ball ? " ball" : ""}" data-s="${side}${slot}" style="left:${x}%;top:${y}%">
+      <img src="${sprite(n)}" alt="">${st ? `<i class="pbst">${ST_ICON[st.k]}</i>` : ""}${ball ? `<span class="pbball">🏀</span>` : ""}<b>${esc(mon(n).name)}</b>${stg}</div>`;
+  };
+  for (let s = 0; s < 3; s++) at.push(tok(o, s, SPOT[s]));
+  const used = {};
+  for (let j = 0; j < 3; j++) {
+    const man = B.guard.indexOf(j);
+    let pos = [50, 30];   // not on anyone (after a switch): sits in the paint
+    if (man >= 0) { const [x, y] = SPOT[man], k = 0.36 + 0.1 * B.open[man]; pos = [x + (HOOP[0] - x) * k, y + (HOOP[1] - y) * k]; }
+    const key = pos.join(); if (used[key]) pos = [pos[0] + 9, pos[1]]; used[key] = 1;
+    at.push(tok(d, j, pos));
+  }
+  return `<div class="pbfloor"><svg viewBox="0 0 100 90" preserveAspectRatio="none" aria-hidden="true">
+      <rect x="35" y="0" width="30" height="38" class="paint"/><circle cx="50" cy="38" r="10"/><path d="M6 0 V18 A44 44 0 0 0 94 18 V0"/>
+      <line x1="42" y1="6" x2="58" y2="6" class="board"/></svg>
+    <div class="pbhoop" style="left:${HOOP[0]}%;top:${HOOP[1]}%"></div>
+    <span class="pbtag" style="left:4%;top:94%">${o === ME() ? "You attack ↑" : `${esc(S.botName)} attack ↑`}</span>${at.join("")}</div>`;
 }
 
 function optionButtons() {
@@ -240,15 +403,16 @@ function renderBattle() {
   const B = S.B, wx = weatherOf(B), over = B.winner >= 0, mineBall = B.off === ME(), me = ME(), op = OP(), R = S.room;
   const clock = Array.from({ length: CLOCK }, (_, i) => `<i class="${i < B.clock ? "on" : ""}"></i>`).join("");
   const bench = (side) => S.B.rosters[side].map((n, ri) => [n, ri]).filter(([, ri]) => !B.on[side].includes(ri));
-  ctx.app.innerHTML = `${ctx.head()}<div class="card pbbattle"><button class="btn ghost pbexit" id="pbExit">← Exit</button>
+  ctx.app.innerHTML = `${ctx.head()}<div class="card pbbattle${S.playing ? " pbplaying" : ""}"><button class="btn ghost pbexit" id="pbExit">← Exit</button>
     <div class="phsb"><div><small>You</small><b>${B.score[me]}</b></div>
       <div class="phclock">to ${TO}${wx ? ` · ${WX_ICON[wx]}` : ""}<small>${over ? "FINAL" : B.dead ? "dead ball" : `${mineBall ? "your ball" : "on defense"}`}</small>${over ? "" : `<span class="pbclock" title="shot clock: actions left">${clock}</span><small>shot clock</small>`}</div>
       <div><small>${esc(S.botName)}</small><b>${B.score[op]}</b></div></div>
     ${wx ? `<div class="phmuted pbwx">${WX_ICON[wx]} ${esc(WEATHER[wx])}${B.weather ? ` (${B.weather.t} turns)` : " (the court)"}</div>` : ""}
-    <div class="pbcourt"><div class="pbside">${esc(S.botName)}</div><div class="pbrow them">${[0, 1, 2].map((s) => playerCard(op, s)).join("")}</div>
-      <div class="pbside">You</div><div class="pbrow us">${[0, 1, 2].map((s) => playerCard(me, s)).join("")}</div></div>
-    ${S.last?.length ? `<div class="pblast">${S.last.map((l) => `<div class="${l.c}">${l.t}</div>`).join("")}</div>` : ""}
-    ${over ? `<div class="phgrade ${B.winner === me ? "great" : "bad"} pop">${B.winner === me ? "You win" : `${esc(S.botName)} wins`} ${Math.max(...B.score)}–${Math.min(...B.score)}</div>
+    ${floor()}
+    <details class="pbcards"${S.open?.cards || B.dead ? " open" : ""}><summary data-bfold="cards">Players: stamina, boosts, matchups</summary><div class="pbcourt"><div class="pbside">${esc(S.botName)}</div><div class="pbrow them">${[0, 1, 2].map((s) => playerCard(op, s)).join("")}</div>
+      <div class="pbside">You</div><div class="pbrow us">${[0, 1, 2].map((s) => playerCard(me, s)).join("")}</div></div></details>
+    ${S.playing ? `<div class="pblast"></div><button class="btn ghost pbskip" id="pbSkip">Skip ⏩</button>` : S.last?.length ? `<div class="pblast">${S.last.map((l) => `<div class="${l.c}">${l.t}</div>`).join("")}</div>` : ""}
+    ${S.playing ? "" : over ? `<div class="phgrade ${B.winner === me ? "great" : "bad"} pop">${B.winner === me ? "You win" : `${esc(S.botName)} wins`} ${Math.max(...B.score)}–${Math.min(...B.score)}</div>
         <div class="pbrecap">${[me, op].map((sd) => `<div><div class="phgroup">${sd === op ? esc(S.botName) : "You"}</div>${Object.entries(S.pts[sd]).sort((a, b) => b[1] - a[1]).map(([ri, p]) => `<div class="pbscorer"><img src="${sprite(B.rosters[sd][ri])}" alt=""> ${nm(sd, ri)} <b>${p}</b></div>`).join("") || `<div class="phmuted">no points</div>`}</div>`).join("")}</div>
         <div class="phmuted">${R ? `You ${S.record[0]}–${S.record[1]} ${esc(S.botName)} in this room.` : `You're ${S.record[0]}–${S.record[1]} in battles.`}</div>
         <div class="phactions">${R ? `<button class="btn primary" id="pbRematch">Rematch (same six)</button>` : `<button class="btn primary" id="pbAgain">Rematch (same six)</button><button class="btn ghost" id="pbNew">New draft</button>`}</div>`
@@ -272,6 +436,7 @@ export function handle(e) {
   if (!S) return false;
   const t = (sel) => e.target.closest(sel);
   let el;
+  if (S.playing) { if (t("#pbSkip, .pbfloor, .pblast")) { S.skip = true; S.wake?.(); for (const a of document.querySelectorAll(".pbfloor *")) a.getAnimations().forEach((x) => x.finish()); } if (!t("[data-bfold]")) return true; }
   if ((el = t("[data-bfold]"))) { (S.open ||= {})[el.dataset.bfold] = !el.parentElement.open; return false; }   // remember folds across re-renders
   if ((el = t("[data-bpick]")) && S.phase === "draft") { S.picks.push(Number(el.dataset.bpick)); if (S.room) roomPicks(S.picks); render(); return true; }
   if ((el = t("[data-bstart]"))) { const i = Number(el.dataset.bstart); S.starters = S.starters.includes(i) ? S.starters.filter((x) => x !== i) : S.starters.length < ON ? [...S.starters, i] : S.starters; render(); return true; }
@@ -373,6 +538,7 @@ function lockRoster() {
 }
 
 function roomView(v) {
+  if (S.playing) return;
   const R = S.room, sig = JSON.stringify([v.phase, v.game, v.turns.length, v.pending, v.opp_pending, v.opp_locked, !!v.roster, v.left, v.names]);
   if (sig === R.sig) return;
   R.sig = sig; R.view = v; R.seat = v.seat;
@@ -400,7 +566,8 @@ function roomView(v) {
     S.log.unshift(S.last);
     scrollTo(0, 0);
   }
-  let moved = false;
+  let moved = 0, turn1 = null;
+  const live = R.loaded; R.loaded = true;
   while (R.applied < v.turns.length) {
     const turn = v.turns[R.applied++], pre = [];
     let B = R.base;
@@ -409,12 +576,13 @@ function roomView(v) {
       if (nb) { pre.push({ t: `Sub (${sd === ME() ? "you" : esc(S.botName)}): ${esc(mon(B.rosters[sd][ri]).name)} in for ${esc(mon(B.rosters[sd][B.on[sd][slot]]).name)}.`, c: "to" }); B = nb; }
     }
     S.B = B;
-    step(turn[B.off].pick, turn[1 - B.off].pick, pre);
-    R.base = S.B; moved = true;
+    turn1 = step(turn[B.off].pick, turn[1 - B.off].pick, pre);
+    R.base = S.B; moved++;
   }
   if (moved) { R.mySubs = []; S.sel = null; }
   if (!R.mySubs.length) S.B = R.base;
   R.waiting = v.pending;
+  if (moved === 1 && live) return play(turn1);
   render();
   if (moved) scrollLast();
 }
