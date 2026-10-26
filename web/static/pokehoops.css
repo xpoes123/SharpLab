@@ -353,3 +353,6 @@ body:has(.phsb) header { position: static; }
   background: var(--panel2); border: 1px solid var(--gold); color: var(--gold); font-size: 12px; pointer-events: none; }
 .phnet[hidden] { display: none; }
 .pbmini:disabled { opacity: .45; cursor: not-allowed; } .pbopt.iso { border-left: 4px solid var(--accent2); }
+.pbcode { font: 800 44px/1 var(--font-mono); letter-spacing: 6px; text-align: center; color: var(--gold); }
+.pbwait { text-align: center; padding: 18px; background: var(--panel2); border-radius: var(--r); color: var(--fg-2); }
+.pbready { color: var(--green); font-weight: 600; text-transform: none; letter-spacing: 0; }

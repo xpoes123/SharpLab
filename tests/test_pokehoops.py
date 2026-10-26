@@ -633,3 +633,36 @@ def test_duel_leave(monkeypatch):
         gp._sweep()
         assert code not in gp._duels
     _run(go())
+
+
+def test_battle_room_relays_turns_only_when_both_are_in(monkeypatch):
+    monkeypatch.setattr(gp.auth, "read_session", lambda r: None)
+    monkeypatch.setattr(gp, "_hits", gp.defaultdict(list))
+
+    async def go():
+        a = await gp.battle_create(_Req(), gp.BattleBody(name="Misty", court="rain"))
+        code = a["code"]
+        assert (await gp.battle_state(code, a["key"]))["phase"] == "lobby"
+        b = await gp.battle_join(_Req(), code, gp.BattleBody(name="Brock"))
+        assert (await gp.battle_join(_Req(), code, gp.BattleBody(name="Gary"))).status_code == 409
+        assert (await gp.battle_roster(code, gp.BattleBody(picks=[1, 2, 3, 4, 5, 129]), a["key"])).status_code == 400
+        v = await gp.battle_roster(code, gp.BattleBody(picks=[150, 2, 3, 4, 5, 6]), a["key"])
+        assert v["phase"] == "draft" and v["rosters"] is None            # the other roster stays hidden until both lock
+        v = await gp.battle_roster(code, gp.BattleBody(picks=[151, 7, 8, 9, 25, 26]), b["key"])
+        assert v["phase"] == "battle" and v["rosters"][0][0] == 150 and v["court"] == "rain"
+        v = await gp.battle_move(code, gp.BattleBody(turn=0, pick="s.man", subs=[[0, 4]]), a["key"])
+        assert v["turns"] == [] and v["pending"] and (await gp.battle_state(code, b["key"]))["opp_pending"]
+        assert (await gp.battle_move(code, gp.BattleBody(turn=0, pick="s.press"), a["key"])).status_code == 409
+        assert (await gp.battle_move(code, gp.BattleBody(turn=1, pick="x"), b["key"])).status_code == 409
+        v = await gp.battle_move(code, gp.BattleBody(turn=0, pick="m0.1"), b["key"])
+        assert v["turns"] == [[{"pick": "s.man", "subs": [[0, 4]]}, {"pick": "m0.1", "subs": []}]] and not v["pending"]
+        seed = v["seed"]
+        v = await gp.battle_rematch(code, gp.BattleBody(turn=1), b["key"])
+        assert v["turns"] == [] and v["game"] == 1 and v["seed"] != seed
+        assert (await gp.battle_rematch(code, gp.BattleBody(turn=1), a["key"]))["game"] == 1   # a racing second tap is a no-op
+        assert (await gp.battle_leave(code, b["key"]))["ok"]
+        assert (await gp.battle_state(code, a["key"]))["phase"] == "left"
+        gp._battles[code]["touched"] -= gp.IDLE_TTL + 1
+        gp._bsweep()
+        assert code not in gp._battles
+    _run(go())

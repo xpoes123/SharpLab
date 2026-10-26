@@ -599,3 +599,163 @@ async def duel_record(duel_id: int):
     return {"id": d["id"], "names": [d["a_name"], d["b_name"]], "seed": d["seed"], "series_seed": d["series_seed"],
             "picks": d["picks"], "teams": d["teams"], "wins": [d["wins_a"], d["wins_b"]], "line": d["line"],
             "bets": d["bets"]}
+
+
+# ── Battle rooms: two phones, one 3v3 Battle. The server is only a relay. Each phone drafts its six from packs seeded
+# off the room seed, posts its roster, then every turn both post {subs, pick} for that turn number; once both are in,
+# the turn is revealed to both, and each phone replays the whole game from the seed (same engine, same rng order),
+# so they agree without the server running the sim. Nothing is at stake, so rosters/picks aren't re-checked here:
+# an illegal pick falls back to the first option on both phones alike.
+# ponytail: trust the clients' rosters; re-check them with the node engine if Battle ever pays out coins.
+COURTS = ("clear", "rain", "sun", "sand")
+NO_BATTLE = {10, 11, 13, 14, 129, 132, 201}   # moveset-less (tv battle.js NO_BATTLE)
+MAX_TURNS = 400
+_battles: dict[str, dict] = {}
+
+
+class BattleBody(BaseModel):
+    name: str | None = None
+    court: str | None = None
+    picks: list[StrictInt] | None = None     # six dex numbers, starters first
+    turn: StrictInt | None = None
+    pick: str | None = None
+    subs: list[list[StrictInt]] | None = None  # [[court slot, roster idx], ...] made at this dead ball
+
+
+def _bphase(r: dict) -> str:
+    if r["left"] is not None:
+        return "left"
+    if r["seats"][1] is None:
+        return "lobby"
+    return "draft" if None in r["rosters"] else "battle"
+
+
+def _bview(r: dict, seat: int) -> dict:
+    ph = _bphase(r)
+    return {"code": r["code"], "seat": seat, "phase": ph, "seed": r["seed"], "game": r["game"], "court": r["court"],
+            "names": [st["name"] if st else None for st in r["seats"]],
+            "roster": r["rosters"][seat], "opp_locked": r["rosters"][1 - seat] is not None,
+            "rosters": r["rosters"] if ph == "battle" else None,
+            "turns": r["turns"], "pending": r["pending"][seat] is not None, "opp_pending": r["pending"][1 - seat] is not None,
+            "left": r["left"]}
+
+
+def _bsweep():
+    now = time.time()
+    for c in [c for c, r in _battles.items() if now - r["created"] > DUEL_TTL or now - r["touched"] > IDLE_TTL]:
+        _battles.pop(c, None)
+
+
+def _broom(code: str, key: str | None) -> tuple[dict | None, int | None, JSONResponse | None]:
+    r = _battles.get(code.upper())
+    if r is None:
+        return None, None, JSONResponse({"error": "that room has closed"}, status_code=404)
+    seat = _seat_of(r, key)
+    if seat is None:
+        return None, None, JSONResponse({"error": "you're not in this room"}, status_code=403)
+    r["touched"] = time.time()
+    return r, seat, None
+
+
+@router.post("/battle")
+async def battle_create(request: Request, body: BattleBody):
+    uid, name = _seat_name(request, body.name)
+    if not name:
+        return JSONResponse({"error": "pick a name"}, status_code=400)
+    if err := _limited(request, "create"):
+        return err
+    _bsweep()
+    code = next((c for c in ("".join(secrets.choice(_CODE_CHARS) for _ in range(CODE_LEN)) for _ in range(20))
+                 if c not in _battles and c not in _duels), None)
+    if code is None or len(_battles) >= MAX_ROOMS:
+        return JSONResponse({"error": "too many rooms open right now — try again shortly"}, status_code=503)
+    seat = _new_seat(uid, name)
+    _battles[code] = {"code": code, "created": time.time(), "touched": time.time(), "lock": asyncio.Lock(),
+                      "seed": secrets.randbits(32), "game": 0, "court": body.court if body.court in COURTS else "clear",
+                      "seats": [seat, None], "rosters": [None, None], "turns": [], "pending": [None, None], "left": None}
+    return {"code": code, "key": seat["key"]}
+
+
+@router.post("/battle/{code}/join")
+async def battle_join(request: Request, code: str, body: BattleBody):
+    if err := _limited(request, "join"):
+        return err
+    r = _battles.get(code.upper())
+    if r is None or _bphase(r) == "left":
+        return JSONResponse({"error": "that room has closed"}, status_code=404)
+    uid, name = _seat_name(request, body.name)
+    async with r["lock"]:
+        if uid and any(st and st["uid"] == uid for st in r["seats"]):
+            return {"code": r["code"], "key": next(st["key"] for st in r["seats"] if st and st["uid"] == uid)}
+        if r["seats"][1] is not None:
+            return JSONResponse({"error": "that room is full"}, status_code=409)
+        if not name:
+            return JSONResponse({"error": "pick a name"}, status_code=400)
+        r["seats"][1] = _new_seat(uid, name)
+        r["touched"] = time.time()
+        return {"code": r["code"], "key": r["seats"][1]["key"]}
+
+
+@router.get("/battle/{code}")
+async def battle_state(code: str, x_duel_key: DuelKey = None):
+    r, seat, err = _broom(code, x_duel_key)
+    return err or _bview(r, seat)
+
+
+@router.post("/battle/{code}/roster")
+async def battle_roster(code: str, body: BattleBody, x_duel_key: DuelKey = None):
+    r, seat, err = _broom(code, x_duel_key)
+    if err:
+        return err
+    p = body.picks or []
+    if len(p) != 6 or len(set(p)) != 6 or any(not 1 <= n <= 251 or n in NO_BATTLE for n in p):
+        return JSONResponse({"error": "a roster is six different Pokémon"}, status_code=400)
+    async with r["lock"]:
+        if _bphase(r) != "draft" or r["rosters"][seat] is not None:
+            return JSONResponse({"error": "your roster is already in"}, status_code=409)
+        r["rosters"][seat] = p
+        return _bview(r, seat)
+
+
+@router.post("/battle/{code}/move")
+async def battle_move(code: str, body: BattleBody, x_duel_key: DuelKey = None):
+    r, seat, err = _broom(code, x_duel_key)
+    if err:
+        return err
+    subs = body.subs or []
+    if not body.pick or len(body.pick) > 16 or len(subs) > 3 or any(len(s) != 2 for s in subs):
+        return JSONResponse({"error": "bad move"}, status_code=400)
+    async with r["lock"]:
+        if _bphase(r) != "battle" or body.turn != len(r["turns"]) or r["pending"][seat] is not None or len(r["turns"]) >= MAX_TURNS:
+            return JSONResponse({"error": "not your call right now"}, status_code=409)
+        r["pending"][seat] = {"pick": body.pick, "subs": subs}
+        if None not in r["pending"]:      # both in: reveal the turn
+            r["turns"].append(r["pending"])
+            r["pending"] = [None, None]
+        return _bview(r, seat)
+
+
+@router.post("/battle/{code}/rematch")
+async def battle_rematch(code: str, body: BattleBody, x_duel_key: DuelKey = None):
+    """Same rosters, new tip-off: a fresh seed, the turn log cleared. `turn` is the caller's turn count, so two
+    rematch taps racing each other only reset once."""
+    r, seat, err = _broom(code, x_duel_key)
+    if err:
+        return err
+    async with r["lock"]:
+        if _bphase(r) == "battle" and body.turn == len(r["turns"]) and r["turns"]:
+            r["seed"], r["game"], r["turns"], r["pending"] = secrets.randbits(32), r["game"] + 1, [], [None, None]
+        return _bview(r, seat)
+
+
+@router.post("/battle/{code}/leave")
+async def battle_leave(code: str, x_duel_key: DuelKey = None):
+    r, seat, err = _broom(code, x_duel_key)
+    if err:
+        return err
+    async with r["lock"]:
+        if _bphase(r) == "lobby":
+            _battles.pop(r["code"], None)
+        else:
+            r["left"] = seat
+        return {"ok": True}
