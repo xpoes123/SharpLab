@@ -2,7 +2,7 @@
 // from the TV repo). Draft six, pick your three starters and the court, then every turn you and the bot choose at the
 // same time and it resolves. Runs entirely in the browser: nothing's at stake, so no server.
 import { newBattle, resolve, options, botPick, botSubs, sub, movesOf, shotChance, speedOf, weatherOf, SCHEMES, CAT, COURTS, WEATHER,
-  STATUS_TXT, TO, ON, CLOCK, NO_BATTLE } from "./pokehoops/battle.js";
+  STATUS_TXT, TO, ON, CLOCK, NO_BATTLE, canSubIn, bestEff } from "./pokehoops/battle.js";
 import { seeded } from "./pokehoops/engine.js";
 import { mon, LEGENDS } from "./pokehoops-draft.js";
 import { profile, skills, typeEff, POOL } from "./pokehoops/ratings.js";
@@ -14,7 +14,7 @@ const TYPE_COL = { normal: "#a8a77a", fire: "#ee8130", water: "#6390f0", electri
   fighting: "#c22e28", poison: "#a33ea1", ground: "#e2bf65", flying: "#a98ff3", psychic: "#f95587", bug: "#a6b91a", rock: "#b6a136",
   ghost: "#735797", dragon: "#6f35fc", dark: "#705746", steel: "#b7b7ce", fairy: "#d685ad" };
 const chip = (t) => `<span class="phtype" style="--tc:${TYPE_COL[t] || "#888"}">${t}</span>`;
-const LEVELS = [{ name: "Rookie", temp: 0.25, draft: 0 }, { name: "Pro", temp: 0.08, draft: 0.6 }, { name: "All-Star", temp: 0.04, draft: 1 }];
+const LEVELS = [{ name: "Rookie", temp: 0.25, draft: 0 }, { name: "Pro", temp: 0.08, draft: 0.6 }, { name: "All-Star", temp: 0.04, draft: 1, depth: 1 }];
 const STAT_LAB = { shoot: "SHT", finish: "FIN", handle: "HND", perD: "PER-D", intD: "RIM-D", reb: "REB", spe: "SPE" };
 const WX_ICON = { rain: "🌧", sun: "☀️", sand: "🌪" };
 const ST_ICON = { slp: "💤", par: "⚡", cnf: "💫", psn: "☠️" };
@@ -124,6 +124,7 @@ function narrate(ev) {
         if (p.kind === "scheme") return `${SCHEMES[p.scheme].name}`;
         if (p.kind === "pass") return `${onNm(s, p.slot)} passes to ${onNm(s, p.to)}`;
         if (p.kind === "heave") return `${onNm(s, p.slot)} heaves it`;
+        if (p.kind === "iso") return `${onNm(s, p.slot)} calls for ${onNm(1 - s, p.to)} on an iso`;
         if (p.kind === "hold") return "holds";
         const m = movesOf(B.rosters[s][B.on[s][p.slot]])[p.mi];
         return `${onNm(s, p.slot)} uses <b>${esc(m.name)}</b>${["deep", "rim"].includes(m.cat) ? "" : ` <small>(${CAT[m.cat]})</small>`}${p.to !== undefined ? ` → ${onNm(s, p.to)}` : ""}`;
@@ -131,14 +132,17 @@ function narrate(ev) {
       lines.push({ t: `<span class="pbo">${side(o)}:</span> ${describe(o, e.off)} &nbsp;·&nbsp; <span class="pbd">${side(1 - o)}:</span> ${describe(1 - o, e.def)}`, c: "pick" });
     } else if (e.k === "shot") {
       const who = onNm(B.off, e.slot), w = effWord(e.eff);
-      lines.push({ t: `${w ? `<i>${w}</i> ` : ""}${e.ft ? `${who} misses but draws the foul — <b>hits the free throw</b> +${e.pts}` : e.made ? `<b>${who} scores!</b> +${e.pts}${e.andOne ? " (and one!)" : ""}` : `${who} misses${e.fouled ? " (fouled — misses the free throw)" : ""}.`}`, c: e.made ? "big" : "dim" });
+      lines.push({ t: `${w ? `<i>${w}</i> ` : ""}${e.made ? `<b>${who} scores!</b> +${e.pts}${e.andOne ? " (and one!)" : ""}` : e.ft ? `${who} misses but draws the foul — <b>hits the free throw</b> +${e.pts}` : `${who} misses${e.fouled ? " (fouled — misses the free throw)" : ""}.`}`, c: e.scored ? "big" : "dim" });
     } else if (e.k === "pass") lines.push({ t: `${onNm(B.off, e.to)} catches it${e.gain >= 2 ? " wide open" : e.gain ? " with room" : ", covered"}.`, c: "" });
     else if (e.k === "screen") lines.push({ t: e.switched ? `They switch the screen — mismatch!` : `The screen frees ${onNm(B.off, B.ball)}${e.gain >= 2 ? " completely" : ""}.`, c: "" });
+    else if (e.k === "iso") lines.push({ t: `Clear out! ${onNm(B.off, e.slot)} gets ${onNm(1 - B.off, e.g)} one-on-one${e.eff >= 2 ? " — a type mismatch!" : ""}${e.gain ? " and has room" : ""}.`, c: e.eff >= 2 ? "call" : "" });
+    else if (e.k === "fastBreak") lines.push({ t: `<b>Fast break!</b> ${onNm(e.side, e.slot)} is out in front. 💨`, c: "call" });
+    else if (e.k === "confusedSelf") lines.push({ t: `${onNm(B.off, e.slot)} is confused… it hurt itself in its confusion!`, c: "dim" });
     else if (e.k === "turnover") lines.push({ t: e.why === "steal" ? `<b>Stolen!</b>` : e.why === "confused" ? `${onNm(B.off, e.slot)} is confused… throws it away!` : "Turnover.", c: "neg" });
     else if (e.k === "oreb") lines.push({ t: `Offensive rebound, ${onNm(B.off, e.slot)}! Shot clock reset.`, c: "" });
     else if (e.k === "dreb") lines.push({ t: `Rebound ${onNm(1 - B.off, e.slot)}.`, c: "dim" });
     else if (e.k === "status") lines.push({ t: `${onNm(e.tSide, e.tSlot)} is ${STATUS_TXT[e.st]}! ${ST_ICON[e.st]}`, c: "call" });
-    else if (e.k === "statusMiss") lines.push({ t: e.immune ? `${onNm(e.tSide, e.tSlot)} is immune!` : `${esc(e.move)} missed!`, c: "dim" });
+    else if (e.k === "statusMiss") lines.push({ t: e.immune ? `${onNm(e.tSide, e.tSlot)} is immune!` : e.failed ? `${esc(e.move)}… but it failed! (already ${STATUS_TXT[S.B.status[e.tSide][S.B.on[e.tSide][e.tSlot]]?.k] || "statused"})` : `${esc(e.move)} missed!`, c: "dim" });
     else if (e.k === "weather") lines.push({ t: `${WX_ICON[e.wx]} ${esc(WEATHER[e.wx])}.`, c: "call" });
     else if (e.k === "weatherEnd") lines.push({ t: `The ${e.wx === "sand" ? "sandstorm" : e.wx === "rain" ? "rain" : "sun"} fades.`, c: "dim" });
     else if (e.k === "boost" || e.k === "debuff") {
@@ -153,7 +157,7 @@ function narrate(ev) {
 }
 
 function act(myPick) {
-  const B = S.B, me = 0, botP = botPick(B, 1, S.rng, LEVELS[S.level].temp);
+  const B = S.B, me = 0, botP = botPick(B, 1, S.rng, LEVELS[S.level].temp, LEVELS[S.level].depth || 0);
   const offPick = B.off === me ? myPick : botP, defPick = B.off === me ? botP : myPick;
   const before = B;
   const { B: next, ev } = resolve(B, offPick, defPick, S.rng);
@@ -161,7 +165,7 @@ function act(myPick) {
   const lines = narrate(ev);
   S.B = next;
   if (next.winner < 0 && (next.off !== before.off || next.dead)) lines.push({ t: `${next.score[0]}–${next.score[1]} · ${next.off === 0 ? "your ball" : "their ball"}`, c: "q" });
-  for (const e of ev) if (e.k === "shot" && e.made) { const ri = before.on[before.off][e.slot]; S.pts[before.off][ri] = (S.pts[before.off][ri] || 0) + e.pts; }
+  for (const e of ev) if (e.k === "shot" && e.scored) { const ri = before.on[before.off][e.slot]; S.pts[before.off][ri] = (S.pts[before.off][ri] || 0) + e.pts; }
   S.log.unshift(lines);
   S.log.length = Math.min(S.log.length, 60);
   S.last = lines;
@@ -209,6 +213,10 @@ function optBtn(op) {
   if (op.kind === "pass") return `<button class="pbopt" data-bopt="${op.id}"><b>Pass → ${onNm(0, op.to)}</b><small>basic pass</small></button>`;
   if (op.kind === "heave") return `<button class="pbopt" data-bopt="${op.id}"><b>Heave it</b><small>out of shot PP</small></button>`;
   if (op.kind === "hold") return `<button class="pbopt" data-bopt="${op.id}"><b>Hold</b></button>`;
+  if (op.kind === "iso") {
+    const dn = B.rosters[1][B.on[1][op.to]], best = S.hints ? Math.max(...movesOf(B.rosters[0][B.on[0][B.ball]]).filter((m) => m.cat === "deep" || m.cat === "rim").map((m) => typeEff(m.type, dn))) : 1;
+    return `<button class="pbopt iso" data-bopt="${op.id}"><b>Isolate vs ${onNm(1, op.to)}</b><small>${mon(dn).types.join("/")} · clear out, take that matchup</small>${best >= 2 ? `<em class="pos">your shots are super effective</em>` : best < 1 ? `<em class="neg">bad matchup</em>` : ""}</button>`;
+  }
   const side = 0, ri = B.on[side][op.slot], m = movesOf(B.rosters[side][ri])[op.mi], pp = B.pp[side][ri][op.mi];
   let hint = "";
   if (S.hints && (m.cat === "deep" || m.cat === "rim")) {
@@ -237,16 +245,17 @@ function renderBattle() {
         <div class="phmuted">You're ${S.record[0]}–${S.record[1]} in battles.</div>
         <div class="phactions"><button class="btn primary" id="pbAgain">Rematch (same six)</button><button class="btn ghost" id="pbNew">New draft</button></div>`
       : `${B.dead ? `<details class="pbsubs"${S.sel != null ? " open" : ""}><summary>🔁 Dead ball: make a sub? <small>tap a player on the floor, then who comes in</small></summary>
-          <div class="pbroster">${bench(0).map(([n, ri]) => `<button class="pbmini pick" data-bbench="${ri}"><img src="${sprite(n)}" alt=""><div><b>${esc(mon(n).name)}</b> ${mon(n).types.map(chip).join("")}<div class="pbstam"><i style="width:${B.stam[0][ri]}%"></i></div></div></button>`).join("")}</div></details>` : ""}
+          <div class="pbroster">${bench(0).map(([n, ri]) => `<button class="pbmini pick" data-bbench="${ri}" ${canSubIn(B, 0, ri) ? "" : "disabled title=\"just came off: back next dead ball\""}><img src="${sprite(n)}" alt=""><div><b>${esc(mon(n).name)}</b> ${mon(n).types.map(chip).join("")}<div class="pbstam"><i style="width:${B.stam[0][ri]}%"></i></div></div></button>`).join("")}</div></details>` : ""}
         <div class="pbchoose"><div class="phstep">${mineBall ? "Your call on offense" : "Your call on defense"}</div>${optionButtons()}</div>`}
-    <details class="pblog"><summary>Play-by-play</summary>${S.log.map((turn) => `<div class="pbturn">${turn.map((l) => `<div class="${l.c}">${l.t}</div>`).join("")}</div>`).join("")}</details>
-    <details class="pbhelp"><summary>How it works</summary><ul>
+    <details class="pblog"${S.open?.log ? " open" : ""}><summary data-bfold="log">Play-by-play</summary>${S.log.map((turn) => `<div class="pbturn">${turn.map((l) => `<div class="${l.c}">${l.t}</div>`).join("")}</div>`).join("")}</details>
+    <details class="pbhelp"${S.open?.help ? " open" : ""}><summary data-bfold="help">How it works</summary><ul>
       <li>Both coaches pick at the same time. Offense: shoot (rim = 1, deep = 2), pass, or a teammate's screen / status / boost / weather move. Defense: a scheme, or a defender's move.</li>
       <li>Deep beats <b>Pack the paint</b>; the rim beats <b>Deny</b>; passes and screens beat the <b>Press</b>; <b>Deny</b> steals passes; <b>Switch</b> kills screens but can leave a mismatch.</li>
-      <li>Open (●) makes the next shot better. Shot clock: ${CLOCK} actions; an offensive board resets it.</li>
+      <li><b>Isolate</b> clears out and calls for the defender you want: hunt a type mismatch or a tired, debuffed defender. After a steal or defensive board the faster team can get a <b>fast break</b> (a head start on openness).</li>
+      <li>Open (●) makes the next shot better; a pass move's power and type decide how open the catch is. Shot clock: ${CLOCK} actions; an offensive board resets it.</li>
       <li>Type matchups vs the defender count on every shot (and STAB). A defender's status or debuff move lands before the handler acts if the defender is faster. Rain powers Water and weakens Fire, sun the reverse; sandstorm wears down everyone not Rock/Ground/Steel.</li>
       <li>Rim attacks can draw a foul: and-one on a make, a free throw on a miss. The press doubles your own defenders' stamina drain.</li>
-      <li>Tired legs miss. Subs only at dead balls (after a make or a violation): resting cures status but resets boosts.</li></ul></details>
+      <li>Tired legs miss. Subs only at dead balls (after a make or a violation): resting cures status but resets boosts, and whoever comes off sits until the next dead ball. A defender's slow move still lands after the play and carries over.</li></ul></details>
   </div>`;
 }
 
@@ -254,6 +263,7 @@ export function handle(e) {
   if (!S) return false;
   const t = (sel) => e.target.closest(sel);
   let el;
+  if ((el = t("[data-bfold]"))) { (S.open ||= {})[el.dataset.bfold] = !el.parentElement.open; return false; }   // remember folds across re-renders
   if ((el = t("[data-bpick]")) && S.phase === "draft") { S.picks.push(Number(el.dataset.bpick)); render(); return true; }
   if ((el = t("[data-bstart]"))) { const i = Number(el.dataset.bstart); S.starters = S.starters.includes(i) ? S.starters.filter((x) => x !== i) : S.starters.length < ON ? [...S.starters, i] : S.starters; render(); return true; }
   if ((el = t("[data-bcourt]"))) { S.court = el.dataset.bcourt; pref("court", S.court); render(); return true; }

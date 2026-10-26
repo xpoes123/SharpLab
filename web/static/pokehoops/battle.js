@@ -1,8 +1,10 @@
 // Poké Hoops battle: half-court, first to 11, played like a Pokémon battle. Every turn BOTH coaches pick at once,
-// then it resolves. Offense: the ball-handler's shot or pass, or a teammate's screen / status / weather move. Defense:
-// a scheme (press, pack the paint, deny, switch) or a defender's status / weather move. Soft rock-paper-scissors —
-// deep beats pack, rim beats deny, passes beat the press, deny steals passes — with skills, types (+ STAB), weather,
-// status, stamina and PP deciding by how much. 3 on the floor out of 8; subs only at dead balls; tired legs miss.
+// then it resolves. Offense: the ball-handler's shot, pass or isolation (call for the defender you want), or a
+// teammate's screen / status / weather / stat move. Defense: a scheme (press, pack the paint, deny, switch) or a
+// defender's move, which always lands (a slow one lands after the play). Soft rock-paper-scissors — deep beats pack,
+// rim beats deny, passes beat the press, deny steals passes — with skills, types (by multiplier, + STAB), weather,
+// stat stages, status, stamina and PP deciding by how much. Off a board or a steal, the faster side runs (fast break).
+// 3 on the floor out of 8; subs only at dead balls, and whoever comes off sits one out; tired legs miss.
 // A shot at the rim is worth 1, a deep shot 2 (pickup rules). Shot clock: 4 actions; an offensive board resets it to 3.
 // State is plain JSON; resolve() takes an rng so a seed replays a whole game.
 import { mon, skills, profile, effectOf, typeEff } from "./ratings.js";
@@ -22,10 +24,14 @@ const VS = {
   rim: { man: 0, press: 0.05, pack: -0.17, deny: 0.09, switch: 0 },
   pass: { man: 1, press: 2, pack: 1, deny: 0, switch: 1 },
   screen: { man: 1, press: 2, pack: 1, deny: 1, switch: 0 },
+  iso: { man: 0, press: 0, pack: 0, deny: 1, switch: 1 },   // a switching or lane-jumping defense hands you the matchup
 };
+// make-chance per open level, per doubling of type effectiveness (4× = 2 doublings), per favouring weather, per stage of
+// shoot / finish over the defender's perD / intD, and for a shooter on empty legs; SKILL scales the ratings gap
+const OPEN = { deep: 0.11, rim: 0.13 }, TYPE = 0.065, WX = 0.13, SKILL = 0.35, STAGE_P = 0.06, TIRED = 0.08;
 const FOUL = { man: 0.14, press: 0.22, pack: 0.12, deny: 0.16, switch: 0.14 };   // fouled attacking the rim, by scheme
 const UTIL = new Set(["status", "weather", "boost", "debuff"]);
-export const CAT = { deep: "deep shot · 2", rim: "at the rim · 1", pass: "pass", screen: "screen", status: "status", weather: "weather", boost: "boost", debuff: "debuff" };
+export const CAT = { deep: "deep shot · 2", rim: "at the rim · 1", pass: "pass", screen: "screen", iso: "isolate", status: "status", weather: "weather", boost: "boost", debuff: "debuff" };
 
 // moves by type: [deep, rim, pass, screen]
 const MOVES = {
@@ -46,7 +52,7 @@ export const WEATHER = { rain: "Rain: Water moves hit harder, Fire fizzles", sun
   sand: "Sandstorm: everyone not Rock, Ground or Steel tires faster" };
 // stat stages (−3..+3, like the games): boosts stay while the Pokémon stays on the floor; a sub resets them
 export const STAGE_MAX = 3, STATS = ["shoot", "finish", "handle", "perD", "intD", "reb", "spe"];
-const stageMult = (st) => (st >= 0 ? 1 + 0.15 * st : 1 / (1 + 0.15 * -st));
+const STAGE = 0.25, stageMult = (st) => (st >= 0 ? 1 + STAGE * st : 1 / (1 + STAGE * -st));
 const FALLBACK_BOOST = { shoot: ["Growth", { shoot: 1 }], finish: ["Swords Dance", { finish: 2 }], handle: ["Agility", { spe: 2, handle: 1 }],
   perD: ["Amnesia", { perD: 2 }], intD: ["Barrier", { intD: 2 }], reb: ["Defense Curl", { intD: 1 }] };
 export const COURTS = { clear: "Clear skies", rain: "Rain", sun: "Harsh sun", sand: "Sandstorm" };
@@ -96,17 +102,20 @@ export function newBattle(rosters, starters, rng, court = "clear") {
     rosters, on: starters.map((s) => s.slice(0, ON)), score: [0, 0], off: rng.int(2), ball: 0, clock: CLOCK, open: [0, 0, 0],
     guard: [0, 1, 2], dead: true, turn: 0, winner: -1, weather: null, hot: [-1, -1], streak: [0, 0],
     stam: rosters.map((r) => r.map(() => 100)), pp: rosters.map((r) => r.map((n) => movesOf(n).map((m) => m.pp))),
-    status: rosters.map((r) => r.map(() => null)),
+    status: rosters.map((r) => r.map(() => null)), outAt: rosters.map((r) => r.map(() => -1)),
   };
 }
 
 const who = (B, side, slot) => B.on[side][slot];
 const dex = (B, side, slot) => B.rosters[side][who(B, side, slot)];
-const legs = (B, side, ri) => 0.72 + 0.28 * (B.stam[side][ri] / 100);   // tired legs: skills scale to 72% when empty
+const legs = (B, side, ri) => 0.62 + 0.38 * (B.stam[side][ri] / 100);   // tired legs: skills scale to 62% when empty
+// ratings pulled 30% toward 0.6 so the draft doesn't decide the game before the calls do
+const SKILLS = {}, baseSkills = (n) => (SKILLS[n] ||= Object.fromEntries(Object.entries(skills(n)).map(([k, v]) => [k, 0.6 + 0.7 * (v - 0.6)])));
 function sk(B, side, slot) {
-  const ri = who(B, side, slot), k = skills(B.rosters[side][ri]), s = B.status[side][ri], f = legs(B, side, ri) * (s?.k === "par" ? 0.85 : 1)
-    * (s?.k === "slp" ? 0.35 : s?.k === "cnf" ? 0.8 : 1), stg = B.stage?.[side][ri] || {};
-  return Object.fromEntries(Object.entries(k).map(([key, v]) => [key, Math.min(1.2, v * f * stageMult(stg[key] || 0))]));
+  const ri = who(B, side, slot), k = baseSkills(B.rosters[side][ri]), s = B.status[side][ri], f = legs(B, side, ri) * (s?.k === "par" ? 0.85 : 1)
+    * (s?.k === "slp" ? 0.35 : s?.k === "cnf" ? 0.8 : 1), stg = B.stage?.[side][ri] || {}, out = {};
+  for (const key in k) out[key] = Math.min(1.2, k[key] * f * (stg[key] ? stageMult(stg[key]) : 1));
+  return out;
 }
 /** Speed for turn order: base Speed × stage, halved when paralyzed. */
 export function speedOf(B, side, slot) {
@@ -129,6 +138,8 @@ export function options(B, side) {
       if (m.cat === "pass") for (let t = 0; t < ON; t++) if (t !== h) out.push({ id: `m${h}.${mi}>${t}`, kind: "move", slot: h, mi, to: t });
     });
     if (hStat?.k !== "slp") for (let t = 0; t < ON; t++) if (t !== h) out.push({ id: `p>${t}`, kind: "pass", slot: h, to: t });
+    // isolate: clear out and call for the defender you want on you (to = their court slot)
+    if (hStat?.k !== "slp") for (let g = 0; g < ON; g++) if (g !== B.guard[h]) out.push({ id: `iso>${g}`, kind: "iso", slot: h, to: g });
     for (let s = 0; s < ON; s++) {
       if (B.status[side][who(B, side, s)]?.k === "slp") continue;
       movesOf(dex(B, side, s)).forEach((m, mi) => {
@@ -155,19 +166,23 @@ export function options(B, side) {
 export function shotChance(B, mv, scheme, extra = 0) {
   const o = B.off, d = 1 - o, h = B.ball, g = B.guard[h], K = sk(B, o, h), D = sk(B, d, g);
   const n = dex(B, o, h), fx = effectOf(n), dfx = effectOf(dex(B, d, g)), deep = mv.cat === "deep";
-  let p = deep ? 0.265 : 0.54;
-  if (deep) p += 0.55 * (K.shoot - D.perD);
-  else { const help = Math.max(...[0, 1, 2].map((s) => sk(B, d, s).intD)); p += 0.55 * (K.finish - (0.6 * D.intD + 0.4 * help)); }
-  p += (deep ? 0.065 : 0.09) * B.open[h] + (VS[mv.cat]?.[scheme] || 0) + extra;
+  let p = deep ? 0.29 : 0.58;
+  if (deep) p += SKILL * (K.shoot - D.perD);
+  else { const help = Math.max(...[0, 1, 2].map((s) => sk(B, d, s).intD)); p += SKILL * (K.finish - (0.6 * D.intD + 0.4 * help)); }
+  p += OPEN[mv.cat] * B.open[h] + (VS[mv.cat]?.[scheme] || 0) + extra - TIRED * (1 - B.stam[o][who(B, o, h)] / 100);
+  const stO = B.stage?.[o][who(B, o, h)] || {}, stD = B.stage?.[d][who(B, d, g)] || {};   // stages also swing the shot itself
+  p += STAGE_P * ((deep ? stO.shoot : stO.finish) || 0) - STAGE_P * ((deep ? stD.perD : stD.intD) || 0);
   const e = typeEff(mv.type, dex(B, d, g));
-  p += e >= 2 ? 0.08 : e === 0 ? -0.15 : e < 1 ? -0.05 : 0;
-  if (mon(n).types.includes(mv.type)) p += 0.03;                                       // STAB
+  p += e === 0 ? -0.2 : TYPE * Math.log2(e);                                            // 4× +0.13 … ¼ −0.13, immune −0.2
+  if (mon(n).types.includes(mv.type)) p += 0.04;                                       // STAB
   if (mv.sig) p += 0.03;
   if (mv.pow) p += mv.pow;
   if (weatherOf(B)) {
     const w = weatherOf(B);
-    if ((w === "rain" && mv.type === "water") || (w === "sun" && mv.type === "fire")) p += 0.07;
-    if ((w === "rain" && mv.type === "fire") || (w === "sun" && mv.type === "water")) p -= 0.07;
+    if ((w === "rain" && mv.type === "water") || (w === "sun" && mv.type === "fire")) p += WX;
+    if ((w === "rain" && mv.type === "fire") || (w === "sun" && mv.type === "water")) p -= WX;
+    // Thunder never misses in rain, Solar Beam needs no charge in sun, sand favours its own
+    if ((w === "rain" && mv.type === "electric") || (w === "sun" && mv.type === "grass") || (w === "sand" && ["rock", "ground", "steel"].includes(mv.type))) p += 0.06;
   }
   if (fx === "SHARPSHOOTER" && deep) p += 0.06;
   if ((fx === "SLASHER" || fx === "POSTERIZER") && !deep) p += 0.06;
@@ -192,44 +207,46 @@ export function resolve(B0, offPick, defPick, rng) {
   say("pick", { off: op, def: dp, scheme });
 
   // speed: a defender's status move on the handler can land before the handler acts
-  const hRi = who(B, o, B.ball), spe = (side, slot) => speedOf(B, side, slot);
+  const hSlot = B.ball, hRi = who(B, o, hSlot), spe = (side, slot) => speedOf(B, side, slot);
   let handlerStopped = false;
   const statusHit = (side, slot, mv, tSide, tSlot) => {
     const tRi = who(B, tSide, tSlot), tn = B.rosters[tSide][tRi], immune = (mv.st === "par" && mon(tn).types.includes("ground")) || (mv.st === "psn" && mon(tn).types.some((t) => t === "poison" || t === "steel"));
     const acc = effectOf(dex(B, side, slot)) === "HYPNOTIST" ? 1 : 0.75;
-    if (B.status[tSide][tRi] || immune || rng.float() >= acc) { say("statusMiss", { side, slot, move: mv.name, tSide, tSlot, immune }); return false; }
+    if (B.status[tSide][tRi]) { say("statusMiss", { side, slot, move: mv.name, tSide, tSlot, immune: false, failed: true }); return false; }   // "But it failed!"
+    if (immune || rng.float() >= acc) { say("statusMiss", { side, slot, move: mv.name, tSide, tSlot, immune }); return false; }
     B.status[tSide][tRi] = { k: mv.st, t: mv.st === "slp" ? 2 : mv.st === "psn" ? 99 : 3 };
     say("status", { side, slot, move: mv.name, st: mv.st, tSide, tSlot });
     return true;
   };
   const defMove = dp.kind === "move" ? movesOf(dex(B, d, dp.slot))[dp.mi] : null;
-  const defFirst = (defMove?.cat === "status" || defMove?.cat === "debuff") && spe(d, dp.slot) > spe(o, B.ball);
+  const defFirst = (defMove?.cat === "status" || defMove?.cat === "debuff") && spe(d, dp.slot) > spe(o, hSlot);
   const defAct = () => {
     if (!defMove) return;
     if (defMove.cat === "weather") { B.weather = { k: defMove.wx, t: 6 }; say("weather", { side: d, slot: dp.slot, move: defMove.name, wx: defMove.wx }); }
     else if (defMove.cat === "boost") stageUp(B, d, dp.slot, defMove, say);
-    else if (defMove.cat === "debuff") stageDown(B, d, dp.slot, defMove, o, B.ball, say);
-    else if (statusHit(d, dp.slot, defMove, o, B.ball) && ["slp", "par"].includes(defMove.st)) handlerStopped = defFirst;
+    else if (defMove.cat === "debuff") stageDown(B, d, dp.slot, defMove, o, hSlot, say);
+    else if (statusHit(d, dp.slot, defMove, o, hSlot) && ["slp", "par"].includes(defMove.st)) handlerStopped = defFirst;
   };
   if (defFirst) defAct();
 
   // the offense's action (status on the actor can stop it)
   const actorSlot = op.kind === "hold" ? B.ball : op.slot, aRi = who(B, o, actorSlot), aSt = B.status[o][aRi];
   let ended = false;
-  const turnover = (why, by = -1) => { say("turnover", { why, slot: B.ball, by }); flip(B, false); ended = true; };
-  if (handlerStopped && actorSlot === B.ball && B.status[o][hRi]?.k === "slp") say("asleep", { slot: B.ball });
+  const live = () => { const fb = flip(B, false); if (fb >= 0) say("fastBreak", { side: B.off, slot: fb }); ended = true; };   // live-ball change
+  const turnover = (why, by = -1) => { say("turnover", { why, slot: B.ball, by }); live(); };
+  if (handlerStopped && actorSlot === hSlot && B.status[o][hRi]?.k === "slp") say("asleep", { slot: B.ball });
   else if (aSt?.k === "par" && rng.float() < 0.25) say("fullyPar", { slot: actorSlot });
   else if (aSt?.k === "cnf" && rng.float() < 0.33) {
     if (actorSlot === B.ball) turnover("confused"); else say("confusedSelf", { slot: actorSlot });
   } else if (op.kind === "hold") say("hold", { slot: B.ball });
   else {
-    const mv = op.kind === "move" ? movesOf(dex(B, o, op.slot))[op.mi] : op.kind === "heave" ? { name: "Heave", type: "normal", cat: "deep" } : { name: "Pass", type: "normal", cat: "pass" };
+    const mv = op.kind === "move" ? movesOf(dex(B, o, op.slot))[op.mi] : op.kind === "heave" ? { name: "Heave", type: "normal", cat: "deep" } : op.kind === "iso" ? { name: "Isolate", cat: "iso" } : { name: "Pass", type: "normal", cat: "pass" };
     if (mv.cat === "deep" || mv.cat === "rim") {
       const p = shotChance(B, mv, scheme, op.kind === "heave" ? -0.12 : 0), made = rng.float() < p;
       const fouled = mv.cat === "rim" && rng.float() < FOUL[scheme], ft = fouled && !made && rng.float() < 0.7;
-      const pts = mv.cat === "deep" ? 2 : 1 + (fouled && made ? 1 : 0) + (ft ? 1 : 0);
+      const pts = made ? (mv.cat === "deep" ? 2 : 1) + (fouled ? 1 : 0) : ft ? 1 : 0;   // and-one; a missed-and-fouled FT is worth 1
       const eff = typeEff(mv.type, dex(B, d, B.guard[B.ball]));
-      say("shot", { slot: B.ball, move: mv.name, cat: mv.cat, type: mv.type, made: made || ft, pts, eff, vs: scheme, fouled, ft, andOne: fouled && made });
+      say("shot", { slot: B.ball, move: mv.name, cat: mv.cat, type: mv.type, made, ft, pts, scored: pts > 0, eff, vs: scheme, fouled, andOne: fouled && made });
       B.stam[o][hRi] -= 9;
       if (made || ft) {
         B.score[o] += pts; B.hot[o] = hRi;
@@ -239,20 +256,17 @@ export function resolve(B0, offPick, defPick, rng) {
         B.hot[o] = -1;
         const oR = Math.max(...[0, 1, 2].map((s) => sk(B, o, s).reb)), dR = Math.max(...[0, 1, 2].map((s) => sk(B, d, s).reb));
         const glass = (side) => ([0, 1, 2].some((s) => effectOf(dex(B, side, s)) === "GLASS_CLEANER") ? 0.08 : 0);
-        const pOreb = clamp(0.24 + 0.5 * (oR - dR) + glass(o) - glass(d) + (scheme === "pack" ? -0.07 : 0) + (mv.cat === "deep" ? 0.03 : 0), 0.08, 0.5);
+        const pOreb = clamp(0.24 + 0.35 * (oR - dR) + glass(o) - glass(d) + (scheme === "pack" ? -0.07 : 0) + (mv.cat === "deep" ? 0.03 : 0), 0.08, 0.5);
         if (rng.float() < pOreb) {
           const r = weighted(rng, [0, 1, 2].map((s) => sk(B, o, s).reb ** 2));
-          say("oreb", { slot: r }); B.ball = r; B.clock = OREB_CLOCK; B.open = [0, 0, 0]; B.open[r] = 1; B.guard = [0, 1, 2];
-        } else { say("dreb", { slot: weighted(rng, [0, 1, 2].map((s) => sk(B, d, s).reb ** 2)) }); flip(B, false); ended = true; }
+          say("oreb", { slot: r }); B.ball = r; B.clock = OREB_CLOCK; B.open = B.open.map((v) => Math.max(0, v - 1)); B.open[r] = Math.max(1, B.open[r]);
+        } else { say("dreb", { slot: weighted(rng, [0, 1, 2].map((s) => sk(B, d, s).reb ** 2)) }); live(); }
       }
     } else if (mv.cat === "pass") {
-      const plus = op.kind === "move" ? 1 : 0, fg = [0, 1, 2].some((s) => effectOf(dex(B, o, s)) === "FLOOR_GENERAL") ? 1 : 0;
-      const pick = [0, 1, 2].some((s) => effectOf(dex(B, d, s)) === "PICKPOCKET") ? 0.08 : 0;
-      const steal = scheme === "deny" ? clamp(0.32 - 0.25 * sk(B, o, B.ball).handle + pick, 0.08, 0.4) : 0.02 + pick / 2;
+      const [steal, gain] = passCalc(B, op, scheme);
       B.stam[o][hRi] -= 4;
-      if (rng.float() < steal) turnover("steal", B.guard[op.to]);
+      if (rng.float() < steal) turnover("steal", scheme === "press" ? B.guard[B.ball] : B.guard[op.to]);
       else {
-        const gain = VS.pass[scheme] + plus + fg;
         say("pass", { from: B.ball, to: op.to, move: mv.name, gain });
         B.ball = op.to; B.open[op.to] = clamp(B.open[op.to] + gain, 0, MAX_OPEN);
       }
@@ -265,20 +279,23 @@ export function resolve(B0, offPick, defPick, rng) {
         B.open[B.ball] = clamp(B.open[B.ball] + gain, 0, MAX_OPEN);
         if (scheme === "switch") { const g = B.guard[B.ball]; B.guard[B.ball] = B.guard[op.slot]; B.guard[op.slot] = g; }   // mismatch
       }
+    } else if (mv.cat === "iso") {
+      const j = B.guard.indexOf(op.to), gain = VS.iso[scheme];
+      B.guard[j] = B.guard[B.ball]; B.guard[B.ball] = op.to; B.open[B.ball] = clamp(B.open[B.ball] + gain, 0, MAX_OPEN); B.stam[o][hRi] -= 3;
+      say("iso", { slot: B.ball, g: op.to, gain, eff: bestEff(B, o, B.ball) });
     } else if (mv.cat === "status") statusHit(o, op.slot, mv, d, B.guard[B.ball]);
     else if (mv.cat === "weather") { B.weather = { k: mv.wx, t: 6 }; say("weather", { side: o, slot: op.slot, move: mv.name, wx: mv.wx }); }
     else if (mv.cat === "boost") stageUp(B, o, op.slot, mv, say);
     else if (mv.cat === "debuff") stageDown(B, o, op.slot, mv, d, B.guard[B.ball], say);
   }
-  if (!defFirst && !ended) defAct();
-  else if (!defFirst && defMove?.cat === "weather") defAct();
+  if (!defFirst) defAct();   // too slow to stop this action, but it still lands (status / stages carry over)
 
   // the clock, legs, status timers, weather
   if (!ended) { B.clock--; if (B.clock <= 0) { say("violation", {}); flip(B, true); ended = true; } }
   for (const side of [0, 1]) for (let ri = 0; ri < B.rosters[side].length; ri++) {
     const on = B.on[side].includes(ri), st = B.status[side][ri];
     let dS = on ? (side === d && scheme === "press" && dp.kind === "scheme" ? -6 : -3) : 6;
-    if (on && weatherOf(B) === "sand" && !mon(B.rosters[side][ri]).types.some((t) => ["rock", "ground", "steel"].includes(t))) dS -= 3;
+    if (on && weatherOf(B) === "sand" && !mon(B.rosters[side][ri]).types.some((t) => ["rock", "ground", "steel"].includes(t))) dS -= 5;
     if (on && st?.k === "psn") dS -= 6;
     B.stam[side][ri] = clamp(B.stam[side][ri] + dS, 0, 100);
     if (st && on && st.k !== "psn" && --st.t <= 0) { B.status[side][ri] = null; say("cured", { side, ri, st: st.k }); }
@@ -299,16 +316,44 @@ function stageDown(B, side, slot, mv, tSide, tSlot, say) {
   say("debuff", { side, slot, move: mv.name, tSide, tSlot, got });
 }
 
+// change of possession. Off a live ball (board, steal) the new offense runs if its fastest beats theirs: the runner
+// gets the ball a step open. Returns the runner's slot, or -1.
 function flip(B, dead) {
   B.off = 1 - B.off; B.ball = 0; B.clock = CLOCK; B.open = [0, 0, 0]; B.guard = [0, 1, 2]; B.dead = dead;
+  if (dead) return -1;
+  const sp = (side) => [0, 1, 2].map((s) => (B.status[side][who(B, side, s)]?.k === "slp" ? 0 : speedOf(B, side, s)));
+  const mine = sp(B.off), fast = Math.max(...mine);
+  if (fast <= Math.max(...sp(1 - B.off))) return -1;
+  B.ball = mine.indexOf(fast); B.open[B.ball] = 1;
+  return B.ball;
+}
+// a pass: [steal chance, openness the receiver gains]. Handle vs the ball (press) or the passing lane (deny); a pass
+// move adds 1, ±1 for its power (Extreme Speed / Splash), ±1 if its type hits the receiver's defender hard / softly.
+function passCalc(B, op, scheme) {
+  const o = B.off, d = 1 - o, mv = op.kind === "move" ? movesOf(dex(B, o, op.slot))[op.mi] : null, H = sk(B, o, B.ball).handle;
+  const pick = [0, 1, 2].some((s) => effectOf(dex(B, d, s)) === "PICKPOCKET") ? 0.08 : 0, pw = mv?.pow || 0;
+  const steal = scheme === "deny" ? 0.22 + 0.45 * (sk(B, d, B.guard[op.to]).perD - H) + pick
+    : scheme === "press" ? 0.05 + 0.3 * (sk(B, d, B.guard[B.ball]).perD - H) + pick / 2 : 0.02 + pick / 2;
+  let gain = VS.pass[scheme] + ([0, 1, 2].some((s) => effectOf(dex(B, o, s)) === "FLOOR_GENERAL") ? 1 : 0);
+  if (mv) { const e = typeEff(mv.type, dex(B, d, B.guard[op.to])); gain += clamp(1 + Math.round(pw * 25) + (e >= 2 ? 1 : e < 1 ? -1 : 0), 0, 3); }
+  return [clamp(steal - 2 * pw, 0.01, 0.45), gain];
+}
+/** Best type multiplier the handler's shot moves get on the defender guarding court slot `slot` (what Isolate hunts). */
+export function bestEff(B, side, slot) {
+  const n = dex(B, side, slot), g = dex(B, 1 - side, B.guard[slot]);
+  return Math.max(...movesOf(n).filter((m) => m.cat === "deep" || m.cat === "rim").map((m) => typeEff(m.type, g)));
 }
 function weighted(rng, w) { let r = rng.float() * w.reduce((a, b) => a + b, 0); for (let i = 0; i < w.length; i++) if ((r -= w[i]) <= 0) return i; return w.length - 1; }
 
-/** Sub at a dead ball: roster idx `inRi` comes in for court slot `slot`. Resting cures sleep / confusion / poison. */
+/** Can roster idx `ri` check in now? Not if it came off at this same dead ball (no free out-and-back-in cure). */
+export const canSubIn = (B, side, ri) => B.dead && ri >= 0 && ri < B.rosters[side].length && !B.on[side].includes(ri) && B.outAt?.[side][ri] !== B.turn;
+/** Sub at a dead ball: roster idx `inRi` comes in for court slot `slot`. Resting cures sleep / confusion / poison and resets
+ *  stages, but whoever comes off sits until a later dead ball. */
 export function sub(B0, side, slot, inRi) {
-  if (!B0.dead || B0.on[side].includes(inRi) || inRi < 0 || inRi >= B0.rosters[side].length) return null;
+  if (!canSubIn(B0, side, inRi)) return null;
   const B = clone(B0), outRi = B.on[side][slot];
   B.on[side][slot] = inRi; B.status[side][outRi] = null; B.stage[side][outRi] = {};
+  (B.outAt ||= B.rosters.map((r) => r.map(() => -1)))[side][outRi] = B.turn;
   return B;
 }
 
@@ -332,30 +377,44 @@ function shotValue(B, mv, scheme, extra = 0) {
   const p = shotChance(B, mv, scheme, extra);
   return mv.cat === "deep" ? 2 * p + 0.12 : p + FOUL[scheme] * (p + (1 - p) * 0.7) + 0.12;
 }
-const LOOK = 0.9;   // a setup costs a tick of the clock and some risk
-function offValue(B, op, scheme) {
+const LOOK = 0.9, PERSIST = 1.5;   // a setup costs a tick of the clock and some risk; PERSIST ≈ later shots a stage helps
+// what a setup leads to: the best shot after it, or (looking deeper) the best next call, setups included
+const next = (B, depth) => {
+  B = { ...B, clock: B.clock - 1 };
+  if (depth <= 0) return bestShot(B);
+  return Math.max(0, ...options(B, B.off).map((op) => SCHEME_KEYS.reduce((a, s) => a + offValue(B, op, s, depth - 1), 0) / SCHEME_KEYS.length));
+};
+function offValue(B, op, scheme, depth = 0) {
   if (op.kind === "hold") return 0;
-  const o = B.off, mv = op.kind === "move" ? movesOf(dex(B, o, op.slot))[op.mi] : op.kind === "heave" ? { type: "normal", cat: "deep" } : { cat: "pass" };
+  const o = B.off, mv = op.kind === "move" ? movesOf(dex(B, o, op.slot))[op.mi] : op.kind === "heave" ? { type: "normal", cat: "deep" } : { cat: op.kind };
   if (mv.cat === "deep" || mv.cat === "rim") return shotValue(B, mv, scheme, op.kind === "heave" ? -0.12 : 0);
   if (B.clock <= 1) return 0;   // anything but a shot on the last tick is a violation
   if (mv.cat === "pass") {
-    const open = B.open.slice(); open[op.to] = Math.min(MAX_OPEN, open[op.to] + VS.pass[scheme] + (op.kind === "move" ? 1 : 0));
-    const steal = scheme === "deny" ? clamp(0.32 - 0.25 * sk(B, o, B.ball).handle, 0.08, 0.4) : 0.02;
-    return (1 - steal) * LOOK * bestShot({ ...B, ball: op.to, open });
+    const [steal, gain] = passCalc(B, op, scheme), open = B.open.slice(); open[op.to] = Math.min(MAX_OPEN, open[op.to] + gain);
+    return (1 - steal) * LOOK * next({ ...B, ball: op.to, open }, depth);
+  }
+  if (mv.cat === "iso") {
+    const guard = B.guard.slice(), j = guard.indexOf(op.to), open = B.open.slice();
+    guard[j] = guard[B.ball]; guard[B.ball] = op.to; open[B.ball] = Math.min(MAX_OPEN, open[B.ball] + VS.iso[scheme]);
+    return LOOK * next({ ...B, guard, open }, depth);
   }
   if (mv.cat === "screen") {
     const open = B.open.slice(); open[B.ball] = Math.min(MAX_OPEN, open[B.ball] + VS.screen[scheme]);
-    return (scheme === "press" ? 0.96 : 1) * LOOK * bestShot({ ...B, open });
+    return (scheme === "press" ? 0.96 : 1) * LOOK * next({ ...B, open }, depth);
   }
   if (mv.cat === "status") {
     const g = B.guard[B.ball], gRi = who(B, 1 - o, g);
     if (B.status[1 - o][gRi]) return 0;
     const status = B.status.slice(); status[1 - o] = B.status[1 - o].slice(); status[1 - o][gRi] = { k: mv.st, t: 2 };
-    return LOOK * (0.75 * bestShot({ ...B, status }) + 0.25 * bestShot(B));
+    return LOOK * (0.75 * next({ ...B, status }, depth) + 0.25 * next(B, depth));
   }
-  if (mv.cat === "weather") return weatherOf(B) === mv.wx ? 0 : LOOK * bestShot({ ...B, weather: { k: mv.wx, t: 6 } });
-  if (mv.cat === "boost") return LOOK * bestShot(withStage(B, o, op.slot, mv.boost)) - (mv.cost || 0) / 400;
-  if (mv.cat === "debuff") return LOOK * bestShot(withStage(B, 1 - o, B.guard[B.ball], mv.drop));
+  if (mv.cat === "weather") return weatherOf(B) === mv.wx ? 0 : LOOK * next({ ...B, weather: { k: mv.wx, t: 6 } }, depth);
+  // stages stay while the Pokémon stays on the floor: a planner (depth ≥ 1) also counts the possessions after this one
+  if (mv.cat === "boost") {
+    const after = withStage(B, o, op.slot, mv.boost), own = (b) => bestShot({ ...b, ball: op.slot });
+    return LOOK * next(after, depth) - (mv.cost || 0) / 400 + (depth > 0 ? PERSIST * (own(after) - own(B)) : 0);
+  }
+  if (mv.cat === "debuff") { const after = withStage(B, 1 - o, B.guard[B.ball], mv.drop); return LOOK * next(after, depth) + (depth > 0 ? PERSIST * (bestShot(after) - bestShot(B)) : 0); }
   return 0;
 }
 function withStage(B, side, slot, delta = {}) {
@@ -367,28 +426,33 @@ function withStage(B, side, slot, delta = {}) {
 }
 const softPick = (rng, opts, vals, temp) => { const m = Math.max(...vals), w = vals.map((v) => Math.exp((v - m) / temp)); return opts[weighted(rng, w)]; };
 
-export function botPick(B, side, rng, temp = 0.06) {
+/** What the bot thinks each option is worth (expected points for the offense, minus that for the defense): [{op, v}].
+ *  w: the offense's read of the defense, {scheme: weight} (default: even). depth 1 plans a setup ahead and counts stages. */
+export function botValues(B, side, depth = 0, w = null) {
   const opts = options(B, side);
-  if (opts.length <= 1) return opts[0];
-  const schemes = Object.keys(SCHEMES);
   if (side === B.off) {
-    const vals = opts.map((op) => schemes.reduce((a, s) => a + offValue(B, op, s), 0) / schemes.length);
-    return softPick(rng, opts, vals, temp);
+    const ws = SCHEME_KEYS.map((s) => (w ? w[s] || 0 : 1)), W = ws.reduce((a, b) => a + b, 0) || 1;
+    return opts.map((op) => ({ op, v: SCHEME_KEYS.reduce((a, s, i) => a + (ws[i] ? ws[i] * offValue(B, op, s, depth) : 0), 0) / W }));
   }
-  // defense: guess the offense's mix (softmax of its options vs man), then minimize what it gets
-  const offOpts = options(B, B.off), ov = offOpts.map((op) => offValue(B, op, "man")), m = Math.max(...ov);
-  const w = ov.map((v) => Math.exp((v - m) / 0.08)), W = w.reduce((a, b) => a + b, 0);
-  const vals = opts.map((dp) => {
-    if (dp.kind === "scheme") return -offOpts.reduce((a, op, i) => a + (w[i] / W) * offValue(B, op, dp.scheme), 0);
+  // defense: guess the offense's mix (a softmax of its own read, every scheme even), then minimize what it gets
+  const offOpts = options(B, B.off), ov = offOpts.map((op) => SCHEME_KEYS.reduce((a, s) => a + offValue(B, op, s), 0) / SCHEME_KEYS.length), m = Math.max(...ov);
+  const ow = ov.map((v) => Math.exp((v - m) / 0.08)), OW = ow.reduce((a, b) => a + b, 0);
+  return opts.map((dp) => {
+    if (dp.kind === "scheme") return { op: dp, v: -offOpts.reduce((a, op, i) => a + (ow[i] / OW) * offValue(B, op, dp.scheme), 0) };
     const mv = movesOf(dex(B, side, dp.slot))[dp.mi], hRi = who(B, B.off, B.ball);
-    if (mv.cat === "weather") return weatherOf(B) === mv.wx ? -9 : -bestShot({ ...B, weather: { k: mv.wx, t: 6 } }) - 0.04;
-    if (mv.cat === "boost") return -bestShot(withStage(B, side, dp.slot, mv.boost)) - 0.1;
-    if (mv.cat === "debuff") return -bestShot(withStage(B, B.off, B.ball, mv.drop)) - 0.08;
-    if (B.status[B.off][hRi]) return -9;
+    if (mv.cat === "weather") return { op: dp, v: weatherOf(B) === mv.wx ? -9 : -bestShot({ ...B, weather: { k: mv.wx, t: 6 } }) - 0.04 };
+    if (mv.cat === "boost") return { op: dp, v: -bestShot(withStage(B, side, dp.slot, mv.boost)) - 0.1 };
+    if (mv.cat === "debuff") return { op: dp, v: -bestShot(withStage(B, B.off, B.ball, mv.drop)) - 0.08 };
+    if (B.status[B.off][hRi]) return { op: dp, v: -9 };
     const status = B.status.slice(); status[B.off] = B.status[B.off].slice(); status[B.off][hRi] = { k: mv.st, t: 2 };
-    return -(0.75 * bestShot({ ...B, status }) + 0.25 * bestShot(B)) - 0.1;   // playing it costs the scheme
+    return { op: dp, v: -(0.75 * bestShot({ ...B, status }) + 0.25 * bestShot(B)) - 0.1 };   // playing it costs the scheme
   });
-  return softPick(rng, opts, vals, temp);
+}
+/** A bot's call: a softmax over botValues. temp: how much it mixes it up (lower = sharper). */
+export function botPick(B, side, rng, temp = 0.06, depth = 0) {
+  const vs = botValues(B, side, depth);
+  if (vs.length <= 1) return vs[0]?.op;
+  return softPick(rng, vs.map((x) => x.op), vs.map((x) => x.v), temp);
 }
 
 /** Bot subs at a dead ball: rest anyone gassed or statused for the freshest bench player. */
@@ -397,7 +461,7 @@ export function botSubs(B, side) {
   for (let slot = 0; slot < ON; slot++) {
     const ri = out.on[side][slot];
     if (out.stam[side][ri] > 45 && !out.status[side][ri]) continue;
-    const bench = out.rosters[side].map((_, i) => i).filter((i) => !out.on[side].includes(i)).sort((a, b) => out.stam[side][b] - out.stam[side][a]);
+    const bench = out.rosters[side].map((_, i) => i).filter((i) => canSubIn(out, side, i)).sort((a, b) => out.stam[side][b] - out.stam[side][a]);
     if (bench.length && out.stam[side][bench[0]] > out.stam[side][ri] + 25) out = sub(out, side, slot, bench[0]) || out;
   }
   return out;
