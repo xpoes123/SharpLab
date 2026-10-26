@@ -165,7 +165,7 @@ function renderIntro() {
     <div class="card phduelcta pbcta">
       <div class="phstep">⚔️ New · Battle (beta)</div>
       <p class="phmuted">The new game: 3v3, first to 11, played like a Pokémon battle. Every turn you and the opponent pick at once: shots, passes, screens, status moves, stat boosts, weather. Draft six, rotate three.</p>
-      <div class="phactions"><button class="btn primary" id="pbStart">Battle a bot</button></div>
+      <div class="phactions"><button class="btn primary" id="pbStart">Battle a bot</button><button class="btn primary" id="pbRoom">Battle a friend</button></div>
     </div>
     <div class="card phintro">
       <div class="phstep">🏆 82-game season</div>
@@ -942,16 +942,18 @@ async function challenge(vs) {
 
 // ── Events ───────────────────────────────────────────────────────────────────
 let battle = null;   // the battle UI module, loaded on first use
-async function startBattle() {
+async function startBattle(room) {
   battle ||= await import("./pokehoops-battle-ui.js");
   clearTimeout(state.reveal?.timer); clearTimeout(state.live?.timer); state.live = null; state.duel = null;
-  battle.start({ app, head, toast, exit: () => { battle.stop(); renderIntro(); } });
+  const ctx = { app, head, toast, post, get: (path, h) => getJSON(API + path, h), signedIn: () => !!state.me, exit: () => { battle.stop(); renderIntro(); } };
+  if (room != null) battle.openRoom(ctx, room); else battle.start(ctx);
   scrollTo(0, 0);
 }
 
 app.addEventListener("click", (e) => {
   if (e.target.closest("#pbStart")) return startBattle();
-  if (e.target.closest("#pbExit")) { battle?.stop(); return renderIntro(); }
+  if (e.target.closest("#pbRoom")) return startBattle("");
+  if (e.target.closest("#pbExit")) { if (battle && !battle.leaving()) return; battle?.stop(); return renderIntro(); }
   if (battle?.active() && battle.handle(e)) return;
   const card = e.target.closest(".phcard");
   if (card) return state.duel?.view?.phase === "draft" ? duelPost("pick", { n: Number(card.dataset.n) }) : pick(Number(card.dataset.n));
@@ -1087,6 +1089,7 @@ async function main() {
   renderNav(state.me && state.me.user);
   const qs = new URLSearchParams(location.search);
   if (qs.get("duel")) return duelOpen(qs.get("duel"));
+  if (qs.get("battle")) return startBattle(qs.get("battle"));
   if (qs.get("d")) return openDuelRecord(qs.get("d"));
   if (qs.get("x")) return openSeries(qs.get("x"));
   if (qs.get("s")) return openShared(qs.get("s"));
