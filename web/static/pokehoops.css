@@ -352,3 +352,4 @@ body:has(.phsb) header { position: static; }
 .phnet { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 60; padding: 5px 12px; border-radius: 999px;
   background: var(--panel2); border: 1px solid var(--gold); color: var(--gold); font-size: 12px; pointer-events: none; }
 .phnet[hidden] { display: none; }
+.pbmini:disabled { opacity: .45; cursor: not-allowed; } .pbopt.iso { border-left: 4px solid var(--accent2); }
