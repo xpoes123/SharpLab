@@ -27,9 +27,7 @@ KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 SPORT = {"NBA": "NBA", "WNBA": "WNBA", "NFL": "NFL", "MLB": "MLB", "NHL": "NHL", "NCAA": "NCAA",
          "VALORANT": "Esports", "CS2": "Esports", "DOTA2": "Esports", "LOL": "Esports",
          "ATP": "Tennis", "WTA": "Tennis", "ITF": "Tennis", "BTC": "Crypto", "ETH": "Crypto"}
-# ponytail: one global filter for PnL/recap/feed (positions show everything) (David's ask, 2026-10-21; he's the only linked user) — per-user prefs if others link
 ET = ZoneInfo("America/New_York")
-TRACKED = {"NBA", "NFL", "MLB", "Esports"}
 
 
 class KalshiAuthError(Exception):
@@ -137,8 +135,6 @@ def summarize(settles: list[dict], open_rows: list[dict], since_iso: str | None 
     for st in settles:
         if since_iso and (st.get("settled_time") or "") < since_iso:
             continue
-        if sport(st["ticker"]) not in TRACKED:
-            continue
         p = settled_pnl(st)
         cost = _f(st.get("yes_total_cost_dollars")) + _f(st.get("no_total_cost_dollars"))
         realized += p
@@ -148,7 +144,7 @@ def summarize(settles: list[dict], open_rows: list[dict], since_iso: str | None 
         s = by_sport[sport(st["ticker"])]
         s[0] += 1; s[1] += p; s[2] += cost
     return {"realized": realized, "fees": fees, "n": n, "won": won,
-            "unrealized": sum(r["unreal"] for r in open_rows if r["sport"] in TRACKED),
+            "unrealized": sum(r["unreal"] for r in open_rows),
             "by_sport": sorted(([k, *v] for k, v in by_sport.items()), key=lambda r: -r[2])}
 
 
@@ -180,7 +176,6 @@ async def fetch_account(key_id: str, pem: str, with_settlements: bool = True) ->
     async with httpx.AsyncClient(timeout=20) as c:
         bal = await _get(c, key_id, key, "/portfolio/balance")
         positions = await _all(c, key_id, key, "/portfolio/positions", "market_positions")
-        # every open market, not just TRACKED — /kalshi positions shows the whole book
         positions = [p for p in positions if _f(p.get("position_fp") or p.get("position"))]
         settles = await _all(c, key_id, key, "/portfolio/settlements", "settlements") if with_settlements else []
         settled_today = await _all(c, key_id, key, "/portfolio/settlements" + since, "settlements")
@@ -214,13 +209,19 @@ def slate_date(ticker: str) -> str | None:
     return f"20{seg[:2]}-{_MONTHS[seg[2:5]]:02d}-{seg[5:7]}"
 
 
+def _settle_day(st: dict) -> str | None:
+    ts = _iso_ts(st.get("settled_time"))
+    return datetime.fromtimestamp(ts, ET).date().isoformat() if ts else None
+
+
 def slates(settles: list[dict]) -> dict[str, dict]:
-    """Settled TRACKED markets grouped by game date:
+    """Settled markets grouped by game date (settle date, ET, for undated futures):
     {date: {n, won, pnl, cost, sports: {sport: [n, won, pnl]}, rows: [(ticker, pnl)]}}."""
     out: dict[str, dict] = {}
     for st in settles:
-        d, sp = slate_date(st["ticker"]), sport(st["ticker"])
-        if sp not in TRACKED or not d:
+        sp = sport(st["ticker"])
+        d = slate_date(st["ticker"]) or _settle_day(st)
+        if not d:
             continue
         p = settled_pnl(st)
         s = out.setdefault(d, {"n": 0, "won": 0, "pnl": 0.0, "cost": 0.0, "sports": {}, "rows": []})
