@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SharpLab HQ — Video shrinker</title>
+<meta property="og:title" content="Video shrinker" />
+<meta property="og:description" content="Phone video in, Discord-ready mp4 under 5 MB out." />
+<link rel="stylesheet" href="/hqstyle.css" />
+<style>
+  .vbox { max-width: 520px; margin: 18px auto; padding: 0 16px; display: grid; gap: 14px; }
+  .vcard { background: var(--panel, #1a1b26); border: 1px solid var(--line, #2a2b3d); border-radius: 14px; padding: 16px; display: grid; gap: 12px; }
+  .vdrop { display: grid; place-items: center; gap: 6px; border: 2px dashed var(--line, #2a2b3d); border-radius: 12px; padding: 28px 12px; text-align: center; cursor: pointer; }
+  .vdrop b { font-size: 18px; } .vdrop input { display: none; }
+  .vbar { height: 10px; border-radius: 6px; background: var(--panel2, #24283b); overflow: hidden; } .vbar i { display: block; height: 100%; width: 0; background: #7aa2f7; transition: width .2s; }
+  .vbar.work i { width: 40%; animation: vslide 1.2s ease-in-out infinite alternate; } @keyframes vslide { from { margin-left: 0; } to { margin-left: 60%; } }
+  .vmuted { color: var(--muted, #787c99); font-size: 14px; } .verr { color: #f7768e; } .vok { color: #9ece6a; }
+  video { width: 100%; border-radius: 10px; background: #000; max-height: 60vh; }
+  .vrow { display: flex; gap: 8px; flex-wrap: wrap; } .vrow .btn { flex: 1; text-align: center; min-height: 44px; display: grid; place-items: center; }
+  select, input[type=text] { width: 100%; min-height: 44px; font-size: 16px; padding: 8px 10px; border-radius: 10px; background: var(--panel2, #24283b); color: inherit; border: 1px solid var(--line, #2a2b3d); }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><a href="/">Sharp<span>Lab</span> HQ</a></div>
+  <nav class="nav"><a href="/">Server</a><a href="/stocks">Stocks</a><a href="/lines">Lines</a><a href="/pickem">Pick'em</a><a href="/cards">Cards</a><a href="/games">Games</a></nav>
+  <div id="navRight"></div>
+</header>
+<main class="vbox" id="app"><p class="vmuted">Loading…</p></main>
+<script>
+const API = "/api/v1/vid", app = document.getElementById("app");
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+let me = null, job = null;
+
+async function api(path, opts = {}) {
+  try {
+    const r = await fetch(API + path, { credentials: "include", ...opts });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok && !j.error) j.error = `error ${r.status}`;
+    return j;
+  } catch { return { error: "offline — check your connection" }; }
+}
+
+function pickView(msg = "") {
+  app.innerHTML = `<div class="vcard"><h2 style="margin:0">📹 Video shrinker</h2>
+    <p class="vmuted" style="margin:0">Pick a video from your phone. You get back an mp4 under 5 MB to save, share, or post to a channel.</p>
+    <label class="vdrop"><input type="file" accept="video/*" id="vfile"><b>Choose a video</b><span class="vmuted">up to 2 GB · shorter clips look better</span></label>
+    ${msg}</div>`;
+  document.getElementById("vfile").onchange = (e) => e.target.files[0] && upload(e.target.files[0]);
+}
+
+function progressView(title, pct, sub = "") {
+  app.innerHTML = `<div class="vcard"><b>${esc(title)}</b><div class="vbar${pct == null ? " work" : ""}"><i style="width:${pct ?? 40}%"></i></div><span class="vmuted">${sub}</span></div>`;
+}
+
+function upload(file) {
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", API);
+  xhr.withCredentials = true;
+  xhr.setRequestHeader("X-Filename", encodeURIComponent(file.name).slice(0, 120));
+  xhr.upload.onprogress = (e) => e.lengthComputable && progressView("Uploading…", Math.round(100 * e.loaded / e.total), `${(e.loaded / 1e6).toFixed(0)} / ${(e.total / 1e6).toFixed(0)} MB · keep this tab open`);
+  xhr.onload = () => {
+    let j = {}; try { j = JSON.parse(xhr.responseText); } catch {}
+    if (xhr.status >= 300 || !j.id) return pickView(`<p class="verr">${esc(j.error || `upload failed (${xhr.status})`)}</p>`);
+    job = j.id; poll();
+  };
+  xhr.onerror = () => pickView(`<p class="verr">Upload dropped. Check your connection and try again.</p>`);
+  progressView("Uploading…", 0);
+  xhr.send(file);
+}
+
+async function poll() {
+  const s = await api(`/${job}`);
+  if (s.error) return pickView(`<p class="verr">${esc(s.error)}</p>`);
+  if (s.state === "error") return pickView(`<p class="verr">Couldn't shrink that: ${esc(s.error)}</p>`);
+  if (s.state === "done") return doneView(s);
+  progressView("Shrinking…", null, s.state === "queued" && s.ahead ? `${s.ahead} video${s.ahead > 1 ? "s" : ""} ahead of yours` : "about a minute per minute of video");
+  setTimeout(poll, 2000);
+}
+
+async function doneView(s) {
+  const dl = `${API}/${job}/file`;
+  app.innerHTML = `<div class="vcard"><b class="vok">Done: ${s.mb} MB · ${esc(s.res)}</b>
+    ${s.poor ? `<p class="vmuted" style="margin:0">Long clip for 5 MB, so it's soft. Trim it for a sharper result.</p>` : ""}
+    <video src="${esc(s.url)}" controls playsinline preload="metadata"></video>
+    <div class="vrow"><a class="btn" href="${dl}" download>⬇ Download</a><button class="btn" id="vshare">Share…</button></div>
+    <div class="vrow"><button class="btn ghost" id="vcopy">Copy link</button><button class="btn ghost" id="vagain">Another video</button></div>
+    <span class="vmuted" id="vlink" style="word-break:break-all">${esc(s.url)}</span></div>
+    ${me.can_post ? `<div class="vcard" id="vpost"><b>Post it to the server</b><span class="vmuted">Loading channels…</span></div>` : ""}`;
+  document.getElementById("vagain").onclick = () => pickView();
+  document.getElementById("vcopy").onclick = () => navigator.clipboard.writeText(s.url).then(() => { document.getElementById("vcopy").textContent = "Copied ✓"; });
+  document.getElementById("vshare").onclick = async () => {   // the share sheet with the file itself (straight into the Discord app)
+    try {
+      const blob = await (await fetch(dl, { credentials: "include" })).blob(), f = new File([blob], `${s.name || "video"}.mp4`, { type: "video/mp4" });
+      if (navigator.canShare?.({ files: [f] })) await navigator.share({ files: [f] });
+      else if (navigator.share) await navigator.share({ url: s.url });
+      else location.href = dl;
+    } catch {}
+  };
+  if (me.can_post) postBox();
+}
+
+async function postBox() {
+  const box = document.getElementById("vpost"), c = await api("/discord/channels");
+  if (c.error) { box.innerHTML = `<b>Post it to the server</b><span class="verr">${esc(c.error)}</span>`; return; }
+  let last = ""; try { last = localStorage.getItem("vid:channel") || ""; } catch {}
+  const groups = {};
+  for (const ch of c.channels) (groups[ch.cat] ||= []).push(ch);
+  box.innerHTML = `<b>Post it to the server</b>
+    <select id="vchan">${Object.entries(groups).map(([cat, chs]) => `<optgroup label="${esc(cat || "—")}">${chs.map((ch) => `<option value="${ch.id}"${ch.id === last ? " selected" : ""}>#${esc(ch.name)}</option>`).join("")}</optgroup>`).join("")}</select>
+    <input type="text" id="vnote" maxlength="500" placeholder="Say something (optional)">
+    <button class="btn" id="vsend" style="min-height:44px">Send to channel</button><span class="vmuted" id="vsent"></span>`;
+  document.getElementById("vsend").onclick = async (e) => {
+    const channel = document.getElementById("vchan").value, out = document.getElementById("vsent");
+    e.target.disabled = true; out.textContent = "Sending…";
+    const r = await api(`/${job}/send`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ channel, note: document.getElementById("vnote").value }) });
+    if (r.error) { e.target.disabled = false; out.innerHTML = `<span class="verr">${esc(r.error)}</span>`; return; }
+    try { localStorage.setItem("vid:channel", channel); } catch {}
+    out.innerHTML = `<span class="vok">Posted ✓</span> <a href="${esc(r.link)}">open in Discord</a>`;
+  };
+}
+
+(async () => {
+  me = await api("/me");
+  if (!me.user) {
+    document.getElementById("navRight").innerHTML = `<a class="btn" href="/api/v1/auth/discord/login?next=/vid">Sign in with Discord</a>`;
+    app.innerHTML = `<div class="vcard"><h2 style="margin:0">📹 Video shrinker</h2><p class="vmuted">Sign in with Discord to shrink videos.</p><a class="btn" href="/api/v1/auth/discord/login?next=/vid" style="min-height:44px;display:grid;place-items:center">Sign in with Discord</a></div>`;
+    return;
+  }
+  document.getElementById("navRight").innerHTML = `<span class="vmuted">${esc(me.user.username)}</span>`;
+  pickView();
+})();
+</script>
+</body>
+</html>
