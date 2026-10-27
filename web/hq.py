@@ -248,10 +248,13 @@ async def _names(user_ids: list[str]) -> dict[str, dict]:
 
 
 @router.get("/auth/discord/login")
-async def discord_login():
+async def discord_login(next: str = ""):
     if not auth.oauth_configured():
         return JSONResponse({"error": "oauth_not_configured"}, status_code=503)
-    return RedirectResponse(auth.login_url(auth.make_state()))
+    resp = RedirectResponse(auth.login_url(auth.make_state()))
+    if next.startswith("/") and not next.startswith("//"):   # come back to the page that asked (same-site paths only)
+        resp.set_cookie("login_next", next[:200], max_age=600, httponly=True, secure=True, samesite="lax")
+    return resp
 
 
 async def _log_member(request: Request, uid: str, username: str | None, etype: str) -> None:
@@ -286,7 +289,9 @@ async def discord_callback(request: Request, code: str = "", state: str = ""):
     if not auth.is_member(info["guilds"]):
         return RedirectResponse(f"{WEB_BASE_URL}/?error=not_member")
     await _log_member(request, str(info["user"].get("id")), info["user"].get("username"), "login")
-    resp = RedirectResponse(f"{WEB_BASE_URL}/")
+    nxt = request.cookies.get("login_next", "")
+    resp = RedirectResponse(f"{WEB_BASE_URL}{nxt if nxt.startswith('/') and not nxt.startswith('//') else '/'}")
+    resp.delete_cookie("login_next")
     resp.set_cookie(
         auth.COOKIE_NAME, auth.make_session_cookie(info["user"]),
         max_age=auth.SESSION_TTL, httponly=True, secure=True, samesite="lax",
