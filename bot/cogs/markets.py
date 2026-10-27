@@ -428,7 +428,7 @@ class MarketsCog(commands.Cog):
     async def kalshi_link(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_modal(_LinkModal())
 
-    @kalshi_group.command(name="recap", description="Your NBA/NFL/MLB/Esports slate recap (posted daily 10am ET)")
+    @kalshi_group.command(name="recap", description="Your Kalshi slate recap (posted daily 10am ET)")
     @app_commands.describe(days_ago="Which slate: 1 = last night (default)")
     async def kalshi_recap(self, interaction: discord.Interaction,
                            days_ago: app_commands.Range[int, 0, 60] = 1) -> None:
@@ -444,7 +444,7 @@ class MarketsCog(commands.Cog):
             await interaction.followup.send("Kalshi rejected your key. Re-run `/kalshi link`.", ephemeral=True)
             return
         await interaction.followup.send(embed=embed or discord.Embed(
-            description=f"No settled NBA/NFL/MLB/Esports markets on the {slate} slate."), ephemeral=True)
+            description=f"No settled Kalshi markets on the {slate} slate."), ephemeral=True)
 
     @kalshi_group.command(name="unlink", description="Delete your stored Kalshi API key")
     async def kalshi_unlink(self, interaction: discord.Interaction) -> None:
@@ -596,7 +596,8 @@ async def _recap_embed(uid: str, slate: str) -> discord.Embed | None:
                           color=0x22C55E if day["pnl"] >= 0 else 0xEF4444)
     embed.description = (f"**{day['pnl']:+,.2f}** on ${day['cost']:,.0f} staked · "
                          f"{day['won']}-{day['n'] - day['won']} across {day['n']} markets")
-    icon = {"NBA": "🏀", "NFL": "🏈", "MLB": "⚾", "Esports": "🎮"}
+    icon = {"NBA": "🏀", "WNBA": "🏀", "NFL": "🏈", "MLB": "⚾", "NHL": "🏒", "NCAA": "🎓",
+            "Esports": "🎮", "Tennis": "🎾", "Crypto": "🪙"}
     embed.add_field(name="By sport", inline=False, value="\n".join(
         f"{icon.get(sp, '•')} {sp} {w}-{n - w} · **{p:+,.2f}**"
         for sp, (n, w, p) in sorted(day["sports"].items(), key=lambda kv: -abs(kv[1][2]))))
@@ -611,7 +612,7 @@ async def _recap_embed(uid: str, slate: str) -> discord.Embed | None:
                     inline=False, value="\n".join(
         f"`{datetime.fromisoformat(d).strftime('%a %m/%d')}` {s['won']}-{s['n'] - s['won']} · **{s['pnl']:+,.2f}**"
         for d, s in week))
-    embed.set_footer(text="NBA/NFL/MLB/Esports, grouped by game date · /kalshi recap to re-check")
+    embed.set_footer(text="All markets, grouped by game date · /kalshi recap to re-check")
     return embed
 
 
