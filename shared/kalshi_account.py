@@ -258,7 +258,11 @@ async def market_titles(tickers: list[str]) -> dict[str, str]:
     async with httpx.AsyncClient(timeout=20) as c:
         r = await c.get(f"{KALSHI_BASE}/markets", params={"tickers": ",".join(tickers[:100]), "limit": 200})
         r.raise_for_status()
-        return {m["ticker"]: m.get("title") or m["ticker"] for m in r.json().get("markets") or []}
+        markets = r.json().get("markets") or []
+        games = await event_titles(c, {m.get("event_ticker") for m in markets} - {None})
+    # "MOUZ wins" -> "MOUZ vs. FaZe — MOUZ wins"
+    return {m["ticker"]: (f"{games[m['event_ticker']]} — " if games.get(m.get("event_ticker")) else "")
+            + (m.get("title") or m["ticker"]) for m in markets}
 
 
 def fill_price(f: dict) -> float:
@@ -296,12 +300,12 @@ def _iso_ts(iso: str | None) -> int:
 
 
 def resolutions(by_user: dict[str, list[dict]], since: dict[str, int]) -> dict[str, dict]:
-    """New settled TRACKED markets across users: {ticker: {result, holders: [(uid, side, pnl)]}}.
+    """New settled markets (all sports) across users: {ticker: {result, holders: [(uid, side, pnl)]}}.
     Filters by settled_time client-side too, so a server ignoring min_ts can't replay history."""
     out: dict[str, dict] = {}
     for uid, settles in by_user.items():
         for st in settles:
-            if _iso_ts(st.get("settled_time")) <= since[uid] or sport(st["ticker"]) not in TRACKED:
+            if _iso_ts(st.get("settled_time")) <= since[uid]:
                 continue
             y, n = _f(st.get("yes_count_fp")), _f(st.get("no_count_fp"))
             side = "YES" if y > n else "NO" if n > y else "BOTH"
