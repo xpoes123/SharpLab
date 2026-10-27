@@ -25,6 +25,8 @@ TARGET_MB = 5.0
 MAX_UPLOAD = 2_000_000_000
 KEEP_DAYS = 7
 BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
+# extra servers the bot can post videos to, without granting their members site login
+VID_GUILD_IDS = {g for g in os.environ.get("VID_GUILD_IDS", "").split(",") if g}
 DISCORD_API = "https://discord.com/api/v10"
 
 # (short side, fps cap, min video kbps for this tier), best first; and a per-tier spend ceiling
@@ -227,19 +229,22 @@ async def _channels() -> list[dict]:
         return _chan_cache["list"]
     out = []
     async with httpx.AsyncClient(timeout=10, headers={"Authorization": f"Bot {BOT_TOKEN}"}) as c:
-        for gid in sorted(auth.GUILD_IDS):
+        gids = sorted(auth.GUILD_IDS) + sorted(VID_GUILD_IDS - auth.GUILD_IDS)
+        for gid in gids:
             r = await c.get(f"{DISCORD_API}/guilds/{gid}/channels")
             if r.status_code != 200:
                 continue
             chans = r.json()
+            g = (await c.get(f"{DISCORD_API}/guilds/{gid}")).json().get("name", "") if len(gids) > 1 else ""
             cats = {ch["id"]: ch for ch in chans if ch["type"] == 4}
             for ch in chans:
                 if ch["type"] in (0, 5):   # text + announcement
                     cat = cats.get(ch.get("parent_id"))
-                    out.append({"id": ch["id"], "name": ch["name"], "cat": cat["name"] if cat else "",
-                                "order": (cat["position"] if cat else -1, ch["position"])})
+                    out.append({"id": ch["id"], "name": ch["name"], "guild": gid,
+                                "cat": " · ".join(x for x in (g, cat and cat["name"]) if x),
+                                "order": (gids.index(gid), cat["position"] if cat else -1, ch["position"])})
     out.sort(key=lambda ch: ch["order"])
-    _chan_cache.update(t=time.time(), list=[{k: ch[k] for k in ("id", "name", "cat")} for ch in out])
+    _chan_cache.update(t=time.time(), list=[{k: ch[k] for k in ("id", "name", "cat", "guild")} for ch in out])
     return _chan_cache["list"]
 
 
@@ -261,7 +266,8 @@ async def send(request: Request, jid: str):
         return _err("not ready yet", 409)
     body = await request.json()
     cid, note = str(body.get("channel") or ""), str(body.get("note") or "")[:500]
-    if cid not in {ch["id"] for ch in await _channels()}:
+    gid = {ch["id"]: ch["guild"] for ch in await _channels()}.get(cid)
+    if not gid:
         return _err("pick a channel from the list")
     content = f"📹 from **{job['user']}**" + (f": {note}" if note.strip() else "")
     payload = {"content": content, "allowed_mentions": {"parse": []}}
@@ -272,4 +278,4 @@ async def send(request: Request, jid: str):
     if r.status_code >= 300:
         return _err("Discord said no (the bot may not be allowed to post there)" if r.status_code == 403 else f"Discord error {r.status_code}", 502)
     m = r.json()
-    return {"ok": True, "link": f"https://discord.com/channels/{m.get('guild_id') or next(iter(auth.GUILD_IDS), '@me')}/{cid}/{m['id']}"}
+    return {"ok": True, "link": f"https://discord.com/channels/{gid}/{cid}/{m['id']}"}
