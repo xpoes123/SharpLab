@@ -185,7 +185,6 @@ class MarketsCog(commands.Cog):
                 if not fills:
                     continue
                 await queries.set_bot_setting(fkey, str(max(int(ka._f(f.get("ts"))) for f in fills) or int(time.time())))
-                fills = [f for f in fills if ka.sport(f["ticker"]) in ka.TRACKED]
                 if fills:
                     embed = await _fills_embed(ka.group_fills(fills))
                     user = self.bot.get_user(int(uid)) or await self.bot.fetch_user(int(uid))
