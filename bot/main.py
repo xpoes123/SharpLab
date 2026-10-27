@@ -142,10 +142,12 @@ COGS = [
     "bot.cogs.cluemaster",
     "bot.cogs.imposter",
     "bot.cogs.stream",
+    "bot.cogs.video",
     "bot.cogs.game_menu",
 ]
 
 GUILD_IDS = [int(g.strip()) for g in os.environ["DISCORD_GUILD_ID"].split(",") if g.strip()]
+VID_GUILD_IDS = {int(g) for g in os.environ.get("VID_GUILD_IDS", "").split(",") if g.strip()}
 
 intents = discord.Intents.default()
 intents.message_content = True  # required for prefix commands (privileged intent)
@@ -196,6 +198,11 @@ class SharpBot(commands.Bot):
             self.tree.copy_global_to(guild=guild)
             await self.tree.sync(guild=guild)
         log.info(f"Slash commands synced to {len(GUILD_IDS)} guild(s).")
+        # servers the bot only posts videos to get just /video
+        for gid in VID_GUILD_IDS - set(GUILD_IDS):
+            guild = discord.Object(id=gid)
+            self.tree.add_command(self.tree.get_command("video"), guild=guild)
+            await self.tree.sync(guild=guild)
 
     async def on_ready(self) -> None:
         log.info(f"Logged in as {self.user} (id={self.user.id})")

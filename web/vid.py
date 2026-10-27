@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import secrets
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -24,6 +25,11 @@ MEDIA_URL = os.environ.get("VID_MEDIA_URL", "https://sharplab.djiang.xyz/media/v
 TARGET_MB = 5.0
 MAX_UPLOAD = 2_000_000_000
 KEEP_DAYS = 7
+MAX_DUR = 600            # past 10 min a 5 MB video is mush, and it ties up the encoder
+MIN_FREE = 2_000_000_000  # stop accepting uploads before the VPS disk fills
+SEND_CAP, SEND_GAP = 3, 20  # posts per video, seconds between a user's posts
+# demuxers a phone video actually needs; blocks playlist formats (hls/concat) that can read other server files
+SAFE_IN = ["-format_whitelist", "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm", "-protocol_whitelist", "file"]
 BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
 # extra servers the bot can post videos to, without granting their members site login
 VID_GUILD_IDS = {g for g in os.environ.get("VID_GUILD_IDS", "").split(",") if g}
@@ -45,7 +51,7 @@ def _err(msg: str, code: int = 400) -> JSONResponse:
 # ── encoding (from discvid) ──────────────────────────────────────────────────
 
 def probe(path: str) -> dict:
-    out = subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", path],
+    out = subprocess.run(["ffprobe", "-v", "error", *SAFE_IN, "-print_format", "json", "-show_format", "-show_streams", path],
                          capture_output=True, text=True, timeout=60)
     if out.returncode:
         raise ValueError("that file isn't a video ffmpeg can read")
@@ -95,7 +101,7 @@ def _ff(args: list[str]) -> None:
 
 
 def encode(path: str, out: str, src: dict, p: dict) -> None:
-    common = ["-i", path, "-map", "0:v:0", "-vf", vfilter(src, p), "-c:v", "libx264", "-preset", "medium",
+    common = [*SAFE_IN, "-i", path, "-map", "0:v:0", "-vf", vfilter(src, p), "-c:v", "libx264", "-preset", "medium",
               "-profile:v", "high", "-b:v", f"{p['vk']}k", "-maxrate", f"{int(p['vk'] * 1.5)}k", "-bufsize", f"{p['vk'] * 2}k",
               "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv",
               "-map_metadata", "-1", "-map_chapters", "-1"]
@@ -111,6 +117,8 @@ def shrink(path: str, out: str, size_mb: float = TARGET_MB) -> dict:
     src = probe(path)
     if src["dur"] <= 0:
         raise ValueError("can't read the video's length")
+    if src["dur"] > MAX_DUR:
+        raise ValueError("that's over 10 minutes; trim it first")
     p, limit = plan(src, size_mb), size_mb * 1_000_000
     for _ in range(3):
         encode(path, out, src, p)
@@ -160,28 +168,34 @@ async def upload(request: Request):
     sess = auth.read_session(request)
     if not sess:
         return _err("sign in with Discord first", 401)
-    if sum(1 for j in _jobs.values() if j["uid"] == sess["id"] and j["state"] in ("queued", "working")) >= 2:
-        return _err("you already have videos shrinking; wait for those", 429)
     os.makedirs(MEDIA_DIR, exist_ok=True)
     await asyncio.to_thread(_sweep)
     jid = secrets.token_urlsafe(9)
-    src_path, total = os.path.join(MEDIA_DIR, f".{jid}.src"), 0
+    with _lock:   # count in-flight uploads too, or parallel uploads dodge the cap
+        if sum(1 for j in _jobs.values() if j["uid"] == sess["id"] and j["state"] in ("uploading", "queued", "working")) >= 2:
+            return _err("you already have videos shrinking; wait for those", 429)
+        _jobs[jid] = {"uid": sess["id"], "user": sess["username"], "state": "uploading", "t": time.time(), "sends": 0,
+                      "name": (request.headers.get("X-Filename") or "video").rsplit(".", 1)[0][:60],
+                      "out": os.path.join(MEDIA_DIR, f"{jid}.mp4")}
+    src_path, total, err = os.path.join(MEDIA_DIR, f".{jid}.src"), 0, None
     try:
         with open(src_path, "wb") as f:
             async for chunk in request.stream():
                 total += len(chunk)
                 if total > MAX_UPLOAD:
-                    raise ValueError
+                    raise ValueError("that's over 2 GB")
+                if shutil.disk_usage(MEDIA_DIR).free < MIN_FREE:
+                    raise ValueError("the server's low on space; try again later")
                 f.write(chunk)
-    except Exception:   # too big, or the phone dropped the upload
+        if total < 1000:
+            raise ValueError("that file is empty")
+    except Exception as e:   # too big, disk low, or the phone dropped the upload
+        err = str(e) if isinstance(e, ValueError) else "upload failed"
+    if err:
         os.remove(src_path)
-        return _err("upload failed or over 2 GB", 413)
-    if total < 1000:
-        os.remove(src_path)
-        return _err("that file is empty")
-    name = (request.headers.get("X-Filename") or "video").rsplit(".", 1)[0][:60]
-    _jobs[jid] = {"uid": sess["id"], "user": sess["username"], "state": "queued", "t": time.time(), "name": name,
-                  "out": os.path.join(MEDIA_DIR, f"{jid}.mp4")}
+        del _jobs[jid]
+        return _err(err, 413)
+    _jobs[jid]["state"] = "queued"
     _pool.submit(_run, jid, src_path)
     return {"id": jid}
 
@@ -222,6 +236,7 @@ async def download(request: Request, jid: str):
 # ── posting through the SharpLab bot ─────────────────────────────────────────
 
 _chan_cache: dict = {"t": 0, "list": []}
+_last_send: dict[str, float] = {}
 
 
 async def _channels() -> list[dict]:
@@ -269,6 +284,13 @@ async def send(request: Request, jid: str):
     gid = {ch["id"]: ch["guild"] for ch in await _channels()}.get(cid)
     if not gid:
         return _err("pick a channel from the list")
+    if job["sends"] >= SEND_CAP:
+        return _err(f"this video's already been sent {SEND_CAP} times", 429)
+    wait = SEND_GAP - (time.time() - _last_send.get(job["uid"], 0))
+    if wait > 0:
+        return _err(f"slow down, try again in {int(wait) + 1}s", 429)
+    _last_send[job["uid"]] = time.time()
+    job["sends"] += 1
     content = f"📹 from **{job['user']}**" + (f": {note}" if note.strip() else "")
     payload = {"content": content, "allowed_mentions": {"parse": []}}
     with open(job["out"], "rb") as f:
