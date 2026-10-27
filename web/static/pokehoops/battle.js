@@ -125,6 +125,10 @@ export function speedOf(B, side, slot) {
 /** The weather in play: a weather move's (for a few turns), else the court's. */
 export const weatherOf = (B) => B.weather?.k || (B.court !== "clear" ? B.court : null);
 
+/** Bigs (top ~30% in rim D + rebounding) can set a plain pick: the same as a screen move, for those without one. */
+export const isBig = (n) => { const k = skills(n); return k.intD + k.reb >= 1.1; };
+export const PICK = { name: "Set a pick", type: "normal", cat: "screen" };
+
 /** Everything a side may pick this turn: [{id, kind, slot, mi?, to?, scheme?}] (ids are stable strings). */
 export function options(B, side) {
   const out = [];
@@ -146,6 +150,7 @@ export function options(B, side) {
         if (!usable(s, mi)) return;
         if ((m.cat === "screen" && s !== h) || UTIL.has(m.cat)) out.push({ id: `m${s}.${mi}`, kind: "move", slot: s, mi });
       });
+      if (s !== h && isBig(dex(B, side, s)) && !movesOf(dex(B, side, s)).some((m) => m.cat === "screen")) out.push({ id: `pick${s}`, kind: "pick", slot: s });
     }
     if (!out.some((o) => o.kind === "move" && ["deep", "rim"].includes(movesOf(dex(B, side, o.slot))[o.mi].cat)) && hStat?.k !== "slp")
       out.push({ id: "heave", kind: "heave", slot: h });   // out of shot PP: a plain heave
@@ -233,20 +238,20 @@ export function resolve(B0, offPick, defPick, rng) {
   const actorSlot = op.kind === "hold" ? B.ball : op.slot, aRi = who(B, o, actorSlot), aSt = B.status[o][aRi];
   let ended = false;
   const live = () => { const fb = flip(B, false); if (fb >= 0) say("fastBreak", { side: B.off, slot: fb }); ended = true; };   // live-ball change
-  const turnover = (why, by = -1) => { say("turnover", { why, slot: B.ball, by }); live(); };
+  const turnover = (why, by = -1, p) => { say("turnover", { why, slot: B.ball, by, p }); live(); };
   if (handlerStopped && actorSlot === hSlot && B.status[o][hRi]?.k === "slp") say("asleep", { slot: B.ball });
   else if (aSt?.k === "par" && rng.float() < 0.25) say("fullyPar", { slot: actorSlot });
   else if (aSt?.k === "cnf" && rng.float() < 0.33) {
     if (actorSlot === B.ball) turnover("confused"); else say("confusedSelf", { slot: actorSlot });
   } else if (op.kind === "hold") say("hold", { slot: B.ball });
   else {
-    const mv = op.kind === "move" ? movesOf(dex(B, o, op.slot))[op.mi] : op.kind === "heave" ? { name: "Heave", type: "normal", cat: "deep" } : op.kind === "iso" ? { name: "Isolate", cat: "iso" } : { name: "Pass", type: "normal", cat: "pass" };
+    const mv = op.kind === "move" ? movesOf(dex(B, o, op.slot))[op.mi] : op.kind === "heave" ? { name: "Heave", type: "normal", cat: "deep" } : op.kind === "iso" ? { name: "Isolate", cat: "iso" } : op.kind === "pick" ? PICK : { name: "Pass", type: "normal", cat: "pass" };
     if (mv.cat === "deep" || mv.cat === "rim") {
       const p = shotChance(B, mv, scheme, op.kind === "heave" ? -0.12 : 0), made = rng.float() < p;
       const fouled = mv.cat === "rim" && rng.float() < FOUL[scheme], ft = fouled && !made && rng.float() < 0.7;
       const pts = made ? (mv.cat === "deep" ? 2 : 1) + (fouled ? 1 : 0) : ft ? 1 : 0;   // and-one; a missed-and-fouled FT is worth 1
       const eff = typeEff(mv.type, dex(B, d, B.guard[B.ball]));
-      say("shot", { slot: B.ball, move: mv.name, cat: mv.cat, type: mv.type, made, ft, pts, scored: pts > 0, eff, vs: scheme, fouled, andOne: fouled && made });
+      say("shot", { slot: B.ball, move: mv.name, cat: mv.cat, type: mv.type, made, ft, pts, scored: pts > 0, eff, vs: scheme, fouled, andOne: fouled && made, p });
       B.stam[o][hRi] -= 9;
       if (made || ft) {
         B.score[o] += pts; B.hot[o] = hRi;
@@ -265,17 +270,17 @@ export function resolve(B0, offPick, defPick, rng) {
     } else if (mv.cat === "pass") {
       const [steal, gain] = passCalc(B, op, scheme);
       B.stam[o][hRi] -= 4;
-      if (rng.float() < steal) turnover("steal", scheme === "press" ? B.guard[B.ball] : B.guard[op.to]);
+      if (rng.float() < steal) turnover("steal", scheme === "press" ? B.guard[B.ball] : B.guard[op.to], steal);
       else {
-        say("pass", { from: B.ball, to: op.to, move: mv.name, gain });
+        say("pass", { from: B.ball, to: op.to, move: mv.name, gain, steal });
         B.ball = op.to; B.open[op.to] = clamp(B.open[op.to] + gain, 0, MAX_OPEN);
       }
     } else if (mv.cat === "screen") {
       const gain = VS.screen[scheme], steal = scheme === "press" ? 0.04 : 0;
       B.stam[o][aRi] -= 6;
-      if (rng.float() < steal) turnover("steal", B.guard[B.ball]);
+      if (rng.float() < steal) turnover("steal", B.guard[B.ball], steal);
       else {
-        say("screen", { slot: op.slot, move: mv.name, gain, switched: scheme === "switch" });
+        say("screen", { slot: op.slot, move: mv.name, gain, switched: scheme === "switch", steal });
         B.open[B.ball] = clamp(B.open[B.ball] + gain, 0, MAX_OPEN);
         if (scheme === "switch") { const g = B.guard[B.ball]; B.guard[B.ball] = B.guard[op.slot]; B.guard[op.slot] = g; }   // mismatch
       }
@@ -329,7 +334,7 @@ function flip(B, dead) {
 }
 // a pass: [steal chance, openness the receiver gains]. Handle vs the ball (press) or the passing lane (deny); a pass
 // move adds 1, ±1 for its power (Extreme Speed / Splash), ±1 if its type hits the receiver's defender hard / softly.
-function passCalc(B, op, scheme) {
+export function passCalc(B, op, scheme) {
   const o = B.off, d = 1 - o, mv = op.kind === "move" ? movesOf(dex(B, o, op.slot))[op.mi] : null, H = sk(B, o, B.ball).handle;
   const pick = [0, 1, 2].some((s) => effectOf(dex(B, d, s)) === "PICKPOCKET") ? 0.08 : 0, pw = mv?.pow || 0;
   const steal = scheme === "deny" ? 0.22 + 0.45 * (sk(B, d, B.guard[op.to]).perD - H) + pick
@@ -386,7 +391,7 @@ const next = (B, depth) => {
 };
 function offValue(B, op, scheme, depth = 0) {
   if (op.kind === "hold") return 0;
-  const o = B.off, mv = op.kind === "move" ? movesOf(dex(B, o, op.slot))[op.mi] : op.kind === "heave" ? { type: "normal", cat: "deep" } : { cat: op.kind };
+  const o = B.off, mv = op.kind === "move" ? movesOf(dex(B, o, op.slot))[op.mi] : op.kind === "heave" ? { type: "normal", cat: "deep" } : { cat: op.kind === "pick" ? "screen" : op.kind };
   if (mv.cat === "deep" || mv.cat === "rim") return shotValue(B, mv, scheme, op.kind === "heave" ? -0.12 : 0);
   if (B.clock <= 1) return 0;   // anything but a shot on the last tick is a violation
   if (mv.cat === "pass") {
