@@ -2,7 +2,7 @@
 // from the TV repo). Draft six, pick your three starters and the court, then every turn you and the bot choose at the
 // same time and it resolves. Vs the bot it runs entirely in the browser. Vs a friend (openRoom) the server only relays:
 // both phones post each turn's call, and once both are in each phone replays the game from the room seed.
-import { newBattle, resolve, options, botPick, botSubs, sub, movesOf, shotChance, speedOf, weatherOf, SCHEMES, CAT, COURTS, WEATHER,
+import { newBattle, resolve, options, botPick, botSubs, sub, movesOf, shotChance, passCalc, speedOf, weatherOf, SCHEMES, CAT, COURTS, WEATHER,
   STATUS_TXT, TO, ON, CLOCK, NO_BATTLE, canSubIn, bestEff } from "./pokehoops/battle.js";
 import { seeded } from "./pokehoops/engine.js";
 import { mon, LEGENDS } from "./pokehoops-draft.js";
@@ -127,10 +127,12 @@ const READ = {
   iso: { deny: [1, "lane-jumping defenders can't help on an iso"], switch: [1, "switching hands over the matchup"] },
 };
 function readOf(B, p, scheme) {
-  const cat = p.kind === "move" ? movesOf(B.rosters[B.off][B.on[B.off][p.slot ?? B.ball]])[p.mi].cat : p.kind;
+  const cat = p.kind === "move" ? movesOf(B.rosters[B.off][B.on[B.off][p.slot ?? B.ball]])[p.mi].cat : p.kind === "pick" ? "screen" : p.kind;
   return READ[cat]?.[scheme];
 }
 
+const pct = (p) => `${Math.round(100 * p)}%`;
+const odds = (p, what) => (p == null ? "" : ` <small class="pbodds">(${pct(p)} ${what})</small>`);
 function narrate(ev) {
   const B = S.B, lines = [];
   const side = (s) => (s === ME() ? "You" : esc(S.botName));
@@ -142,6 +144,7 @@ function narrate(ev) {
         if (p.kind === "pass") return `${onNm(s, p.slot)} passes to ${onNm(s, p.to)}`;
         if (p.kind === "heave") return `${onNm(s, p.slot)} heaves it`;
         if (p.kind === "iso") return `${onNm(s, p.slot)} calls for ${onNm(1 - s, p.to)} on an iso`;
+        if (p.kind === "pick") return `${onNm(s, p.slot)} sets a pick`;
         if (p.kind === "hold") return "holds";
         const m = movesOf(B.rosters[s][B.on[s][p.slot]])[p.mi];
         return `${onNm(s, p.slot)} uses <b>${esc(m.name)}</b>${["deep", "rim"].includes(m.cat) ? "" : ` <small>(${CAT[m.cat]})</small>`}${p.to !== undefined ? ` → ${onNm(s, p.to)}` : ""}`;
@@ -151,13 +154,13 @@ function narrate(ev) {
       if (r) lines.push({ t: `📋 ${r[0] > 0 ? "Offense" : "Defense"} wins the call: ${r[1]}.`, c: (r[0] > 0) === (o === ME()) ? "pos read" : "neg read" });
     } else if (e.k === "shot") {
       const who = onNm(B.off, e.slot), w = effWord(e.eff);
-      lines.push({ t: `${w ? `<i>${w}</i> ` : ""}${e.made ? `<b>${who} scores!</b> +${e.pts}${e.andOne ? " (and one!)" : ""}` : e.ft ? `${who} misses but draws the foul — <b>hits the free throw</b> +${e.pts}` : `${who} misses${e.fouled ? " (fouled — misses the free throw)" : ""}.`}`, c: e.scored ? "big" : "dim" });
-    } else if (e.k === "pass") lines.push({ t: `${onNm(B.off, e.to)} catches it${e.gain >= 2 ? " wide open" : e.gain ? " with room" : ", covered"}.`, c: "" });
-    else if (e.k === "screen") lines.push({ t: e.switched ? `They switch the screen — mismatch!` : `The screen frees ${onNm(B.off, B.ball)}${e.gain >= 2 ? " completely" : ""}.`, c: "" });
+      lines.push({ t: `${w ? `<i>${w}</i> ` : ""}${e.made ? `<b>${who} scores!</b> +${e.pts}${e.andOne ? " (and one!)" : ""}` : e.ft ? `${who} misses but draws the foul — <b>hits the free throw</b> +${e.pts}` : `${who} misses${e.fouled ? " (fouled — misses the free throw)" : ""}.`}${odds(e.p, "to make")}`, c: e.scored ? "big" : "dim" });
+    } else if (e.k === "pass") lines.push({ t: `${onNm(B.off, e.to)} catches it${e.gain >= 2 ? " wide open" : e.gain ? " with room" : ", covered"}.${odds(e.steal, "steal risk")}`, c: "" });
+    else if (e.k === "screen") lines.push({ t: e.switched ? `They switch the screen — mismatch!` : `The screen frees ${onNm(B.off, B.ball)}${e.gain >= 2 ? " completely" : ""}.${e.steal ? odds(e.steal, "steal risk") : ""}`, c: "" });
     else if (e.k === "iso") lines.push({ t: `Clear out! ${onNm(B.off, e.slot)} gets ${onNm(1 - B.off, e.g)} one-on-one${e.eff >= 2 ? " — a type mismatch!" : ""}${e.gain ? " and has room" : ""}.`, c: e.eff >= 2 ? "call" : "" });
     else if (e.k === "fastBreak") lines.push({ t: `<b>Fast break!</b> ${onNm(e.side, e.slot)} is out in front. 💨`, c: "call" });
     else if (e.k === "confusedSelf") lines.push({ t: `${onNm(B.off, e.slot)} is confused… it hurt itself in its confusion!`, c: "dim" });
-    else if (e.k === "turnover") lines.push({ t: e.why === "steal" ? `<b>Stolen!</b>` : e.why === "confused" ? `${onNm(B.off, e.slot)} is confused… throws it away!` : "Turnover.", c: "neg" });
+    else if (e.k === "turnover") lines.push({ t: e.why === "steal" ? `<b>Stolen!</b>${odds(e.p, "steal chance")}` : e.why === "confused" ? `${onNm(B.off, e.slot)} is confused… throws it away!` : "Turnover.", c: "neg" });
     else if (e.k === "oreb") lines.push({ t: `Offensive rebound, ${onNm(B.off, e.slot)}! Shot clock reset.`, c: "" });
     else if (e.k === "dreb") lines.push({ t: `Rebound ${onNm(1 - B.off, e.slot)}.`, c: "dim" });
     else if (e.k === "status") lines.push({ t: `${onNm(e.tSide, e.tSlot)} is ${STATUS_TXT[e.st]}! ${ST_ICON[e.st]}`, c: "call" });
@@ -204,7 +207,7 @@ function act(myPick) {
 
 // ── turn replay: redraw the floor as it was, then play each narrated line with its effect on the court ──
 const wait = (ms) => new Promise((r) => { if (S.skip) return r(); S.wake = r; setTimeout(r, ms); });
-const PACE = { pick: 1000, shot: 1300, iso: 1000, weather: 900, pass: 750, oreb: 700, dreb: 700, turnover: 800 };
+const PACE = { pick: 1000, shot: 1500, iso: 1000, weather: 900, pass: 750, oreb: 700, dreb: 700, turnover: 800 };
 async function play({ before, lines }) {
   const run = S, after = S.B, last = S.last;
   if (matchMedia("(prefers-reduced-motion: reduce)").matches) { render(); return scrollLast(); }
@@ -224,6 +227,7 @@ async function play({ before, lines }) {
   if (S !== run) return;   // left mid-replay
   S.playing = false; S.B = after; S.last = last;
   render(); scrollLast();
+  document.querySelector(".pbfloor")?.animate([{ opacity: 0.35 }, { opacity: 1 }], { duration: 250 });   // settle into the next possession, no snap
 }
 const cardEl = (court, side, slot) => court.querySelector(`[data-s="${side}${slot}"]`);
 function center(court, el) {
@@ -245,25 +249,27 @@ function pop(court, el, html, cls = "", style = "") {   // a label that floats u
   const k = (o, dy, sc) => ({ opacity: o, transform: `translate(-50%, ${dy}px) scale(${sc})` });
   f.animate([k(0, 6, 0.7), k(1, -6, 1.08), k(1, -10, 1), k(0, -34, 1)], { duration: 1400, easing: "ease-out" }).finished.then(() => f.remove());
 }
-const shake = (el, px = 6) => el?.animate([0, -px, px, -px / 2, px / 2, 0].map((x) => (el.classList.contains("pbtok") ? T(x) : { transform: `translateX(${x}px)` })), { duration: 420 });
+const shake = (el, px = 6) => el?.animate([0, -px, px, -px / 2, px / 2, 0].map((x) => (el.classList.contains("pbtok") ? at(el, x) : { transform: `translateX(${x}px)` })), { duration: 420 });
 const glow = (el, col, ms = 800) => el?.animate([{ boxShadow: `0 0 0 0 ${col}` }, { boxShadow: `0 0 22px 6px ${col}` }, { boxShadow: `0 0 0 0 ${col}` }], { duration: ms });
 const T = (dx = 0, dy = 0, sc = 1) => ({ transform: `translate(-50%, -50%) translate(${dx}px, ${dy}px) scale(${sc})` });
-const lunge = (el) => el?.animate([T(), T(0, -6, 1.15), T()], { duration: 500, easing: "ease-out" });
-function slide(court, el, to, ms = 700, back = true) {   // run a token toward another token (or a point) and, by default, back
+const at = (el, dx = 0, dy = 0, sc = 1) => T((el._o?.[0] || 0) + dx, (el._o?.[1] || 0) + dy, sc);   // relative to where the token now stands
+const lunge = (el) => el?.animate([at(el), at(el, 0, -6, 1.15), at(el)], { duration: 500, easing: "ease-out" });
+function slide(court, el, to, ms = 700, back = true) {   // run a token toward another token (or a point); back = return after
   if (!el || !to) return;
   const [x0, y0] = center(court, el), [x1, y1] = Array.isArray(to) ? to : center(court, to), dx = x1 - x0, dy = y1 - y0;
-  el.animate(back ? [T(), T(dx, dy), T(dx, dy), T()] : [T(), T(dx, dy)], { duration: ms, easing: "ease-in-out", fill: back ? "none" : "forwards" });
+  el.animate(back ? [at(el), at(el, dx, dy), at(el, dx, dy), at(el)] : [at(el), at(el, dx, dy)], { duration: ms, easing: "ease-in-out", fill: back ? "none" : "forwards" });
+  if (!back) el._o = [(el._o?.[0] || 0) + dx, (el._o?.[1] || 0) + dy];
 }
+function toward(court, a, b, k) { const [x0, y0] = center(court, a), [x1, y1] = center(court, b); return [x0 + (x1 - x0) * k, y0 + (y1 - y0) * k]; }
 const PACK = [[38, 30], [50, 38], [62, 30]];
 function formation({ court, o, B }, scheme) {
   const d = 1 - o, w = court.clientWidth, h = court.clientHeight, c = (s, sl) => cardEl(court, s, sl);
-  const toward = (a, b, k) => { const [x0, y0] = center(court, a), [x1, y1] = center(court, b); return [x0 + (x1 - x0) * k, y0 + (y1 - y0) * k]; };
   for (let j = 0; j < 3; j++) {
     const el = c(d, j), man = c(o, B.guard.indexOf(j));
     if (!el) continue;
     if (scheme === "pack") slide(court, el, [PACK[j][0] * w / 100, PACK[j][1] * h / 100], 600, false);
-    else if (scheme === "press" && man) slide(court, el, toward(el, man, 0.75), 500, false);
-    else if (scheme === "deny" && man && B.guard.indexOf(j) !== B.ball) slide(court, el, toward(man, c(o, B.ball), 0.4), 600, false);
+    else if (scheme === "press" && man) slide(court, el, toward(court, el, man, 0.75), 500, false);
+    else if (scheme === "deny" && man && B.guard.indexOf(j) !== B.ball) slide(court, el, toward(court, man, c(o, B.ball), 0.4), 600, false);
     else if (scheme === "switch") pop(court, el, "↔", "sch");
   }
 }
@@ -280,19 +286,21 @@ function fx(e, P) {
   };
   if (e.k === "pick") { callout(o, e.off); setTimeout(() => court.isConnected && callout(d, e.def), 350); }
   else if (e.k === "pass") fly(court, c(o, e.from), c(o, e.to), 600, 26);
-  else if (e.k === "screen") { const g = c(d, P.guard[B.ball]); slide(court, c(o, e.slot), g, 1000); glow(g, "#7aa2f7"); pop(court, c(o, e.slot), "🛡 screen"); }
+  else if (e.k === "screen") { const g = c(d, P.guard[B.ball]), sc = c(o, e.slot); if (sc && g) slide(court, sc, toward(court, sc, g, 0.8), 600, false); glow(g, "#7aa2f7"); pop(court, sc, e.move === "Set a pick" ? "🧱 pick" : "🛡 screen"); }
   else if (e.k === "iso") {
     // clear out: everyone else drifts to the far corners, the called-for defender switches onto the ball
     const w = court.clientWidth;
-    for (let s = 0; s < 3; s++) if (s !== e.slot) { const dx = (SPOT[s][0] < 50 ? -1 : SPOT[s][0] > 50 ? 1 : 0) * w * 0.1, dy = s === 1 ? 20 : -40; c(o, s)?.animate([T(), T(dx, dy)], { duration: 700, fill: "forwards" }); }
-    for (let j = 0; j < 3; j++) if (j !== e.g) c(d, j)?.animate([T(), T(0, -30)], { duration: 700, fill: "forwards" });
+    const move = (el, dx, dy) => el && slide(court, el, [center(court, el)[0] + dx, center(court, el)[1] + dy], 700, false);
+    for (let s = 0; s < 3; s++) if (s !== e.slot) move(c(o, s), (SPOT[s][0] < 50 ? -1 : SPOT[s][0] > 50 ? 1 : 0) * w * 0.1, s === 1 ? 20 : -40);
+    for (let j = 0; j < 3; j++) if (j !== e.g) move(c(d, j), 0, -30);
     slide(court, c(d, e.g), c(o, e.slot), 700, false);
     if (e.eff >= 2) { glow(c(d, e.g), "#f7d02c"); pop(court, c(d, e.g), "mismatch!", "sch"); }
     P.guard[e.slot] = e.g;
   } else if (e.k === "shot") {
     const shooter = c(o, e.slot), def = c(d, P.guard[e.slot]);
-    if (e.cat === "rim") slide(court, shooter, hoop, 900); else lunge(shooter);   // drive vs pull-up
-    fly(court, shooter, hoop, 650, e.cat === "deep" ? 70 : 30);
+    const lead = e.cat === "rim" ? 400 : 150;   // drive in and lay it up vs pull-up jumper
+    if (e.cat === "rim" && shooter) slide(court, shooter, toward(court, shooter, hoop, 0.55), 400, false); else lunge(shooter);
+    setTimeout(() => court.isConnected && fly(court, shooter, hoop, 600, e.cat === "deep" ? 70 : 30), lead);
     if (e.eff >= 2) { shake(def, 8); glow(def, TYPE_COL[e.type] || "#fff", 600); }
     else if (e.eff < 1) pop(court, def, e.eff === 0 ? "barely…" : "not very effective", "dim");
     setTimeout(() => {
@@ -304,13 +312,17 @@ function fx(e, P) {
       pop(court, shooter, `+${e.pts}`, "good big");
       const sb = document.querySelectorAll(".phsb > div > b"), el = sb[o === ME() ? 0 : 1];
       if (el) { el.textContent = P.score[o]; el.animate([{ transform: "scale(1)" }, { transform: "scale(1.6)", color: "#9ece6a" }, { transform: "scale(1)" }], { duration: 600 }); }
-    }, 650);
-  } else if (e.k === "oreb") { slide(court, c(o, e.slot), hoop, 700); fly(court, hoop, c(o, e.slot), 500, 20); pop(court, c(o, e.slot), "board!", "good"); }
-  else if (e.k === "dreb") { slide(court, c(d, e.slot), hoop, 700); fly(court, hoop, c(d, e.slot), 500, 20); }
+    }, lead + 600);
+  } else if (e.k === "oreb" || e.k === "dreb") {   // the rebounder crashes toward the rim, the ball comes off to him
+    const r = c(e.k === "oreb" ? o : d, e.slot);
+    if (r) slide(court, r, toward(court, r, hoop, 0.5), 350, false);
+    setTimeout(() => court.isConnected && fly(court, hoop, r, 350, 16), 350);
+    if (e.k === "oreb") pop(court, r, "board!", "good");
+  }
   else if (e.k === "turnover") {
     const to = c(d, e.by >= 0 ? e.by : P.guard[e.slot]);
-    if (e.why === "steal") { slide(court, to, c(o, e.slot), 500); fly(court, c(o, e.slot), to, 400, 10); pop(court, to, "Stolen!", "bad"); } else shake(c(o, e.slot));
-  } else if (e.k === "fastBreak") { slide(court, c(e.side, e.slot), [court.clientWidth / 2, court.clientHeight * 0.95], 700); pop(court, c(e.side, e.slot), "💨 fast break"); }
+    if (e.why === "steal" && to) { slide(court, to, toward(court, to, c(o, e.slot), 0.6), 300, false); setTimeout(() => court.isConnected && fly(court, c(o, e.slot), to, 300, 8), 300); pop(court, to, "Stolen!", "bad"); } else shake(c(o, e.slot));
+  } else if (e.k === "fastBreak") { slide(court, c(e.side, e.slot), [court.clientWidth / 2, court.clientHeight * 0.85], 600, false); pop(court, c(e.side, e.slot), "💨 fast break"); }
   else if (e.k === "status") { shake(c(e.tSide, e.tSlot), 4); pop(court, c(e.tSide, e.tSlot), ST_ICON[e.st], "big"); }
   else if (e.k === "statusMiss") pop(court, c(e.tSide, e.tSlot), e.immune ? "immune" : e.failed ? "failed" : "missed", "dim");
   else if (e.k === "boost") pop(court, c(e.side, e.slot), Object.entries(e.got).map(([k, v]) => `${STAT_LAB[k]} ${v > 0 ? "▲".repeat(v) : "▼".repeat(-v)}`).join(" ") || "max!", "up");
@@ -343,7 +355,7 @@ function floor() {
   const tok = (side, slot, [x, y]) => {
     const ri = B.on[side][slot], n = B.rosters[side][ri], st = B.status[side][ri], ball = side === o && slot === B.ball;
     const stg = Object.entries(B.stage[side][ri]).filter(([, v]) => v).map(([k, v]) => `<em class="${v > 0 ? "up" : "dn"}">${STAT_LAB[k]}${v > 0 ? "▲" : "▼"}${Math.abs(v) > 1 ? Math.abs(v) : ""}</em>`).join("");
-    return `<div class="pbtok ${mine(side)}${ball ? " ball" : ""}" data-s="${side}${slot}" style="left:${x}%;top:${y}%">
+    return `<div class="pbtok ${mine(side)}${ball ? " ball" : ""}${S.peek === `${side}${slot}` ? " peek" : ""}" data-s="${side}${slot}" data-peek="${side}${slot}" style="left:${x}%;top:${y}%">
       <img src="${sprite(n)}" alt="">${st ? `<i class="pbst">${ST_ICON[st.k]}</i>` : ""}${ball ? `<span class="pbball">🏀</span>` : ""}<b>${esc(mon(n).name)}</b>${stg}</div>`;
   };
   for (let s = 0; s < 3; s++) at.push(tok(o, s, SPOT[s]));
@@ -362,6 +374,17 @@ function floor() {
     <span class="pbtag" style="left:4%;top:94%">${o === ME() ? "You attack ↑" : `${esc(S.botName)} attack ↑`}</span>${at.join("")}</div>`;
 }
 
+function peekSheet() {
+  if (!S.peek || S.playing) return `<div class="phmuted pbpeekhint">Tap any player on the court for their stats.</div>`;
+  const B = S.B, side = Number(S.peek[0]), slot = Number(S.peek[1]), ri = B.on[side][slot], n = B.rosters[side][ri], st = B.status[side][ri], stg = B.stage[side][ri];
+  const bars = Object.entries(STAT_LAB).filter(([k]) => k !== "spe").map(([k, lab]) => `<div class="phbar"><span>${lab}</span><i><b style="width:${rating(n, k)}%"></b></i><em>${rating(n, k)}${stg[k] ? `<small class="${stg[k] > 0 ? "up" : "dn"}"> ${stg[k] > 0 ? "▲" : "▼"}${Math.abs(stg[k])}</small>` : ""}</em></div>`).join("");
+  return `<div class="pbpeek ${side === ME() ? "me" : "op"}"><button class="btn ghost pbpeekx" data-peek="${S.peek}" aria-label="close">✕</button>
+    <div class="phtop"><img src="${sprite(n)}" alt=""><div><b>${esc(mon(n).name)}</b> ${mon(n).types.map(chip).join("")}
+      <div class="phmuted">${side === ME() ? "You" : esc(S.botName)} · SPE ${mon(n).spe}${stg.spe ? ` ${stg.spe > 0 ? "▲" : "▼"}${Math.abs(stg.spe)}` : ""} · stamina ${Math.round(B.stam[side][ri])}%${st ? ` · ${STATUS_TXT[st.k]} ${ST_ICON[st.k]}` : ""}</div></div></div>
+    <div class="phbars">${bars}</div>
+    <div class="pbmoves">${movesOf(n).map((m, mi) => moveChip(m).replace("</small>", ` · PP ${B.pp[side][ri][mi]}/${m.pp}</small>`)).join("")}</div></div>`;
+}
+
 function optionButtons() {
   const B = S.B, opts = options(B, ME()), mine = B.off === ME();
   if (mine) {
@@ -378,10 +401,13 @@ function optionButtons() {
     ${moves.length ? `<div class="pbgrp"><div class="phgroup">Or a defender's move <small>(you play man-to-man that turn)</small></div><div class="pbopts">${moves.map(optBtn).join("")}</div></div>` : ""}`;
 }
 
+const rating = (n, k) => Math.round(skills(n)[k] * 99);
+const stealHint = (op) => (S.hints ? `<em>steal ${pct(passCalc(S.B, op, "man")[0])} · ${pct(passCalc(S.B, op, "deny")[0])} vs deny</em>` : "");
 function optBtn(op) {
   const B = S.B;
   if (op.kind === "scheme") return `<button class="pbopt" data-bopt="${op.id}"><b>${SCHEMES[op.scheme].name}</b><small>${SCHEMES[op.scheme].does}</small></button>`;
-  if (op.kind === "pass") return `<button class="pbopt" data-bopt="${op.id}"><b>Pass → ${onNm(ME(), op.to)}</b><small>basic pass</small></button>`;
+  if (op.kind === "pass") return `<button class="pbopt" data-bopt="${op.id}"><b>Pass → ${onNm(ME(), op.to)}</b><small>basic pass</small>${stealHint(op)}</button>`;
+  if (op.kind === "pick") return `<button class="pbopt" data-bopt="${op.id}"><b>Set a pick</b><small>${onNm(ME(), op.slot)} screens for the ball handler: more open (beats the press; a switch kills it)</small></button>`;
   if (op.kind === "heave") return `<button class="pbopt" data-bopt="${op.id}"><b>Heave it</b><small>out of shot PP</small></button>`;
   if (op.kind === "hold") return `<button class="pbopt" data-bopt="${op.id}"><b>Hold</b></button>`;
   if (op.kind === "iso") {
@@ -392,9 +418,14 @@ function optBtn(op) {
   let hint = "";
   if (S.hints && (m.cat === "deep" || m.cat === "rim")) {
     const e = typeEff(m.type, B.rosters[OP()][B.on[OP()][B.guard[B.ball]]]);
-    const pct = (sc) => Math.round(100 * shotChance(B, m, sc));
-    hint = `<em>${pct("man")}% vs man</em> ` + (e >= 2 ? `<em class="pos">super effective</em>` : e === 0 ? `<em class="neg">barely affects (−15%)</em>` : e < 1 ? `<em class="neg">not very effective</em>` : "");
+    const pc = (sc) => Math.round(100 * shotChance(B, m, sc));
+    hint = `<em>${pc("man")}% vs man</em> ` + (e >= 2 ? `<em class="pos">super effective</em>` : e === 0 ? `<em class="neg">barely affects (−15%)</em>` : e < 1 ? `<em class="neg">not very effective</em>` : "");
   }
+  if (m.cat === "deep" || m.cat === "rim") {   // the ratings this shot is decided on, shooter vs his defender
+    const [a, b] = m.cat === "deep" ? ["shoot", "perD"] : ["finish", "intD"], g = B.rosters[OP()][B.on[OP()][B.guard[B.ball]]];
+    hint = `<em>${STAT_LAB[a]} ${rating(B.rosters[side][ri], a)} vs ${STAT_LAB[b]} ${rating(g, b)}</em> ` + hint;
+  }
+  if (m.cat === "pass") hint += stealHint(op);
   return `<button class="pbopt mv" style="--tc:${TYPE_COL[m.type] || "#888"}" data-bopt="${op.id}"><b>${esc(m.name)}${op.to !== undefined ? ` → ${onNm(ME(), op.to)}` : ""}</b>
     <small>${m.type} · ${CAT[m.cat]}${m.boost ? ` (${Object.entries(m.boost).map(([k, v]) => `${STAT_LAB[k]} ${v > 0 ? "+" : ""}${v}`).join(" ")})` : m.drop ? ` (${Object.entries(m.drop).map(([k, v]) => `${STAT_LAB[k]} ${v}`).join(" ")})` : m.st ? ` (${STATUS_TXT[m.st]})` : ""} · PP ${pp}/${m.pp}</small>${hint}</button>`;
 }
@@ -408,7 +439,7 @@ function renderBattle() {
       <div class="phclock">to ${TO}${wx ? ` · ${WX_ICON[wx]}` : ""}<small>${over ? "FINAL" : B.dead ? "dead ball" : `${mineBall ? "your ball" : "on defense"}`}</small>${over ? "" : `<span class="pbclock" title="shot clock: actions left">${clock}</span><small>shot clock</small>`}</div>
       <div><small>${esc(S.botName)}</small><b>${B.score[op]}</b></div></div>
     ${wx ? `<div class="phmuted pbwx">${WX_ICON[wx]} ${esc(WEATHER[wx])}${B.weather ? ` (${B.weather.t} turns)` : " (the court)"}</div>` : ""}
-    ${floor()}
+    ${floor()}${peekSheet()}
     <details class="pbcards"${S.open?.cards || B.dead ? " open" : ""}><summary data-bfold="cards">Players: stamina, boosts, matchups</summary><div class="pbcourt"><div class="pbside">${esc(S.botName)}</div><div class="pbrow them">${[0, 1, 2].map((s) => playerCard(op, s)).join("")}</div>
       <div class="pbside">You</div><div class="pbrow us">${[0, 1, 2].map((s) => playerCard(me, s)).join("")}</div></div></details>
     ${S.playing ? `<div class="pblast"></div><button class="btn ghost pbskip" id="pbSkip">Skip ⏩</button>` : S.last?.length ? `<div class="pblast">${S.last.map((l) => `<div class="${l.c}">${l.t}</div>`).join("")}</div>` : ""}
@@ -437,6 +468,7 @@ export function handle(e) {
   const t = (sel) => e.target.closest(sel);
   let el;
   if (S.playing) { if (t("#pbSkip, .pbfloor, .pblast")) { S.skip = true; S.wake?.(); for (const a of document.querySelectorAll(".pbfloor *")) a.getAnimations().forEach((x) => x.finish()); } if (!t("[data-bfold]")) return true; }
+  if ((el = t("[data-peek]")) && S.phase === "battle") { S.peek = S.peek === el.dataset.peek ? null : el.dataset.peek; render(); return true; }
   if ((el = t("[data-bfold]"))) { (S.open ||= {})[el.dataset.bfold] = !el.parentElement.open; return false; }   // remember folds across re-renders
   if ((el = t("[data-bpick]")) && S.phase === "draft") { S.picks.push(Number(el.dataset.bpick)); if (S.room) roomPicks(S.picks); render(); return true; }
   if ((el = t("[data-bstart]"))) { const i = Number(el.dataset.bstart); S.starters = S.starters.includes(i) ? S.starters.filter((x) => x !== i) : S.starters.length < ON ? [...S.starters, i] : S.starters; render(); return true; }

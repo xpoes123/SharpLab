@@ -383,3 +383,10 @@ body:has(.phsb) header { position: static; }
 .pbtok em.up { background: #7aa2f7; color: #11121a; } .pbtok em.dn { background: #f7768e; color: #11121a; }
 .pbcards > summary { cursor: pointer; color: var(--fg-2); padding: 8px 0; }
 .pblast .read, .pblog .read { font-size: 13px; } .pblast .pos, .pblog .pos { color: var(--green); } .pblast .neg.read, .pblog .neg.read { color: var(--red); }
+.pbodds { color: var(--muted); font-weight: 400; }
+.pbtok { cursor: pointer; } .pbtok.peek img { box-shadow: 0 0 0 3px var(--ring-c), 0 0 0 6px #fff, 0 3px 6px rgba(0,0,0,.4); }
+.pbpeekhint { font-size: 12px; text-align: center; }
+.pbpeek { position: relative; display: grid; gap: 8px; background: var(--panel2); border-radius: var(--r); padding: 10px; border-left: 4px solid #7aa2f7; }
+.pbpeek.op { border-left-color: #f7768e; } .pbpeek .phtop { display: flex; gap: 10px; align-items: center; justify-content: start; }
+.pbpeek img { width: 56px; height: 56px; image-rendering: pixelated; } .pbpeekx { position: absolute; right: 6px; top: 6px; padding: 2px 10px; min-height: 32px; }
+.pbpeek .up { color: #7aa2f7; } .pbpeek .dn { color: #f7768e; }
