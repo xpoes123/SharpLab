@@ -503,13 +503,17 @@ _SPORT_ICON = {"NBA": "🏀", "WNBA": "🏀", "NFL": "🏈", "MLB": "⚾", "NHL"
 _PER_PAGE = 5
 
 
+def _clip(text: str, n: int) -> str:
+    return text if len(text) <= n else text[:n - 1].rsplit(" ", 1)[0] + "…"
+
+
 def _position_field(r: dict, today) -> tuple[str, str]:
     d = ka.slate_date(r["ticker"])
     gap = (datetime.fromisoformat(d).date() - today).days if d else None
     when = ("" if gap is None else " · 🔴 Today" if gap == 0 else " · Tmrw" if gap == 1
             else f" · {datetime.fromisoformat(d):%a %-m/%-d}")
     head = f"{r['game']} — {r['title']}" if r.get("game") else r["title"]
-    name = f"{'🟢' if r['unreal'] >= 0 else '🔴'} {_SPORT_ICON.get(r['sport'], '📈')} {head}"[:250]
+    name = f"{'🟢' if r['unreal'] >= 0 else '🔴'} {_SPORT_ICON.get(r['sport'], '📈')} {_clip(head, 240)}"
     basis = r["cost"] + r.get("fees", 0)
     pct = f" ({r['unreal'] / basis * 100:+.0f}%)" if basis else ""
     avg = r["cost"] / r["qty"] * 100 if r["qty"] else 0
@@ -549,7 +553,7 @@ def _position_pages(acct: dict, who: str) -> dict[str, list[discord.Embed]]:
     if movers:
         ov.add_field(name="Biggest movers", inline=False, value="\n".join(
             f"{'🟢' if r['unreal'] >= 0 else '🔴'} **{r['unreal']:+,.2f}** "
-            + discord.utils.escape_markdown((f"{r['game']} — " if r.get("game") else "") + r["title"])[:70]
+            + discord.utils.escape_markdown(_clip((f"{r['game']} — " if r.get("game") else "") + r["title"], 80))
             for r in movers))
     ov.set_footer(text="Today resets 4am ET: settled since then + open positions' ~24h move "
                        "(cost basis if traded today) · all figures net of fees")
