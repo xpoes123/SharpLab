@@ -13,7 +13,7 @@ import asyncio
 import base64
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import defaultdict
 from zoneinfo import ZoneInfo
 from urllib.parse import urlsplit
@@ -159,6 +159,13 @@ def _balance(bal: dict) -> float:
     return _f(bal["balance_dollars"]) if "balance_dollars" in bal else _f(bal.get("balance")) / 100
 
 
+def day_start(now: datetime | None = None) -> datetime:
+    """The betting day rolls over at 4am ET, so late-night games count toward the evening they started."""
+    now = now or datetime.now(ET)
+    start = now.replace(hour=4, minute=0, second=0, microsecond=0)
+    return start if now >= start else start - timedelta(days=1)
+
+
 def today_pnl(open_rows: list[dict], settled_today: list[dict], traded_today: set[str]) -> dict:
     """Settled-today PnL + open positions' ~24h move (Kalshi's previous_* prices are "a day ago").
     Positions traded today, or with no prior price (new market), count from cost basis instead."""
@@ -171,8 +178,7 @@ def today_pnl(open_rows: list[dict], settled_today: list[dict], traded_today: se
 
 async def fetch_account(key_id: str, pem: str, with_settlements: bool = True) -> dict:
     key = load_key(pem)
-    midnight = datetime.now(ET).replace(hour=0, minute=0, second=0, microsecond=0)
-    since = f"?min_ts={int(midnight.timestamp())}"
+    since = f"?min_ts={int(day_start().timestamp())}"
     async with httpx.AsyncClient(timeout=20) as c:
         bal = await _get(c, key_id, key, "/portfolio/balance")
         positions = await _all(c, key_id, key, "/portfolio/positions", "market_positions")
