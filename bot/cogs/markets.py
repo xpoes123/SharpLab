@@ -464,48 +464,9 @@ class MarketsCog(commands.Cog):
         acct = await _load_account(interaction, public, with_settlements=False, target=target)
         if not acct:
             return
-        rows = acct["open"]
-        unreal = sum(r["unreal"] for r in rows)
-        embed = discord.Embed(title=f"📂 {target.display_name}'s Kalshi positions",
-                              color=0x22C55E if unreal >= 0 else 0xEF4444)
-        today = datetime.now(_ET).date()
-
-        def when(d: str) -> str:
-            gap = (datetime.fromisoformat(d).date() - today).days
-            return "Today" if gap == 0 else "Tmrw" if gap == 1 else datetime.fromisoformat(d).strftime("%a %-m/%-d")
-
-        def line(r: dict, label: str = "") -> str:
-            name = f"{r['game']} — {r['title']}" if r.get("game") else r["title"]
-            name = discord.utils.escape_markdown(name[:90]).replace("]", ")")
-            return (f"`{r['side']:<3}` **{r['qty']:g}** × [{name}]({ka.market_url(r['ticker'])})"
-                    + (f" · *{label}*" if label else "")
-                    + f"\n  cost ${r['cost']:,.2f}" + (f" + ${r['fees']:,.2f} fees" if r.get("fees") else "") + f" · mark {r['mark']*100:.0f}¢ · **{r['unreal']:+,.2f}**")
-
-        # Game/daily markets carry a date in the ticker; futures (season/champion/long-dated) don't.
-        games = sorted((r for r in rows if ka.slate_date(r["ticker"])),
-                       key=lambda r: (ka.slate_date(r["ticker"]), -r["cost"]))
-        futures = [r for r in rows if not ka.slate_date(r["ticker"])]
-        parts = []
-        for head, group, dated in (("🎯 Now & upcoming", games, True), ("🔮 Futures", futures, False)):
-            if not group:
-                continue
-            body = [line(r, when(ka.slate_date(r["ticker"])) if dated else "") for r in group[:10]]
-            if len(group) > 10:
-                body.append(f"*+{len(group) - 10} more*")
-            parts.append(f"**{head}** · {sum(r['unreal'] for r in group):+,.2f}\n" + "\n".join(body))
-        desc = "\n\n".join(parts)
-        # links make lines long; cut on a line boundary so no link is left half-open
-        embed.description = (desc if len(desc) <= 4000 else desc[:4000].rsplit("\n", 1)[0]) or "No open positions."
-        embed.add_field(name="Cash", value=f"${acct['balance']:,.2f}")
-        embed.add_field(name="Open value", value=f"${sum(r['value'] for r in rows):,.2f}")
-        embed.add_field(name="Unrealized", value=f"{unreal:+,.2f}")
-        t = acct["today"]
-        embed.add_field(name="Today", inline=False, value=(
-            f"**{t['total']:+,.2f}** · settled {t['settled']:+,.2f} ({t['n_settled']} mkts)"
-            f" · open move {t['open_move']:+,.2f}"))
-        embed.set_footer(text="Today (resets 4am ET) = markets settled since then + open positions' ~24h move "
-                              "(cost basis if traded today)")
-        await interaction.followup.send(embed=embed, ephemeral=not public)
+        view = _PositionsView(_position_pages(acct, target.display_name), interaction.user.id)
+        view.message = await interaction.followup.send(embed=view.current(), view=view,
+                                                       ephemeral=not public, wait=True)
 
     @kalshi_group.command(name="pnl", description="Your realized + unrealized Kalshi PnL")
     @app_commands.describe(days="Only count markets settled in the last N days (default: all time)",
@@ -536,6 +497,142 @@ class MarketsCog(commands.Cog):
                 for sp, n, pnl, cost in s["by_sport"][:10]))
         embed.set_footer(text="Realized is net of fees · Unrealized = open positions marked at current bid, minus fees paid")
         await interaction.followup.send(embed=embed, ephemeral=not public)
+
+_SPORT_ICON = {"NBA": "🏀", "WNBA": "🏀", "NFL": "🏈", "MLB": "⚾", "NHL": "🏒", "NCAA": "🎓",
+               "Esports": "🎮", "Tennis": "🎾", "Crypto": "🪙"}
+_PER_PAGE = 5
+
+
+def _clip(text: str, n: int) -> str:
+    return text if len(text) <= n else text[:n - 1].rsplit(" ", 1)[0] + "…"
+
+
+def _position_field(r: dict, today) -> tuple[str, str]:
+    d = ka.slate_date(r["ticker"])
+    gap = (datetime.fromisoformat(d).date() - today).days if d else None
+    when = ("" if gap is None else " · 🔴 Today" if gap == 0 else " · Tmrw" if gap == 1
+            else f" · {datetime.fromisoformat(d):%a %-m/%-d}")
+    head = f"{r['game']} — {r['title']}" if r.get("game") else r["title"]
+    name = f"{'🟢' if r['unreal'] >= 0 else '🔴'} {_SPORT_ICON.get(r['sport'], '📈')} {_clip(head, 240)}"
+    basis = r["cost"] + r.get("fees", 0)
+    pct = f" ({r['unreal'] / basis * 100:+.0f}%)" if basis else ""
+    avg = r["cost"] / r["qty"] * 100 if r["qty"] else 0
+    value = (f"`{r['side']}` **{r['qty']:,.0f}** @ {avg:.0f}¢ → **{r['mark'] * 100:.0f}¢**{when}\n"
+             f"${basis:,.2f}" + (f" (incl ${r['fees']:,.2f} fees)" if r.get("fees") else "")
+             + f" → ${r['value']:,.2f} · **{r['unreal']:+,.2f}**{pct}\n[View on Kalshi ↗]({ka.market_url(r['ticker'])})")
+    return name, value
+
+
+def _position_pages(acct: dict, who: str) -> dict[str, list[discord.Embed]]:
+    """{tab: [embeds]} — an Overview page plus paged position cards per group."""
+    rows, t = acct["open"], acct["today"]
+    unreal = sum(r["unreal"] for r in rows)
+    today = datetime.now(_ET).date()
+    color = lambda x: 0x22C55E if x >= 0 else 0xEF4444
+    games = sorted((r for r in rows if ka.slate_date(r["ticker"])),
+                   key=lambda r: (ka.slate_date(r["ticker"]), -r["cost"]))
+    futures = sorted((r for r in rows if not ka.slate_date(r["ticker"])), key=lambda r: -r["cost"])
+
+    ov = discord.Embed(title=f"📂 {who}'s Kalshi positions", color=color(t["total"]))
+    ov.description = (f"## Today {t['total']:+,.2f}\n"
+                      f"settled **{t['settled']:+,.2f}** ({t['n_settled']} mkts) · open move **{t['open_move']:+,.2f}**")
+    ov.add_field(name="💵 Cash", value=f"${acct['balance']:,.2f}")
+    ov.add_field(name="📦 Open value", value=f"${sum(r['value'] for r in rows):,.2f}")
+    ov.add_field(name="📈 Unrealized", value=f"{unreal:+,.2f}")
+    ov.add_field(name="🎯 Now & upcoming", value=f"{len(games)} · {sum(r['unreal'] for r in games):+,.2f}")
+    ov.add_field(name="🔮 Futures", value=f"{len(futures)} · {sum(r['unreal'] for r in futures):+,.2f}")
+    by_sport: dict[str, list] = {}
+    for r in rows:
+        by_sport.setdefault(r["sport"], []).append(r["unreal"])
+    if by_sport:
+        ov.add_field(name="By sport", inline=False, value="\n".join(
+            f"{_SPORT_ICON.get(sp, '📈')} {sp} · {len(v)} · **{sum(v):+,.2f}**"
+            for sp, v in sorted(by_sport.items(), key=lambda kv: -abs(sum(kv[1]))))[:1024])
+    ranked = sorted(rows, key=lambda r: r["unreal"])
+    movers = [r for r in ranked[::-1][:2] if r["unreal"] > 0] + [r for r in ranked[:2] if r["unreal"] < 0]
+    if movers:
+        ov.add_field(name="Biggest movers", inline=False, value="\n".join(
+            f"{'🟢' if r['unreal'] >= 0 else '🔴'} **{r['unreal']:+,.2f}** "
+            + discord.utils.escape_markdown(_clip((f"{r['game']} — " if r.get("game") else "") + r["title"], 80))
+            for r in movers))
+    ov.set_footer(text="Today resets 4am ET: settled since then + open positions' ~24h move "
+                       "(cost basis if traded today) · all figures net of fees")
+    pages = {"overview": [ov]}
+    for key, label, group in (("games", "🎯 Now & upcoming", games), ("futures", "🔮 Futures", futures)):
+        chunks = [group[i:i + _PER_PAGE] for i in range(0, len(group), _PER_PAGE)] or [[]]
+        pages[key] = []
+        for i, chunk in enumerate(chunks, 1):
+            e = discord.Embed(title=f"{label} · {who}", color=color(sum(r["unreal"] for r in group)),
+                              description=None if chunk else "Nothing here.")
+            for r in chunk:
+                name, value = _position_field(r, today)
+                e.add_field(name=name, value=value, inline=False)
+            e.set_footer(text=f"Page {i}/{len(chunks)} · {len(group)} positions · "
+                              f"{sum(r['unreal'] for r in group):+,.2f} unrealized")
+            pages[key].append(e)
+    return pages
+
+
+class _PositionsView(discord.ui.View):
+    _TABS = (("overview", "📊 Overview"), ("games", "🎯 Now & upcoming"), ("futures", "🔮 Futures"))
+
+    def __init__(self, pages: dict[str, list[discord.Embed]], owner_id: int) -> None:
+        super().__init__(timeout=300)
+        self.pages, self.owner_id, self.tab, self.page = pages, owner_id, "overview", 0
+        self.message: discord.Message | None = None
+        self.tab_select.options = [discord.SelectOption(label=label, value=key, default=key == "overview")
+                                   for key, label in self._TABS]
+        self._sync()
+
+    def current(self) -> discord.Embed:
+        return self.pages[self.tab][self.page]
+
+    def _sync(self) -> None:
+        n = len(self.pages[self.tab])
+        self.prev_btn.disabled = self.page == 0
+        self.next_btn.disabled = self.page >= n - 1
+        self.count_btn.label = f"{self.page + 1}/{n}"
+        for o in self.tab_select.options:
+            o.default = o.value == self.tab
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.owner_id:
+            return True
+        await interaction.response.send_message("Run `/kalshi positions` to get your own viewer.", ephemeral=True)
+        return False
+
+    async def _show(self, interaction: discord.Interaction) -> None:
+        self._sync()
+        await interaction.response.edit_message(embed=self.current(), view=self)
+
+    @discord.ui.select(placeholder="Jump to…", row=0)
+    async def tab_select(self, interaction: discord.Interaction, select: discord.ui.Select) -> None:
+        self.tab, self.page = select.values[0], 0
+        await self._show(interaction)
+
+    @discord.ui.button(emoji="◀", style=discord.ButtonStyle.secondary, row=1)
+    async def prev_btn(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        self.page -= 1
+        await self._show(interaction)
+
+    @discord.ui.button(label="1/1", style=discord.ButtonStyle.secondary, disabled=True, row=1)
+    async def count_btn(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        pass
+
+    @discord.ui.button(emoji="▶", style=discord.ButtonStyle.secondary, row=1)
+    async def next_btn(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        self.page += 1
+        await self._show(interaction)
+
+    async def on_timeout(self) -> None:
+        for c in self.children:
+            c.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
 
 _ACCT_CACHE: dict[str, tuple[float, bool, dict]] = {}
 _ACCT_TTL = 60
@@ -596,8 +693,7 @@ async def _recap_embed(uid: str, slate: str) -> discord.Embed | None:
                           color=0x22C55E if day["pnl"] >= 0 else 0xEF4444)
     embed.description = (f"**{day['pnl']:+,.2f}** on ${day['cost']:,.0f} staked · "
                          f"{day['won']}-{day['n'] - day['won']} across {day['n']} markets")
-    icon = {"NBA": "🏀", "WNBA": "🏀", "NFL": "🏈", "MLB": "⚾", "NHL": "🏒", "NCAA": "🎓",
-            "Esports": "🎮", "Tennis": "🎾", "Crypto": "🪙"}
+    icon = _SPORT_ICON
     embed.add_field(name="By sport", inline=False, value="\n".join(
         f"{icon.get(sp, '•')} {sp} {w}-{n - w} · **{p:+,.2f}**"
         for sp, (n, w, p) in sorted(day["sports"].items(), key=lambda kv: -abs(kv[1][2]))))
