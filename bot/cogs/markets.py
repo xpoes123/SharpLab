@@ -503,7 +503,7 @@ class MarketsCog(commands.Cog):
         embed.add_field(name="Today", inline=False, value=(
             f"**{t['total']:+,.2f}** · settled {t['settled']:+,.2f} ({t['n_settled']} mkts)"
             f" · open move {t['open_move']:+,.2f}"))
-        embed.set_footer(text="Today = markets settled since midnight ET + open positions' ~24h move "
+        embed.set_footer(text="Today (resets 4am ET) = markets settled since then + open positions' ~24h move "
                               "(cost basis if traded today)")
         await interaction.followup.send(embed=embed, ephemeral=not public)
 

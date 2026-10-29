@@ -136,3 +136,11 @@ def test_today_pnl():
     assert t["open_move"] == pytest.approx(1.0 - 1.0 + 0.25)
     assert t["settled"] == pytest.approx(4.0) and t["n_settled"] == 1
     assert t["total"] == pytest.approx(4.25)
+
+
+def test_day_start_rolls_at_4am_et():
+    from datetime import datetime
+    late = datetime(2026, 10, 29, 1, 10, tzinfo=ka.ET)   # 1:10am still counts as the 28th
+    assert ka.day_start(late) == datetime(2026, 10, 28, 4, 0, tzinfo=ka.ET)
+    morning = datetime(2026, 10, 29, 9, 0, tzinfo=ka.ET)
+    assert ka.day_start(morning) == datetime(2026, 10, 29, 4, 0, tzinfo=ka.ET)
