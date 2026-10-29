@@ -76,8 +76,8 @@ def test_slate_grouping():
     assert d["n"] == 5 and d["won"] == 4 and d["pnl"] == pytest.approx(15) and d["cost"] == 25
     assert d["sports"] == {"NBA": [2, 1, pytest.approx(0)], "MLB": [1, 1, pytest.approx(5)],
                            "NHL": [1, 1, pytest.approx(5)], "Tennis": [1, 1, pytest.approx(5)]}
-    fut = dict(st("KXNBA-26-OKC", 1000, 1), settled_time="2026-10-22T02:00:00Z")  # 10pm ET on the 21st
-    assert list(ka.slates([fut])) == ["2026-10-21"]
+    fut = dict(st("KXNBA-26-OKC", 1000, 1), settled_time="2026-10-22T06:00:00Z")  # 2am ET on the 22nd
+    assert list(ka.slates([fut])) == ["2026-10-21"]  # before the 4am rollover
 
 
 def test_group_fills_weights_partials_and_handles_cent_prices():
