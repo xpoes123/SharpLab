@@ -122,10 +122,11 @@ def mark_position(mp: dict, market: dict) -> dict:
         prev_ask = _f(market.get("previous_yes_ask_dollars"))
         prev = 1 - prev_ask if prev_ask else 0.0
     cost = _f(mp.get("market_exposure_dollars"))
+    fees = _f(mp.get("fees_paid_dollars"))  # ponytail: lifetime on this market, so incl. fees on any closed-out portion
     value = abs(q) * mark
     return {"ticker": mp["ticker"], "title": market.get("title") or mp["ticker"], "sport": sport(mp["ticker"]),
             "side": "YES" if q > 0 else "NO", "qty": abs(q), "cost": cost, "mark": mark, "prev_mark": prev,
-            "value": value, "unreal": value - cost}
+            "fees": fees, "value": value, "unreal": value - cost - fees}
 
 
 def summarize(settles: list[dict], open_rows: list[dict], since_iso: str | None = None) -> dict:
@@ -284,10 +285,11 @@ def group_fills(fills: list[dict]) -> list[dict]:
     out: dict[tuple, dict] = {}
     for f in sorted(fills, key=lambda f: _f(f.get("ts"))):
         k = (f["ticker"], f.get("action", "buy"), f.get("side", "yes"))
-        g = out.setdefault(k, {"ticker": k[0], "action": k[1], "side": k[2], "qty": 0.0, "cost": 0.0})
+        g = out.setdefault(k, {"ticker": k[0], "action": k[1], "side": k[2], "qty": 0.0, "cost": 0.0, "fee": 0.0})
         q = _f(f.get("count_fp") or f.get("count"))
         g["qty"] += q
         g["cost"] += q * fill_price(f)
+        g["fee"] += _f(f.get("fee_cost"))
     for g in out.values():
         g["avg"] = g["cost"] / g["qty"] if g["qty"] else 0.0
     return list(out.values())
