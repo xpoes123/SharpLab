@@ -12,6 +12,8 @@ async def test_position_pages_and_view_paging():
             "today": {"total": 10.0, "settled": 4.0, "n_settled": 1, "open_move": 6.0}}
     pages = mk._position_pages(acct, "xpoes")
     assert [len(pages[k]) for k in ("overview", "games", "futures")] == [1, 2, 1]
+    ov = pages["overview"][0].description
+    assert "**Today & upcoming**" in ov and ov.count("[YES Portland]") == 7 and "Movers" not in ov
     first = pages["games"][0].description
     assert first.count("🟢") == 6 and pages["games"][1].description.count("🟢") == 1
     assert "**[YES Portland](https://kalshi.com/markets/" in first and "Portland vs Los Angeles L" in first
@@ -29,6 +31,7 @@ async def test_empty_book():
     pages = mk._position_pages({"balance": 0.0, "open": [], "today": {"total": 0.0, "settled": 0.0,
                                 "n_settled": 0, "open_move": 0.0}}, "x")
     assert pages["games"][0].description == "Nothing here."
+    assert "Today & upcoming" not in pages["overview"][0].description
 
 
 def test_event_name_and_when():

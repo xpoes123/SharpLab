@@ -501,6 +501,7 @@ class MarketsCog(commands.Cog):
 _SPORT_ICON = {"NBA": "🏀", "WNBA": "🏀", "NFL": "🏈", "MLB": "⚾", "NHL": "🏒", "NCAA": "🎓",
                "Esports": "🎮", "Tennis": "🎾", "Crypto": "🪙"}
 _PER_PAGE = 6
+_OVERVIEW_GAMES = 8
 
 
 def _clip(text: str, n: int) -> str:
@@ -528,6 +529,13 @@ def _position_line(r: dict) -> str:
             + f" · **{r['unreal']:+,.2f}**{pct}")
 
 
+def _short_line(r: dict) -> str:
+    pick = discord.utils.escape_markdown(_clip(f"{r['side']} {r.get('pick') or r['title']}", 32)).replace("]", ")")
+    ctx = " · ".join(x for x in (_clip(r.get("game") or "", 36), _when(r["ticker"])) if x)
+    return (f"{'🟢' if r['unreal'] >= 0 else '🔴'} `{r['unreal']:+9,.2f}` [{pick}]({ka.market_url(r['ticker'])})"
+            + (f" · {discord.utils.escape_markdown(ctx)}" if ctx else ""))
+
+
 def _position_pages(acct: dict, who: str) -> dict[str, list[discord.Embed]]:
     """{tab: [embeds]} — an Overview page plus paged position lists per group."""
     rows, t = acct["open"], acct["today"]
@@ -537,18 +545,20 @@ def _position_pages(acct: dict, who: str) -> dict[str, list[discord.Embed]]:
                    key=lambda r: (ka.slate_date(r["ticker"]), -r["cost"]))
     futures = sorted((r for r in rows if not ka.slate_date(r["ticker"])), key=lambda r: -r["cost"])
 
-    ranked = sorted(rows, key=lambda r: r["unreal"])
-    movers = [r for r in ranked[::-1][:3] if r["unreal"] > 0] + [r for r in ranked[:3] if r["unreal"] < 0]
     ov = discord.Embed(title=f"{who}'s Kalshi", color=color(t["total"]), description=(
         f"## {t['total']:+,.2f} today\n"
         f"-# since 4am ET · settled {t['settled']:+,.2f} ({t['n_settled']}) · open {t['open_move']:+,.2f}\n\n"
         f"Cash **${acct['balance']:,.2f}** · Open **${sum(r['value'] for r in rows):,.2f}**"
-        f" · Unrealized **{unreal:+,.2f}**"
-        + ("\n\n**Movers**\n" + "\n".join(
-            f"{'🟢' if r['unreal'] >= 0 else '🔴'} `{r['unreal']:+9,.2f}` "
-            + discord.utils.escape_markdown(_clip(f"{r['side']} {r.get('pick') or r['title']}", 30)
-                                            + (f" · {_clip(r['game'], 34)}" if r.get("game") else ""))
-            for r in movers) if movers else "")))
+        f" · Unrealized **{unreal:+,.2f}**"))
+    if games:  # what people check: tonight's and upcoming games
+        shown = games[:_OVERVIEW_GAMES]
+        ov.description += "\n\n**Today & upcoming**\n" + "\n".join(map(_short_line, shown)) + (
+            f"\n-# +{len(games) - len(shown)} more in Now & upcoming" if len(games) > len(shown) else "")
+    else:
+        ranked = sorted(rows, key=lambda r: r["unreal"])
+        movers = [r for r in ranked[::-1][:3] if r["unreal"] > 0] + [r for r in ranked[:3] if r["unreal"] < 0]
+        if movers:
+            ov.description += "\n\n**Movers**\n" + "\n".join(map(_short_line, movers))
     pages = {"overview": [ov]}
     for key, label, group in (("games", "Now & upcoming", games), ("futures", "Futures", futures)):
         chunks = [group[i:i + _PER_PAGE] for i in range(0, len(group), _PER_PAGE)] or [[]]
