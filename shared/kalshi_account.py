@@ -217,11 +217,11 @@ def slate_date(ticker: str) -> str | None:
 
 def _settle_day(st: dict) -> str | None:
     ts = _iso_ts(st.get("settled_time"))
-    return datetime.fromtimestamp(ts, ET).date().isoformat() if ts else None
+    return day_start(datetime.fromtimestamp(ts, ET)).date().isoformat() if ts else None
 
 
 def slates(settles: list[dict]) -> dict[str, dict]:
-    """Settled markets grouped by game date (settle date, ET, for undated futures):
+    """Settled markets grouped by game date (settle day, 4am-ET rollover, for undated futures):
     {date: {n, won, pnl, cost, sports: {sport: [n, won, pnl]}, rows: [(ticker, pnl)]}}."""
     out: dict[str, dict] = {}
     for st in settles:
