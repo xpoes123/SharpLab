@@ -500,76 +500,62 @@ class MarketsCog(commands.Cog):
 
 _SPORT_ICON = {"NBA": "🏀", "WNBA": "🏀", "NFL": "🏈", "MLB": "⚾", "NHL": "🏒", "NCAA": "🎓",
                "Esports": "🎮", "Tennis": "🎾", "Crypto": "🪙"}
-_PER_PAGE = 5
+_PER_PAGE = 6
 
 
 def _clip(text: str, n: int) -> str:
     return text if len(text) <= n else text[:n - 1].rsplit(" ", 1)[0] + "…"
 
 
-def _position_field(r: dict, today) -> tuple[str, str]:
-    d = ka.slate_date(r["ticker"])
-    gap = (datetime.fromisoformat(d).date() - today).days if d else None
-    when = ("" if gap is None else " · 🔴 Today" if gap == 0 else " · Tmrw" if gap == 1
-            else f" · {datetime.fromisoformat(d):%a %-m/%-d}")
-    head = f"{r['game']} — {r['title']}" if r.get("game") else r["title"]
-    name = f"{'🟢' if r['unreal'] >= 0 else '🔴'} {_SPORT_ICON.get(r['sport'], '📈')} {_clip(head, 240)}"
+def _when(ticker: str) -> str:
+    d = ka.slate_date(ticker)
+    if not d:
+        return ""
+    gap = (datetime.fromisoformat(d).date() - ka.day_start().date()).days  # 4am-ET day, like Today
+    return ("Yesterday" if gap == -1 else "Tonight" if gap == 0 else "Tomorrow" if gap == 1
+            else f"{datetime.fromisoformat(d):%a %-m/%-d}")
+
+
+def _position_line(r: dict) -> str:
     basis = r["cost"] + r.get("fees", 0)
     pct = f" ({r['unreal'] / basis * 100:+.0f}%)" if basis else ""
     avg = r["cost"] / r["qty"] * 100 if r["qty"] else 0
-    value = (f"`{r['side']}` **{r['qty']:,.0f}** @ {avg:.0f}¢ → **{r['mark'] * 100:.0f}¢**{when}\n"
-             f"${basis:,.2f}" + (f" (incl ${r['fees']:,.2f} fees)" if r.get("fees") else "")
-             + f" → ${r['value']:,.2f} · **{r['unreal']:+,.2f}**{pct}\n[View on Kalshi ↗]({ka.market_url(r['ticker'])})")
-    return name, value
+    pick = discord.utils.escape_markdown(_clip(f"{r['side']} {r.get('pick') or r['title']}", 60)).replace("]", ")")
+    ctx = " · ".join(x for x in (_clip(r.get("game") or "", 60), _when(r["ticker"])) if x)
+    return (f"{'🟢' if r['unreal'] >= 0 else '🔴'} **[{pick}]({ka.market_url(r['ticker'])})**"
+            + (f" · {discord.utils.escape_markdown(ctx)}" if ctx else "")
+            + f"\n-# {r['qty']:,.0f} @ {avg:.0f}¢ → {r['mark'] * 100:.0f}¢ · ${basis:,.2f} → ${r['value']:,.2f}"
+            + f" · **{r['unreal']:+,.2f}**{pct}")
 
 
 def _position_pages(acct: dict, who: str) -> dict[str, list[discord.Embed]]:
-    """{tab: [embeds]} — an Overview page plus paged position cards per group."""
+    """{tab: [embeds]} — an Overview page plus paged position lists per group."""
     rows, t = acct["open"], acct["today"]
     unreal = sum(r["unreal"] for r in rows)
-    today = datetime.now(_ET).date()
     color = lambda x: 0x22C55E if x >= 0 else 0xEF4444
     games = sorted((r for r in rows if ka.slate_date(r["ticker"])),
                    key=lambda r: (ka.slate_date(r["ticker"]), -r["cost"]))
     futures = sorted((r for r in rows if not ka.slate_date(r["ticker"])), key=lambda r: -r["cost"])
 
-    ov = discord.Embed(title=f"📂 {who}'s Kalshi positions", color=color(t["total"]))
-    ov.description = (f"## Today {t['total']:+,.2f}\n"
-                      f"settled **{t['settled']:+,.2f}** ({t['n_settled']} mkts) · open move **{t['open_move']:+,.2f}**")
-    ov.add_field(name="💵 Cash", value=f"${acct['balance']:,.2f}")
-    ov.add_field(name="📦 Open value", value=f"${sum(r['value'] for r in rows):,.2f}")
-    ov.add_field(name="📈 Unrealized", value=f"{unreal:+,.2f}")
-    ov.add_field(name="🎯 Now & upcoming", value=f"{len(games)} · {sum(r['unreal'] for r in games):+,.2f}")
-    ov.add_field(name="🔮 Futures", value=f"{len(futures)} · {sum(r['unreal'] for r in futures):+,.2f}")
-    by_sport: dict[str, list] = {}
-    for r in rows:
-        by_sport.setdefault(r["sport"], []).append(r["unreal"])
-    if by_sport:
-        ov.add_field(name="By sport", inline=False, value="\n".join(
-            f"{_SPORT_ICON.get(sp, '📈')} {sp} · {len(v)} · **{sum(v):+,.2f}**"
-            for sp, v in sorted(by_sport.items(), key=lambda kv: -abs(sum(kv[1]))))[:1024])
     ranked = sorted(rows, key=lambda r: r["unreal"])
-    movers = [r for r in ranked[::-1][:2] if r["unreal"] > 0] + [r for r in ranked[:2] if r["unreal"] < 0]
-    if movers:
-        ov.add_field(name="Biggest movers", inline=False, value="\n".join(
-            f"{'🟢' if r['unreal'] >= 0 else '🔴'} **{r['unreal']:+,.2f}** "
-            + discord.utils.escape_markdown(_clip((f"{r['game']} — " if r.get("game") else "") + r["title"], 80))
-            for r in movers))
-    ov.set_footer(text="Today resets 4am ET: settled since then + open positions' ~24h move "
-                       "(cost basis if traded today) · all figures net of fees")
+    movers = [r for r in ranked[::-1][:3] if r["unreal"] > 0] + [r for r in ranked[:3] if r["unreal"] < 0]
+    ov = discord.Embed(title=f"{who}'s Kalshi", color=color(t["total"]), description=(
+        f"## {t['total']:+,.2f} today\n"
+        f"-# since 4am ET · settled {t['settled']:+,.2f} ({t['n_settled']}) · open {t['open_move']:+,.2f}\n\n"
+        f"Cash **${acct['balance']:,.2f}** · Open **${sum(r['value'] for r in rows):,.2f}**"
+        f" · Unrealized **{unreal:+,.2f}**"
+        + ("\n\n**Movers**\n" + "\n".join(
+            f"{'🟢' if r['unreal'] >= 0 else '🔴'} `{r['unreal']:+9,.2f}` "
+            + discord.utils.escape_markdown(_clip(f"{r['side']} {r.get('pick') or r['title']}", 30)
+                                            + (f" · {_clip(r['game'], 34)}" if r.get("game") else ""))
+            for r in movers) if movers else "")))
     pages = {"overview": [ov]}
-    for key, label, group in (("games", "🎯 Now & upcoming", games), ("futures", "🔮 Futures", futures)):
+    for key, label, group in (("games", "Now & upcoming", games), ("futures", "Futures", futures)):
         chunks = [group[i:i + _PER_PAGE] for i in range(0, len(group), _PER_PAGE)] or [[]]
-        pages[key] = []
-        for i, chunk in enumerate(chunks, 1):
-            e = discord.Embed(title=f"{label} · {who}", color=color(sum(r["unreal"] for r in group)),
-                              description=None if chunk else "Nothing here.")
-            for r in chunk:
-                name, value = _position_field(r, today)
-                e.add_field(name=name, value=value, inline=False)
-            e.set_footer(text=f"Page {i}/{len(chunks)} · {len(group)} positions · "
-                              f"{sum(r['unreal'] for r in group):+,.2f} unrealized")
-            pages[key].append(e)
+        total = sum(r["unreal"] for r in group)
+        pages[key] = [discord.Embed(title=f"{label} · {total:+,.2f}", color=color(total),
+                                    description="\n\n".join(map(_position_line, chunk)) or "Nothing here.")
+                      for chunk in chunks]
     return pages
 
 
@@ -580,8 +566,12 @@ class _PositionsView(discord.ui.View):
         super().__init__(timeout=300)
         self.pages, self.owner_id, self.tab, self.page = pages, owner_id, "overview", 0
         self.message: discord.Message | None = None
-        self.tab_select.options = [discord.SelectOption(label=label, value=key, default=key == "overview")
-                                   for key, label in self._TABS]
+        self.tab_select.options = [
+            discord.SelectOption(label=label, value=key, default=key == "overview",
+                                 description=None if key == "overview" else
+                                 f"{len(pages[key])} page(s) · {pages[key][0].title.split(' · ')[-1]}")
+            for key, label in self._TABS]
+        self._pager = [self.prev_btn, self.count_btn, self.next_btn]
         self._sync()
 
     def current(self) -> discord.Embed:
@@ -589,6 +579,11 @@ class _PositionsView(discord.ui.View):
 
     def _sync(self) -> None:
         n = len(self.pages[self.tab])
+        for b in self._pager:  # ◀ n/N ▶ only when there's something to page through
+            if n > 1 and b not in self.children:
+                self.add_item(b)
+            elif n <= 1 and b in self.children:
+                self.remove_item(b)
         self.prev_btn.disabled = self.page == 0
         self.next_btn.disabled = self.page >= n - 1
         self.count_btn.label = f"{self.page + 1}/{n}"

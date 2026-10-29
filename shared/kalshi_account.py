@@ -125,6 +125,7 @@ def mark_position(mp: dict, market: dict) -> dict:
     fees = _f(mp.get("fees_paid_dollars"))  # ponytail: lifetime on this market, so incl. fees on any closed-out portion
     value = abs(q) * mark
     return {"ticker": mp["ticker"], "title": market.get("title") or mp["ticker"], "sport": sport(mp["ticker"]),
+            "pick": market.get("yes_sub_title") or market.get("title") or mp["ticker"],
             "side": "YES" if q > 0 else "NO", "qty": abs(q), "cost": cost, "mark": mark, "prev_mark": prev,
             "fees": fees, "value": value, "unreal": value - cost - fees}
 
@@ -245,6 +246,13 @@ def slates(settles: list[dict]) -> dict[str, dict]:
 _EVENT_TITLES: dict[str, str] = {}
 
 
+def event_name(title: str) -> str:
+    """"Golden State vs Phoenix: Total Points" -> "Golden State vs Phoenix";
+    "Pro Basketball: Minnesota Total Wins" -> "Minnesota Total Wins"."""
+    parts = [p.strip() for p in title.split(":") if p.strip()]
+    return next((p for p in parts if " vs" in p), parts[-1] if parts else "")
+
+
 async def event_titles(c: httpx.AsyncClient, event_tickers: set[str]) -> dict[str, str]:
     """Matchup per event ("Portland vs Los Angeles L") — market titles alone just say "Portland wins".
     Cached forever (event titles don't change)."""
@@ -252,8 +260,7 @@ async def event_titles(c: httpx.AsyncClient, event_tickers: set[str]) -> dict[st
         try:
             r = await c.get(f"{KALSHI_BASE}/events/{t}")
             r.raise_for_status()
-            # "Golden State vs Phoenix: Total Points" -> "Golden State vs Phoenix"
-            _EVENT_TITLES[t] = (r.json()["event"].get("title") or "").split(":")[0].strip()
+            _EVENT_TITLES[t] = event_name(r.json()["event"].get("title") or "")
         except (httpx.HTTPError, KeyError, ValueError):
             pass  # no matchup is cosmetic; the market title still shows
     await asyncio.gather(*(one(t) for t in event_tickers if t not in _EVENT_TITLES))
