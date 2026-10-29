@@ -479,7 +479,7 @@ class MarketsCog(commands.Cog):
             name = discord.utils.escape_markdown(name[:90]).replace("]", ")")
             return (f"`{r['side']:<3}` **{r['qty']:g}** × [{name}]({ka.market_url(r['ticker'])})"
                     + (f" · *{label}*" if label else "")
-                    + f"\n  cost ${r['cost']:,.2f} · mark {r['mark']*100:.0f}¢ · **{r['unreal']:+,.2f}**")
+                    + f"\n  cost ${r['cost']:,.2f}" + (f" + ${r['fees']:,.2f} fees" if r.get("fees") else "") + f" · mark {r['mark']*100:.0f}¢ · **{r['unreal']:+,.2f}**")
 
         # Game/daily markets carry a date in the ticker; futures (season/champion/long-dated) don't.
         games = sorted((r for r in rows if ka.slate_date(r["ticker"])),
@@ -534,7 +534,7 @@ class MarketsCog(commands.Cog):
                 f"`{sp:<8}` {n:>4} mkts · staked ${cost:,.0f} · **{pnl:+,.2f}**"
                 + (f" ({pnl / cost * 100:+.1f}%)" if cost else "")
                 for sp, n, pnl, cost in s["by_sport"][:10]))
-        embed.set_footer(text="Unrealized = open positions marked at current bid, before fees")
+        embed.set_footer(text="Realized is net of fees · Unrealized = open positions marked at current bid, minus fees paid")
         await interaction.followup.send(embed=embed, ephemeral=not public)
 
 _ACCT_CACHE: dict[str, tuple[float, bool, dict]] = {}
@@ -624,7 +624,7 @@ async def _fills_embed(rows: list[dict]) -> discord.Embed:
     embed = discord.Embed(title="⚡ New Kalshi trade" + ("s" if len(rows) > 1 else ""), color=0x3B82F6)
     embed.description = "\n".join(
         f"{'🟢 Bought' if r['action'] == 'buy' else '🔴 Sold'} **{r['qty']:,.0f} {r['side'].upper()}** "
-        f"@ {r['avg'] * 100:.0f}¢ (${r['cost']:,.2f}) · [{discord.utils.escape_markdown(titles.get(r['ticker'], r['ticker'])[:80]).replace(']', ')')}]({ka.market_url(r['ticker'])})"
+        f"@ {r['avg'] * 100:.0f}¢ (${r['cost']:,.2f}" + (f" + ${r['fee']:,.2f} fee" if r.get("fee") else "") + f") · [{discord.utils.escape_markdown(titles.get(r['ticker'], r['ticker'])[:80]).replace(']', ')')}]({ka.market_url(r['ticker'])})"
         for r in rows)[:4000]
     return embed
 

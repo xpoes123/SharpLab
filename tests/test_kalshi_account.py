@@ -144,3 +144,12 @@ def test_day_start_rolls_at_4am_et():
     assert ka.day_start(late) == datetime(2026, 10, 28, 4, 0, tzinfo=ka.ET)
     morning = datetime(2026, 10, 29, 9, 0, tzinfo=ka.ET)
     assert ka.day_start(morning) == datetime(2026, 10, 29, 4, 0, tzinfo=ka.ET)
+
+
+def test_fees_reduce_unrealized_and_sum_on_fills():
+    r = ka.mark_position({"ticker": "KXNBAGAME-A", "position_fp": "10", "market_exposure_dollars": "4",
+                          "fees_paid_dollars": "0.25"}, {"yes_bid_dollars": "0.55"})
+    assert r["fees"] == 0.25 and r["unreal"] == pytest.approx(1.25)
+    g = ka.group_fills([{"ticker": "A", "count_fp": "5", "yes_price_dollars": "0.4", "fee_cost": "0.1", "ts": 1},
+                        {"ticker": "A", "count_fp": "5", "yes_price_dollars": "0.4", "fee_cost": "0.15", "ts": 2}])
+    assert g[0]["fee"] == pytest.approx(0.25)
