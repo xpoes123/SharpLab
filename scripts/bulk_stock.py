@@ -94,7 +94,7 @@ async def apply(user: str, rows: list[dict], cash: float | None, commit: bool):
     print(f"  new portfolio ({len(rows)} positions):")
     for r in rows:
         print(f"    {r['shares']:g} {r['ticker']} @ ${r['price']:,.2f}")
-    print(f"  cash -> {'$%,.2f' % cash if cash is not None else '(unchanged)'}")
+    print(f"  cash -> {f'${cash:,.2f}' if cash is not None else '(unchanged)'}")
 
     if not commit:
         print("\nDRY RUN — re-run with --apply to commit.")
