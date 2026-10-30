@@ -323,7 +323,8 @@ CREATE TABLE IF NOT EXISTS stock_trades (
     shares       REAL NOT NULL CHECK(shares > 0),
     price        REAL NOT NULL CHECK(price > 0),
     executed_at  TEXT NOT NULL,
-    notes        TEXT
+    notes        TEXT,
+    account      TEXT  -- brokerage sub-account (Roth IRA, HSA, …); NULL = untagged
 );
 CREATE INDEX IF NOT EXISTS idx_stock_trades_user_ticker
     ON stock_trades(discord_user, ticker, executed_at);
@@ -997,6 +998,11 @@ async def init_db() -> None:
             pass
         try:  # add `livebet_alerts` opt-in flag to an already-existing user_settings table
             await db.execute("ALTER TABLE user_settings ADD COLUMN livebet_alerts INTEGER NOT NULL DEFAULT 0")
+            await db.commit()
+        except Exception:
+            pass
+        try:  # tag stock trades with a sub-account (Roth IRA / HSA / 401k / Brokerage)
+            await db.execute("ALTER TABLE stock_trades ADD COLUMN account TEXT")
             await db.commit()
         except Exception:
             pass

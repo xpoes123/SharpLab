@@ -588,6 +588,17 @@ def _option_label(pos: dict) -> str:
     return f"{pos['underlying']} ${strike_str}{tag} {_fmt_expiry(pos['expiry'])}"
 
 
+async def _account_autocomplete(interaction: "discord.Interaction", current: str):
+    """The user's existing sub-account names, plus the common ones as defaults."""
+    try:
+        mine = await queries.get_stock_accounts(str(interaction.user.id))
+    except Exception:
+        mine = []
+    names = mine + [a for a in ("Brokerage", "Roth IRA", "Traditional IRA", "401k", "HSA") if a not in mine]
+    cur = (current or "").lower().strip()
+    return [app_commands.Choice(name=a, value=a) for a in names if cur in a.lower()][:25]
+
+
 async def _holdings_autocomplete(interaction: "discord.Interaction", current: str):
     """Suggest the user's own open stock positions — turns /stock sell's ticker into
     a dropdown of what you actually hold (with share counts)."""
@@ -3555,7 +3566,9 @@ class StockCog(commands.Cog):
         price="Execution price per share",
         date="Optional trade date (YYYY-MM-DD or YYYY-MM-DD HH:MM, UTC). Defaults to now.",
         notes="Optional note",
+        account="Optional sub-account (Roth IRA, HSA, 401k, Brokerage, …)",
     )
+    @app_commands.autocomplete(account=_account_autocomplete)
     async def buy(
         self,
         interaction: discord.Interaction,
@@ -3564,10 +3577,12 @@ class StockCog(commands.Cog):
         price: float,
         date: str | None = None,
         notes: str | None = None,
+        account: str | None = None,
     ) -> None:
-        await self._record_buy(interaction, ticker, shares, price, date, notes)
+        await self._record_buy(interaction, ticker, shares, price, date, notes, account=account)
 
-    async def _record_buy(self, interaction, ticker, shares, price, date, notes, *, verb="BUY") -> None:
+    async def _record_buy(self, interaction, ticker, shares, price, date, notes, *, verb="BUY",
+                          account=None) -> None:
         """Shared body for /stock buy and /stock cover. `verb` only changes the wording —
         a buy and a cover are the same trade (a buy that closes an open short first)."""
         symbol = _normalize_symbol(ticker)
@@ -3605,7 +3620,8 @@ class StockCog(commands.Cog):
             return
 
         await queries.add_stock_trade(
-            str(interaction.user.id), symbol, "buy", shares, price, executed_at, notes
+            str(interaction.user.id), symbol, "buy", shares, price, executed_at, notes,
+            account=account,
         )
         # Floored at 0: a buy spends available cash, and any excess is funded by
         # money the user already had (most people never /stock cash deposit). Cash
@@ -3630,7 +3646,7 @@ class StockCog(commands.Cog):
 
     @stock.command(name="import", description="Bulk-replace your whole portfolio from a CSV (ticker,shares,price)")
     @app_commands.describe(
-        file="CSV with a header row: ticker,shares,price (price = your avg cost)",
+        file="CSV header: ticker,shares,price[,account] (price = your avg cost)",
         cash="Optional: set your cash balance too",
     )
     async def import_portfolio(
@@ -3649,7 +3665,8 @@ class StockCog(commands.Cog):
             await interaction.followup.send(f"Couldn't read that CSV: {e}", ephemeral=True)
             return
 
-        preview = "\n".join(f"`{r['shares']:g}` {r['ticker']} @ ${r['price']:,.2f}" for r in rows[:40])
+        preview = "\n".join(f"`{r['shares']:g}` {r['ticker']} @ ${r['price']:,.2f}"
+                            + (f" · {r['account']}" if r.get("account") else "") for r in rows[:40])
         if len(rows) > 40:
             preview += f"\n… +{len(rows) - 40} more"
         embed = discord.Embed(
@@ -3670,8 +3687,9 @@ class StockCog(commands.Cog):
         price="Execution price per share",
         date="Optional trade date (YYYY-MM-DD or YYYY-MM-DD HH:MM, UTC). Defaults to now.",
         notes="Optional note",
+        account="Optional sub-account the shares come out of (Roth IRA, HSA, …)",
     )
-    @app_commands.autocomplete(ticker=_holdings_autocomplete)
+    @app_commands.autocomplete(ticker=_holdings_autocomplete, account=_account_autocomplete)
     async def sell(
         self,
         interaction: discord.Interaction,
@@ -3680,10 +3698,12 @@ class StockCog(commands.Cog):
         price: float,
         date: str | None = None,
         notes: str | None = None,
+        account: str | None = None,
     ) -> None:
-        await self._record_sell(interaction, ticker, shares, price, date, notes)
+        await self._record_sell(interaction, ticker, shares, price, date, notes, account=account)
 
-    async def _record_sell(self, interaction, ticker, shares, price, date, notes, *, verb="SELL") -> None:
+    async def _record_sell(self, interaction, ticker, shares, price, date, notes, *, verb="SELL",
+                           account=None) -> None:
         """Shared body for /stock sell and /stock short. `verb` only changes the wording —
         a sell and a short are the same trade (a sell past flat opens a short)."""
         symbol = _normalize_symbol(ticker)
@@ -3717,7 +3737,8 @@ class StockCog(commands.Cog):
         realized = closed_qty * (price - avg_cost)
 
         await queries.add_stock_trade(
-            str(interaction.user.id), symbol, "sell", shares, price, executed_at, notes
+            str(interaction.user.id), symbol, "sell", shares, price, executed_at, notes,
+            account=account,
         )
         new_cash = await queries.adjust_stock_cash(
             str(interaction.user.id), shares * price, allow_negative=True)
