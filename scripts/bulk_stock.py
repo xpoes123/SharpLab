@@ -8,11 +8,13 @@ CSV row, then (optionally) sets cash. Dry-run by default; pass --apply to commit
     # commit
     ./venv/bin/python scripts/bulk_stock.py harsha port.csv --cash 20000 --apply
 
-CSV (header required), price = your average cost basis:
+CSV (header required), price = your average cost basis. Optional `account`
+column tags each row with a sub-account (Roth IRA, HSA, 401k, Brokerage, …);
+the same ticker may appear once per account:
 
-    ticker,shares,price
-    AAPL,3,163.74
-    GOOGL,7,150.85
+    ticker,shares,price,account
+    AAPL,3,163.74,Roth IRA
+    AAPL,1,170.00,Brokerage
 
 Self-test: ./venv/bin/python scripts/bulk_stock.py --selftest
 
@@ -46,7 +48,8 @@ def parse_csv(text: str) -> list[dict]:
             raise ValueError(f"row {i}: shares/price must be numbers ({r!r})")
         if shares <= 0 or price <= 0:
             raise ValueError(f"row {i}: shares and price must be > 0 ({r!r})")
-        rows.append({"ticker": r["ticker"].upper(), "shares": shares, "price": price})
+        rows.append({"ticker": r["ticker"].upper(), "shares": shares, "price": price,
+                     "account": r.get("account") or None})
     if not rows:
         raise ValueError("no data rows found")
     return rows
@@ -74,12 +77,12 @@ async def apply_portfolio(user: str, rows: list[dict], cash: float | None) -> di
         await queries.delete_option_trade(user, t["trade_id"])
     for r in rows:
         await queries.add_stock_trade(user, r["ticker"], "buy", r["shares"], r["price"],
-                                      notes="bulk import")
+                                      notes="bulk import", account=r.get("account"))
     if cash is not None:
         await queries.set_stock_cash(user, cash)
     left = await queries.get_stock_holdings(user)
     left_opt = [o for o in await queries.get_option_positions_full(user) if not o["closed"]]
-    assert len(left) == len(rows) and not left_opt, "post-import position count mismatch"
+    assert len(left) == len({r["ticker"] for r in rows}) and not left_opt, "post-import position count mismatch"
     return {"positions": len(left), "cash": await queries.get_stock_cash(user)}
 
 
@@ -93,7 +96,8 @@ async def apply(user: str, rows: list[dict], cash: float | None, commit: bool):
           f"{sum(1 for o in old_opts if not o['closed'])} open option, cash ${old_cash:,.2f}")
     print(f"  new portfolio ({len(rows)} positions):")
     for r in rows:
-        print(f"    {r['shares']:g} {r['ticker']} @ ${r['price']:,.2f}")
+        print(f"    {r['shares']:g} {r['ticker']} @ ${r['price']:,.2f}"
+              + (f"  [{r['account']}]" if r.get("account") else ""))
     print(f"  cash -> {f'${cash:,.2f}' if cash is not None else '(unchanged)'}")
 
     if not commit:
@@ -105,8 +109,10 @@ async def apply(user: str, rows: list[dict], cash: float | None, commit: bool):
 
 def selftest():
     ok = parse_csv("ticker,shares,price\nAAPL,3,163.74\n# note\nGOOGL, 7 , 150.85\n\n")
-    assert ok == [{"ticker": "AAPL", "shares": 3.0, "price": 163.74},
-                  {"ticker": "GOOGL", "shares": 7.0, "price": 150.85}], ok
+    assert ok == [{"ticker": "AAPL", "shares": 3.0, "price": 163.74, "account": None},
+                  {"ticker": "GOOGL", "shares": 7.0, "price": 150.85, "account": None}], ok
+    acct = parse_csv("ticker,shares,price,account\nVOO,1,500,Roth IRA\nVOO,2,510,HSA\n")
+    assert [r["account"] for r in acct] == ["Roth IRA", "HSA"], acct
     for bad in ["nope,1,2", "ticker,shares,price\nAAPL,-1,5", "ticker,shares,price\nAAPL,x,5",
                 "ticker,shares,price\n"]:
         try:

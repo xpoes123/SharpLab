@@ -812,6 +812,8 @@ async def hq_stock_trader(handle: str, request: Request):
     stripped = {k: v for k, v in data.items() if k not in _SENSITIVE_TRADER}
     stripped["stock_holdings"] = [
         {k: v for k, v in h.items() if k not in _SENSITIVE_STOCK_HOLDING}
+        | {"accounts": {a: {k: v for k, v in g.items() if k not in _SENSITIVE_STOCK_HOLDING}
+                        for a, g in (h.get("accounts") or {}).items()}}
         for h in data.get("stock_holdings", [])
     ]
     stripped["option_positions"] = [
@@ -834,6 +836,7 @@ async def _build_trader(uid: str, who: dict):
     live_since = next((s["captured_at"] for s in snaps if s["kind"] == "live"), None)
 
     sp = await queries.get_stock_positions_full(uid)
+    by_acct = await queries.get_stock_positions_by_account(uid)   # {} unless trades are tagged
     stock_realized = sum(p.get("realized_pnl", 0) for p in sp)
     open_pos = [p for p in sp if abs(p.get("shares", 0)) > 1e-9]
     # lazy import (heavy deps)
@@ -884,6 +887,10 @@ async def _build_trader(uid: str, who: dict):
             "realized": round(p.get("realized_pnl", 0), 2),
             "period": period,        # {label: {pnl, pct}} — her ACTUAL P/L over each window
             "history": hist,         # [[date_iso, close], ...] ascending
+            # Per sub-account split (Roth IRA / HSA / …); absent when untagged.
+            "accounts": {a: {"shares": round(g["shares"], 4), "dca": round(g["dca_price"], 2),
+                             "cost_basis": round(g["cost_basis"], 2)}
+                         for a, g in by_acct.get(p["ticker"], {}).items()},
         })
     stock_holdings.sort(key=lambda h: h["cost_basis"], reverse=True)
 
@@ -967,6 +974,7 @@ async def _build_trader(uid: str, who: dict):
         "live_since": live_since,
         "benchmark": _benchmark(equity, await _spy_history()),
         "stock_holdings": stock_holdings,
+        "accounts": sorted({a for v in by_acct.values() for a in v}),
         "option_positions": option_positions,
         "transactions": txns[:150],
     }

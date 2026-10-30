@@ -3361,6 +3361,7 @@ async def add_stock_trade(
     price: float,
     executed_at: str | None = None,
     notes: str | None = None,
+    account: str | None = None,
 ) -> int:
     if side not in ("buy", "sell"):
         raise ValueError(f"side must be 'buy' or 'sell', got {side!r}")
@@ -3370,9 +3371,9 @@ async def add_stock_trade(
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "INSERT INTO stock_trades "
-            "(discord_user, ticker, side, shares, price, executed_at, notes) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (discord_user, ticker.upper(), side, shares, price, ts, notes),
+            "(discord_user, ticker, side, shares, price, executed_at, notes, account) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (discord_user, ticker.upper(), side, shares, price, ts, notes, (account or "").strip() or None),
         )
         await db.commit()
         return cur.lastrowid
@@ -3382,7 +3383,7 @@ async def get_stock_trades(
     discord_user: str, ticker: str | None = None, limit: int | None = None
 ) -> list[dict]:
     sql = (
-        "SELECT trade_id, ticker, side, shares, price, executed_at, notes "
+        "SELECT trade_id, ticker, side, shares, price, executed_at, notes, account "
         "FROM stock_trades WHERE discord_user = ?"
     )
     params: list = [discord_user]
@@ -3476,6 +3477,33 @@ async def get_stock_positions_full(discord_user: str) -> list[dict]:
         {"ticker": ticker, **_aggregate_trades(by_ticker[ticker])}
         for ticker in sorted(by_ticker)
     ]
+
+
+async def get_stock_positions_by_account(discord_user: str) -> dict[str, dict[str, dict]]:
+    """{ticker: {account: aggregate}} for OPEN per-account positions. Empty when the
+    user never tagged a trade — the account split is opt-in. Untagged trades land
+    under "Other" so the per-account shares still sum to the ticker total."""
+    trades = await get_stock_trades(discord_user)
+    if not any(t["account"] for t in trades):
+        return {}
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for t in trades:
+        groups.setdefault((t["ticker"], t["account"] or "Other"), []).append(t)
+    out: dict[str, dict[str, dict]] = {}
+    for (ticker, acct), ts in groups.items():
+        agg = _aggregate_trades(ts)
+        if not agg["closed"]:
+            out.setdefault(ticker, {})[acct] = agg
+    return out
+
+
+async def get_stock_accounts(discord_user: str) -> list[str]:
+    """Distinct sub-account names the user has tagged trades with."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT DISTINCT account FROM stock_trades WHERE discord_user = ? "
+            "AND account IS NOT NULL ORDER BY account", (discord_user,))
+        return [r[0] for r in await cur.fetchall()]
 
 
 async def get_all_stock_positions() -> dict[str, list[dict]]:

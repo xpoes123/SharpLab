@@ -23,6 +23,8 @@ let sortCol = null;                // holdings sort column key (null = original 
 let sortDir = -1;                  // 1 = asc, -1 = desc
 let pieMode = "alloc";             // allocation donut mode: "alloc" | "stocks" | "all"
 let SUMMARY = {};                  // last render()'s d.summary, for the donut
+let ACCTS = [];                    // sub-account names (Roth IRA, HSA, …); [] when untagged
+let acct = "all";                  // holdings filter: "all" | an account name
 const BENCH_COLOR = "#58a6ff";     // S&P line — distinct from grey reconstructed segment
 const PIE_COLORS = ["#7aa2f7", "#bb9af7", "#9ece6a", "#e0af68", "#f7768e", "#7dcfff", "#ff9e64", "#2ac3de", "#c0caf5", "#9d7cd8", "#41a6b5", "#73daca"];
 const PIE_GREY = "#565f89";        // Cash / Other slices
@@ -47,10 +49,34 @@ function sortVal(h, key) {
   }
 }
 
-// HOLD sorted per sortCol/sortDir; original order when no column is active.
+// Holdings narrowed to one sub-account: that account's shares/cost; period P/L scaled
+// by its share of the position (approx — per-account trade timing isn't modelled).
+function viewHoldings() {
+  if (acct === "all") return HOLD;
+  return HOLD.filter((h) => h.accounts?.[acct]).map((h) => {
+    const a = h.accounts[acct];
+    const frac = h.shares ? a.shares / h.shares : 0;
+    const period = Object.fromEntries(Object.entries(h.period || {}).map(([k, p]) =>
+      [k, { ...p, pnl: p.pnl == null ? null : p.pnl * frac }]));
+    return { ...h, shares: a.shares, dca: a.dca, cost_basis: a.cost_basis, period, realized: 0,
+      unrealized: h.price == null || a.dca == null ? null : Math.round(a.shares * (h.price - a.dca) * 100) / 100 };
+  });
+}
+
+const acctValue = (name) => HOLD.reduce((sum, h) =>
+  sum + (h.price != null && h.accounts?.[name] ? h.accounts[name].shares * h.price : 0), 0);
+
+function acctChips() {
+  if (!ACCTS.length) return "";
+  const total = HOLD.reduce((sum, h) => sum + (h.price != null ? h.shares * h.price : 0), 0);
+  const chip = (key, label, v) => `<button data-acct="${key}" class="rangebtn${key === acct ? " on" : ""}">${label} <span class="muted" style="font-size:11px">${money(v)}</span></button>`;
+  return `<div class="stakebtns" style="margin-bottom:10px;flex-wrap:wrap">${chip("all", "All", total)}${ACCTS.map((a) => chip(a, a, acctValue(a))).join("")}</div>`;
+}
+
+// Holdings sorted per sortCol/sortDir; original order when no column is active.
 function sortedHoldings() {
-  if (!sortCol) return HOLD;
-  const rows = HOLD.slice();
+  if (!sortCol) return viewHoldings();
+  const rows = viewHoldings().slice();
   rows.sort((a, b) => {
     const va = sortVal(a, sortCol), vb = sortVal(b, sortCol);
     const c = sortCol === "ticker" ? String(va).localeCompare(String(vb)) : (va - vb);
@@ -300,14 +326,18 @@ function donutSVG(slices, total) {
 function pieSlices() {
   const s = SUMMARY;
   let raw;
-  if (pieMode === "alloc") {
+  if (pieMode === "accounts") {
+    raw = ACCTS.map((a) => ({ label: a, value: acctValue(a), grey: false }));
+    if ((s.cash || 0) > 0) raw.push({ label: "Cash", value: s.cash, grey: true });
+    raw = raw.filter((x) => x.value > 0).sort((a, b) => b.value - a.value);
+  } else if (pieMode === "alloc") {
     raw = [
       { label: "Stocks", value: s.stock_value || 0, grey: false },
       { label: "Options", value: s.options_value || 0, grey: false },
       { label: "Cash", value: s.cash || 0, grey: true },
     ].filter((x) => x.value > 0);
   } else {
-    const stocks = HOLD
+    const stocks = viewHoldings()
       .map((h) => ({ label: h.ticker, value: (h.price != null && h.price > 0) ? h.shares * h.price : 0, grey: false }))
       .filter((x) => x.value > 0)
       .sort((a, b) => b.value - a.value);
@@ -334,8 +364,9 @@ function pieSlices() {
 const PIE_MODES = [["alloc", "Account"], ["stocks", "Stocks"], ["all", "All"]];
 
 function pieBody() {
+  const modes = ACCTS.length ? [...PIE_MODES, ["accounts", "By account"]] : PIE_MODES;
   const buttons = `<div class="stakebtns" style="margin-bottom:12px">
-    ${PIE_MODES.map(([m, lbl]) => `<button data-pie="${m}" class="rangebtn${m === pieMode ? " on" : ""}">${lbl}</button>`).join("")}</div>`;
+    ${modes.map(([m, lbl]) => `<button data-pie="${m}" class="rangebtn${m === pieMode ? " on" : ""}">${lbl}</button>`).join("")}</div>`;
   const slices = pieSlices();
   const total = slices.reduce((sum, x) => sum + x.value, 0);
   if (total <= 0) return `${buttons}<div class="muted" style="padding:18px">No allocation data.</div>`;
@@ -390,10 +421,12 @@ function render(d) {
     </div>`;
 
   HOLD = d.stock_holdings || [];
+  ACCTS = d.accounts || [];
   html += `<h2>Allocation</h2>
     <div class="card" id="pieBox">${pieBody()}</div>`;
 
   html += `<h2>Stock Holdings <span class="muted" style="font-size:13px;font-weight:400">— click a row to chart it</span></h2>
+    <div id="acctBox">${acctChips()}</div>
     <div class="card" style="padding:0" id="holdBox">${holdingsTable()}</div>`;
 
   const op = d.option_positions || [];
@@ -439,6 +472,15 @@ function render(d) {
       document.querySelectorAll(".rangebtn[data-range]").forEach((x) => x.classList.toggle("on", x === rb));
       document.getElementById("holdBox").innerHTML = holdingsTable();
       updateChart();
+      return;
+    }
+
+    const ab = e.target.closest("[data-acct]");
+    if (ab) {  // sub-account filter — narrows holdings + the Stocks donut
+      acct = ab.dataset.acct;
+      document.getElementById("acctBox").innerHTML = acctChips();
+      document.getElementById("holdBox").innerHTML = holdingsTable();
+      document.getElementById("pieBox").innerHTML = pieBody();
       return;
     }
 
