@@ -426,7 +426,7 @@ class MarketsCog(commands.Cog):
 
     @kalshi_group.command(name="link", description="Link your Kalshi account with a READ-ONLY API key")
     async def kalshi_link(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_modal(_LinkModal())
+        await interaction.response.send_message(embed=_link_tutorial_embed(), view=_LinkView(), ephemeral=True)
 
     @kalshi_group.command(name="recap", description="Your Kalshi slate recap (posted daily 10am ET)")
     @app_commands.describe(days_ago="Which slate: 1 = last night (default)")
@@ -748,6 +748,37 @@ async def _resolution_embeds(bot: commands.Bot, res: dict[str, dict]) -> list[di
     return out
 
 
+def _link_tutorial_embed() -> discord.Embed:
+    return discord.Embed(
+        title="🔑 Link Kalshi: get an API key",
+        color=0x7AA2F7,
+        description=(
+            "**1.** Log in on **kalshi.com** (desktop is easiest) and open **Profile / Account settings**. "
+            "The button below goes straight there.\n"
+            "**2.** Scroll to **API Keys** and click **Create New API Key**. Name it something like `sharplab`.\n"
+            "**3.** If you can pick permissions, choose **read-only**. If you can pick a key type, choose **RSA** "
+            "(SharpLab can't use Ed25519).\n"
+            "**4.** Kalshi shows the **Key ID** and downloads the **private key** file. "
+            "⚠️ The private key is shown **once**. Save the file, because Kalshi can't show it again.\n"
+            "**5.** Click **Enter key** below. Paste the Key ID, then open the key file in any text editor and paste "
+            "**all** of it, including the `-----BEGIN…` and `-----END…` lines.\n\n"
+            "Your key is stored encrypted and SharpLab only makes read requests. "
+            "Revoke it on Kalshi or run `/kalshi unlink` at any time."
+        ),
+    )
+
+
+class _LinkView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=600)
+        self.add_item(discord.ui.Button(label="Open Kalshi API keys", style=discord.ButtonStyle.link,
+                                        url="https://kalshi.com/account/profile"))
+
+    @discord.ui.button(label="Enter key", style=discord.ButtonStyle.primary, emoji="🔑")
+    async def enter(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.send_modal(_LinkModal())
+
+
 class _LinkModal(discord.ui.Modal, title="Link Kalshi (read-only key)"):
     key_id = discord.ui.TextInput(label="API Key ID", placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
                                   max_length=64)
@@ -761,7 +792,10 @@ class _LinkModal(discord.ui.Modal, title="Link Kalshi (read-only key)"):
         try:
             ka.load_key(pem)
         except Exception:
-            await interaction.followup.send("That doesn't parse as an RSA private key.", ephemeral=True)
+            await interaction.followup.send(
+                "That doesn't parse as an RSA private key. Paste the **whole** key file including the BEGIN/END "
+                "lines, and make sure the key type is **RSA** (not Ed25519). Run `/kalshi link` for the steps.",
+                ephemeral=True)
             return
         try:
             bal = await ka.fetch_balance(key_id, pem)
