@@ -33,6 +33,7 @@ from web.liarsdice import router as liarsdice_router, liarsdice_websocket, clean
 from web.penalties import router as penalties_router, penalties_websocket, cleanup_stale_penalties_rooms
 from web.pd import router as pd_router, pd_websocket, cleanup_stale_pd_rooms
 from web.contraband import router as contraband_router, contraband_websocket, cleanup_stale_contraband_rooms
+from web.wallstreet import router as wallstreet_router, wallstreet_websocket, cleanup_stale_wallstreet_rooms, refund_all_wallstreet_rooms
 from web.hq import router as hq_router, quote_refresh_loop
 from web.cards import router as cards_router
 from web.casino import router as casino_router
@@ -142,6 +143,7 @@ async def lifespan(app: FastAPI):
     pen_cleanup_task = asyncio.create_task(cleanup_stale_penalties_rooms())
     pd_cleanup_task = asyncio.create_task(cleanup_stale_pd_rooms())
     contraband_cleanup_task = asyncio.create_task(cleanup_stale_contraband_rooms())
+    wallstreet_cleanup_task = asyncio.create_task(cleanup_stale_wallstreet_rooms())
     quote_task = asyncio.create_task(quote_refresh_loop())   # keep HQ stock prices warm
     yield
     # Snapshot open hands so a deploy/restart resumes them instead of dropping the player mid-game.
@@ -167,6 +169,8 @@ async def lifespan(app: FastAPI):
     pen_cleanup_task.cancel()
     pd_cleanup_task.cancel()
     contraband_cleanup_task.cancel()
+    wallstreet_cleanup_task.cancel()
+    await refund_all_wallstreet_rooms()  # in-memory rooms die with the process — return buy-ins
 
 
 app = FastAPI(title="SharpLab", docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -229,6 +233,7 @@ app.include_router(liarsdice_router)
 app.include_router(penalties_router)
 app.include_router(pd_router)
 app.include_router(contraband_router)
+app.include_router(wallstreet_router)
 
 
 # WebSocket endpoint (not on the API router — different path pattern)
@@ -318,6 +323,11 @@ async def ws_pd(websocket: WebSocket, room_id: str):
 async def ws_contraband(websocket: WebSocket, room_id: str):
     await contraband_websocket(websocket, room_id)
 
+
+@app.websocket("/ws/wallstreet/{room_id}")
+async def ws_wallstreet(websocket: WebSocket, room_id: str):
+    await wallstreet_websocket(websocket, room_id)
+
 # ── Static data (replicated from bot cogs to avoid importing bot deps) ───────
 
 GAME_LABELS: dict[str, str] = {
@@ -366,6 +376,7 @@ GAME_LABELS: dict[str, str] = {
     "beauty": "Beauty Contest",
     "pd": "Prisoner's Dilemma",
     "contraband": "Contraband",
+    "wallstreet": "Wall Street Poker",
     "pokehoops": "Poké Hoops",
 }
 
