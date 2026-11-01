@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SharpLab HQ — Wall Street Poker</title>
+<link rel="stylesheet" href="/hqstyle.css" />
+<style>
+  .ws-wrap { max-width: 980px; margin: 0 auto; padding: 0 16px 60px; }
+  .ws-head { text-align: center; margin: 8px 0 20px; }
+  .ws-head h1 { font-size: 26px; margin: 0 0 6px; }
+  .ws-head p { color: var(--muted); margin: 0; font-size: 14px; }
+  .phase { display: none; }
+  .phase.active { display: block; }
+  .narrow { max-width: 560px; margin: 0 auto; }
+
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); margin-bottom: 6px; }
+  .inp { width: 100%; box-sizing: border-box; background: var(--panel2); border: 1px solid var(--line);
+    border-radius: var(--r); padding: 12px 14px; color: var(--fg); font-size: 16px; font-family: inherit; outline: none; }
+  .inp:focus { border-color: var(--accent); }
+  .inp.code { text-transform: uppercase; letter-spacing: .3em; font-weight: 700; font-family: var(--font-mono); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .row > .inp { flex: 1; min-width: 0; }
+  .sep { text-align: center; color: var(--muted); font-size: 12px; margin: 18px 0; }
+
+  .btn { background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: var(--r);
+    padding: 11px 16px; cursor: pointer; font-family: inherit; font-weight: 700; font-size: 14px; }
+  .btn:hover { border-color: var(--accent); }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border: 0; }
+  .btn.danger { border-color: #f7768e; color: #f7768e; }
+  .btn.sm { padding: 6px 10px; font-size: 12px; }
+  .btn.big { width: 100%; padding: 13px; font-size: 15px; font-weight: 800; }
+
+  .rules { background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r);
+    padding: 12px 16px; margin: 16px 0; font-size: 13px; color: var(--muted); line-height: 1.6; }
+  .rules b { color: var(--fg); }
+
+  .codebox { text-align: center; background: var(--panel2); border: 1px solid var(--line);
+    border-radius: var(--r-lg); padding: 14px; margin-bottom: 16px; }
+  .codebox .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
+  .codebox .code { font-size: 38px; font-weight: 800; letter-spacing: .18em; font-family: var(--font-mono);
+    color: var(--accent); cursor: pointer; }
+
+  .seatlist { display: grid; gap: 8px; margin: 12px 0; }
+  .seatrow { display: flex; justify-content: space-between; align-items: center; background: var(--panel);
+    border: 1px solid var(--line); border-radius: var(--r); padding: 10px 14px; }
+  .tag { font-size: 11px; font-weight: 800; padding: 2px 7px; border-radius: 999px; margin-left: 6px;
+    background: var(--panel2); border: 1px solid var(--line); color: var(--muted); }
+  .tag.ok { color: #9ece6a; border-color: #9ece6a; }
+  .tag.btn-tag { color: var(--accent); border-color: var(--accent); }
+  .tag.off { color: #f7768e; border-color: #f7768e; }
+
+  /* Cards */
+  .pc { position: relative; width: 46px; height: 64px; flex: 0 0 auto; border-radius: 6px; background: #f6f7fb;
+    color: #1b2430; border: 1px solid rgba(0,0,0,.25); font-weight: 800; display: inline-flex;
+    flex-direction: column; align-items: center; justify-content: center; line-height: 1; font-size: 16px; }
+  .pc i { font-style: normal; font-size: 18px; }
+  .pc.red { color: #d0344a; }
+  .pc.big { width: 84px; height: 118px; font-size: 28px; border-radius: 10px; }
+  .pc.big i { font-size: 34px; }
+  .pc.back { background: repeating-linear-gradient(45deg, var(--accent) 0 6px, #7aa2f7 6px 12px); }
+  .pc.slot { background: transparent; border: 1px dashed var(--line); }
+  .pc.buyable { cursor: pointer; }
+  .pc.buyable:hover { outline: 2px solid var(--accent); }
+  .pc.sel { outline: 3px solid var(--accent); }
+  .cards { display: flex; gap: 5px; flex-wrap: wrap; }
+
+  /* Table */
+  .grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 14px; }
+  .panel h3 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .stats { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+  .stat { flex: 1; min-width: 90px; text-align: center; background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--r); padding: 10px; }
+  .stat .v { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+
+  .block { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+  .upnext { font-size: 12px; color: var(--muted); }
+  .timer { font-family: var(--font-mono); font-size: 20px; font-weight: 800; color: var(--accent); }
+  .bidrow { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .bidrow .inp { width: 110px; flex: 0 0 auto; }
+  .note { color: var(--muted); font-size: 13px; margin-top: 8px; }
+
+  .players { display: grid; gap: 10px; }
+  .pl { border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; background: var(--panel2); }
+  .pl.me { border-color: var(--accent); }
+  .pl.folded { opacity: .45; }
+  .pl .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; gap: 8px; }
+  .pl .nm { font-weight: 800; }
+  .pl .money { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .offers, .log { display: grid; gap: 6px; font-size: 13px; }
+  .offer { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 10px;
+    border: 1px solid var(--line); border-radius: var(--r); }
+  .log div { color: var(--muted); }
+  .log b { color: var(--fg); }
+  .offerbox { margin-top: 10px; display: none; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .offerbox.show { display: flex; }
+  .offerbox .inp { width: 100px; flex: 0 0 auto; }
+
+  .result .pl { margin-bottom: 8px; }
+  .won { color: #9ece6a; font-weight: 800; }
+  .lost { color: #f7768e; font-weight: 800; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><a href="/">Sharp<span>Lab</span> HQ</a></div>
+  <nav class="nav"><a href="/">Server</a><a href="/stocks">Stocks</a><a href="/lines">Lines</a><a href="/pickem">Pick'em</a><a href="/cards">Cards</a><a href="/games">Games</a><a href="/vid">Video</a></nav>
+  <div id="navRight"></div>
+</header>
+
+<main class="ws-wrap">
+  <div class="ws-head">
+    <h1>📈 Wall Street Poker</h1>
+    <p>Auction your way to a poker hand. 2–6 players · 🪙 buy-in</p>
+  </div>
+
+  <!-- Entry -->
+  <section id="entry" class="phase narrow">
+    <div id="signin" style="display:none;text-align:center">
+      <p class="muted">Sign in with Discord to play for casino coins.</p>
+      <a class="btn primary" href="/api/v1/auth/discord/login?next=/wallstreet.html">Sign in with Discord</a>
+    </div>
+    <div id="entryForms" style="display:none">
+      <div class="field">
+        <label>Buy-in (coins, everyone pays the same)</label>
+        <div class="row">
+          <input id="buyIn" class="inp" type="number" min="10" max="10000" value="100" />
+          <button class="btn primary" id="createBtn">Create table</button>
+        </div>
+      </div>
+      <div class="sep">— or join —</div>
+      <div class="row">
+        <input id="codeIn" class="inp code" maxlength="4" placeholder="CODE" />
+        <button class="btn" id="joinBtn">Join</button>
+      </div>
+    </div>
+    <div class="rules">
+      <b>How it plays.</b> Everyone gets <b>2 hidden cards</b>. Cards come out <b>3 at a time</b> and are auctioned
+      left to right: everyone who still needs cards submits a <b>sealed bid</b>, bids reveal together, the high bid
+      takes the card face-up and pays the <b>pot</b>. Ties go to the seat closest left of the button.<br>
+      <b>No card is skipped:</b> if nobody bids, the first seat left of the button eats it at the forced price.<br>
+      Click anyone's face-up card to <b>offer to buy it</b> (paid to them, not the pot). At 5 cards you stop bidding
+      unless you sell one. <b>Fold</b> any time to keep your stack.<br>
+      Once everyone holds 5, <b>best poker hand takes the pot</b>. You cash out your stack + winnings.
+    </div>
+  </section>
+
+  <!-- Lobby -->
+  <section id="lobby" class="phase narrow">
+    <div class="codebox">
+      <div class="lbl">Room code · click to copy</div>
+      <div class="code" id="lobbyCode">----</div>
+      <div class="lbl" id="lobbyBuyIn"></div>
+    </div>
+    <div id="lastResult" class="result"></div>
+    <div class="seatlist" id="seatList"></div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn primary" id="buyinBtn">Buy in</button>
+      <button class="btn" id="cashoutBtn">Cash out</button>
+      <button class="btn primary" id="startBtn">Deal</button>
+      <button class="btn danger" id="leaveBtn">Leave</button>
+    </div>
+    <p class="note" id="lobbyNote"></p>
+  </section>
+
+  <!-- Table -->
+  <section id="table" class="phase">
+    <div class="stats">
+      <div class="stat"><div class="v" id="sPot">0</div><div class="k">Pot</div></div>
+      <div class="stat"><div class="v" id="sStack">0</div><div class="k">Your stack</div></div>
+      <div class="stat"><div class="v" id="sNeed">0</div><div class="k">Cards needed</div></div>
+      <div class="stat"><div class="v" id="sForced">0</div><div class="k">Forced price</div></div>
+    </div>
+    <div class="grid">
+      <div>
+        <div class="panel">
+          <h3>On the block</h3>
+          <div class="block">
+            <div id="blockCard"></div>
+            <div>
+              <div class="timer" id="timer"></div>
+              <div class="upnext">Up next</div>
+              <div class="cards" id="upNext"></div>
+            </div>
+          </div>
+          <div class="bidrow" id="bidRow">
+            <input id="bidIn" class="inp" type="number" min="0" value="0" />
+            <button class="btn sm" data-q="0">0</button>
+            <button class="btn sm" data-q="forced">Forced</button>
+            <button class="btn sm" data-q="10">10%</button>
+            <button class="btn sm" data-q="25">25%</button>
+            <button class="btn primary" id="bidBtn">Seal bid</button>
+          </div>
+          <p class="note" id="bidNote"></p>
+        </div>
+        <div class="panel" style="margin-top:16px">
+          <h3>Players</h3>
+          <div class="players" id="players"></div>
+          <div class="offerbox" id="offerBox">
+            <span id="offerLabel"></span>
+            <input id="offerIn" class="inp" type="number" min="1" value="5" />
+            <button class="btn primary sm" id="offerBtn">Offer</button>
+            <button class="btn sm" id="offerCancel">Cancel</button>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="panel">
+          <h3>Your hand</h3>
+          <div class="cards" id="myCards"></div>
+          <div class="row" style="margin-top:12px"><button class="btn danger" id="foldBtn">Fold</button></div>
+        </div>
+        <div class="panel" style="margin-top:16px">
+          <h3>Offers</h3>
+          <div class="offers" id="offers"></div>
+        </div>
+        <div class="panel" style="margin-top:16px">
+          <h3>Tape</h3>
+          <div class="log" id="log"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="toast" style="position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:var(--panel2);
+  border:1px solid var(--line);border-radius:10px;padding:10px 18px;display:none;z-index:300"></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const num = (n) => Number(n || 0).toLocaleString();
+  const game = { ws: null, roomId: null, s: null, sel: null, foldArmed: false };
+
+  function toast(msg) {
+    const t = $("toast");
+    t.textContent = msg;
+    t.style.display = "block";
+    clearTimeout(t._h);
+    t._h = setTimeout(() => (t.style.display = "none"), 3000);
+  }
+  function showPhase(id) {
+    for (const p of document.querySelectorAll(".phase")) p.classList.toggle("active", p.id === id);
+  }
+
+  function card(c, cls = "", attrs = "") {
+    if (!c) return `<div class="pc ${cls || "slot"}"></div>`;  // face-down back or empty slot
+    const suit = c.slice(-1), rank = c.slice(0, -1);
+    const red = suit === "♥" || suit === "♦";
+    return `<div class="pc ${red ? "red" : ""} ${cls}" ${attrs}>${esc(rank)}<i>${esc(suit)}</i></div>`;
+  }
+
+  // ── Entry / REST ──
+  async function postJSON(url, body) {
+    const r = await fetch(url, { method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) j._status = r.status;
+    return j;
+  }
+
+  $("createBtn").onclick = async () => {
+    const buy_in = parseInt($("buyIn").value, 10);
+    const res = await postJSON("/api/v1/wallstreet/rooms", { buy_in });
+    if (res._status) return toast("❌ " + (res.detail || "Couldn't create a table."));
+    connect(res.room_id);
+  };
+  $("joinBtn").onclick = async () => {
+    const code = ($("codeIn").value || "").trim().toUpperCase();
+    if (code.length !== 4) return toast("Enter the 4-letter code.");
+    const res = await postJSON(`/api/v1/wallstreet/rooms/${code}/join`);
+    if (res._status) return toast("❌ " + (res.detail || "Couldn't join."));
+    connect(res.room_id);
+  };
+
+  // ── Socket ──
+  function connect(roomId) {
+    game.roomId = roomId;
+    history.replaceState(null, "", "#" + roomId);
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const ws = new WebSocket(`${proto}://${location.host}/ws/wallstreet/${roomId}`);
+    game.ws = ws;
+    ws.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data); } catch { return; } onMsg(m); };
+    ws.onclose = (ev) => {
+      if (game.ws !== ws) return;
+      game.ws = null;
+      if (ev.code === 4004 || ev.code === 4000) { reset(ev.code === 4000 ? "Opened in another tab." : "Table not found."); return; }
+      setTimeout(() => { if (!game.ws && game.roomId) connect(game.roomId); }, 2000);
+    };
+  }
+  function reset(msg) {
+    game.roomId = null; game.s = null;
+    history.replaceState(null, "", location.pathname);
+    if (msg) toast(msg);
+    showPhase("entry");
+  }
+  function send(msg) {
+    if (game.ws && game.ws.readyState === WebSocket.OPEN) game.ws.send(JSON.stringify(msg));
+  }
+  setInterval(() => send({ type: "ping" }), 30000);
+
+  function onMsg(m) {
+    if (m.type === "error") return toast("⚠️ " + m.message);
+    if (m.type === "left") { const ws = game.ws; game.ws = null; if (ws) ws.close(); return reset(); }
+    if (m.type === "state") { game.s = m; render(); }
+  }
+
+  // ── Render ──
+  const nameOf = (uid) => ((game.s.players || []).find((p) => p.uid === uid) || {}).name || "?";
+
+  function render() {
+    const s = game.s;
+    if (s.hand && s.players.some((p) => p.uid === s.me && p.in_hand)) renderTable(s);
+    else renderLobby(s);
+  }
+
+  function resultHTML(r) {
+    if (!r) return "";
+    const rows = r.players.map((p) => `
+      <div class="pl ${p.folded ? "folded" : ""}">
+        <div class="top"><span class="nm">${esc(p.name)} ${p.won ? "🏆" : ""}</span>
+          <span class="${p.net >= 0 ? "won" : "lost"}">${p.net >= 0 ? "+" : ""}${num(p.net)}</span></div>
+        <div class="cards">${p.hole.map((c) => card(c)).join("")}<span style="width:8px"></span>${p.board.map((c) => card(c)).join("")}</div>
+        <div class="note">${p.folded ? "Folded" : esc(p.hand || "")}</div>
+      </div>`).join("");
+    return `<div class="panel" style="margin-bottom:14px"><h3>Last hand · pot ${num(r.pot)} → ${esc(r.winners.join(", "))}</h3>${rows}</div>`;
+  }
+
+  function renderLobby(s) {
+    showPhase("lobby");
+    const me = s.players.find((p) => p.uid === s.me) || {};
+    $("lobbyCode").textContent = s.code;
+    $("lobbyBuyIn").textContent = `Buy-in 🪙 ${num(s.buy_in)} · forced price ${num(s.forced)}`;
+    $("lastResult").innerHTML = resultHTML(s.last_result);
+    $("seatList").innerHTML = s.players.map((p) => `
+      <div class="seatrow"><span>${esc(p.name)}${p.uid === s.me ? " (you)" : ""}
+        ${p.is_host ? '<span class="tag">host</span>' : ""}
+        ${p.connected ? "" : '<span class="tag off">offline</span>'}</span>
+        <span>${p.in_hand ? '<span class="tag">in hand</span>' : p.bought_in ? '<span class="tag ok">✓ bought in</span>' : '<span class="tag">not in</span>'}</span>
+      </div>`).join("");
+    const handLive = !!s.hand;
+    const ready = s.players.filter((p) => p.bought_in).length;
+    $("buyinBtn").textContent = `Buy in · 🪙 ${num(s.buy_in)}`;
+    $("buyinBtn").style.display = me.bought_in ? "none" : "";
+    $("buyinBtn").disabled = handLive;
+    $("cashoutBtn").style.display = me.bought_in && !handLive ? "" : "none";
+    $("startBtn").style.display = s.me === s.host && !handLive ? "" : "none";
+    $("startBtn").disabled = ready < 2;
+    $("lobbyNote").textContent = handLive ? "A hand is in progress — you'll be dealt into the next one."
+      : ready < 2 ? "Need at least 2 players bought in." : s.me === s.host ? "Deal when everyone's in." : "Waiting for the host to deal.";
+  }
+
+  function renderTable(s) {
+    showPhase("table");
+    const h = s.hand;
+    const me = s.players.find((p) => p.uid === s.me);
+    $("sPot").textContent = num(h.pot);
+    $("sStack").textContent = num(me.stack);
+    $("sNeed").textContent = me.folded ? "—" : me.need;
+    $("sForced").textContent = num(s.forced);
+
+    $("blockCard").innerHTML = card(h.card, "big");
+    $("upNext").innerHTML = h.street.length ? h.street.map((c) => card(c)).join("") : '<span class="upnext">new street after this</span>';
+
+    const canBid = me.bidding && !me.folded;
+    $("bidRow").style.display = canBid ? "" : "none";
+    $("bidIn").max = me.stack;
+    $("bidNote").textContent = me.folded ? "You folded — sit tight for the next hand."
+      : !me.bidding ? (me.need === 0 ? "You have 5 cards. Sell one to get back in the bidding." : "Waiting for this auction.")
+      : me.has_bid ? `Sealed: ${num(h.my_bid)} — you can change it until everyone's in.`
+      : `Seal a bid (0–${num(me.stack)}). Nobody bids → ${esc(nameOf(h.order.find((u) => (s.players.find((p) => p.uid === u) || {}).bidding)))} eats it at ${num(s.forced)}.`;
+
+    $("players").innerHTML = h.order.map((uid) => {
+      const p = s.players.find((x) => x.uid === uid);
+      if (!p) return "";
+      const isMe = uid === s.me;
+      const board = p.board.map((c) => {
+        const buyable = !isMe && !p.folded && !me.folded && me.need > 0;
+        const sel = game.sel && game.sel.seller === uid && game.sel.card === c;
+        return card(c, (buyable ? "buyable " : "") + (sel ? "sel" : ""),
+          buyable ? `data-seller="${esc(uid)}" data-card="${esc(c)}"` : "");
+      }).join("");
+      const hidden = isMe ? (h.my_hole || []).map((c) => card(c)).join("") : card(null, "back") + card(null, "back");
+      const status = p.folded ? '<span class="tag off">folded</span>'
+        : p.bidding ? (p.has_bid ? '<span class="tag ok">bid in</span>' : '<span class="tag">thinking…</span>') : "";
+      return `<div class="pl ${isMe ? "me" : ""} ${p.folded ? "folded" : ""}">
+        <div class="top"><span class="nm">${esc(p.name)}${isMe ? " (you)" : ""}
+          ${p.button ? '<span class="tag btn-tag">BTN</span>' : ""}${p.connected ? "" : '<span class="tag off">offline</span>'}${status}</span>
+          <span class="money">🪙 ${num(p.stack)} · in pot ${num(p.paid)}</span></div>
+        <div class="cards">${hidden}<span style="width:8px"></span>${board}</div>
+      </div>`;
+    }).join("");
+    for (const el of document.querySelectorAll("#players .pc.buyable")) {
+      el.onclick = () => { game.sel = { seller: el.dataset.seller, card: el.dataset.card }; renderOfferBox(); render(); };
+    }
+    renderOfferBox();
+
+    $("myCards").innerHTML = (h.my_hole || []).map((c) => card(c)).join("") + '<span style="width:8px"></span>'
+      + me.board.map((c) => card(c)).join("") + Array.from({ length: Math.max(0, me.need) }, () => card(null)).join("");
+    $("foldBtn").style.display = me.folded ? "none" : "";
+    $("foldBtn").textContent = game.foldArmed ? "Confirm fold" : "Fold";
+
+    $("offers").innerHTML = h.offers.length ? h.offers.map((o) => {
+      const incoming = o.seller === s.me;
+      return `<div class="offer"><span>${incoming ? `<b>${esc(o.buyer_name)}</b> wants your` : `You offered <b>${esc(o.seller_name)}</b> for`}
+        ${card(o.card)} for 🪙 ${num(o.price)}</span>
+        <span>${incoming ? `<button class="btn primary sm" data-acc="${o.id}">Sell</button> ` : ""}
+        <button class="btn sm" data-wd="${o.id}">${incoming ? "Decline" : "Cancel"}</button></span></div>`;
+    }).join("") : '<div class="note">Click someone\'s face-up card to make an offer.</div>';
+    for (const b of document.querySelectorAll("[data-acc]")) b.onclick = () => send({ type: "accept", id: +b.dataset.acc });
+    for (const b of document.querySelectorAll("[data-wd]")) b.onclick = () => send({ type: "withdraw", id: +b.dataset.wd });
+
+    $("log").innerHTML = h.log.slice().reverse().map((e) => {
+      if (e.kind === "fold") return `<div><b>${esc(e.who)}</b> folded</div>`;
+      if (e.kind === "trade") return `<div><b>${esc(e.buyer)}</b> bought ${esc(e.card)} from <b>${esc(e.seller)}</b> for ${num(e.price)}</div>`;
+      const bids = Object.entries(e.bids).map(([n, b]) => `${esc(n)} ${num(b)}`).join(" · ");
+      return `<div>${esc(e.card)} → <b>${esc(e.winner)}</b> for ${num(e.price)}${e.how === "forced" ? " (forced)" : ""}${bids ? ` <span>[${bids}]</span>` : ""}</div>`;
+    }).join("") || '<div>No cards sold yet.</div>';
+  }
+
+  function renderOfferBox() {
+    const box = $("offerBox");
+    box.classList.toggle("show", !!game.sel);
+    if (game.sel) $("offerLabel").innerHTML = `Buy ${esc(game.sel.card)} from <b>${esc(nameOf(game.sel.seller))}</b> for`;
+  }
+
+  // Bid timer
+  setInterval(() => {
+    const h = game.s && game.s.hand;
+    const left = h && h.deadline && h.card ? Math.max(0, Math.ceil(h.deadline - Date.now() / 1000)) : null;
+    $("timer").textContent = left == null ? "" : `⏱ ${left}s`;
+  }, 250);
+
+  // ── Actions ──
+  $("lobbyCode").onclick = () => navigator.clipboard && navigator.clipboard.writeText($("lobbyCode").textContent).then(() => toast("Copied."));
+  $("buyinBtn").onclick = () => send({ type: "buyin" });
+  $("cashoutBtn").onclick = () => send({ type: "cashout" });
+  $("startBtn").onclick = () => send({ type: "start" });
+  $("leaveBtn").onclick = () => send({ type: "leave" });
+  $("bidBtn").onclick = () => send({ type: "bid", amount: Math.max(0, parseInt($("bidIn").value, 10) || 0) });
+  $("bidIn").onkeydown = (e) => { if (e.key === "Enter") $("bidBtn").click(); };
+  for (const b of document.querySelectorAll("[data-q]")) {
+    b.onclick = () => {
+      const s = game.s, me = s.players.find((p) => p.uid === s.me);
+      const q = b.dataset.q;
+      $("bidIn").value = q === "forced" ? s.forced : Math.floor((me.stack * +q) / 100);
+    };
+  }
+  $("foldBtn").onclick = () => {
+    if (!game.foldArmed) { game.foldArmed = true; render(); setTimeout(() => { game.foldArmed = false; game.s && render(); }, 3000); return; }
+    game.foldArmed = false;
+    send({ type: "fold" });
+  };
+  $("offerBtn").onclick = () => {
+    if (!game.sel) return;
+    send({ type: "offer", seller: game.sel.seller, card: game.sel.card, price: parseInt($("offerIn").value, 10) || 0 });
+    game.sel = null; render();
+  };
+  $("offerCancel").onclick = () => { game.sel = null; render(); };
+
+  // ── Boot ──
+  async function main() {
+    const r = await fetch("/api/v1/hq/me", { credentials: "include" });
+    const me = r.ok ? await r.json() : null;
+    const nav = $("navRight");
+    if (me && me.authenticated) {
+      nav.innerHTML = `<div class="userbar"><span>${esc(me.user.username)}</span>
+        <span class="coinschip">🪙 ${num(me.balance)}</span></div>`;
+      $("entryForms").style.display = "";
+      const hash = location.hash.slice(1);
+      if (hash) return connect(hash);
+    } else {
+      nav.innerHTML = `<a class="btn" href="/api/v1/auth/discord/login?next=/wallstreet.html">Sign in with Discord</a>`;
+      $("signin").style.display = "";
+    }
+    showPhase("entry");
+  }
+  main();
+})();
+</script>
+<script src="/track.js"></script>
+</body>
+</html>
