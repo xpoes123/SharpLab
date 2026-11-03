@@ -17,6 +17,8 @@ from wall.live import LEAGUES, REFRESH_S, LiveRun, Scores, carries, matchup
 from wall.presets import PresetStore, check_url
 
 log = logging.getLogger("wall.instance")
+APP_POLL_S = 2.0   # how often a TV wall asks the TV OS what it shows
+AWAY_S = 8.0       # in another app this long → a wall the TV OS didn't start stops
 BOARDS = {"nfl": "NFL", "nba": "NBA"}   # the boards a service-owned overlay can show (ESPN scoreboards)
 
 
@@ -67,6 +69,13 @@ class Instance:
         self.tv_on_wall = lambda: True          # is the TV showing its wall right now?
         self._tv_wall, self._wall_at, self._screen_retry = False, 0.0, 0.0
         self.sync = None                        # wall/sync.SyncStore: the spoiler delay per tile page (set by the server)
+        # the TV OS this wall's screen belongs to (tv only): host_app() → its active app ("wall", "dreamscape", … or
+        # None = home / unreachable). The overlay draws only while it is "wall"; a wall the TV OS didn't start (the
+        # service API, a mirror's change) stops once the TV OS has been in another app for AWAY_S.
+        self.host_app = None
+        self.app = None                          # the last answer ("" = never asked)
+        self._app_at, self._away_since = 0.0, 0.0
+        self.tv_owned = False                    # the TV OS was on its wall app when this wall started
 
     # ---- state -------------------------------------------------------------------------------------------------------
     def _bump(self) -> None:
@@ -89,7 +98,8 @@ class Instance:
                    "urls": list(self.urls), "sound": self.driver.sound, "rev": self.rev, "live": live,
                    "overlay": {"board": self.board, "visible": self.visible, "layout": self.layout, "view": self.view},
                    "started": self.started, "error": self.error, "stopped": self.stopped_why,
-                   "mirror": self.follow, "notice": self.notice, "origin": self.origin}
+                   "mirror": self.follow, "notice": self.notice, "origin": self.origin,
+                   "tv_app": self.app if self.host_app is not None else None, "overlay_on": self.overlay_on()}
             if self.sync is not None:
                 out["sync"] = self.sync_view()
             if self.headless:
@@ -125,6 +135,7 @@ class Instance:
                     raise WallError(f"no {LEAGUES[live]} games on now or later today")
         if not urls:
             raise WallError("needs 1–4 URLs, a preset or live games")
+        app = self._ask_app()   # the TV OS on its wall app now = it started this wall (an HTTP call: outside the lock)
         with self.lock:
             self._stop_locked("")
             if self.headless:
@@ -144,6 +155,8 @@ class Instance:
             self.preset = self.store.presets.index(p) if p else -1
             self.started, self.last_fetch, self.error, self.stopped_why = self.clock(), 0.0, "", ""
             self.follow, self.origin = follow, origin
+            self._app_at, self._away_since, self.app = self.clock(), 0.0, app
+            self.tv_owned = app == "wall"
             self.driver.start(urls)
             self.driver.sound = max(0, min(sound, len(urls) - 1))
             if self.headless:
@@ -305,7 +318,7 @@ class Instance:
                 "tiles": [{**t, "game": g} for t, g in zip(self.sync.tiles(urls), games)]}
 
     def overlay_view(self) -> dict:
-        return {"view": self.view, "rev": self.ov_rev}
+        return {"view": self.view if self.overlay_on() else "", "rev": self.ov_rev}
 
     def overlay_data(self, board: str = "") -> dict:
         b = board or self.board or "nfl"
@@ -575,11 +588,47 @@ class Instance:
         """A playlist fetch = someone is watching."""
         self.last_fetch = self.clock()
 
+    # ---- the TV OS's active app (tv) ----------------------------------------------------------------------------------
+    def _ask_app(self) -> str | None:
+        if self.host_app is None:
+            return None
+        try:
+            return self.host_app() or None
+        except Exception:  # noqa: BLE001 — unknown = not on the wall: the overlay hides, nothing stops
+            return None
+
+    def overlay_on(self) -> bool:
+        """May this wall's overlay draw (bets, bands, boards)? Always on a wall without a TV OS; on the TV only while
+        the TV OS shows its wall app — never over Dreamscape, YouTube, News…"""
+        return self.host_app is None or self.app == "wall"
+
+    def app_tick(self, now: float) -> bool:
+        """Every APP_POLL_S while the wall runs: ask the TV OS what it shows; True when the wall should stop (it moved to
+        another app for AWAY_S and didn't start this wall itself). Called without the lock (an HTTP call)."""
+        if self.host_app is None or now - self._app_at < APP_POLL_S:
+            return False
+        self._app_at = now
+        app = self._ask_app()
+        if app != self.app:
+            self.app = app
+            self._bump()
+        if app in (None, "wall"):   # home / unreachable: hidden overlay, but nobody left for another app
+            self._away_since = 0.0
+            return False
+        self._away_since = self._away_since or now
+        return not self.tv_owned and now - self._away_since >= AWAY_S
+
     def tick(self) -> None:
         try:
             self.mirror_tick()
         except Exception as e:  # noqa: BLE001 — a bad copy leaves the wall as it is
             log.warning("%s mirror: %s", self.name, e)
+        if self.urls and self.app_tick(self.clock()):
+            with self.lock:
+                if self.urls:
+                    log.info("%s auto-stop: the TV moved to %s", self.name, self.app)
+                    self._stop_locked(f"auto-stopped: the TV moved to {self.app}")
+                    return
         with self.lock:
             if not self.urls:
                 return
