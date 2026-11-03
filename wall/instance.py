@@ -100,7 +100,7 @@ class Instance:
                         "clock": [(lv.game(g) or {}).get("clock", "") if g else "" for g in lv.games],
                         "states": [(lv.game(g) or {}).get("state", "") if g else "" for g in lv.games]}
             out = {"inst": self.name, "running": bool(self.urls), "name": self.preset_name, "preset": self.preset,
-                   "urls": list(self.urls), "sound": self.driver.sound, "rev": self.rev, "live": live,
+                   "urls": list(self.urls), "sound": self.driver.sound, "volume": self.driver.volume, "rev": self.rev, "live": live,
                    "overlay": {"board": self.board, "visible": self.visible, "layout": self.layout, "view": self.view},
                    "started": self.started, "error": self.error, "stopped": self.stopped_why,
                    "mirror": self.follow, "notice": self.notice, "origin": self.origin,
@@ -277,6 +277,13 @@ class Instance:
             if not 0 <= i < len(self.urls):
                 raise WallError("tile index out of range")
             self.driver.focus(i)
+            self._bump()
+            return self.state()
+
+    def volume(self, volume: int | None = None, delta: int = 0) -> dict:
+        """The sound tile's stream volume (%): set it, or step it (the phone remote's up/down). Kept across presets."""
+        with self.lock:
+            self.driver.set_volume((self.driver.volume if volume is None else volume) + delta)
             self._bump()
             return self.state()
 

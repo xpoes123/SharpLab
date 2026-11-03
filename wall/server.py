@@ -440,6 +440,17 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         await asyncio.to_thread(target(name).sound, num(d, "i"))
         return inst(name).state()
 
+    @app.post("/i/{name}/volume")
+    async def volume(name: str, request: Request) -> dict:
+        """{"volume": 0..100} sets the sound tile's volume, {"delta": ±n} steps it (the phone remote's up / down)."""
+        d = await body(request)
+        v = num(d, "volume") if "volume" in d else None
+        step = num(d, "delta") if "delta" in d else 0
+        if v is None and not step:
+            raise ValueError("give volume or delta")
+        await asyncio.to_thread(target(name).volume, v, step)
+        return inst(name).state()
+
     @app.post("/i/{name}/pin")
     async def pin(name: str, request: Request) -> dict:
         d = await body(request)

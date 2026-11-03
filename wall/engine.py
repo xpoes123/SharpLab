@@ -45,7 +45,11 @@ FULLSCREEN_JS = """(async () => {
   const v = [...document.querySelectorAll('video')].sort((a, b) => b.offsetWidth * b.offsetHeight - a.offsetWidth * a.offsetHeight)[0];
   if (!v) return false;
   v.play().catch(() => {});
-  if (v.hasAttribute('data-tvfs')) return true;          // already pinned by the CSS fallback
+  // the CSS pin's z-index only counts if no ancestor makes its own stacking context: YouTube's #player-container has
+  // view-transition-name, .html5-video-container z-index 10 — without this the masthead, sidebar and comments paint over
+  // the pinned video (NBC News NOW's live watch page, 2026-11-03). Re-marked every round: YouTube re-renders the player.
+  const flat = () => { for (let e = v.parentElement; e && e !== document.documentElement; e = e.parentElement) e.setAttribute('data-tvfs-a', ''); return true; };
+  if (v.hasAttribute('data-tvfs')) return flat();        // already pinned by the CSS fallback
   if (!v.offsetWidth && document.fullscreenElement !== v) return false;
   const r = v.getBoundingClientRect(), fits = Math.abs(r.width - innerWidth) <= 4 || Math.abs(r.height - innerHeight) <= 4;
   if (document.fullscreenElement === v && fits) return true;
@@ -55,11 +59,14 @@ FULLSCREEN_JS = """(async () => {
   if (done && document.fullscreenElement === v) return true;
   if (!document.getElementById('__tvfs')) {
     const st = document.createElement('style'); st.id = '__tvfs';
-    st.textContent = 'video[data-tvfs]{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;z-index:2147483647!important;background:#000!important;object-fit:contain!important;transform:none!important;margin:0!important}html,body{overflow:hidden!important}';
+    st.textContent = 'video[data-tvfs]{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;z-index:2147483647!important;background:#000!important;object-fit:contain!important;transform:none!important;margin:0!important}html,body{overflow:hidden!important}'
+      + '[data-tvfs-a]{z-index:auto!important;transform:none!important;filter:none!important;backdrop-filter:none!important;contain:none!important;'
+      + 'will-change:auto!important;isolation:auto!important;opacity:1!important;mix-blend-mode:normal!important;clip-path:none!important;'
+      + 'mask:none!important;perspective:none!important;container-type:normal!important;view-transition-name:none!important}';
     document.documentElement.appendChild(st);
   }
   v.setAttribute('data-tvfs', '1');
-  return true;
+  return flat();
 })()"""
 
 
@@ -328,6 +335,23 @@ def sink_inputs(env: dict) -> list[dict]:
         return []
 
 
+def tile_volume(env=os.environ) -> int:
+    """WALL_TILE_VOLUME (percent, "45" or "45%"): the sound tile's stream volume. A tile's stream at 100 % into the TV's
+    sink was far too loud next to everything else (election night 2026-11-03)."""
+    try:
+        return max(0, min(100, int(str(env.get("WALL_TILE_VOLUME", "45")).strip().rstrip("%"))))
+    except ValueError:
+        return 45
+
+
+def stream_percent(s: dict) -> int | None:
+    """A pactl -f json sink input's volume (its loudest channel), in percent; None if pactl gave none."""
+    try:
+        return max(int(str(c["value_percent"]).rstrip("%")) for c in (s.get("volume") or {}).values())
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
 def unmute_all(env: dict | None = None) -> None:
     """Unmute every sink input; WirePlumber then stores mute=false for the app name, so new kiosk streams start audible."""
     env = env or dict(os.environ)
@@ -350,6 +374,7 @@ class Driver:
         self.layout = ""
         self.lbar = False
         self.sound = 0
+        self.volume = tile_volume()   # the sound tile's stream volume, %; set_volume changes it
         self._layout_until = 0.0
         self._stop = threading.Event()
         self.on_change = lambda: None   # tile died / relaunched → the owner bumps its rev
@@ -460,6 +485,12 @@ class Driver:
                      f"{self.s.name}-focus", self.s.child_env())
             self._mute([p.pid if p else -1 for p, _ in self.tiles])
 
+    def set_volume(self, v: int) -> int:
+        """The sound tile's stream volume (0..100 %), now and for every tile that gets the sound after."""
+        self.volume = max(0, min(100, int(v)))
+        self._mute(self.pids())
+        return self.volume
+
     def pids(self) -> list[int]:
         return [p.pid if p else -1 for p, _ in self.tiles]
 
@@ -500,5 +531,7 @@ class Driver:
             i = tile_of(int(s.get("properties", {}).get("application.process.id") or 0), pids, _ppid)
             if i is not None:
                 want = i != self.sound
+                if not want and stream_percent(s) != self.volume:
+                    subprocess.run(["pactl", "set-sink-input-volume", str(s["index"]), f"{self.volume}%"], capture_output=True, timeout=3, env=env)
                 if bool(s.get("mute")) != want:
                     subprocess.run(["pactl", "set-sink-input-mute", str(s["index"]), "1" if want else "0"], capture_output=True, timeout=3, env=env)
