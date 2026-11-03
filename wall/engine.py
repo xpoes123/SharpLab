@@ -135,6 +135,10 @@ FADE_OUT_JS = """(() => { const r = document.documentElement; r.style.background
 # a stream page loading in a tile is never seen: from its first paint everything is invisible on black (TV_HIDE_JS, run at
 # document start) until its video is fullscreen in the tile, then it fades in (TV_REVEAL_JS). REVEAL_WAIT_S at most.
 REVEAL_WAIT_S = 15.0
+# the stream is shown only once its video plays for real (enough buffered, not paused, time moving) — never its spinner,
+# YouTube's controls or the player swapping in
+PLAYING_JS = """(() => { const v = [...document.querySelectorAll('video')].sort((a, b) => b.offsetWidth * b.offsetHeight
+  - a.offsetWidth * a.offsetHeight)[0]; return !!v && v.readyState >= 3 && !v.paused && v.currentTime > 0.5; })()"""
 TV_HIDE_JS = """(() => { const s = document.createElement('style'); s.id = 'tv-hide';
   s.textContent = 'html{background:#000!important} html *{visibility:hidden!important}';
   (document.head || document.documentElement).appendChild(s); })()"""
@@ -426,12 +430,16 @@ class Driver:
         closing and opening (KWin re-tiling it is what showed as a shrink / grow). False = relaunch instead."""
         if p is None or p.poll() is not None:
             return False
-        try:   # reachable at all? (else relaunch now, the old way)
-            with cdp_page(self.s.cdp_base + slot) as call:
-                call("Runtime.evaluate", {"expression": FADE_OUT_JS})
-        except Exception as e:  # noqa: BLE001
-            log.info("%s tile slot %d: in-place swap failed (%s), relaunching", self.s.name, slot, e)
-            return False
+        for attempt in range(4):   # reachable? a tile still starting refuses CDP for a moment: retry before reopening it
+            try:
+                with cdp_page(self.s.cdp_base + slot) as call:
+                    call("Runtime.evaluate", {"expression": FADE_OUT_JS})
+                break
+            except Exception as e:  # noqa: BLE001
+                if attempt == 3:
+                    log.info("%s tile slot %d: in-place swap failed (%s), relaunching", self.s.name, slot, e)
+                    return False
+                time.sleep(1.0)
         threading.Thread(target=self._swap_hidden, args=(slot, url), name=f"wall-{self.s.name}-swap{slot}", daemon=True).start()
         return True
 
@@ -455,7 +463,15 @@ class Driver:
                                                       "returnByValue": True})
                     except Exception:  # noqa: BLE001 — still loading
                         continue
-                    if (r.get("result") or {}).get("value") is True:
+                    if (r.get("result") or {}).get("value") is True and stream:
+                        try:
+                            playing = call("Runtime.evaluate", {"expression": PLAYING_JS, "returnByValue": True})
+                        except Exception:  # noqa: BLE001
+                            continue
+                        if (playing.get("result") or {}).get("value") is True:
+                            time.sleep(0.4)   # a beat of real playback under the black, then fade in
+                            break
+                    elif (r.get("result") or {}).get("value") is True:
                         break
                 call("Runtime.evaluate", {"expression": TV_REVEAL_JS})   # fullscreen, or out of patience: show it anyway
         except Exception as e:  # noqa: BLE001 — the tend loop keeps fullscreening it; the next swap relaunches if it's stuck
