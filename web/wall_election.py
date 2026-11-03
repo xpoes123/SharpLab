@@ -645,8 +645,9 @@ CLASSIFY_SYSTEM = (
     '{"label": "coverage"|"ad"|"break"|"offtopic", "confidence": 0..1}. coverage = news anchors, reporters or guests on '
     "the election, politics or the news; ad = a commercial (products, drugs, insurance, cars, phone numbers, disclaimers); "
     "break = bumpers, \"we'll be right back\", station IDs, promos for the channel's own shows, music or silence; "
-    "offtopic = regular programming unrelated to the news (lifestyle, sports, entertainment). Speech-to-text may be "
-    "garbled; judge the gist.")
+    "offtopic = regular programming unrelated to the news (lifestyle, sports, entertainment). Also \"soon\": 0..1, how "
+    "likely the stream cuts to a commercial break within the next minute, judging by the end of the snippet (anchors "
+    "teasing what's next, \"stay with us\", \"after the break\"). Speech-to-text may be garbled; judge the gist.")
 CLASSIFY_EVERY_S = 15.0
 CLASSIFY_TIMEOUT_S = 8.0
 _cls: dict = {"cache": {}, "last": {}}   # cache: text hash → (t, answer); last: stream → (t, answer)
@@ -660,24 +661,79 @@ JEV_CRITERIA = {"coverage": "news anchors, reporters or guests on the election, 
                 "offtopic": "regular programming unrelated to the news: weather, lifestyle, sports, entertainment"}
 
 
-async def _classify_jev(text: str) -> dict | None:
-    """TypeSafe's Jev decision model: one typed choice + its confidence in ~0.1 s. None without a key or on any failure."""
+# the preemptive sound move (wall/onair.py): is a break coming within a minute, and — at the moment it would move — is
+# something on that can't be missed. Both are yes/no choices; the probability of the first label is what's returned.
+JEV_SOON = {"soon": "the anchors are wrapping up and heading to a commercial: teasing what's coming next, \"stay with us\", "
+                    "\"after the break\", \"when we come back\", \"don't go anywhere\", a toss to a break",
+            "not": "coverage carries on: reporting, analysis, interviews or results, with no sign of a cut to a commercial"}
+JEV_IMPORTANT = {"yes": "something viewers shouldn't miss is happening now: breaking news, a race call or projection being "
+                        "announced, a candidate speaking, results coming in",
+                 "no": "routine coverage: panel talk, recaps, analysis, teases, small talk"}
+IMPORTANT_TIMEOUT_S = 1.2   # the wall waits 1.5 s at most; no answer = don't preempt
+
+
+def _jev_p(a: object, label: str) -> float | None:
+    """P(label) from a Jev choice answer: its probabilities, else its confidence (two-label questions)."""
+    if not isinstance(a, dict):
+        return None
+    probs = a.get("probabilities")
+    p = probs.get(label) if isinstance(probs, dict) else None
+    if not isinstance(p, (int, float)) or isinstance(p, bool):
+        conf = a.get("confidence")
+        if not isinstance(conf, (int, float)) or isinstance(conf, bool) or not isinstance(a.get("choice"), str):
+            return None
+        p = conf if a["choice"] == label else 1 - conf
+    return round(max(0.0, min(1.0, float(p))), 2)
+
+
+async def _jev(state: str, questions: dict, timeout: float = 4) -> dict | None:
     key = os.environ.get("JEV_API_KEY", "")
     if not key:
         return None
-    body = {"model": "jev-latest", "state": f"Transcript of the last ~45 s of a live US TV news stream on election night "
-            f"(speech-to-text, may be garbled):\n{text}",
-            "questions": {"segment": {"type": "choice", "question": "What is this stream airing right now?", "criteria": JEV_CRITERIA}}}
     try:
-        async with httpx.AsyncClient(timeout=4) as c:
-            r = await c.post(JEV_URL, json=body, headers={"Authorization": f"Bearer {key}"})
-        a = r.json()["answers"]["segment"] if r.status_code == 200 else None
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            r = await c.post(JEV_URL, json={"model": "jev-latest", "state": state, "questions": questions},
+                             headers={"Authorization": f"Bearer {key}"})
+        a = r.json()["answers"] if r.status_code == 200 else None
     except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
         log.warning("jev: %s", type(e).__name__)
         return None
-    if not isinstance(a, dict) or a.get("choice") not in JEV_CRITERIA:
+    return a if isinstance(a, dict) else None
+
+
+async def _classify_jev(text: str, recent: str = "") -> dict | None:
+    """TypeSafe's Jev decision model: what the stream airs (a typed choice + its confidence, ~0.1 s) and, from the last
+    ~20 s, P(a break within the next minute) as "soon". None without a key or on any failure."""
+    recent = recent.strip() or text[-400:]
+    a = await _jev(f"Transcript of the last ~45 s of a live US TV news stream on election night (speech-to-text, may be "
+                   f"garbled):\n{text}\n\nThe last ~20 s of it:\n{recent}",
+                   {"segment": {"type": "choice", "question": "What is this stream airing right now?", "criteria": JEV_CRITERIA},
+                    "soon": {"type": "choice", "question": "Judging by the last ~20 s, is this stream about to cut to a "
+                             "commercial break within the next minute?", "criteria": JEV_SOON}})
+    seg = a.get("segment") if a else None
+    if not isinstance(seg, dict) or seg.get("choice") not in JEV_CRITERIA:
         return None
-    return {"label": a["choice"], "confidence": a.get("confidence")}
+    out = {"label": seg["choice"], "confidence": seg.get("confidence")}
+    soon = _jev_p(a.get("soon"), "soon")
+    if soon is not None:
+        out["soon"] = soon
+    return out
+
+
+async def important(text: str) -> dict:
+    """{important: P(something can't-miss is on now)} from Jev on the last ~20 s; {} without a key, on a failure or a timeout."""
+    async def ask():
+        a = await _jev(f"The last ~20 s of a live US TV news stream on election night (speech-to-text, may be garbled):\n"
+                       f"{text}", {"now": {"type": "choice", "question": "Is something important happening right now "
+                                           "that viewers shouldn't miss?", "criteria": JEV_IMPORTANT}},
+                       timeout=IMPORTANT_TIMEOUT_S)
+        return _jev_p(a.get("now"), "yes") if a else None
+    try:
+        p = await asyncio.wait_for(ask(), IMPORTANT_TIMEOUT_S)
+    except Exception as e:  # noqa: BLE001 — timeouts included
+        log.warning("important: %s", type(e).__name__)
+        p = None
+    return {} if p is None else {"important": p}
 
 
 async def _classify_llm(text: str) -> dict | None:
@@ -686,8 +742,8 @@ async def _classify_llm(text: str) -> dict | None:
                                 model=llm.HAIKU_FAST, system=CLASSIFY_SYSTEM, effort="low", timeout=CLASSIFY_TIMEOUT_S)
 
 
-async def classify(stream: str, text: str, now: float | None = None) -> dict:
-    """{label, confidence, src}: cached by text, at most one LLM call per stream per CLASSIFY_EVERY_S (else that stream's
+async def classify(stream: str, text: str, now: float | None = None, recent: str = "") -> dict:
+    """{label, confidence, src[, soon]}: cached by text, at most one LLM call per stream per CLASSIFY_EVERY_S (else that stream's
     last answer), "unknown" on a timeout or a bad answer."""
     import hashlib
     now = time.monotonic() if now is None else now
@@ -700,7 +756,8 @@ async def classify(stream: str, text: str, now: float | None = None) -> dict:
         return {**last[1], "src": "limited"}
     _cls["last"][stream] = (now, {"label": "unknown", "confidence": 0.0})   # holds the slot while the call runs
     src = "jev"
-    got = await _classify_jev(text)
+    got = await _classify_jev(text, recent)
+    jev_soon = got.get("soon") if isinstance(got, dict) else None
     if not got or not isinstance(got.get("confidence"), (int, float)) or got["confidence"] < JEV_MIN:
         src = "llm"
         try:
@@ -714,6 +771,9 @@ async def classify(stream: str, text: str, now: float | None = None) -> dict:
     conf = got.get("confidence")
     ans = {"label": label, "confidence": round(max(0.0, min(1.0, float(conf))), 2)
            if isinstance(conf, (int, float)) and not isinstance(conf, bool) else 0.6}
+    soon = jev_soon if jev_soon is not None else got.get("soon")   # Jev's read of "a break is coming" first, then Haiku's
+    if isinstance(soon, (int, float)) and not isinstance(soon, bool):
+        ans["soon"] = round(max(0.0, min(1.0, float(soon))), 2)
     _cls["last"][stream] = (now, ans)
     if len(_cls["cache"]) > 2000:
         _cls["cache"].clear()
@@ -753,7 +813,9 @@ async def post_direct(request: Request, x_api_key: str = Header("")):
 
 @router.post("/classify")
 async def post_classify(request: Request, x_api_key: str = Header("")):
-    """{stream, text} → {label: coverage|ad|break|offtopic|unknown, confidence, src}. The wall service's key only."""
+    """{stream, text[, recent]} → {label: coverage|ad|break|offtopic|unknown, confidence, src[, soon]};
+    {check: "important", stream, text} → {important: 0..1} or {} (the preemptive sound move's last look). The wall
+    service's key only."""
     wall._need_key(x_api_key)
     try:
         body = await request.json()
@@ -762,4 +824,7 @@ async def post_classify(request: Request, x_api_key: str = Header("")):
     stream, text = (body.get("stream"), body.get("text")) if isinstance(body, dict) else (None, None)
     if not isinstance(stream, str) or not isinstance(text, str) or not text.strip():
         return JSONResponse({"error": "stream and text are strings"}, status_code=422)
-    return await classify(stream[:300], text.strip()[-2000:])
+    if body.get("check") == "important":
+        return await important(text.strip()[-1200:])
+    recent = body.get("recent") if isinstance(body.get("recent"), str) else ""
+    return await classify(stream[:300], text.strip()[-2000:], recent=recent.strip()[-1200:])

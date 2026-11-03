@@ -501,7 +501,19 @@ each checked live with `wall.streams.check` every 10 min), plus the live Spectru
 * Favorites: `POST /i/{inst}/favorite {url, on}` (op `favorite`, ★ on every stream tile and pool stream in the panel), two
   at most (a third replaces the oldest), `$WALL_STATE_DIR/favorites.json`. Starring a stream that isn't up puts it on
   tile 3 or 4 (whichever doesn't hold the other favorite).
-* State: `onair: [{label, confidence, since, tail} | null per tile]`, `favorites: [url]`, `adwatch: {on, orig: {tile:
+* Break log + clock (`wall/breaks.py`): every break the board sees (coverage/off-topic → ad/break and back, ≤ 15 min) is
+  a row `{stream, start, end, label}` in `$WALL_STATE_DIR/breaks.jsonl`. Per stream, from that log only (≥ 3 breaks):
+  `{next_likely: "~:48", p_soon, n_breaks}` — p_soon = the share of watched hours with a break start within ±2 min of
+  now + 60–90 s.
+* Preemptive sound (never tiles): the listener sends the last ~20 s as `recent`; classify also asks Jev "about to cut to
+  a commercial within the next minute?" (soon / not) → `soon` (Haiku's own estimate when Jev has none). The sound moves
+  to an on-air tile before the break when its stream is coverage and soon ≥ 0.85, or soon ≥ 0.6 with clock p_soon ≥ 0.6
+  — never on the clock alone — and then only if a last look says nothing can't-miss is on: the wall service posts
+  `{check: "important", stream, text}` to classify (Jev yes/no on breaking news / a race call / a candidate speaking /
+  results; 1.5 s timeout); yes ≥ 0.5, no answer or a timeout = stay (re-checked ≤ every 5 s). Marked automatic: once the
+  break comes and ends the sound returns as usual; no break within 2 min → it goes back, and that stream isn't preempted
+  again for 5 min. The watch page adds "· break soon" / "· break likely ~:48" to an on-air badge.
+* State: `onair: [{label, confidence, since, tail, soon, clock} | null per tile]`, `favorites: [url]`, `adwatch: {on, orig: {tile:
   url}, pool: [{url, label, …}]}` (a mirror shows the TV's). The watch page shows "● on air" / "⏸ break" / "ad" per tile.
 
 ## `/wall` in Discord (`bot/cogs/wall.py`)

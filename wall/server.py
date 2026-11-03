@@ -43,6 +43,7 @@ from wall.turnout import Turnout
 from wall.events import Events
 from wall.director import Director, summary as night_summary
 from wall import onair, spectrum, streams
+from wall.breaks import BreakLog
 
 log = logging.getLogger("wall.server")
 TAILNET = ipaddress.ip_network("100.64.0.0/10")
@@ -117,6 +118,25 @@ def public_url(u: str) -> str:
     return u
 
 
+IMPORTANT_TIMEOUT_S = 1.5
+
+
+def important_check(url: str, key: str):
+    """The preemptive sound move's last look (wall/onair.py): the web asks Jev whether something on the stream can't be
+    missed right now. None on a timeout or any failure, which the policy reads as "don't preempt"."""
+    http = urllib_http(url, key, timeout=IMPORTANT_TIMEOUT_S)
+
+    def check(stream: str, text: str) -> float | None:
+        try:
+            code, r = http("POST", "/api/v1/wall/election/classify", {"check": "important", "stream": stream, "text": text})
+        except Exception as e:  # noqa: BLE001 — timeouts included
+            log.info("important check: %s", type(e).__name__)
+            return None
+        p = r.get("important") if code == 200 and isinstance(r, dict) else None
+        return float(p) if isinstance(p, (int, float)) and not isinstance(p, bool) else None
+    return check
+
+
 class Cfg:
     def __init__(self, env=os.environ) -> None:
         self.state = Path(env.get("WALL_STATE_DIR") or os.path.expanduser("~/.local/state/sharplab-wall"))
@@ -156,7 +176,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
           exitpoll: ExitPoll | None = None, odds: Odds | None = None, board: onair.Board | None = None,
           favs: onair.Favorites | None = None) -> FastAPI:
     cfg = cfg or Cfg()
-    airs = board or onair.Board()   # (not "board": the overlay endpoint below takes that name)
+    airs = board or onair.Board(log=BreakLog(cfg.state / "breaks.jsonl"))   # (not "board": the overlay endpoint below takes that name)
     favs = favs or onair.Favorites(cfg.state / "favorites.json")
     results = results or Results(replay(cfg.election_replay) if cfg.election_replay else None, cfg.state)
     sync = sync or SyncStore(cfg.state / "sync.json", cfg.sync_default)
@@ -202,7 +222,9 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         return {"races": ke.compact_races(snap["races"], set(bets.need)), "offices": snap["offices"]}
 
     adw_file = cfg.state / "adwatch-on"   # the owner's ad-skip toggle survives a restart (env WALL_ADWATCH = the first default)
-    policies = {k: onair.Policy(adw_file.read_text().strip() == "1" if adw_file.exists() else cfg.adwatch) for k in instances}
+    important = important_check(cfg.web_url, cfg.web_key) if cfg.web_url and cfg.web_key else None
+    policies = {k: onair.Policy(adw_file.read_text().strip() == "1" if adw_file.exists() else cfg.adwatch, important)
+                for k in instances}
 
     def onair_state(i: Instance) -> dict:
         src = i.source if i.follow and i.source is not None else i   # a mirror shows the TV's policy

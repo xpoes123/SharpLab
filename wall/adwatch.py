@@ -48,6 +48,7 @@ MAX = 16
 RATE = 16000
 CHUNK_S, WINDOW_S, CLASSIFY_S, POST_S, WATCH_S = 15, 45, 20, 5, 15
 HLS_TTL, POOL_RECHECK_S, MAX_LAG_S = 20 * 60, 10 * 60, 40
+RECENT_S = 20   # "the last ~20 s": what the web asks Jev "is a break coming?" about (wall/onair.py preempts on it)
 QUIET_RMS = 120   # s16 RMS under this = silence (a bumper's dead air, a cut to black)
 
 AD_CUES = [r"\bcall now\b", r"\bask your doctor\b", r"\bside effects?\b", r"\bterms (and conditions )?apply\b",
@@ -74,6 +75,14 @@ def cues(text: str) -> tuple[int, int, int]:
     """(ad, break, coverage): how many distinct cues of each kind the text has."""
     return sum(bool(r.search(text)) for r in _AD), sum(bool(r.search(text)) for r in _BREAK), \
         sum(bool(r.search(text)) for r in _COV)
+
+
+def recent_text(text: deque) -> str:
+    """The words of the last ~RECENT_S of a stream's window."""
+    if not text:
+        return ""
+    last = text[-1][0]
+    return " ".join(t for at, t, _ in text if t and last - at <= RECENT_S)
 
 
 # ---- I/O helpers (separate so the logic above tests without network) --------------------------------------------------
@@ -308,16 +317,21 @@ class Watcher:
         self.streams: dict[str, Stream] = {}
         self.pool_live: dict[str, tuple[float, bool]] = {}
 
-    def _classify_web(self, url: str, text: str) -> tuple[str, float]:
+    def _classify_web(self, url: str, text: str) -> tuple[str, float, float | None]:
+        """(label, confidence, soon): soon = P(a break within the next minute) from the last ~20 s, None if unanswered."""
         if not (self.web and self.key):
-            return "unknown", 0.0
+            return "unknown", 0.0, None
+        s = self.streams.get(url)
         try:
-            r = post_json(self.web + "/api/v1/wall/election/classify", {"stream": url, "text": text},
+            r = post_json(self.web + "/api/v1/wall/election/classify",
+                          {"stream": url, "text": text, "recent": recent_text(s.text) if s else ""},
                           {"X-Api-Key": self.key}, timeout=12)
-            return r.get("label", "unknown"), float(r.get("confidence") or 0)
+            soon = r.get("soon")
+            return r.get("label", "unknown"), float(r.get("confidence") or 0), \
+                float(soon) if isinstance(soon, (int, float)) and not isinstance(soon, bool) else None
         except Exception as e:  # noqa: BLE001
             log.info("classify: %s", e)
-            return "unknown", 0.0
+            return "unknown", 0.0, None
 
     def wanted(self) -> list[str]:
         """Streams on the walls first (and the originals the policy swapped away, and the favorites), then the live
@@ -376,12 +390,15 @@ class Watcher:
             # sound but no words for the whole window (a "back in 3 minutes" slate over music, a jingle): say so and let
             # the model judge — still never a rule of ours
             text = NO_SPEECH
-        lab, conf = self.classify(s.url, text[-2000:]) if text.strip() else ("unknown", 0.0)
+        got = self.classify(s.url, text[-2000:]) if text.strip() else ("unknown", 0.0)
+        lab, conf = got[0], got[1]
+        soon = got[2] if len(got) > 2 else None   # passed through: the wall's policy may move the sound before the break
         if lab not in ("coverage", "ad", "break", "offtopic"):
-            lab, conf = "unknown", 0.0
+            lab, conf, soon = "unknown", 0.0, None
         if lab != s.status["label"]:
             s.status["since"] = now
-        s.status.update(label=lab, confidence=round(conf, 2), text_tail=text[-160:])
+        s.status.update(label=lab, confidence=round(conf, 2), text_tail=text[-160:], soon=soon,
+                        recent=recent_text(s.text)[-1200:])
         s.last_classify = now
 
     def transcribe_loop(self) -> None:

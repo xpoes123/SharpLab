@@ -12,6 +12,7 @@ what the wall does about it (docs/wall-service.md "Ad-skip").
     swaps in place to the best on-air pool stream not already up; it goes home — its favorite (coverage FAV_BACK_S) or
     else the original (coverage BACK_S) — later. At most one swap per tile per SWAP_GAP_S; a change by people (votes, the
     owner, the TV's phones) pauses the auto-swaps on that tile for HAND_PAUSE_S and drops what it remembered.
+  - preempt (sound only): see PRE_* below; marked automatic, so the sound comes back as after a break.
   Changes by people are noticed by comparing the tiles with what the policy last saw, so every path (votes, reset, the
   TV router, rotation) counts without hooks.
 """
@@ -22,6 +23,7 @@ import logging
 import time
 from pathlib import Path
 
+from wall.breaks import BreakLog
 from wall.engine import own_page
 
 log = logging.getLogger("wall.onair")
@@ -34,12 +36,20 @@ SWAP_AFTER_S, BACK_S, FAV_BACK_S, FRESH_S = 60.0, 30.0, 20.0, 10.0
 SWAP_SOUND_S = 15.0   # the tile with the sound on a break and no other tile on air to take the sound: swap it this soon
 SWAP_GAP_S, HAND_PAUSE_S = 120.0, 600.0
 MAX_FAVS = 2
+# preemptive sound move (never tiles): the sound stream's transcript model says a break is coming ("soon", Jev on the last
+# ~20 s) at PRE_SOON, or at PRE_BOTH while the clock model (wall/breaks.py) says the same — never on the clock alone; then
+# one quick "is something important on right now?" check (≥ IMPORTANT_MAX, no answer or no checker: stay). No break within
+# PRE_GIVEUP_S: the sound goes back, and that stream isn't preempted again for PRE_GAP_S.
+PRE_SOON, PRE_BOTH, PRE_CLOCK = 0.85, 0.6, 0.6
+PRE_GIVEUP_S, PRE_GAP_S = 120.0, 300.0
+IMPORTANT_MAX, IMPORTANT_EVERY_S = 0.5, 5.0
 
 
 class Board:
-    def __init__(self, clock=time.time) -> None:
+    def __init__(self, clock=time.time, log: BreakLog | None = None) -> None:
         self.clock = clock
         self.streams: dict[str, dict] = {}
+        self.breaks = log or BreakLog()
 
     def put(self, streams: object) -> int:
         if not isinstance(streams, dict):
@@ -53,8 +63,16 @@ class Board:
             conf = float(conf) if isinstance(conf, (int, float)) and not isinstance(conf, bool) else 0.0
             since = float(since) if isinstance(since, (int, float)) and not isinstance(since, bool) else now
             tail = s.get("text_tail") if isinstance(s.get("text_tail"), str) else ""
+            recent = s.get("recent") if isinstance(s.get("recent"), str) else ""
+            soon = s.get("soon")
+            soon = round(max(0.0, min(1.0, float(soon))), 2) \
+                if isinstance(soon, (int, float)) and not isinstance(soon, bool) else None
+            prev = self.streams.get(url[:500], {}).get("label")
+            if prev != s["label"]:
+                self.breaks.note(url[:500], prev, s["label"], min(since, now))
             self.streams[url[:500]] = {"label": s["label"], "confidence": round(max(0.0, min(1.0, conf)), 2),
-                                       "since": min(since, now), "tail": tail[-160:], "at": now}
+                                       "since": min(since, now), "tail": tail[-160:], "recent": recent[-1200:],
+                                       "soon": soon, "at": now}
             n += 1
         return n
 
@@ -66,7 +84,11 @@ class Board:
 
     def view(self, url: str) -> dict | None:
         s = self.get(url)
-        return {k: s[k] for k in ("label", "confidence", "since", "tail")} if s else None
+        if not s:
+            return None
+        clock = self.breaks.predict(url, self.clock())
+        return {**{k: s[k] for k in ("label", "confidence", "since", "tail", "soon")},
+                "clock": {k: clock[k] for k in ("next_likely", "p_soon", "n_breaks")}}
 
     def is_(self, url: str, labels: set[str] | str, for_s: float, now: float) -> bool:
         s = self.get(url)
@@ -122,8 +144,9 @@ def fav_tile(urls: list[str], favs: list[str], url: str, elec: bool) -> int:
 
 
 class Policy:
-    def __init__(self, on: bool = False) -> None:
+    def __init__(self, on: bool = False, important=None) -> None:
         self.on = on
+        self.important = important   # (url, text) → P(something important is on now) | None; the web asks Jev
         self.reset()
 
     def reset(self) -> None:
@@ -135,12 +158,16 @@ class Policy:
         self.orig: dict[int, str] = {}        # tile → the stream it showed before an auto-swap
         self.last_swap: dict[int, float] = {}
         self.paused: dict[int, float] = {}
+        self.pre: dict | None = None          # a preemptive sound move waiting for its break: {from, at}
+        self.no_pre: dict[str, float] = {}    # stream → no preempting it until
+        self.checked: dict[str, float] = {}   # stream → last "important?" check
 
     def set_on(self, on: bool) -> None:
         self.on = on
         if not on:
             self.orig.clear()
             self.auto_sound = False
+            self.pre = None
 
     def view(self) -> dict:
         return {"on": self.on, "orig": {str(k): v for k, v in sorted(self.orig.items())}}
@@ -166,7 +193,7 @@ class Policy:
             for i in range(len(urls), len(self.seen)):
                 self.orig.pop(i, None)
             if s != self.seen_sound and 0 <= s < len(urls):   # someone moved the sound
-                self.pref, self.auto_sound = urls[s], False
+                self.pref, self.auto_sound, self.pre = urls[s], False, None
         self.seen, self.seen_sound = urls, s
 
     def tick(self, inst, board: Board, favs: list[str], now: float) -> list[str]:
@@ -188,26 +215,83 @@ class Policy:
         if not 0 <= s < len(urls):
             return []
         video = [k for k, u in enumerate(urls) if not own_page(u)]
+        if self.pre:
+            held = self._pre_hold(inst, board, urls, s, now)
+            if held is not None:
+                return held
         target = None
         if board.is_(urls[s], AWAY, SOUND_AD_S, now):
-            on_air = [k for k in video if k != s and board.is_(urls[k], "coverage", 0, now)]
-            target = next((k for k in on_air if urls[k] in favs), None)
-            if target is None:
-                target = next((k for k in on_air if urls[k] == self.pref), None)
-            if target is None and on_air:
-                target = max(on_air, key=lambda k: board.get(urls[k])["confidence"])
+            target = self._on_air(urls, video, s, board, favs, now)
         elif self.auto_sound:
             back = [k for k in video if board.is_(urls[k], "coverage", SOUND_BACK_S, now)]
             fav = [k for k in back if urls[k] in favs]
             target = next((k for k in fav if urls[k] == self.pref), fav[0] if fav else None)
             if target is None:
                 target = next((k for k in back if urls[k] == self.pref), None)
+        if target is None and not board.is_(urls[s], AWAY, 0, now) and self._pre_due(urls[s], board, now):
+            target = self._on_air(urls, video, s, board, favs, now)
+            if target is not None and self._calm(urls[s], board, now):
+                self.pre = {"from": urls[s], "at": now}
+                inst.sound(target)
+                self.seen_sound, self.auto_sound = target, True
+                return [f"sound {s + 1}→{target + 1} (break soon)"]
+            return []
         if target is None or target == s:
             return []
         inst.sound(target)
         self.seen_sound = target
         self.auto_sound = urls[target] != self.pref   # at the manual pick: nothing left to undo
         return [f"sound {s + 1}→{target + 1}"]
+
+    def _on_air(self, urls: list[str], video: list[int], s: int, board: Board, favs: list[str], now: float) -> int | None:
+        """Where the sound goes off a break: a favorite on air, else the manual pick, else the surest."""
+        on_air = [k for k in video if k != s and board.is_(urls[k], "coverage", 0, now)]
+        target = next((k for k in on_air if urls[k] in favs), None)
+        if target is None:
+            target = next((k for k in on_air if urls[k] == self.pref), None)
+        if target is None and on_air:
+            target = max(on_air, key=lambda k: board.get(urls[k])["confidence"])
+        return target
+
+    def _pre_due(self, url: str, board: Board, now: float) -> bool:
+        e = board.get(url)
+        soon = e.get("soon") if e else None
+        if soon is None or e["label"] != "coverage" or self.no_pre.get(url, 0.0) > now:
+            return False
+        if soon >= PRE_SOON:
+            return True
+        return soon >= PRE_BOTH and board.breaks.predict(url, now)["p_soon"] >= PRE_CLOCK   # never on the clock alone
+
+    def _calm(self, url: str, board: Board, now: float) -> bool:
+        """True only when the important-check answered "nothing that can't be missed" (no checker / no answer: False)."""
+        if self.important is None or now - self.checked.get(url, -1e9) < IMPORTANT_EVERY_S:
+            return False
+        self.checked[url] = now
+        e = board.get(url) or {}
+        try:
+            p = self.important(url, e.get("recent") or e.get("tail") or "")
+        except Exception as ex:  # noqa: BLE001 — a failed check is "don't preempt"
+            log.info("important check: %s", ex)
+            return False
+        return isinstance(p, (int, float)) and not isinstance(p, bool) and p < IMPORTANT_MAX
+
+    def _pre_hold(self, inst, board: Board, urls: list[str], s: int, now: float) -> list[str] | None:
+        """While a preemptive move waits for its break: [] holds the sound, a list = moved it back, None = the usual rules."""
+        frm = self.pre["from"]
+        if board.is_(frm, AWAY, 0, now) or board.is_(urls[s], AWAY, 0, now):
+            self.pre = None   # the break came (or the new stream broke too): from here it is an ordinary break
+            return None
+        if now - self.pre["at"] < PRE_GIVEUP_S:
+            return []
+        self.pre = None
+        self.no_pre[frm] = now + PRE_GAP_S
+        k = urls.index(frm) if frm in urls else -1
+        if k < 0 or k == s:
+            return None
+        inst.sound(k)
+        self.seen_sound = k
+        self.auto_sound = frm != self.pref
+        return [f"sound {s + 1}→{k + 1} (no break came)"]
 
     def _home(self, i: int, favs: list[str], on_wall: set[str]) -> str | None:
         orig = self.orig.get(i)
