@@ -142,14 +142,16 @@ def test_service_endpoints(tmp_path):
         assert c.get(bad).status_code == 404, bad
 
 
-def _overlay_render(tmp_path, layout, positions=None):
+def _overlay_render(tmp_path, layout, positions=None, results=None):
     import shutil
     import subprocess
     import threading
     import time
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-    r = Results(replay(f"{FX}:0.6"))
-    r.poll()
+    r = results
+    if r is None:
+        r = Results(replay(f"{FX}:0.6"))
+        r.poll()
     data = board(r.snapshot(), positions)
 
     class H(BaseHTTPRequestHandler):

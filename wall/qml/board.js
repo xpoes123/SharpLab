@@ -116,6 +116,21 @@ function callItem(c, now) {
              tone: c.party === "D" ? "dem" : c.party === "R" ? "rep" : "ind", flip: !!c.flip, t: c.t || 0 };
 }
 
+// the vote updates that matter (wall/election_feed.py latest(): lead changes, big drops in close races, calls, poll
+// closings — the most significant of the last 45 min, newest first)
+function kVotes(n) { return n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e4 ? Math.round(n / 1e3) + "K" : String(n); }
+function pts(x) { return (x >= 0 ? "+" : "−") + Math.abs(x).toFixed(Math.abs(x) < 0.1 && x !== 0 ? 2 : 1); }
+function latestItem(u) {
+    var call = u.kind === "call", polls = u.kind === "polls", votes = u.kind === "lead" || u.kind === "big" || u.kind === "drop";
+    var text = polls ? (u.states || []).join(" ") : call ? u.text.replace(/ · call: .*$/, "").replace(/ · flip$/, "")
+             : u.kind === "lead" ? u.lead + " takes the lead · " + pts(u.m1) : (u.m0 === 0 && u.dv ? "first votes · " : "+" + kVotes(u.dv) + " · ") + u.lead + " " + pts(u.m1);
+    var tail = (call ? (u.text.match(/call: ([^·]+)/) || ["", ""])[1].trim() + " · " : "")
+             + (u.kind === "lead" ? "was " + pts(u.m0) + " · +" + kVotes(u.dv) + " votes · " : "")
+             + clock(u.t) + (votes && u.pct ? " · " + Math.round(u.pct) + "% in" : "");
+    return { head: polls ? "Polls closed" : u.head, text: text, tail: tail,
+             tone: polls ? "accent" : u.party === "D" ? "dem" : u.party === "R" ? "rep" : "ind", flip: !!u.flip, t: u.t || 0 };
+}
+
 function electionItems(d, now) {   // the ticker: the calls as they come (newest first); before any, what's next
     var calls = (d.calls || []).map(function (c) { return callItem(c, now); });
     var watch = (d.watch || []).map(function (r) {
@@ -124,7 +139,8 @@ function electionItems(d, now) {   // the ticker: the calls as they come (newest
                  tail: Math.round(r.pct) + "% in", tone: "ink" };
     });
     var next = (d.next || []).map(function (n) { return { head: "Polls close " + clock(n.t), text: n.states.join(" "), tail: "", tone: "accent" }; });
-    return calls.slice(0, 12).concat(watch, next);
+    var hot = (d.latest || []).filter(function (u) { return u.sig >= 3; }).slice(0, 4).map(latestItem);   // lead changes, big drops
+    return hot.concat(calls.slice(0, 12), watch, next);
 }
 
 // members' midterm positions (wall/election.py trades(): opt-in filtered, live — results aren't a picture)
@@ -163,8 +179,9 @@ var KINDS = {
         var tt = tradeTicker(d), calledFirst = tt.filter(function (x) { return x.called; });
         var items = electionItems(d, now);
         return { cells: [], plays: [], side: false, ticker: calledFirst.concat(interleave(items, tt.slice(calledFirst.length))),
-                 kicker: (d.calls || []).length ? "Race calls" : "Election",
-                 elec: { offices: (d.offices || []).map(bop), trades: (d.trades || []).map(tradeItem), calls: (d.calls || []).slice(0, 10).map(function (c) { return callItem(c, now); }),
+                 kicker: (d.latest || []).length ? "Latest" : (d.calls || []).length ? "Race calls" : "Election",
+                 elec: { offices: (d.offices || []).map(bop), trades: (d.trades || []).map(tradeItem), calls: (d.latest || []).length ? d.latest.slice(0, 10).map(latestItem) : (d.calls || []).slice(0, 10).map(function (c) { return callItem(c, now); }),
+                         latest: (d.latest || []).length > 0,
                          source: "Unofficial · calls: " + (d.source === "NYT (AP)" ? "AP" : d.source || "–"), counting: d.counting || 0,
                          next: (d.next || []).length ? "Polls close " + clock(d.next[0].t) + " · " + d.next[0].states.join(" ") : "" } };
     },
