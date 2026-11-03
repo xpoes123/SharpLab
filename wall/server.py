@@ -234,7 +234,11 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
             raise ValueError("tiles is 1–4")
         if i.headless and not i.urls:   # anyone may start the discord wall, but only while nobody is using the TV
             busy = await asyncio.to_thread(tv_active, cfg.tv_overlay_api)
-            if busy:
+            tv = instances.get("tv")
+            if busy == "wall" and tv and tv.urls:   # the TV is on the wall: stream the same tiles, layout, board and sound
+                preset, urls, d = None, list(tv.urls), {**d, "live": "", "sound": tv.driver.sound}
+                board, layout, tiles = (tv.board if tv.visible else ""), tv.layout, len(tv.urls)
+            elif busy:
                 raise WallError(f"the TV is in use ({busy}) — try again when it's free")
         if i.headless and urls:
             await asyncio.to_thread(lambda: [public_url(u) for u in urls])
