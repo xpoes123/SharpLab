@@ -26,7 +26,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # wall/adwatch.py's GPU speech-to-text (the homelab: `uv sync --extra adwatch`)
-adwatch = ["faster-whisper>=1.1"]
+adwatch = ["faster-whisper>=1.1", "nvidia-cublas-cu12", "nvidia-cudnn-cu12>=9,<10"]   # CUDA 12 runtime for ctranslate2 (the box has CUDA 13)
 
 [tool.setuptools.packages.find]
 include = ["bot*", "db*", "shared*", "temporal*", "wall*"]

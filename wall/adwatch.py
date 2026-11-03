@@ -153,10 +153,28 @@ def get_json(url: str, timeout: float = 5) -> dict:
 
 
 # ---- speech-to-text ------------------------------------------------------------------------------------------------------
+
+def cuda12_preload() -> None:
+    """ctranslate2 wants CUDA 12's cuBLAS / cuDNN; the box runs CUDA 13. The `adwatch` extra ships them as NVIDIA's pip
+    wheels: load them globally first so ctranslate2's dlopen finds them (no LD_LIBRARY_PATH in the unit)."""
+    import ctypes
+    import glob
+    import importlib.util
+    import os
+    spec = importlib.util.find_spec("nvidia")   # a namespace package: its wheels' lib dirs under each search location
+    for root in (spec.submodule_search_locations if spec else []):
+        for name in ("cublas", "cudnn"):
+            for f in sorted(glob.glob(os.path.join(root, name, "lib", "lib*.so*"))):
+                try:
+                    ctypes.CDLL(f, mode=ctypes.RTLD_GLOBAL)
+                except OSError:
+                    pass
+
 class GpuSTT:
     """faster-whisper on the GPU: one model for every stream, chunks one at a time."""
 
     def __init__(self, model: str) -> None:
+        cuda12_preload()
         from faster_whisper import WhisperModel   # the `adwatch` extra
         self.model = WhisperModel(model, device="cuda", compute_type="int8_float16")
         self(b"\0\0" * RATE)   # a missing CUDA / cuDNN library shows up on the first transcribe: here, not mid-night
