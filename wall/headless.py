@@ -77,6 +77,17 @@ def find_cast_node(root_pid: int, dump: str | None = None, ppid=_ppid) -> int | 
     return None
 
 
+def _spawn(cmd: list[str], log_path: Path, both: bool = False, **kw) -> subprocess.Popen:
+    """Popen with stderr (both: stdout too) into log_path. Our copy of the log fd closes once the child has its own, so
+    every start/stop doesn't leak four fds into the long-lived service."""
+    with open(log_path, "wb") as f:
+        if both:
+            kw.update(stdout=f, stderr=subprocess.STDOUT)
+        else:
+            kw["stderr"] = f
+        return subprocess.Popen(cmd, stdin=subprocess.DEVNULL, **kw)
+
+
 class Headless:
     """start() → the env the wall's children need (WAYLAND_DISPLAY, the private D-Bus, PULSE_SINK); begin_capture() once
     the tiles are up; stop() ends every process it started, by pid / its own process group, and unloads the sink."""
@@ -114,11 +125,11 @@ class Headless:
                            capture_output=True, text=True, timeout=5, env=base)
         self.module = r.stdout.strip()
         socket = f"wall-{self.name}"
-        self.kwin = subprocess.Popen(
+        self.kwin = _spawn(
             ["dbus-run-session", "--", "kwin_wayland", "--virtual", "--width", str(self.width), "--height", str(self.height),
              "--socket", socket, "--no-lockscreen", "--no-global-shortcuts", f"--exit-with-session={HOLD}"],
-            env={**base, "KWIN_WAYLAND_NO_PERMISSION_CHECKS": "1", "WALL_ENV_OUT": str(envf)},
-            stdin=subprocess.DEVNULL, stdout=open(self.dir / "kwin.log", "wb"), stderr=subprocess.STDOUT, start_new_session=True)
+            self.dir / "kwin.log", both=True,
+            env={**base, "KWIN_WAYLAND_NO_PERMISSION_CHECKS": "1", "WALL_ENV_OUT": str(envf)}, start_new_session=True)
         end = time.monotonic() + timeout
         while not envf.exists():
             if time.monotonic() > end or self.kwin.poll() is not None:
@@ -134,8 +145,7 @@ class Headless:
         if shutil.which("gst-launch-1.0") is None:
             raise RuntimeError("gst-launch-1.0 missing")
         env = {**self._base_env(), **self.env, "QT_QPA_PLATFORM": "wayland"}
-        self.cast = subprocess.Popen(["qml6", str(QML_DIR / "Cast.qml"), "--", OUTPUT], env=env, stdin=subprocess.DEVNULL,
-                                     stdout=subprocess.DEVNULL, stderr=open(self.dir / "cast.log", "wb"))
+        self.cast = _spawn(["qml6", str(QML_DIR / "Cast.qml"), "--", OUTPUT], self.dir / "cast.log", env=env, stdout=subprocess.DEVNULL)
         node, end = None, time.monotonic() + timeout
         while node is None and time.monotonic() < end:
             time.sleep(0.3)
@@ -146,10 +156,9 @@ class Headless:
         if self.hls.exists():
             shutil.rmtree(self.hls)
         self.hls.mkdir(parents=True)
-        self.gst = subprocess.Popen(gst_cmd(node, self.sink), env=self._base_env(), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                    stderr=open(self.dir / "gst.log", "wb"))
-        self.ff = subprocess.Popen(ffmpeg_cmd(self.hls), stdin=self.gst.stdout, stdout=subprocess.DEVNULL,
-                                   stderr=open(self.dir / "ffmpeg.log", "wb"))
+        self.gst = _spawn(gst_cmd(node, self.sink), self.dir / "gst.log", env=self._base_env(), stdout=subprocess.PIPE)
+        with open(self.dir / "ffmpeg.log", "wb") as f:
+            self.ff = subprocess.Popen(ffmpeg_cmd(self.hls), stdin=self.gst.stdout, stdout=subprocess.DEVNULL, stderr=f)
         self.gst.stdout.close()   # ffmpeg owns the read end now
         self.error = ""
 
