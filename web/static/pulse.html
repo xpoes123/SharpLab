@@ -37,6 +37,12 @@
   .note { font-size: 12px; color: var(--muted); line-height: 1.5; }
   a { color: var(--accent); }
   #more { margin: 10px 0; }
+  .map { max-width: 760px; margin: 0 auto; } .map svg { width: 100%; height: auto; display: block; }
+  .map path { stroke: var(--bg); stroke-width: 1; cursor: pointer; transition: fill .6s; }
+  .map path:hover, .map path:focus { stroke: var(--text); stroke-width: 1.5; outline: none; }
+  .map path.hot { stroke: var(--accent); stroke-width: 2; } .map path.sel { stroke: var(--text); stroke-width: 2.5; }
+  .legend { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -2px; margin-right: 4px; }
 </style>
 </head>
 <body>
@@ -64,13 +70,20 @@
       <div class="scroll"><h2>House popular-vote margin <span class="muted small">KXHOUSEPOPVOTEMARGIN</span></h2><table id="hMargin"></table></div>
     </div>
 
+    <h2>Map <span class="muted small">shade = % of the vote in · gold outline = a market with edge ≥ <span class="edgeN">12</span> · click to filter</span></h2>
+    <div class="map" id="map"></div>
+    <div class="legend"><span><i style="background:var(--surface-2)"></i>no votes</span>
+      <span><i style="background:color-mix(in srgb, var(--accent) 35%, var(--surface-2))"></i>some in</span>
+      <span><i style="background:var(--accent)"></i>~all in</span></div>
+    <div id="selInfo" class="bar small"></div>
+
     <div id="mineBox" hidden><h2>Your positions <span class="muted small">your linked Kalshi key, read-only · only you see this</span></h2>
       <div class="scroll"><table id="mine"></table></div></div>
 
     <h2>Races with turnout / vote-share markets</h2>
     <div class="bar">
       <input id="q" type="search" placeholder="Filter: NJ, Senate, Ossoff, CA-22…" />
-      <label><input id="fHot" type="checkbox" /> edge ≥ <span id="edgeN">12</span> only</label>
+      <label><input id="fHot" type="checkbox" /> edge ≥ <span class="edgeN">12</span> only</label>
       <label><input id="fIn" type="checkbox" /> votes in only</label>
     </div>
     <div id="races"></div>
@@ -106,7 +119,43 @@
   const mrow = (label, m) => `<tr class="${m.hot ? "hot" : ""}"><td><a href="${kal(m.ticker)}" target="_blank" rel="noopener">${label}</a>${you(m.ticker)}</td>
     <td>${c(m.bid)}</td><td>${c(m.ask)}</td><td>${c(m.model)}</td>${edge(m.edge)}<td class="muted">${n(m.vol)}</td></tr>`;
   const head = (first) => `<tr><th>${first}</th><th>bid¢</th><th>ask¢</th><th>model%</th><th>edge</th><th>vol</th></tr>`;
-  let data = null, shown = 40, mine = {};
+  let data = null, shown = 40, mine = {}, shapes = null, sel = "";
+  const SVG = "http://www.w3.org/2000/svg";
+
+  function pick(st) { sel = sel === st ? "" : st; shown = 40; drawMap(); renderRaces(); }
+
+  function drawMap() {
+    const box = $("map");
+    if (!shapes || !data) return;
+    if (!box.firstChild) {
+      const svg = document.createElementNS(SVG, "svg");
+      svg.setAttribute("viewBox", "0 0 975 610"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "US map — pick a state");
+      for (const [st, x] of Object.entries(shapes)) {
+        const p = document.createElementNS(SVG, "path");
+        p.setAttribute("d", x.d); p.dataset.st = st; p.setAttribute("tabindex", "0"); p.setAttribute("role", "button");
+        p.append(document.createElementNS(SVG, "title"));
+        p.addEventListener("click", () => pick(st));
+        p.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(st); } });
+        svg.append(p);
+      }
+      box.append(svg);
+    }
+    const byState = Object.fromEntries(data.states.map((x) => [x.state, x]));
+    const hot = {}, mk = {};
+    for (const r of data.races) { hot[r.state] = (hot[r.state] || 0) + r.hot; mk[r.state] = (mk[r.state] || 0) + r.turnout.length + r.shares.length; }
+    box.querySelectorAll("path").forEach((p) => {
+      const st = p.dataset.st, s = byState[st], pct = s && s.pct ? Math.min(100, s.pct) : 0;
+      p.style.fill = pct ? `color-mix(in srgb, var(--accent) ${Math.round(20 + 0.8 * pct)}%, var(--surface-2))` : "var(--surface-2)";
+      p.classList.toggle("hot", !!hot[st]); p.classList.toggle("sel", st === sel);
+      p.firstChild.textContent = `${shapes[st].name || st}: ${s && s.votes ? `${s.pct ?? "?"}% in · ${n(s.votes)} counted${s.proj ? " · → " + n(s.proj) : ""}` : "no votes yet"} · ${mk[st] || 0} markets${hot[st] ? ` · ${hot[st]} with edge` : ""}`;
+    });
+    const s = byState[sel];
+    $("selInfo").innerHTML = sel ? `<b>${esc(shapes[sel]?.name || sel)}</b>
+      <span class="muted">${s && s.votes ? `${s.pct ?? "?"}% in · ${n(s.votes)} counted${s.proj ? ` · projected ${n(s.proj)} ± ${n(s.sd)}` : ""} (${esc(s.basis)})` : "no votes yet"}</span>
+      <span>${mk[sel] || 0} markets${hot[sel] ? ` · <b>${hot[sel]} with edge</b>` : ""}</span>
+      <button class="ui-btn" type="button" id="clearSel">Show all states</button>` : `<span class="muted">Click a state to filter the races below to it.</span>`;
+    const cb = $("clearSel"); if (cb) cb.onclick = () => pick(sel);
+  }
   const you = (tk) => mine[tk] ? ` <span class="pill hot">you ${mine[tk].side} ${Math.round(mine[tk].qty)}</span>` : "";
 
   function renderHouse(h) {
@@ -140,7 +189,7 @@
   function renderRaces() {
     if (!data) return;
     const q = $("q").value.trim().toLowerCase(), hot = $("fHot").checked, inn = $("fIn").checked;
-    const rs = data.races.filter((r) => (!hot || r.hot) && (!inn || r.votes) &&
+    const rs = data.races.filter((r) => (!sel || r.state === sel) && (!hot || r.hot) && (!inn || r.votes) &&
       (!q || `${r.label} ${r.state} ${{ S: "senate", G: "governor", H: "house" }[r.office]} ${r.cands.map((x) => x.name).join(" ")}`.toLowerCase().includes(q)));
     const open = new Set([...document.querySelectorAll("details.race[open]")].map((d) => d.dataset.id));
     $("races").innerHTML = rs.slice(0, shown).map(raceHtml).join("") || `<p class="muted">No races match.</p>`;
@@ -179,7 +228,8 @@
       data.states.map((s) => `<tr><td>${s.state}</td><td class="muted">${esc(s.basis)}</td><td>${n(s.votes)}</td><td>${s.pct ?? "—"}</td><td>${n(s.proj)}</td><td class="muted">${n(s.sd)}</td></tr>`).join("");
     $("calls").innerHTML = data.calls.map((x) => `<div><span class="muted">${t(x.t)}</span> <span class="${x.party}">${esc(x.text)}</span> <span class="muted">· ${esc(x.by)}</span></div>`).join("") || `<span class="muted">None yet.</span>`;
     $("next").innerHTML = data.next.map((x) => `<div><b>${t(x.t)}</b> ${x.states.join(", ")}</div>`).join("") || `<span class="muted">All polls closed.</span>`;
-    $("edgeN").textContent = data.model.edge;
+    document.querySelectorAll(".edgeN").forEach((e) => { e.textContent = data.model.edge; });
+    drawMap();
     $("minIn").textContent = Math.round(data.model.min_in * 100);
     $("meta").innerHTML = `Results: ${esc(data.source || "—")} · updated ${t(data.updated)} · Kalshi prices live` +
       (data.error ? ` · <span class="err">${esc(data.error)}</span>` : "");
@@ -222,6 +272,8 @@
   });
   loadFb();
   setInterval(loadFb, 10000);
+  fetch("/api/v1/wall/election/shapes", { credentials: "same-origin" }).then((r) => (r.ok ? r.json() : null))
+    .then((x) => { if (x) { shapes = x; drawMap(); } }).catch(() => {});
   $("q").addEventListener("input", () => { shown = 40; renderRaces(); });
   $("fHot").addEventListener("change", renderRaces);
   $("fIn").addEventListener("change", renderRaces);
