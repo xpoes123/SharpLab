@@ -383,3 +383,15 @@ def test_music_only_window_goes_to_the_model_as_no_speech(monkeypatch):
     w.streams[NBC].add("", False, 4980)        # audio (not quiet) but whisper heard no words: music
     w.streams[NBC].add("", False, 4995)
     assert w.cycle(5000.0)["streams"][NBC]["label"] == "break" and seen == [adwatch.NO_SPEECH]
+
+
+def test_sound_tile_on_break_with_nowhere_for_the_sound_swaps_in_15s(tmp_path):
+    clock = T()
+    urls = ELEC[:2] + [NBC, LOCAL]                      # tile 4 isn't on air (a stream that hasn't started)
+    b, i, p = onair.Board(clock), wall(tmp_path, urls, sound=2), onair.Policy(on=True)
+    now = clock.t
+    label(b, CBS, "coverage", now - 300)
+    label(b, NBC, "coverage", now - 300)
+    p.tick(i, b, [], now)
+    label(b, NBC, "break", now - 16)
+    assert p.tick(i, b, [], now) == [f"tile 3 break → {CBS}"] and i.urls[2] == CBS

@@ -363,7 +363,7 @@ class Instance:
             if not (0 <= i < len(self.urls) and screen(self.urls[i])):
                 raise WallError("that tile doesn't rotate")
             if act == "next":
-                url = next_url(self.urls, i)
+                url = next_url(self.urls, i, force=True)
                 if not url:
                     raise WallError("no other screen to show")
                 self.urls[i] = url

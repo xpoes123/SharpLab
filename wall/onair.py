@@ -31,6 +31,7 @@ SWAP_AWAY = AWAY | {"offtopic"}   # a tile leaves these
 STALE_S = 90.0
 SOUND_AD_S, SOUND_BACK_S = 10.0, 10.0
 SWAP_AFTER_S, BACK_S, FAV_BACK_S, FRESH_S = 60.0, 30.0, 20.0, 10.0
+SWAP_SOUND_S = 15.0   # the tile with the sound on a break and no other tile on air to take the sound: swap it this soon
 SWAP_GAP_S, HAND_PAUSE_S = 120.0, 600.0
 MAX_FAVS = 2
 
@@ -231,7 +232,9 @@ class Policy:
                     self.orig.pop(i, None)
                     acts.append(f"tile {i + 1} home → {home}")
                     continue
-            if board.is_(u, SWAP_AWAY, SWAP_AFTER_S, now):
+            stuck = i == inst.driver.sound and not any(board.is_(urls[k], "coverage", 0, now) for k in range(len(urls))
+                                                         if k != i and not own_page(urls[k]))
+            if board.is_(u, SWAP_AWAY, SWAP_SOUND_S if stuck else SWAP_AFTER_S, now):
                 cands = [c for c in board.fresh() if c not in on_wall and board.is_(c, "coverage", FRESH_S, now)]
                 if not cands:
                     continue
