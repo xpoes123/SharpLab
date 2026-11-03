@@ -33,6 +33,10 @@
   const live = el("section", "card lv-feed");
   live.id = "elecLive"; live.hidden = true; live.setAttribute("aria-label", "Live election updates");
   panel.after(live);
+  // desktop: the feed sits in the right rail under the chat (the main column keeps the map); phones keep it under the map
+  const wide = matchMedia("(min-width: 1400px)");
+  const placeFeed = () => { const side = document.querySelector(".side"); if (wide.matches && side) side.append(live); else panel.after(live); };
+  placeFeed(); wide.addEventListener("change", placeFeed);
   let scope = store("elecLiveScope") || "key", feed = null;
 
   function buildFeed() {
