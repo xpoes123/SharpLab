@@ -195,6 +195,24 @@ time minus a delay (see Sync below); that cancels the offset.
 Found missing (not needed, so nothing to install): gst `pulsesrc`/`mp4mux` (gst-plugins-good), `wf-recorder`,
 `grim`, `Xvfb`, `pywayland`.
 
+## The bands around the tiles (`wall/bands.py`, `wall/qml/Bands.qml`)
+2 and 3 tiles leave bands above and below the 16:9 arrangement (with or without the L-bar; 1 and 4 fill their area).
+The overlay process gets `--bands http://127.0.0.1:7795/i/<name>` and maps up to two more OVERLAY layer-shell
+surfaces sized exactly to those bands (`lbar.js wallBands`; exclusive zone 0 so the bottom one sits on the L-bar's band),
+hidden while the full / matchup board is up. Every 2 s it reads `GET /i/<name>/bands`:
+`{n, sound, lbar, view, title, league, tiles: [{url, host, delay, src, game, synced}], ticker, delay, chat}`.
+* Header strip against each tile (the top band; 3-up's lower small tile gets its header below it): teams + colours,
+  score, period + clock, a speaker on the sound tile, the tile's delay.
+* Spoilers: `ScoreTape` keeps each scoreboard with the time it was first seen; a header shows the one as of
+  now − the tile's delay, the strip the one as of now − the default. No snapshot that old yet (a wall that just
+  started) → teams + "syncing", never a score. The delay comes from `build(delay=...)`, `(url) -> (seconds, src)`,
+  default 45 s everywhere (`bands.default_delay`); wire the per-tile SyncStore (`sync.delay`) in there when it lands.
+* Backdrop: dark base tinted by each tile's team colours, faint court arcs (NBA) / yard lines (NFL), a drift stepped
+  every 2 s over a 4-minute period. Nothing flashes or pulses; the strip changes page every 14 s with a slow fade.
+* Bottom band without the L-bar: the other games (delayed) + the watch party's chat (the L-bar's sidebar has the chat
+  when the L-bar is up).
+* Preview: `QT_QPA_PLATFORM=offscreen qml6 wall/qml/Preview.qml -- --layout none --tiles 2 --bands http://127.0.0.1:7795/i/tv --out /tmp/b.png`.
+
 ## Watch page, sync, chat, viewers, votes (sharplab-web, `web/wall.py`)
 
 * `GET /wall.html` — the player page (static; `/wall` needs the optional Caddy snippet) (hls.js vendored at `web/static/vendor/hls.min.js`, no CDN). Login required.
