@@ -88,6 +88,7 @@
 
 .bar .btn { cursor: pointer; border: 0; font: inherit; }
 .bar [hidden] { display: none !important; }
+.bar .vol { width: 90px; accent-color: var(--accent); cursor: pointer; flex: none; }
 #pipBtn[aria-pressed="true"] { color: var(--accent); }
 .player:fullscreen, .player:-webkit-full-screen { background: #000; display: flex; align-items: center; justify-content: center; }
 .player:fullscreen video, .player:-webkit-full-screen video { width: 100%; height: 100%; object-fit: contain; }

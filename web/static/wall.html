@@ -6,7 +6,7 @@
 <meta name="theme-color" content="var(--bg)" />
 <title>SharpLab Wall</title>
 <link rel="stylesheet" href="/hqstyle.css" />
-<link rel="stylesheet" href="/wall.css?v=20261103h" />
+<link rel="stylesheet" href="/wall.css?v=20261103i" />
 <link rel="stylesheet" href="/wall-bets.css?v=20261103c" />
 <link rel="stylesheet" href="/wall-election.css?v=20261103r" />
 <link rel="stylesheet" href="/wall-election-live.css?v=20261103a" />
@@ -63,6 +63,7 @@
       <div class="bar">
         <button id="elecBtn" class="pill btn elec-btn" type="button" aria-label="Election map" hidden><span class="ico">🗺</span><span class="lbl"> Election</span></button>
         <button id="muteBtn" class="pill btn" type="button" aria-label="Sound off" hidden><span class="ico">🔇</span><span class="lbl"> Sound off</span></button>
+        <input id="vol" class="vol" type="range" min="0" max="100" step="1" aria-label="Volume" title="Volume (just for you)" hidden />
         <button id="fsBtn" class="pill btn" type="button" aria-label="Full screen"><span class="ico">⛶</span><span class="lbl"> Full screen</span></button>
         <button id="pipBtn" class="pill btn" type="button" aria-label="Picture in picture" title="Keep watching in a small window while you use other apps" hidden><span class="ico">⧉</span><span class="lbl"> Pop out</span></button>
         <span id="sync" class="pill">syncing…</span>
@@ -87,11 +88,13 @@
         <div class="row">
           <span>Screen</span>
           <button data-act="board" data-v="" class="btn" title="Games fill the whole screen, no scoreboard band">Full screen</button>
-          <span>Scoreboard L-bar</span>
-          <button data-act="board" data-v="nfl" class="btn">NFL</button>
-          <button data-act="board" data-v="nba" class="btn">NBA</button>
+          <span data-sports>Scoreboard L-bar</span>
+          <button data-act="board" data-v="nfl" class="btn" data-sports>NFL</button>
+          <button data-act="board" data-v="nba" class="btn" data-sports>NBA</button>
         </div>
-        <div class="row live-row"><span>Live now</span><span id="liveGames" class="muted small">loading…</span></div>
+        <div class="row live-row" data-sports><span>Live now</span><span id="liveGames" class="muted small">loading…</span></div>
+        <div class="row live-row" data-elec hidden><span>Election screens</span><span id="elecScreens" class="live-games"></span></div>
+        <div class="row live-row" data-elec hidden><label>Local news <select id="newsSt"></select></label><span id="newsBtns" class="live-games"></span></div>
         <div class="row">
           <label>Tile <select id="tileI"><option value="0">1</option><option value="1">2</option><option value="2">3</option><option value="3">4</option></select></label>
           <input id="tileUrl" type="url" placeholder="https://… (a stream page)" maxlength="500" data-member />
@@ -126,7 +129,7 @@
   <aside id="elecSheet" class="es-sheet" hidden aria-hidden="true" aria-label="State results and markets"></aside>
 </main>
 <script src="/vendor/hls.min.js"></script>
-<script src="/wall.js?v=20261103j"></script>
+<script src="/wall.js?v=20261103k"></script>
 <script src="/wall-bets.js?v=20261103d"></script>
 <script src="/wall-election.js?v=20261103s"></script>
 <script src="/wall-election-live.js?v=20261103b"></script>
