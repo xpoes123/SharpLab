@@ -66,7 +66,7 @@ def cfg() -> dict:
         # member's powers on this page). Public mode: the plain page is data-only for anyone (map, results, the live feed,
         # chat read-only) — no stream, no votes, no Kalshi. WALL_GUEST_OPEN=1 is its old name and still turns it on.
         "public": e("WALL_PUBLIC", "0") == "1" or e("WALL_GUEST_OPEN", "0") == "1",
-        "demo_key": e("WALL_DEMO_KEY", "") if e("WALL_DEMO", "0") == "1" and len(e("WALL_DEMO_KEY", "")) >= 16 else "",
+        "demo_key": e("WALL_DEMO_KEY", "") if e("WALL_DEMO", "0") == "1" and len(e("WALL_DEMO_KEY", "")) >= 8 else "",
     }
 
 
