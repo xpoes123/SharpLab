@@ -821,6 +821,11 @@ Item {
         Item {
             id: band
             readonly property var items: (root.v.ticker || []).concat(B.betTicker(root.bets, root.bets ? root.bets.n : 0))
+            // what the crawl shows: new items wait for the end of the pass (prices change every poll — swapping mid-pass
+            // made the crawl jump back to the start)
+            property var shown: []
+            onItemsChanged: if (shown.length < 2) shown = items
+            Component.onCompleted: shown = items
             readonly property var feat: items.length ? items[root.pageNo % Math.min(items.length, 3)] : null
             Rectangle { width: parent.width; height: root.hair; color: root.cAccent }
             Item {
@@ -872,7 +877,7 @@ Item {
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 0
                         Repeater {
-                            model: band.items.length > 1 ? band.items.concat(band.items) : []
+                            model: band.shown.length > 1 ? band.shown.concat(band.shown) : []
                             delegate: Row {
                                 required property var modelData
                                 spacing: 0.6 * root.rem
@@ -883,14 +888,15 @@ Item {
                                 T { text: "◆"; size: root.tMeta; color: root.cAccentDim; anchors.verticalCenter: parent.verticalCenter; elide: Text.ElideNone }
                             }
                         }
+                        // one full pass of the first copy (the second copy makes the wrap seamless), then the newest items
                         NumberAnimation on x {
                             id: crawlAnim
                             from: 0; to: -crawl.width / 2
                             duration: Math.max(8000, crawl.width / 2 / (5 * root.rem) * 1000)   // 5 rem a second
-                            loops: Animation.Infinite
+                            loops: 1
                             running: crawlBox.visible && crawl.width > 0
+                            onFinished: { band.shown = band.items; crawl.x = 0; crawlAnim.restart() }
                         }
-                        onWidthChanged: crawlAnim.restart()
                     }
                 }
             }
