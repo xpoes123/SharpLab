@@ -377,3 +377,28 @@ def test_spot_card_for_the_tv_needs_the_key_and_has_no_positions(eenv):
     s = d["races"][0]
     assert s["markets"][0]["who"] == "Jon Ossoff" and len(s["spark"]) == 40 and s["spark_party"] == "D"
     assert "positions" not in d and "Hansen" not in json.dumps(d)
+
+
+def test_pulse_mine_only_the_viewers_own_pulse_positions(eenv, monkeypatch):
+    client = eenv[0]
+    asked = []
+
+    async def account(uid):
+        asked.append(uid)
+        return ("kid", b"enc") if uid == "7" else None
+
+    async def all_(c, key_id, key, path, field):
+        return [{"ticker": "KXMIDTERMVOTETURN-NJSEN-3000000", "position_fp": "-40", "market_exposure_dollars": "12.4"},
+                {"ticker": "SENATEGA-26-D", "position_fp": "5"}]
+    monkeypatch.setattr(wel.queries, "get_kalshi_account", account)
+    monkeypatch.setattr(wel.ka, "decrypt", lambda b: b)
+    monkeypatch.setattr(wel.ka, "load_key", lambda b: object())
+    monkeypatch.setattr(wel.ka, "_all", all_)
+    client.cookies.clear()
+    assert client.get("/api/v1/wall/election/pulse/mine").status_code == 401
+    login(client, "8")
+    assert client.get("/api/v1/wall/election/pulse/mine").json() == {"linked": False, "positions": {}}
+    login(client, "7")
+    got = client.get("/api/v1/wall/election/pulse/mine").json()
+    assert got["positions"] == {"KXMIDTERMVOTETURN-NJSEN-3000000": {"side": "NO", "qty": 40.0, "cost": 12.4}}
+    assert asked == ["8", "7"]

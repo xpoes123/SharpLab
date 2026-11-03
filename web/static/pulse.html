@@ -57,6 +57,9 @@
       <div class="scroll"><h2>House popular-vote margin <span class="muted small">KXHOUSEPOPVOTEMARGIN</span></h2><table id="hMargin"></table></div>
     </div>
 
+    <div id="mineBox" hidden><h2>Your positions <span class="muted small">your linked Kalshi key, read-only · only you see this</span></h2>
+      <div class="scroll"><table id="mine"></table></div></div>
+
     <h2>Races with turnout / vote-share markets</h2>
     <div class="bar">
       <input id="q" type="search" placeholder="Filter: NJ, Senate, Ossoff, CA-22…" />
@@ -93,10 +96,11 @@
   const t = (s) => s ? new Date(s * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "—";
   const edge = (e) => `<td class="${e == null ? "" : e >= 0 ? "pos" : "neg"}">${e == null ? "—" : (e > 0 ? "+" : "") + e.toFixed(0)}</td>`;
   const kal = (tk) => `https://kalshi.com/markets/${esc(tk.split("-")[0].toLowerCase())}`;
-  const mrow = (label, m) => `<tr class="${m.hot ? "hot" : ""}"><td><a href="${kal(m.ticker)}" target="_blank" rel="noopener">${label}</a></td>
+  const mrow = (label, m) => `<tr class="${m.hot ? "hot" : ""}"><td><a href="${kal(m.ticker)}" target="_blank" rel="noopener">${label}</a>${you(m.ticker)}</td>
     <td>${c(m.bid)}</td><td>${c(m.ask)}</td><td>${c(m.model)}</td>${edge(m.edge)}<td class="muted">${n(m.vol)}</td></tr>`;
   const head = (first) => `<tr><th>${first}</th><th>bid¢</th><th>ask¢</th><th>model%</th><th>edge</th><th>vol</th></tr>`;
-  let data = null, shown = 40;
+  let data = null, shown = 40, mine = {};
+  const you = (tk) => mine[tk] ? ` <span class="pill hot">you ${mine[tk].side} ${Math.round(mine[tk].qty)}</span>` : "";
 
   function renderHouse(h) {
     const m = h.margin;
@@ -116,7 +120,7 @@
     let body = "";
     if (r.turnout.length) body += `<div class="scroll"><table>${head("total votes &gt;")}${r.turnout.map((x) => mrow(n(x.strike), x)).join("")}</table></div>`;
     if (r.shares.length) body += `<div class="scroll"><table><tr><th>vote share ≥</th><th>now</th><th>bid¢</th><th>ask¢</th><th>model%</th><th>edge</th><th>vol</th></tr>${
-      r.shares.map((x) => `<tr class="${x.hot ? "hot" : ""}"><td><a class="${x.party}" href="${kal(x.ticker)}" target="_blank" rel="noopener">${esc(x.name)} ${x.strike}%</a></td>
+      r.shares.map((x) => `<tr class="${x.hot ? "hot" : ""}"><td><a class="${x.party}" href="${kal(x.ticker)}" target="_blank" rel="noopener">${esc(x.name)} ${x.strike}%</a>${you(x.ticker)}</td>
         <td>${x.now == null ? "—" : x.now.toFixed(1)}</td><td>${c(x.bid)}</td><td>${c(x.ask)}</td><td>${c(x.model)}</td>${edge(x.edge)}<td class="muted">${n(x.vol)}</td></tr>`).join("")}</table></div>`;
     return `<details class="race" data-id="${esc(r.id)}"><summary><span class="lbl">${esc(r.label)} ${{ S: "Sen", G: "Gov", H: "" }[r.office]}</span>
       <span class="muted small">${r.votes ? `${r.pct}% in · ${n(r.votes)} counted` : r.closes ? "polls close " + t(r.closes) : "no votes yet"}</span>
@@ -138,7 +142,30 @@
     $("more").textContent = `Show more (${rs.length - shown} left)`;
   }
 
+  function renderMine() {
+    const idx = {};
+    for (const x of data.house.turnout) idx[x.ticker] = ["House turnout " + x.label, x];
+    for (const x of data.house.margin_mkts) idx[x.ticker] = ["House margin " + x.label, x];
+    for (const r of data.races) {
+      for (const x of r.turnout) idx[x.ticker] = [`${r.label} ${{ S: "Sen", G: "Gov", H: "" }[r.office]} votes &gt; ${n(x.strike)}`, x, r];
+      for (const x of r.shares) idx[x.ticker] = [`${r.label}: ${esc(x.name)} ≥ ${x.strike}%`, x, r];
+    }
+    const tks = Object.keys(mine);
+    $("mineBox").hidden = !tks.length;
+    $("mine").innerHTML = `<tr><th>market</th><th>side</th><th>qty</th><th>avg¢</th><th>bid¢</th><th>ask¢</th><th>model% (your side)</th><th>status</th></tr>` +
+      tks.map((tk) => {
+        const p = mine[tk], [label, m, r] = idx[tk] || [esc(tk), {}];
+        const yes = p.side === "YES", bid = yes ? m.bid : m.ask != null ? 100 - m.ask : null, ask = yes ? m.ask : m.bid != null ? 100 - m.bid : null;
+        const mod = m.model == null ? null : yes ? m.model : 100 - m.model;
+        const avg = p.qty ? (100 * p.cost) / p.qty : null;
+        const st = r ? (r.votes ? `${r.pct}% in${r.proj ? " · → " + n(r.proj) : ""}` : "no votes yet") : "";
+        return `<tr><td><a href="${kal(tk)}" target="_blank" rel="noopener">${label}</a></td><td>${p.side}</td><td>${Math.round(p.qty)}</td><td>${c(avg)}</td>
+          <td>${c(bid)}</td><td>${c(ask)}</td><td class="${mod == null ? "" : mod >= 50 ? "pos" : "neg"}">${c(mod)}</td><td class="muted">${st}</td></tr>`;
+      }).join("");
+  }
+
   function render() {
+    renderMine();
     renderHouse(data.house);
     renderRaces();
     $("states").innerHTML = `<tr><th>state</th><th>basis</th><th>counted</th><th>% in</th><th>projected</th><th>±</th></tr>` +
@@ -155,7 +182,10 @@
     try {
       const r = await fetch("/api/v1/wall/election/pulse", { credentials: "same-origin" });
       if (r.status === 401) { $("gate").hidden = false; $("meta").textContent = ""; return; }
-      data = await r.json();
+      const [d, m] = await Promise.all([r.json(),
+        fetch("/api/v1/wall/election/pulse/mine", { credentials: "same-origin" }).then((x) => x.ok ? x.json() : null).catch(() => null)]);
+      data = d;
+      if (m) mine = m.positions || {};
       $("gate").hidden = true; $("app").hidden = false;
       render();
     } catch (e) {
