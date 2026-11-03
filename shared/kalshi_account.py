@@ -10,28 +10,20 @@ Private keys are Fernet-encrypted at rest with KALSHI_CRED_KEY (.env); GETs only
 from __future__ import annotations
 
 import asyncio
-import base64
 import os
-import time
 from datetime import datetime, timedelta
 from collections import defaultdict
 from zoneinfo import ZoneInfo
-from urllib.parse import urlsplit
 
 import httpx
 from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
-
-KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
+from cryptography.hazmat.primitives.asymmetric import rsa
+from djtoolkit import kalshi as dk
+from djtoolkit.kalshi import KALSHI_BASE, KalshiAuthError, load_key  # noqa: F401  (re-exported for existing importers)
 SPORT = {"NBA": "NBA", "WNBA": "WNBA", "NFL": "NFL", "MLB": "MLB", "NHL": "NHL", "NCAA": "NCAA",
          "VALORANT": "Esports", "CS2": "Esports", "DOTA2": "Esports", "LOL": "Esports",
          "ATP": "Tennis", "WTA": "Tennis", "ITF": "Tennis", "BTC": "Crypto", "ETH": "Crypto"}
 ET = ZoneInfo("America/New_York")
-
-
-class KalshiAuthError(Exception):
-    pass
 
 
 def _f(x) -> float:
@@ -56,47 +48,18 @@ def decrypt(blob: bytes) -> str:
     return _fernet().decrypt(blob).decode()
 
 
-def load_key(pem: str) -> rsa.RSAPrivateKey:
-    """Parse a pasted PEM. Discord can flatten newlines to spaces, so rebuild the body if needed."""
-    pem = pem.strip()
-    if "\n" not in pem and "-----" in pem:
-        # "-----BEGIN RSA PRIVATE KEY----- MIIE... -----END RSA PRIVATE KEY-----"
-        parts = pem.split("-----")
-        if len(parts) >= 5:
-            begin, body, end = parts[1], parts[2], parts[3]
-            pem = f"-----{begin}-----\n" + "\n".join(body.split()) + f"\n-----{end}-----\n"
-    key = serialization.load_pem_private_key(pem.encode(), password=None)
-    if not isinstance(key, rsa.RSAPrivateKey):
-        raise ValueError("not an RSA private key")
-    return key
-
-
 def sign_headers(key_id: str, key: rsa.RSAPrivateKey, path: str, ts_ms: int | None = None) -> dict:
-    ts = str(ts_ms if ts_ms is not None else int(time.time() * 1000))
-    msg = f"{ts}GET{urlsplit(KALSHI_BASE).path}{path.split('?')[0]}".encode()
-    sig = key.sign(msg, padding.PSS(mgf=padding.MGF1(hashes.SHA256()),
-                                    salt_length=padding.PSS.DIGEST_LENGTH), hashes.SHA256())
-    return {"KALSHI-ACCESS-KEY": key_id, "KALSHI-ACCESS-TIMESTAMP": ts,
-            "KALSHI-ACCESS-SIGNATURE": base64.b64encode(sig).decode()}
+    """GET headers for a base-relative path (signing lives in djtoolkit.kalshi)."""
+    return dk.sign_headers(key_id, key, "GET", dk.sign_path(KALSHI_BASE, path), ts_ms)
 
 
 async def _get(client: httpx.AsyncClient, key_id: str, key, path: str) -> dict:
-    r = await client.get(KALSHI_BASE + path, headers=sign_headers(key_id, key, path))
-    if r.status_code in (401, 403):
-        raise KalshiAuthError(f"Kalshi rejected the key ({r.status_code})")
-    r.raise_for_status()
-    return r.json()
+    return await dk.AsyncKalshiClient(key_id, key, KALSHI_BASE, http=client).get(path)
 
 
 async def _all(client, key_id, key, path: str, field: str) -> list[dict]:
-    out, cur = [], ""
-    for _ in range(100):  # ponytail: 20k-row ceiling, plenty for any human account
-        r = await _get(client, key_id, key, f"{path}{'&' if '?' in path else '?'}limit=200" + (f"&cursor={cur}" if cur else ""))
-        out += r.get(field) or []
-        cur = r.get("cursor")
-        if not cur:
-            break
-    return out
+    # ponytail: 100 pages x 200 = 20k-row ceiling, plenty for any human account
+    return await dk.AsyncKalshiClient(key_id, key, KALSHI_BASE, http=client).paginate(path, field, max_pages=100)
 
 
 def sport(ticker: str) -> str:
@@ -158,7 +121,7 @@ async def fetch_balance(key_id: str, pem: str) -> float:
 
 
 def _balance(bal: dict) -> float:
-    return _f(bal["balance_dollars"]) if "balance_dollars" in bal else _f(bal.get("balance")) / 100
+    return dk.balance_dollars(bal)
 
 
 def day_start(now: datetime | None = None) -> datetime:

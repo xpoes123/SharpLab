@@ -183,3 +183,26 @@ def test_board_ranks_window_and_picks_best_worst():
     a = b[1]
     assert (a["pnl"], a["cost"], a["n"], a["won"]) == (pytest.approx(1.0), 9.0, 2, 1)
     assert a["best"] == ("W", pytest.approx(6.0)) and a["worst"] == ("L", pytest.approx(-5.0))
+
+
+def test_all_paginates_and_maps_auth_errors():
+    import asyncio
+    import httpx
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    seen = []
+
+    def handler(req):
+        seen.append(req)
+        if req.url.path.endswith("/balance"):
+            return httpx.Response(401, json={})
+        cur = req.url.params.get("cursor")
+        return httpx.Response(200, json={"fills": [cur or "first"], "cursor": "" if cur else "c1"})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+            assert await ka._all(c, "kid", key, "/portfolio/fills?min_ts=5", "fills") == ["first", "c1"]
+            with pytest.raises(ka.KalshiAuthError):
+                await ka._get(c, "kid", key, "/portfolio/balance")
+    asyncio.run(run())
+    assert str(seen[0].url) == ka.KALSHI_BASE + "/portfolio/fills?min_ts=5&limit=200"
+    assert seen[1].url.params["cursor"] == "c1"
