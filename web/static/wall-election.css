@@ -1,9 +1,12 @@
-/* The watch page's Election panel + state sheet (wall-election.js). Tokyo Night; the party fills are the TV map's
-   (wall/pages/election/election.css) so the page and the TV read the same, the neutrals are Tokyo Night's. Calm: fills
-   fade over 2 s, nothing blinks; the sheet slides once (in from the right on desktop, up from the bottom on phones). */
+/* The watch page's Election panel + state sheet (wall-election.js). Colours come from the shared toolkit theme (ui.css):
+   the parties are --party-d / --party-r / --party-i when the theme has them, else its accent / bad / purple; "leading" is
+   the same hue mixed into the surface (the TV map's won / leading / no votes / no race scheme). Calm: fills fade over 2 s,
+   nothing blinks; the sheet slides once (in from the right on desktop, up from the bottom on phones). */
 :root {
-  --e-dem: #6C9BE0; --e-dem-lead: #3A5378; --e-rep: #E07A6E; --e-rep-lead: #7A3F39; --e-ind: #B39AD9; --e-ind-lead: #5E5277;
-  --e-none: #343a52; --e-off: #16161e;
+  --e-dem: var(--party-d, var(--accent)); --e-rep: var(--party-r, var(--bad)); --e-ind: var(--party-i, var(--purple, var(--info)));
+  --e-dem-lead: color-mix(in srgb, var(--e-dem) 40%, var(--surface-2)); --e-rep-lead: color-mix(in srgb, var(--e-rep) 40%, var(--surface-2));
+  --e-ind-lead: color-mix(in srgb, var(--e-ind) 40%, var(--surface-2));
+  --e-none: var(--line-2); --e-off: var(--bg);
 }
 .elec { margin-bottom: 10px; }
 .elec[hidden], .es-sheet[hidden], .es-scrim[hidden], #elecBtn[hidden] { display: none; }
@@ -46,7 +49,7 @@
 .elec.as-sheet .el-done { display: inline-block; min-height: 44px; padding: 0 16px; }
 
 /* the sheet: a drawer from the right on desktop, a bottom sheet on phones */
-.es-scrim { position: fixed; inset: 0; z-index: 70; background: rgba(8,9,14,.5); opacity: 0; transition: opacity .25s ease; }
+.es-scrim { position: fixed; inset: 0; z-index: 70; background: color-mix(in srgb, var(--bg) 60%, transparent); opacity: 0; transition: opacity .25s ease; }
 .es-scrim.open { opacity: 1; }
 .es-sheet { position: fixed; z-index: 71; top: 0; right: 0; bottom: 0; width: min(560px, 100vw); overflow-y: auto; overscroll-behavior: contain;
   background: var(--panel); border-left: 1px solid var(--line-strong); box-shadow: var(--shadow-lg); padding: 0 18px 24px;
