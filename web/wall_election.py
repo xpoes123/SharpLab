@@ -26,6 +26,7 @@ import httpx
 from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse, Response
 
+from db import queries
 from shared import election_markets as em
 from shared import election_pulse as ep
 from shared import kalshi_account as ka
@@ -334,6 +335,31 @@ async def get_pulse(request: Request):
     if "gzip" in request.headers.get("accept-encoding", ""):
         return Response(gzip.compress(body, 5), media_type="application/json", headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
     return Response(body, media_type="application/json")
+
+
+@router.get("/pulse/mine")
+async def get_pulse_mine(request: Request):
+    """The viewer's own open positions in Pulse's markets (their linked Kalshi key, read-only; only ever their own).
+    {ticker: {side, qty, cost}}; linked=False when they have no key."""
+    user = wall.session_user(wall.auth.read_session(request))
+    if not user:
+        return JSONResponse({"error": "log in"}, status_code=401)
+    row = await queries.get_kalshi_account(user["id"])
+    if not row:
+        return {"linked": False, "positions": {}}
+    try:
+        key = ka.load_key(ka.decrypt(row[1]))
+        async with httpx.AsyncClient(timeout=15) as c:
+            mps = await ka._all(c, row[0], key, "/portfolio/positions?count_filter=position", "market_positions")
+    except Exception as e:  # noqa: BLE001 — never log the key, only that Kalshi said no
+        log.warning("pulse mine %s: %s", user["id"], type(e).__name__)
+        return JSONResponse({"linked": True, "positions": {}, "error": "Kalshi didn't answer for your key."}, status_code=502)
+    out = {}
+    for p in mps:
+        q, t = ka._f(p.get("position_fp") or p.get("position")), p.get("ticker") or ""
+        if q and t.startswith(ep.SERIES):
+            out[t] = {"side": "YES" if q > 0 else "NO", "qty": abs(q), "cost": ka._f(p.get("market_exposure_dollars"))}
+    return {"linked": True, "positions": out}
 
 
 @router.get("/shapes")
