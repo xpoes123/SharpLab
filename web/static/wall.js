@@ -519,7 +519,9 @@
   // DJ Jev: the wall's decision model, shown as a member of the party (it runs the dashboards, the streams, the sound)
   const JEV_AV = "/dj-jev.svg";
   const JEV_LINE = /^(?:🤖|🎧|🎬|🔊|📊)\s*(?:DJ )?Jev:\s*/u;
+  let pubN = 0, lastViewers = null;   // public-link viewers (a count only) and the last list, to re-render on a count change
   function renderViewers(list) {
+    lastViewers = list;
     const ul = $("viewers"); ul.replaceChildren();
     if (wall && wall.running) {
       const j = el("li", "jev");
@@ -533,6 +535,7 @@
       if (v.away) li.append(el("span", "tag", "away"));
       ul.append(li);
     });
+    if (pubN) ul.append(el("li", "muted small pub-n", `(${pubN} guest${pubN === 1 ? "" : "s"})`));
     const active = list.filter((v) => !v.away).length;
     $("count").replaceChildren(`${list.length} watching`);
     if (active < list.length) $("count").append(el("span", "act", ` · ${active} active`));
@@ -545,10 +548,9 @@
 
   function showCount(c) {   // public viewers: how many are at the party (never who); the party: how many follow publicly
     if (!c) return;
-    if (me && !me.public) {
-      let p = $("pubCount");
-      if (!p) { p = el("span", "pill"); p.id = "pubCount"; p.title = "Watching on the public link"; $("count").after(p); }
-      p.textContent = `👀 ${c.public || 0} public`;
+    if (me && !me.public) {   // the party: public viewers as one line under the watcher list
+      pubN = c.public || 0;
+      if (lastViewers) renderViewers(lastViewers);
       return;
     }
     $("count").textContent = `${c.watching} at the watch party` + (c.public ? ` · ${c.public} following along` : "");
