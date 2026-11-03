@@ -57,6 +57,8 @@ def test_big_drop_only_in_a_close_race():
     close = ef.state_of(race(votes=(500_000, 480_000)))
     [u] = ef.diff(race(votes=(530_000, 500_000)), close, 1)
     assert u["kind"] == "big"
+    [u] = ef.diff(race(votes=(530_000, 500_000)), ef.state_of(race()), 1)
+    assert u["kind"] == "drop" and u["text"] == "First votes · Talarico +2.9"   # the first count: not a "big drop"
     blowout = ef.state_of(race(votes=(700_000, 300_000)))
     [u] = ef.diff(race(votes=(740_000, 320_000)), blowout, 1)
     assert u["kind"] == "drop"

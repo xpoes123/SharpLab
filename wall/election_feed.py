@@ -78,7 +78,7 @@ def diff(r: dict, last: dict | None, t: float, price: dict | None = None) -> lis
         m0, mv0 = margin_of(last["cv"], a["name"], b["name"] if b else None) if last["votes"] else (0.0, 0)
         lead_change = last["votes"] > 0 and mv0 < 0 < mv1
         close = abs(m1) < CLOSE_PTS or abs(m0) < CLOSE_PTS
-        big = close and (dv >= BIG_VOTES or (last["votes"] and dv >= BIG_SHARE * last["votes"]))
+        big = close and last["votes"] > 0 and (dv >= BIG_VOTES or dv >= BIG_SHARE * last["votes"])   # first votes: not "big"
         kind = "lead" if lead_change else "big" if big else "drop"
         text = f"+{dv:,} votes · {a['name']} {signed(m0)} → {signed(m1)}" if last["votes"] else f"First votes · {a['name']} {signed(m1)}"
         if lead_change:
