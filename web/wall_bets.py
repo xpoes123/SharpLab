@@ -231,19 +231,20 @@ async def panel(at_ms: float | None, state: dict | None, others: list[dict]) -> 
 router = APIRouter(prefix="/api/v1/wall/bets", tags=["wall"], dependencies=wall.guarded)
 
 
-def member(request: Request) -> tuple[dict | None, JSONResponse | None]:
-    """Members only: a guest (demo nickname) or nobody gets a 403 / 401."""
-    user = wall.session_user(wall.auth.read_session(request))
+def member(request: Request, read: bool = False) -> tuple[dict | None, JSONResponse | None]:
+    """Members and friends (the keyed link's guests). A public viewer (public mode) may read the panel (wall.PUBLIC),
+    never change anything (403); nobody else gets a 401."""
+    user = wall.viewer(request)
     if user:
         return user, None
-    if wall.read_guest(request):
-        return None, JSONResponse({"error": "Bets are for SharpLab members."}, status_code=403)
+    if wall.public_mode():
+        return (wall.PUBLIC, None) if read else (None, JSONResponse({"error": "The watch party is invite-only."}, status_code=403))
     return None, JSONResponse({"error": "log in"}, status_code=401)
 
 
 @router.get("")
 async def get_panel(request: Request, at: float | None = None):
-    user, err = member(request)
+    user, err = member(request, read=True)
     if err:
         return err
     bets.want()
@@ -257,9 +258,11 @@ async def get_panel(request: Request, at: float | None = None):
 
 @router.get("/me")
 async def get_me(request: Request):
-    user, err = member(request)
+    user, err = member(request, read=True)
     if err:
         return err
+    if user.get("guest") or user.get("public"):   # no Kalshi key here to share: the panel, read-only
+        return {"share": False, "exact": False, "linked": False, "guest": True}
     o = await queries.get_kalshi_wall_optin(user["id"])
     return {"share": o["share"], "exact": o["exact"], "linked": await queries.get_kalshi_account(user["id"]) is not None}
 
@@ -269,6 +272,8 @@ async def set_me(request: Request):
     user, err = member(request)
     if err:
         return err
+    if user.get("guest"):
+        return JSONResponse({"error": "Sharing positions needs a linked Kalshi account (Discord members)."}, status_code=403)
     try:
         body = await request.json()
     except ValueError:

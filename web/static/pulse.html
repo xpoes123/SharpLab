@@ -43,13 +43,19 @@
   .map path.hot { stroke: var(--accent); stroke-width: 2; } .map path.sel { stroke: var(--text); stroke-width: 2.5; }
   .legend { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; font-size: 12px; color: var(--muted); margin-top: 4px; }
   .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -2px; margin-right: 4px; }
+  .nav[hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <header>
   <div class="brand"><a href="/">Sharp<span>Lab</span> HQ</a></div>
-  <nav class="nav"><a href="/">Server</a><a href="/wall.html">Wall</a><a href="/pulse.html" class="on">Pulse</a><a href="https://discord.gg/zWmTnc8z" target="_blank" rel="noopener" class="nav-discord">Discord ↗</a></nav>
+  <nav class="nav" id="topNav" hidden><a href="/">Server</a><a href="/wall.html">Wall</a><a href="/pulse.html" class="on">Pulse</a></nav>
 </header>
+<script>
+  // the top nav is for logged-in Discord members only: friends and public viewers (the wall's public mode) see the page alone
+  fetch("/api/v1/wall/me", { credentials: "same-origin" }).then((r) => r.json())
+    .then((j) => { if (j.tier === "member") document.getElementById("topNav").hidden = false; }).catch(() => {});
+</script>
 <main>
   <h1>Election Pulse</h1>
   <div id="meta" class="muted small">Loading…</div>

@@ -58,8 +58,10 @@ def cfg() -> dict:
         "sound_approvals": max(1, int(e("WALL_SOUND_APPROVALS", "2"))),
         "vote_s": float(e("WALL_VOTE_S", "60")),
         "notices": e("WALL_JOIN_NOTICES", "0") == "1",
-        # demo mode: anyone with the keyed link (/wall.html?k=WALL_DEMO_KEY) may watch under a nickname
-        "guest_open": e("WALL_GUEST_OPEN", "0") == "1",   # with demo mode on: the plain page offers guest join too
+        # demo mode: anyone with the keyed link (/wall.html?k=WALL_DEMO_KEY) joins under a nickname as a "friend" (a
+        # member's powers on this page). Public mode: the plain page is data-only for anyone (map, results, the live feed,
+        # chat read-only) — no stream, no votes, no Kalshi. WALL_GUEST_OPEN=1 is its old name and still turns it on.
+        "public": e("WALL_PUBLIC", "0") == "1" or e("WALL_GUEST_OPEN", "0") == "1",
         "demo_key": e("WALL_DEMO_KEY", "") if e("WALL_DEMO", "0") == "1" and len(e("WALL_DEMO_KEY", "")) >= 16 else "",
     }
 
@@ -494,17 +496,18 @@ def redeem_link(token: str, now: float | None = None) -> dict | None:
 # ---- demo mode: guests with the keyed link pick a nickname ------------------------------------------------------------
 GUEST_COOKIE = "sharplab_wall_guest"
 GUEST_TTL = 24 * 3600
-GUEST_OPS = {"start", "stop", "tile", "spotlight", "favorite"}   # what a guest may not propose: no starting/stopping, no arbitrary pages on stream
 _guest_signer = URLSafeTimedSerializer(auth.SESSION_SECRET, salt="sharplab-wall-guest")
 _NICK = re.compile(r"^[\w .'-]{2,24}$")
 
 
 def key_ok(k: object) -> bool:
-    """Guests may join: the keyed link, or anyone on the plain page while WALL_GUEST_OPEN=1 (a watch-party night)."""
+    """Friends may join: only with the keyed link (the plain page is the public, data-only view)."""
     dk = cfg()["demo_key"]
-    if dk and cfg()["guest_open"]:
-        return True
     return bool(dk) and isinstance(k, str) and secrets.compare_digest(k.encode(), dk.encode())
+
+
+def public_mode() -> bool:
+    return cfg()["public"]
 
 
 def _key_tag() -> str:
@@ -533,7 +536,7 @@ def unique_name(name: str, taken: set[str]) -> str:
 
 
 def make_guest_cookie(name: str) -> tuple[str, dict]:
-    g = {"id": "g-" + secrets.token_hex(6), "name": name, "k": _key_tag()}
+    g = {"id": "g-" + secrets.token_hex(6), "name": name, "k": _key_tag(), "t": "friend"}
     return _guest_signer.dumps(g), g
 
 
@@ -547,9 +550,10 @@ def read_guest(conn) -> dict | None:
         g = _guest_signer.loads(raw, max_age=GUEST_TTL)
     except (BadSignature, SignatureExpired):
         return None
-    if not isinstance(g, dict) or g.get("k") != _key_tag() or not str(g.get("id", "")).startswith("g-"):
+    # only friend cookies (the keyed link): one from before tiers, or from the old open plain page, is a public viewer
+    if not isinstance(g, dict) or g.get("k") != _key_tag() or not str(g.get("id", "")).startswith("g-") or g.get("t") != "friend":
         return None
-    return {"id": g["id"], "name": g.get("name") or "Guest", "avatar": None, "guest": True}
+    return {"id": g["id"], "name": g.get("name") or "Guest", "avatar": None, "guest": True, "tier": "friend"}
 
 
 def verified(user: dict) -> bool:
@@ -558,8 +562,16 @@ def verified(user: dict) -> bool:
 
 
 def viewer(conn) -> dict | None:
-    """A logged-in member (SharpLab session), else in demo mode a guest with a nickname cookie."""
+    """Who may use the whole page: a logged-in member (SharpLab session), else in demo mode a friend (the keyed link's
+    nickname cookie) — a member's powers on this page. None = a public viewer (data only, when public_mode())."""
     return session_user(auth.read_session(conn)) or read_guest(conn)
+
+
+PUBLIC = {"id": "", "name": "", "avatar": None, "public": True}   # a public viewer, where a read needs a "who"
+
+
+def tier(user: dict | None) -> str:
+    return "public" if not user else "friend" if user.get("guest") else "member"
 
 
 def client_ip(conn) -> str:
@@ -739,6 +751,8 @@ class Hub:
         self._alert_ids = itertools.count(-1, -1)
         self.votes = Votes()
         self.socks: dict[int, tuple[WebSocket, dict]] = {}
+        self.pubs: dict[int, WebSocket] = {}   # public viewers: chat read-only + a head count, nothing else
+        self._count_sig: tuple = ()
         self.cids = itertools.count(1)
         self.wall: dict | None = None
         self._viewers_sig: tuple = ()
@@ -784,6 +798,21 @@ class Hub:
     async def broadcast(self, msg: dict) -> None:
         for ws, _ in list(self.socks.values()):
             await self.send(ws, msg)
+        if self.pubs and (pm := public_msg(msg)) is not None:
+            for ws in list(self.pubs.values()):
+                await self.send(ws, pm)
+
+    def counts(self) -> dict:
+        return {"t": "count", "watching": len(self.presence.watching()), "active": len(self.presence.active(self.clock())),
+                "public": len(self.pubs)}
+
+    async def push_counts(self, force: bool = False) -> None:
+        c = self.counts()
+        sig = (c["watching"], c["active"], c["public"])
+        if force or sig != self._count_sig:
+            self._count_sig = sig
+            for ws in list(self.pubs.values()):
+                await self.send(ws, c)
 
     def viewers(self) -> list[dict]:
         return self.presence.listing(self.clock())
@@ -793,7 +822,9 @@ class Hub:
         sig = tuple((x["id"], x["away"]) for x in v)
         if force or sig != self._viewers_sig:
             self._viewers_sig = sig
-            await self.broadcast({"t": "viewers", "list": v})
+            for ws, _ in list(self.socks.values()):   # members + friends only: public viewers get a count (push_counts)
+                await self.send(ws, {"t": "viewers", "list": v})
+        await self.push_counts()
 
     def pub(self, p: Proposal) -> dict:
         c = cfg()
@@ -828,10 +859,6 @@ class Hub:
         now = self.clock()
         if self.chat.is_muted(user["id"], now):
             return None, "You're muted for now."
-        # a live game or a Spectrum stream (verified above) is a curated tile, not an arbitrary page
-        live_tile = a["op"] == "tile" and (a["url"] in {g["url"] for g in _live["games"]} or bool(spectrum.find(a["url"])))
-        if user.get("guest") and a["op"] in GUEST_OPS and not live_tile:
-            return None, "Guests can vote, chat and change the sound / layout / board — starting, stopping and new pages need a SharpLab login."
         if a["op"] == "adwatch" and not self.is_admin(user["id"]):
             return None, "Only the owner and admins can switch auto ad-skip."
         owner = self.is_owner(user["id"])
@@ -904,7 +931,7 @@ class Hub:
 
     async def _run(self) -> None:
         n = 0
-        while self.socks:
+        while self.socks or self.pubs:
             await asyncio.sleep(1)
             try:
                 await self.tick()
@@ -942,6 +969,20 @@ class Hub:
                 "watch_url": watch_url()}
 
 
+def public_chat(m: dict) -> dict:
+    """A chat line as a public viewer sees it: no Discord ids or avatars."""
+    return {k: m.get(k) for k in ("id", "ts", "kind", "name", "text")} | {"guest": bool(m.get("guest"))}
+
+
+def public_msg(msg: dict) -> dict | None:
+    """What of a broadcast reaches public viewers: chat lines (never the owner's private alerts) and deletes."""
+    if msg.get("t") == "chat" and isinstance(msg.get("msg"), dict) and not msg["msg"].get("private"):
+        return {"t": "chat", "msg": public_chat(msg["msg"])}
+    if msg.get("t") == "del":
+        return {"t": "del", "id": msg.get("id")}
+    return None
+
+
 hub = Hub()
 
 
@@ -970,6 +1011,9 @@ async def wall_websocket(ws: WebSocket) -> None:
         await ws.close(code=4403, reason="bad origin")
         return
     user = viewer(ws)
+    if not user and public_mode():
+        await public_websocket(ws)
+        return
     if not user:
         await ws.close(code=4401, reason="Log in to SharpLab first")
         return
@@ -1017,6 +1061,39 @@ async def wall_websocket(ws: WebSocket) -> None:
         if gone and cfg()["notices"]:
             await h.say(f"{user['name']} left.")
         await h.push_viewers()
+
+
+async def public_websocket(ws: WebSocket) -> None:
+    """A public viewer (no login, no friend cookie): the chat read-only and a head count. Anything it sends but a ping is
+    refused — it can't chat, vote or propose."""
+    h, ip = hub, client_ip(ws)
+    if not guest_joins_ip.allow(ip, h.clock()):
+        await ws.close(code=4429, reason="Too many connects — wait a minute")
+        return
+    await ws.accept()
+    cid = next(h.cids)
+    h.pubs[cid] = ws
+    await h.send(ws, {"t": "hello", "me": {"public": True, "id": "", "name": "", "guest": False, "admin": False, "owner": False},
+                      "now": h.clock() * 1000, "history": [public_chat(m) for m in h.chat.log], "viewers": [],
+                      "proposals": [], "wall": None, "count": h.counts(), "cfg": {"chat_max": CHAT_MAX}})
+    await h.push_counts(force=True)
+    h.ensure_ticker()
+    ident = "ip:" + ip
+    try:
+        while True:
+            msg = await ws.receive_json()
+            t, now = msg.get("t") if isinstance(msg, dict) else None, h.clock()
+            if h.guard.limit(ident, t != "ping", now):
+                continue
+            if t == "ping":
+                await h.send(ws, {"t": "pong", "c": msg.get("c"), "s": now * 1000})
+            elif t != "hb" and h.guard.tell(("pub", cid), now):
+                await h.send(ws, {"t": "error", "text": "The chat is read-only here — the watch party is invite-only.", "chat": t == "chat"})
+    except (WebSocketDisconnect, RuntimeError, ValueError):
+        pass
+    finally:
+        h.pubs.pop(cid, None)
+        await h.push_counts()
 
 
 async def handle(h: Hub, cid: int, ws: WebSocket, user: dict, msg: dict) -> None:
@@ -1157,15 +1234,17 @@ def peek() -> dict:
 @router.get("/me")
 async def me(request: Request, k: str = ""):
     user = viewer(request)
+    login = f"/api/v1/auth/discord/login?next={PAGE}"
+    if not user and not key_ok(k) and public_mode():   # the plain page: data only, no join
+        return {"authenticated": False, "public": True, "tier": "public", "login": login, "peek": peek()}
     if not user:
-        return JSONResponse({"authenticated": False, "login": f"/api/v1/auth/discord/login?next={PAGE}",
-                             "guest_ok": key_ok(k), "peek": peek()}, status_code=401)
-    return {"authenticated": True, **user}
+        return JSONResponse({"authenticated": False, "login": login, "guest_ok": key_ok(k), "peek": peek()}, status_code=401)
+    return {"authenticated": True, **user, "tier": tier(user)}
 
 
 @router.post("/guest")
 async def guest(request: Request):
-    """Demo mode: someone with the keyed link picks a nickname → a signed guest cookie (24 h)."""
+    """Demo mode: someone with the keyed link picks a nickname → a signed friend cookie (24 h)."""
     try:
         body = await request.json()
     except ValueError:

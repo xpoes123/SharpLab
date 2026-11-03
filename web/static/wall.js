@@ -201,10 +201,10 @@
         me = m.me; cfg = { ...cfg, ...m.cfg };
         offset = m.now - Date.now();
         if (m.pdt_off != null) pdtOff = m.pdt_off;
-        $("ownerNote").textContent = me.owner ? "· you're the owner: changes apply at once" : me.guest ? "· as a guest you can vote, and change sound / layout / board" : "";
-        document.querySelectorAll("[data-member]").forEach((x) => (x.hidden = !!me.guest));
-        $("offSub").textContent = me.guest ? "It'll be back on soon." : "Start it from “Change the wall” below.";
         $("msgs").replaceChildren(); m.history.forEach(addMsg);
+        if (me.public) { showCount(m.count); break; }   // public: the chat read-only + a head count, nothing else
+        $("ownerNote").textContent = me.owner ? "· you're the owner: changes apply at once" : "";
+        $("offSub").textContent = "Start it from “Change the wall” below.";
         renderViewers(m.viewers);
         props.clear(); m.proposals.forEach((p) => props.set(p.id, p)); renderProps();
         setWall(m.wall);
@@ -214,6 +214,7 @@
       case "chat": { const seen = chatInView(); addMsg(m.msg); incoming(m.msg, seen); break; }
       case "del": { const li = document.querySelector(`#msgs li[data-id="${m.id}"]`); if (li) li.remove(); break; }
       case "viewers": renderViewers(m.list); break;
+      case "count": showCount(m); break;
       case "proposal": if (m.p.status === "open") props.set(m.p.id, m.p); else props.delete(m.p.id); renderProps(); break;
       case "wall": setWall(m.state); break;
       case "error":
@@ -424,6 +425,11 @@
     if (list.length > 5) $("vstrip").append(el("span", "av more", `+${list.length - 5}`));
     const names = list.map((v) => v.name);
     $("vcount").textContent = names.slice(0, 2).join(", ") + (names.length > 2 ? ` +${names.length - 2}` : "");
+  }
+
+  function showCount(c) {   // public viewers: how many are at the party (never who)
+    if (!c) return;
+    $("count").textContent = `${c.watching} at the watch party` + (c.public ? ` · ${c.public} following along` : "");
   }
 
   // ---- chat ----
@@ -642,7 +648,7 @@
   }));
 
   // ---- presence ----
-  const beat = () => send({ t: "hb", hidden: document.hidden });
+  const beat = () => { if (!(me && me.public)) send({ t: "hb", hidden: document.hidden }); };
   document.addEventListener("visibilitychange", beat);
   setInterval(beat, 15000);
   setInterval(ping, 15000);
@@ -670,7 +676,7 @@
   }
   if (Date.now() < Date.UTC(2026, 10, 5, 12)) {   // US midterms, 3 Nov 2026: say so on the join card
     $("gateTitle").textContent = "Election Night";
-    $("gateLede").textContent = "Live map, NBC + PBS, Kalshi odds, chat. Results from 6 PM ET.";
+    $("gateLede").textContent = "Live map, the news streams, Kalshi odds, chat. Results from 6 PM ET.";
   }
   const qs = new URLSearchParams(location.search), err = qs.get("error"), key = qs.get("k") || "";
   try { const n = localStorage.getItem("wall.nick"); if (n) $("nick").value = n; } catch (e) { /* storage blocked: start empty */ }
@@ -683,10 +689,19 @@
         showGate(err === "link_expired" ? "That link expired — use Get my link again, or log in." : "");
         return;
       }
-      $("navRight").textContent = j.name + (j.guest ? " (guest)" : "");
-      window.__wallMe = j;   // wall-bets.js / wall-election.js start from this (a guest never calls member-only endpoints)
+      if (j.public) {   // the plain page in public mode: live election data only — no stream, no votes, chat read-only
+        document.body.classList.add("public");
+        $("publicNote").hidden = false;
+        $("chatIn").disabled = true;
+        const a = el("a", "pub-login", "Member? Log in"); a.href = j.login || "/api/v1/auth/discord/login?next=/wall.html";
+        $("navRight").replaceChildren(a);
+      } else {
+        $("navRight").textContent = j.name + (j.guest ? " (guest)" : "");
+        if (j.tier === "member") $("topNav").hidden = false;   // friends and the public see only the page's own name
+      }
+      window.__wallMe = j;   // wall-bets.js / wall-election.js start from this (a public viewer never calls the Kalshi endpoints)
       window.dispatchEvent(new CustomEvent("wall:me", { detail: j }));
-      startLive();
+      if (!j.public) startLive();
       $("gate").hidden = true;
       $("room").hidden = false;
       document.body.classList.add("inroom");

@@ -17,6 +17,8 @@ def env(monkeypatch):
     monkeypatch.setenv("WALL_SOUND_APPROVALS", "2")
     monkeypatch.setenv("WALL_VOTE_S", "60")
     monkeypatch.setenv("WALL_JOIN_NOTICES", "0")
+    monkeypatch.delenv("WALL_PUBLIC", raising=False)
+    monkeypatch.delenv("WALL_GUEST_OPEN", raising=False)
     monkeypatch.setattr(wall, "check_api_key", lambda k: k == "sekrit")
 
 
@@ -574,13 +576,14 @@ def test_nicknames():
     assert wall.unique_name("Kim", {"Kim", "Kim (guest)"}) == "Kim (guest 2)"
 
 
-def test_guest_watches_chats_and_votes_but_cant_start_or_put_pages_up(demo, monkeypatch):
+def test_friend_watches_chats_and_changes_the_wall_like_a_member(demo, monkeypatch):
     client, hub, clock, done = demo
     assert join_as_guest(client, "<b>").status_code == 422
     r = join_as_guest(client, "Kim")
     assert r.status_code == 200 and r.json()["guest"]
     me = client.get("/api/v1/wall/me").json()
     assert me["authenticated"] and me["guest"] and me["id"].startswith("g-") and me["name"] == "Kim"
+    assert me["tier"] == "friend"
 
     async def upstream(name):
         return 200, b"#EXTM3U\n", "application/vnd.apple.mpegurl"
@@ -594,11 +597,11 @@ def test_guest_watches_chats_and_votes_but_cant_start_or_put_pages_up(demo, monk
         assert until(ws, "viewers")["list"][0]["guest"] is True
         ws.send_json({"t": "chat", "text": "hi"})
         assert until(ws, "chat")["msg"]["guest"] is True
-        for a in ({"op": "start", "mirror": True}, {"op": "stop"}, {"op": "tile", "i": 0, "url": "https://evil.example"}):
-            ws.send_json({"t": "propose", "action": a})
-            assert "Guests can" in until(ws, "error")["text"]
+        ws.send_json({"t": "propose", "action": {"op": "tile", "i": 3, "url": "https://news.example/live"}})
+        assert until(ws, "proposal")["p"]["status"] == "passed"   # alone: their own yes is the majority, like a member's
+        assert done[-1] == {"op": "tile", "i": 3, "url": "https://news.example/live"}
         ws.send_json({"t": "del", "id": 1})
-        assert "moderate" in until(ws, "error")["text"]
+        assert "moderate" in until(ws, "error")["text"]           # owner / admin powers stay Discord-only
 
 
 @pytest.mark.anyio
@@ -623,11 +626,10 @@ async def test_guest_votes_count():
     q, err = await hub.propose(guest, {"op": "sound", "i": 1})   # sound / layout / board: fine for guests
     assert q and not err
     lu = {"id": "g-def", "name": "Lu", "guest": True}
-    q, err = await hub.propose(lu, {"op": "tile", "i": 0, "url": "https://x.example/any"})   # arbitrary pages: no
-    assert not q and "login" in err
-    wall._live.update(at=0.0, games=[{"league": "nba", "label": "A–B", "url": "https://s.example/nba/lakers", "state": "in"}])
-    q, err = await hub.propose(lu, {"op": "tile", "i": 0, "url": "https://s.example/nba/lakers"})   # a live game: yes
+    q, err = await hub.propose(lu, {"op": "tile", "i": 0, "url": "https://x.example/any"})   # friends: any page, like members
     assert q and not err, err
+    q, err = await hub.propose({"id": "g-xyz", "name": "Mo", "guest": True}, {"op": "adwatch", "on": True})
+    assert not q and "admins" in err                                                         # admin powers: no
 
 
 def test_guest_names_are_unique_and_connects_are_rate_limited(demo):
@@ -776,13 +778,132 @@ def test_election_default_and_dashboard_tiles_guard():
     assert noop(check_action({"op": "tile", "i": 0, "url": "http://127.0.0.1:7795/p/election/turnout"}), w) == ""
 
 
-def test_open_guests_on_the_plain_page(monkeypatch):
-    from web.wall import key_ok
+def test_only_the_keyed_link_joins_public_mode_never_does(monkeypatch):
+    from web.wall import key_ok, public_mode
     monkeypatch.setenv("WALL_DEMO", "1")
     monkeypatch.setenv("WALL_DEMO_KEY", "k" * 20)
-    monkeypatch.delenv("WALL_GUEST_OPEN", raising=False)
-    assert key_ok("k" * 20) and not key_ok("") and not key_ok(None)
-    monkeypatch.setenv("WALL_GUEST_OPEN", "1")
-    assert key_ok("") and key_ok(None)
+    assert key_ok("k" * 20) and not key_ok("") and not key_ok(None) and not public_mode()
+    monkeypatch.setenv("WALL_GUEST_OPEN", "1")                   # the old name turns public mode on …
+    assert public_mode() and not key_ok("") and not key_ok(None)  # … and no longer lets the plain page join
+    monkeypatch.delenv("WALL_GUEST_OPEN")
+    monkeypatch.setenv("WALL_PUBLIC", "1")
+    assert public_mode()
     monkeypatch.setenv("WALL_DEMO", "0")
-    assert not key_ok("")                                        # never without demo mode
+    assert not key_ok("k" * 20)                                  # never without demo mode
+
+
+# ---- tiers: the keyed link = friends (a member's powers here), the plain page = public (read-only) ----------------------
+@pytest.fixture
+def public(demo, monkeypatch):
+    monkeypatch.setenv("WALL_GUEST_OPEN", "1")   # what the VPS has set
+    return demo
+
+
+def test_public_me_is_data_only_and_the_key_still_offers_the_join(public):
+    client, *_ = public
+    client.cookies.clear()
+    r = client.get("/api/v1/wall/me")
+    assert r.status_code == 200 and r.json()["public"] is True and r.json()["tier"] == "public"
+    assert not r.json()["authenticated"] and "guest_ok" not in r.json()
+    k = client.get(f"/api/v1/wall/me?k={KEY}")
+    assert k.status_code == 401 and k.json()["guest_ok"] is True   # the friend link: the nickname form
+    assert join_as_guest(client, "Kim", k="").status_code == 403   # no joining from the plain page
+    join_as_guest(client, "Kim")
+    assert client.get("/api/v1/wall/me").json()["tier"] == "friend"
+    for k_, v in cookie("300", "Steph").items():
+        client.cookies.set(k_, v)
+    assert client.get("/api/v1/wall/me").json()["tier"] == "member"
+
+
+def test_public_gets_no_stream_and_no_live_games(public, monkeypatch):
+    client, *_ = public
+    calls = []
+
+    async def upstream(name):
+        calls.append(name)
+        return 200, b"#EXTM3U\n", "application/vnd.apple.mpegurl"
+    monkeypatch.setattr(wall, "fetch_upstream", upstream)
+    wall._cache.clear()
+    client.cookies.clear()
+    assert client.get("/api/v1/wall/hls/index.m3u8").status_code == 401
+    assert client.get("/api/v1/wall/hls/seg000001.ts").status_code == 401
+    assert client.get("/api/v1/wall/games").status_code == 401
+    assert calls == []
+    join_as_guest(client, "Kim")
+    assert client.get("/api/v1/wall/hls/index.m3u8").status_code == 200   # a friend watches
+
+
+def test_old_guest_cookies_without_a_tier_are_public(public):
+    client, *_ = public
+    old = wall._guest_signer.dumps({"id": "g-0123456789ab", "name": "Kim", "k": wall._key_tag()})   # before tiers
+    client.cookies.clear()
+    client.cookies.set(wall.GUEST_COOKIE, old)
+    assert client.get("/api/v1/wall/me").json()["tier"] == "public"
+    assert client.get("/api/v1/wall/hls/index.m3u8").status_code == 401
+    forged = wall._guest_signer.dumps({"id": "g-0123456789ab", "name": "Kim", "k": "nope", "t": "friend"})
+    client.cookies.set(wall.GUEST_COOKIE, forged)
+    assert client.get("/api/v1/wall/me").json()["tier"] == "public"   # a friend cookie for another key: public too
+
+
+def test_public_socket_reads_chat_but_cant_write_or_see_who(public):
+    client, hub, clock, done = public
+    hub.chat.post({"id": "300", "name": "Steph", "avatar": "https://cdn.example/a.png"}, "before you came", clock.t)
+    client.cookies.clear()
+    with client.websocket_connect("/ws/wall") as pub:
+        hello = pub.receive_json()
+        assert hello["t"] == "hello" and hello["me"]["public"] is True
+        assert [m["text"] for m in hello["history"]] == ["before you came"]
+        assert "uid" not in hello["history"][0] and "avatar" not in hello["history"][0]   # no Discord ids on the public page
+        assert hello["viewers"] == [] and hello["proposals"] == [] and hello["wall"] is None
+        assert until(pub, "count")["watching"] == 0
+        with connect(client, "300", "Steph") as m:
+            m.receive_json()
+            c = until(pub, "count")
+            assert c["watching"] == 1 and "list" not in c                               # a count, never names
+            m.send_json({"t": "chat", "text": "go team"})
+            got = until(pub, "chat")["msg"]
+            assert got["text"] == "go team" and got["name"] == "Steph" and "uid" not in got   # live, read-only
+            m.send_json({"t": "propose", "action": {"op": "board", "board": "nba"}})
+            seen = until(pub, "chat")["msg"]                                            # the proposal line is just text
+            assert "proposes" in seen["text"] and "proposal" not in seen
+            n_before = len(hub.chat.log)
+            pub.send_json({"t": "chat", "text": "let me in"})
+            err = until(pub, "error")
+            assert "read-only" in err["text"] and err["chat"] is True
+            for x in ({"t": "propose", "action": {"op": "stop"}}, {"t": "vote", "id": 1, "yes": True},
+                      {"t": "del", "id": 1}, {"t": "mute", "uid": "300"}):
+                pub.send_json(x)
+            pub.send_json({"t": "ping", "c": 1})
+            assert until(pub, "pong")["c"] == 1
+            assert len(hub.chat.log) == n_before                                        # nothing it sent landed
+            p = next(iter(hub.votes.props.values()))
+            assert p.yes == {"300"} and not p.no                                        # its vote didn't count
+            assert [v["id"] for v in hub.viewers()] == ["300"]                          # never in the viewer list
+
+
+def test_public_socket_is_refused_without_public_mode(demo):
+    client, *_ = demo
+    client.cookies.clear()
+    with pytest.raises(WebSocketDisconnect) as e:
+        with client.websocket_connect("/ws/wall") as ws:
+            ws.receive_json()
+    assert e.value.code == 4401
+
+
+def test_public_msg_filters_broadcasts():
+    assert wall.public_msg({"t": "viewers", "list": [{"id": "1"}]}) is None
+    assert wall.public_msg({"t": "proposal", "p": {}}) is None
+    assert wall.public_msg({"t": "wall", "state": {}}) is None
+    assert wall.public_msg({"t": "chat", "msg": {"id": -1, "text": "⏱ x", "private": True}}) is None   # owner alerts
+    assert wall.public_msg({"t": "del", "id": 4}) == {"t": "del", "id": 4}
+
+
+def test_wall_page_nav_is_hidden_until_a_member_and_has_no_discord_invite():
+    from pathlib import Path
+    static = Path(__file__).resolve().parents[1] / "web" / "static"
+    html = (static / "wall.html").read_text()
+    assert '<nav class="nav" id="topNav" hidden>' in html and "Live election data · watch party is invite-only" in html
+    assert 'j.tier === "member"' in (static / "wall.js").read_text()
+    assert 'class="nav" id="topNav" hidden' in (static / "pulse.html").read_text()
+    for f in static.glob("*.html"):
+        assert "discord.gg/" not in f.read_text() and "nav-discord" not in f.read_text(), f.name
