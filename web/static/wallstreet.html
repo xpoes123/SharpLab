@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
+<head><link rel="stylesheet" href="https://share.djiang.xyz/ui/ui.css">
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>SharpLab HQ — Wall Street Poker</title>
@@ -30,7 +30,7 @@
   .btn:hover { border-color: var(--accent); }
   .btn:disabled { opacity: .4; cursor: not-allowed; }
   .btn.primary { background: var(--accent); color: var(--accent-ink); border: 0; }
-  .btn.danger { border-color: #f7768e; color: #f7768e; }
+  .btn.danger { border-color: var(--bad); color: var(--bad); }
   .btn.sm { padding: 6px 10px; font-size: 12px; }
   .btn.big { width: 100%; padding: 13px; font-size: 15px; font-weight: 800; }
 
@@ -49,9 +49,9 @@
     border: 1px solid var(--line); border-radius: var(--r); padding: 10px 14px; }
   .tag { font-size: 11px; font-weight: 800; padding: 2px 7px; border-radius: 999px; margin-left: 6px;
     background: var(--panel2); border: 1px solid var(--line); color: var(--muted); }
-  .tag.ok { color: #9ece6a; border-color: #9ece6a; }
+  .tag.ok { color: var(--ok); border-color: var(--ok); }
   .tag.btn-tag { color: var(--accent); border-color: var(--accent); }
-  .tag.off { color: #f7768e; border-color: #f7768e; }
+  .tag.off { color: var(--bad); border-color: var(--bad); }
 
   /* Cards */
   .pc { position: relative; width: 46px; height: 64px; flex: 0 0 auto; border-radius: 6px; background: #f6f7fb;
@@ -61,7 +61,7 @@
   .pc.red { color: #d0344a; }
   .pc.big { width: 84px; height: 118px; font-size: 28px; border-radius: 10px; }
   .pc.big i { font-size: 34px; }
-  .pc.back { background: repeating-linear-gradient(45deg, var(--accent) 0 6px, #7aa2f7 6px 12px); }
+  .pc.back { background: repeating-linear-gradient(45deg, var(--accent) 0 6px, var(--accent) 6px 12px); }
   .pc.slot { background: transparent; border: 1px dashed var(--line); }
   .pc.buyable { cursor: pointer; }
   .pc.buyable:hover { outline: 2px solid var(--accent); }
@@ -104,8 +104,8 @@
   .offerbox .inp { width: 100px; flex: 0 0 auto; }
 
   .result .pl { margin-bottom: 8px; }
-  .won { color: #9ece6a; font-weight: 800; }
-  .lost { color: #f7768e; font-weight: 800; }
+  .won { color: var(--ok); font-weight: 800; }
+  .lost { color: var(--bad); font-weight: 800; }
 </style>
 </head>
 <body>

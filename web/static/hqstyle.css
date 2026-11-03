@@ -1,11 +1,11 @@
 :root {
-  --bg: #15161e; --panel: #1a1b26; --panel2: #1f2230; --line: #2a2e42;
-  --fg: #c0caf5; --muted: #7884b0; --accent: #7aa2f7; --accent2: #bb9af7;
-  --green: #9ece6a; --red: #f7768e; --gold: #e0af68;
+   --panel: var(--bg); --panel2: #1f2230; --line: #2a2e42;
+  --fg: var(--text);   --accent2: var(--purple);
+  --green: var(--ok); --red: var(--bad); --gold: var(--warn);
   /* facelift tokens (additive — existing vars unchanged) */
   --line-strong: #384063;      /* hover/active borders */
-  --fg-2: #a9b1d6;             /* softer body copy */
-  --faint: #565f89;            /* hints / disabled */
+  --fg-2: var(--text-2);             /* softer body copy */
+  --faint: var(--muted);            /* hints / disabled */
   --accent-ink: #11121a;       /* text on accent fills */
   --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
   --green-soft: color-mix(in srgb, var(--green) 14%, transparent);

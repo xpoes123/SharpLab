@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
+<head><link rel="stylesheet" href="https://share.djiang.xyz/ui/ui.css">
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>SharpLab HQ — Video shrinker</title>
@@ -9,15 +9,15 @@
 <link rel="stylesheet" href="/hqstyle.css" />
 <style>
   .vbox { max-width: 520px; margin: 18px auto; padding: 0 16px; display: grid; gap: 14px; }
-  .vcard { background: var(--panel, #1a1b26); border: 1px solid var(--line, #2a2b3d); border-radius: 14px; padding: 16px; display: grid; gap: 12px; }
+  .vcard { background: var(--panel, var(--bg)); border: 1px solid var(--line, #2a2b3d); border-radius: 14px; padding: 16px; display: grid; gap: 12px; }
   .vdrop { display: grid; place-items: center; gap: 6px; border: 2px dashed var(--line, #2a2b3d); border-radius: 12px; padding: 28px 12px; text-align: center; cursor: pointer; }
   .vdrop b { font-size: 18px; } .vdrop input { display: none; }
-  .vbar { height: 10px; border-radius: 6px; background: var(--panel2, #24283b); overflow: hidden; } .vbar i { display: block; height: 100%; width: 0; background: #7aa2f7; transition: width .2s; }
+  .vbar { height: 10px; border-radius: 6px; background: var(--panel2, var(--surface)); overflow: hidden; } .vbar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
   .vbar.work i { width: 40%; animation: vslide 1.2s ease-in-out infinite alternate; } @keyframes vslide { from { margin-left: 0; } to { margin-left: 60%; } }
-  .vmuted { color: var(--muted, #787c99); font-size: 14px; } .verr { color: #f7768e; } .vok { color: #9ece6a; }
+  .vmuted { color: var(--muted, var(--muted)); font-size: 14px; } .verr { color: var(--bad); } .vok { color: var(--ok); }
   video { width: 100%; border-radius: 10px; background: #000; max-height: 60vh; }
   .vrow { display: flex; gap: 8px; flex-wrap: wrap; } .vrow .btn { flex: 1; text-align: center; min-height: 44px; display: grid; place-items: center; }
-  select, input[type=text] { width: 100%; min-height: 44px; font-size: 16px; padding: 8px 10px; border-radius: 10px; background: var(--panel2, #24283b); color: inherit; border: 1px solid var(--line, #2a2b3d); }
+  select, input[type=text] { width: 100%; min-height: 44px; font-size: 16px; padding: 8px 10px; border-radius: 10px; background: var(--panel2, var(--surface)); color: inherit; border: 1px solid var(--line, #2a2b3d); }
 </style>
 </head>
 <body>
