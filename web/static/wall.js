@@ -97,7 +97,13 @@
     s.className = "pill " + (a < 0.5 ? "ok" : a < 1.5 ? "meh" : "bad");
   }
 
-  const showMute = () => { $("muteBtn").textContent = video.muted ? "🔇 Sound off" : "🔊 Sound on"; $("unmute").hidden = !video.muted; };
+  const showMute = () => {
+    const b = $("muteBtn");
+    b.querySelector(".ico").textContent = video.muted ? "🔇" : "🔊";
+    b.querySelector(".lbl").textContent = video.muted ? " Sound off" : " Sound on";
+    b.setAttribute("aria-label", video.muted ? "Sound off" : "Sound on");
+    $("unmute").hidden = !video.muted;
+  };
   const toggleMute = () => { video.muted = !video.muted; if (!video.muted) video.play().catch(() => {}); showMute(); };
   $("unmute").onclick = toggleMute;
   $("muteBtn").onclick = toggleMute;
@@ -173,7 +179,11 @@
         break;
       case "pong": addOffset(m.c, m.s); if (m.pdt_off != null) pdtOff = m.pdt_off; break;
       case "clock": pdtOff = m.pdt_off; break;
-      case "chat": addMsg(m.msg); break;
+      case "chat": {
+        addMsg(m.msg);
+        if (LANDSCAPE.matches && m.msg.kind !== "system" && me && m.msg.uid !== me.id) { if (!pinned) setUnread(unread + 1); peek(); }
+        break;
+      }
       case "del": { const li = document.querySelector(`#msgs li[data-id="${m.id}"]`); if (li) li.remove(); break; }
       case "viewers": renderViewers(m.list); break;
       case "proposal": if (m.p.status === "open") props.set(m.p.id, m.p); else props.delete(m.p.id); renderProps(); break;
@@ -231,7 +241,13 @@
       ul.append(li);
     });
     const active = list.filter((v) => !v.away).length;
-    $("count").textContent = `${list.length} watching` + (active < list.length ? ` · ${active} active` : "");
+    $("count").replaceChildren(`${list.length} watching`);
+    if (active < list.length) $("count").append(el("span", "act", ` · ${active} active`));
+    // phones: a strip of avatars + a few names; tapping it opens the full list as a sheet
+    $("vstrip").replaceChildren(...list.slice(0, 5).map(avatar));
+    if (list.length > 5) $("vstrip").append(el("span", "av more", `+${list.length - 5}`));
+    const names = list.map((v) => v.name);
+    $("vcount").textContent = names.slice(0, 2).join(", ") + (names.length > 2 ? ` +${names.length - 2}` : "");
   }
 
   // ---- chat ----
@@ -258,6 +274,75 @@
     const t = $("chatIn").value.trim();
     if (t) { send({ t: "chat", text: t }); $("chatIn").value = ""; }
   };
+
+  // ---- phone layouts (keep these queries in step with wall.css) ----
+  const PORTRAIT = matchMedia("(max-width: 700px) and (orientation: portrait), (max-width: 700px) and (min-height: 501px)");
+  const LANDSCAPE = matchMedia("(orientation: landscape) and (max-height: 500px)");
+  const COARSE = matchMedia("(pointer: coarse)");
+  const phone = () => PORTRAIT.matches || LANDSCAPE.matches;
+  const vv = window.visualViewport;
+  const sheets = [...document.querySelectorAll(".sheet-host")];
+  const chatIn = $("chatIn"), msgs = $("msgs");
+
+  // The room is pinned to the *visual* viewport, so the iOS keyboard shrinks the chat instead of covering the input.
+  function fitViewport() {
+    const st = document.documentElement.style;
+    st.setProperty("--vvh", (vv ? vv.height : innerHeight) + "px");
+    st.setProperty("--vvtop", (vv ? vv.offsetTop : 0) + "px");
+    const wasStuck = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 40;
+    document.body.classList.toggle("kb", PORTRAIT.matches && COARSE.matches && document.activeElement === chatIn);
+    if (wasStuck) msgs.scrollTop = msgs.scrollHeight;
+  }
+  if (vv) { vv.addEventListener("resize", fitViewport); vv.addEventListener("scroll", fitViewport); }
+  addEventListener("resize", fitViewport);
+  chatIn.addEventListener("focus", () => { fitViewport(); setUnread(0); clearTimeout(hideT); });
+  chatIn.addEventListener("blur", () => { fitViewport(); if (!pinned) peek(); });
+
+  // sheets ("Change the wall", who's watching): open on desktop, collapsed bottom sheets on phones
+  const anySheet = () => phone() && sheets.some((d) => d.open);
+  const closeSheets = () => sheets.forEach((d) => (d.open = false));
+  sheets.forEach((d) => d.addEventListener("toggle", () => {
+    if (phone() && d.open) sheets.forEach((o) => o !== d && (o.open = false));
+    $("scrim").hidden = !anySheet();
+  }));
+  $("scrim").onclick = closeSheets;
+  document.querySelectorAll(".sheet-done").forEach((b) => (b.onclick = () => (b.closest("details").open = false)));
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && anySheet()) closeSheets(); });
+
+  // landscape: the bar fades after a few still seconds; chat peeks in on a message and hides again when quiet
+  let pinned = false, hideT = null, idleT = null, unread = 0;
+  function setUnread(n) { unread = n; $("unread").hidden = !n; $("unread").textContent = n > 9 ? "9+" : String(n); }
+  function chatOn(on) {
+    document.body.classList.toggle("chat-on", on);
+    $("chatToggle").setAttribute("aria-pressed", String(on));
+    if (on) msgs.scrollTop = msgs.scrollHeight;
+  }
+  function peek() {
+    if (!LANDSCAPE.matches) return;
+    if (!document.body.classList.contains("chat-on")) chatOn(true);
+    clearTimeout(hideT);
+    hideT = setTimeout(() => { if (!pinned && document.activeElement !== chatIn) chatOn(false); }, 5000);
+  }
+  $("chatToggle").onclick = () => {
+    pinned = !pinned; clearTimeout(hideT); chatOn(pinned);
+    if (pinned) setUnread(0); else chatIn.blur();
+  };
+  function wake() {
+    document.body.classList.remove("idle");
+    clearTimeout(idleT);
+    if (LANDSCAPE.matches) idleT = setTimeout(() => document.body.classList.add("idle"), 4000);
+  }
+  document.addEventListener("pointerdown", wake, { passive: true });
+
+  function applyMode() {
+    const p = phone();
+    sheets.forEach((d) => (d.open = !p));
+    $("scrim").hidden = true;
+    pinned = false; clearTimeout(hideT); chatOn(false); setUnread(0); wake();
+    fitViewport();
+  }
+  PORTRAIT.addEventListener("change", applyMode);
+  LANDSCAPE.addEventListener("change", applyMode);
 
   // ---- votes ----
   function propose(action) { send({ t: "propose", action }); }
@@ -328,6 +413,7 @@
   // ---- boot ----
   function showGate(msg) {
     $("room").hidden = true; $("gate").hidden = false;
+    document.body.classList.remove("inroom");
     if (msg) $("gateErr").textContent = msg;
   }
   const qs = new URLSearchParams(location.search), err = qs.get("error"), key = qs.get("k") || "";
@@ -342,6 +428,8 @@
       $("navRight").textContent = j.name + (j.guest ? " (guest)" : "");
       $("gate").hidden = true;
       $("room").hidden = false;
+      document.body.classList.add("inroom");
+      applyMode();
       connect();
     }).catch(() => showGate("Couldn't reach SharpLab."));
   }
