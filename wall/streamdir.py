@@ -240,7 +240,8 @@ class StreamDirector:
         for u, i in zip(new, free):
             cur = urls[i]
             sc, sn = scores.get(cur, 0.0), scores[u]
-            if sn - sc < MARGIN:
+            dead = cur not in scores   # not an on-air candidate (not started / ended / unheard): anything live beats it
+            if not dead and sn - sc < MARGIN:
                 log.debug("stream director: tile %d stays %s (margin %.2f)", i + 1, name_of(cur), sn - sc)
                 continue
             self._swap(inst, policy, i, u, now)
