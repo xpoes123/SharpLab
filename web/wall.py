@@ -1376,6 +1376,75 @@ async def hls(name: str, request: Request):
     return Response(hit[1], media_type=hit[2], headers={"Cache-Control": "no-store"})   # names repeat across wall restarts
 
 
+# ---- pop-out: the wall's election dashboards (wall/pages/election/*), read-only, for every tier that sees the page ----
+# Mounted at …/p/election/<file> + …/p/us-states.json so the pages' relative URLs (data.json, election.css,
+# ../us-states.json) resolve back through here. Exactly these files; the wall service's REMOTE_OK allows the same set.
+POP_FILE = re.compile(r"^(map|races|turnout|exitpoll|swing|election\.css|election\.js|(data|odds|turnout|exitpoll|swing)\.json)$")
+POP_TYPES = {"": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+             ".json": "application/json"}
+POP_JSON_S, POP_STATIC_S = 3.0, 60.0   # data: shared by every viewer for a few s; the page files change only on a deploy
+_pop: dict[str, tuple[float, bytes | int]] = {}
+_pop_locks: dict[str, asyncio.Lock] = {}
+
+
+async def fetch_pop(path: str) -> tuple[int, bytes]:
+    """GET a wall-service path over the HLS proxy's kept-alive client."""
+    global _upstream
+    c = cfg()
+    if _upstream is None or _upstream.is_closed:
+        _upstream = httpx.AsyncClient(timeout=10, limits=httpx.Limits(max_keepalive_connections=4, keepalive_expiry=60))
+    r = await _upstream.get(f"{c['service']}{path}", headers={"Authorization": f"Bearer {c['token']}"})
+    return r.status_code, r.content
+
+
+async def pop_get(path: str, ttl: float) -> bytes | int:
+    """The body (cached; one upstream fetch per expiry, shared by every viewer), or an error status (502 = unreachable)."""
+    hit = _pop.get(path)
+    if hit and hit[0] >= time.monotonic():
+        return hit[1]
+    async with _pop_locks.setdefault(path, asyncio.Lock()):
+        hit = _pop.get(path)
+        if hit and hit[0] >= time.monotonic():
+            return hit[1]
+        try:
+            code, body = await fetch_pop(path)
+        except httpx.HTTPError:
+            code, body = 502, b""
+        val: bytes | int = body if code == 200 else (404 if code == 404 else 502)
+        _pop[path] = (time.monotonic() + (ttl if code == 200 else 2.0), val)   # an outage is retried in 2 s, not per viewer
+        return val
+
+
+async def pop_serve(request: Request, path: str, ctype: str, ttl: float):
+    user = viewer(request)
+    if not user and not public_mode():
+        return JSONResponse({"error": "log in"}, status_code=401)
+    got = await pop_get(path, ttl)
+    if isinstance(got, int):
+        return JSONResponse({"error": "the election dashboards aren't reachable right now"}, status_code=got)
+    if path == "/p/election/data.json" and not user:   # the members' position chips (names + sides) aren't for the public
+        try:
+            snap = json.loads(got)
+            snap["holders"] = {}
+            got = json.dumps(snap, separators=(",", ":")).encode()
+        except (ValueError, TypeError):
+            return JSONResponse({"error": "bad upstream data"}, status_code=502)
+    return Response(got, media_type=ctype, headers={"Cache-Control": f"private, max-age={int(ttl)}", "X-Content-Type-Options": "nosniff"})
+
+
+@router.get("/p/election/{name}")
+async def pop_file(name: str, request: Request):
+    if not POP_FILE.match(name):
+        return JSONResponse({"error": "no such file"}, status_code=404)
+    ext = name[name.rfind("."):] if "." in name else ""
+    return await pop_serve(request, f"/p/election/{name}", POP_TYPES[ext], POP_JSON_S if ext == ".json" else POP_STATIC_S)
+
+
+@router.get("/p/us-states.json")
+async def pop_shapes(request: Request):
+    return await pop_serve(request, "/p/us-states.json", POP_TYPES[".json"], POP_STATIC_S)
+
+
 # ---- bot API (X-Api-Key = WEB_API_SECRET) ----------------------------------------------------------------------------
 @router.get("/state")
 async def bot_state(x_api_key: str = Header("")):

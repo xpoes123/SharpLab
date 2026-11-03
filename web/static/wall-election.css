@@ -19,6 +19,26 @@
 .el-chip { border: 1px solid var(--line); background: var(--panel2); color: var(--fg-2); border-radius: var(--r-pill); font: inherit;
   font-size: 12px; padding: 5px 11px; cursor: pointer; min-height: 32px; }
 .el-chip:hover, .el-segbtn:hover { color: var(--fg); }
+/* pop-out: the TV's dashboards (web/wall.py /p/election/*) at 16:9, as big as the viewport allows; full-screen on phones */
+.el-dash { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
+.el-dash-lbl { margin-right: 2px; }
+.el-pop { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; padding: 16px;
+  background: color-mix(in srgb, var(--bg) 78%, transparent); }
+.el-pop[hidden] { display: none; }
+.el-pop-box { display: flex; flex-direction: column; width: min(96vw, calc((92vh - 52px) * 16 / 9)); background: var(--panel);
+  border: 1px solid var(--line-strong); border-radius: var(--r-sm); box-shadow: var(--shadow-lg); overflow: hidden; }
+.el-pop-head { display: flex; align-items: center; gap: 12px; padding: 8px 10px 8px 14px; border-bottom: 1px solid var(--line); }
+.el-pop-title { margin-right: auto; font-size: 15px; color: var(--fg); }
+.el-pop-tab { color: var(--fg-2); text-decoration: none; }
+.el-pop-tab:hover { color: var(--fg); }
+.el-pop-frame { aspect-ratio: 16 / 9; background: #000; }
+.el-pop-frame iframe { display: block; width: 100%; height: 100%; border: 0; }
+body.pop-on { overflow: hidden; }
+@media (max-width: 700px), (orientation: landscape) and (max-height: 500px) {
+  .el-pop { padding: 0; }
+  .el-pop-box { width: 100%; height: 100%; border: 0; border-radius: 0; }
+  .el-pop-frame { aspect-ratio: auto; flex: 1; }
+}
 .el-bal { margin: 10px 0 4px; }
 .el-nums { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .el-nums b { font-size: 18px; font-variant-numeric: tabular-nums; white-space: nowrap; }

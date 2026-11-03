@@ -799,6 +799,92 @@ def public(demo, monkeypatch):
     return demo
 
 
+# ---- pop-out: the wall's election dashboards through /api/v1/wall/p/* ---------------------------------------------------
+@pytest.fixture
+def pop_upstream(monkeypatch):
+    calls = []
+    files = {"/p/election/map": b"<!doctype html>map", "/p/election/election.css": b"body{}", "/p/election/election.js": b"1",
+             "/p/election/data.json": b'{"races":[],"holders":{"S-PA":[{"who":"Kim","chip":"YES D","won":null}]}}',
+             "/p/election/odds.json": b'{"odds":{}}', "/p/us-states.json": b'{"PA":"M0"}'}
+
+    async def upstream(path):
+        calls.append(path)
+        return (200, files[path]) if path in files else (404, b"")
+    monkeypatch.setattr(wall, "fetch_pop", upstream)
+    wall._pop.clear()
+    return calls
+
+
+def test_pop_allow_list_types_and_cache(public, pop_upstream, monkeypatch):
+    client, *_ = public
+    client.cookies.clear()
+    for path, ctype in [("p/election/map", "text/html"), ("p/election/election.css", "text/css"), ("p/election/election.js", "text/javascript"),
+                        ("p/election/odds.json", "application/json"), ("p/us-states.json", "application/json")]:
+        r = client.get("/api/v1/wall/" + path)
+        assert r.status_code == 200 and r.headers["content-type"].startswith(ctype) and r.headers["x-content-type-options"] == "nosniff", path
+    assert client.get("/api/v1/wall/p/election/map?view=H").status_code == 200   # the page reads ?view itself
+    n = len(pop_upstream)
+    for bad in ("p/election/board.json", "p/election/map.html", "p/election/other", "p/election/..%2Fsecret", "p/election/data.json.bak",
+                "p/other", "p/us-states.json/x"):
+        assert client.get("/api/v1/wall/" + bad).status_code == 404, bad
+    assert len(pop_upstream) == n                                          # refused here, never asked upstream
+    assert client.get("/api/v1/wall/p/election/swing").status_code == 404  # upstream 404 passes through
+    # caching: json a few seconds, the page files a minute, one upstream fetch shared by every viewer
+    t = [1000.0]
+    monkeypatch.setattr(wall.time, "monotonic", lambda: t[0])
+    wall._pop.clear()
+    pop_upstream.clear()
+    for _ in range(3):
+        client.get("/api/v1/wall/p/election/odds.json")
+        client.get("/api/v1/wall/p/election/map")
+    assert pop_upstream == ["/p/election/odds.json", "/p/election/map"]
+    t[0] += wall.POP_JSON_S + 0.1
+    client.get("/api/v1/wall/p/election/odds.json")
+    client.get("/api/v1/wall/p/election/map")
+    assert pop_upstream[2:] == ["/p/election/odds.json"]
+    t[0] += wall.POP_STATIC_S
+    client.get("/api/v1/wall/p/election/map")
+    assert pop_upstream[-1] == "/p/election/map"
+    assert 2 <= wall.POP_JSON_S <= 5 and wall.POP_STATIC_S == 60
+
+
+def test_pop_every_tier_but_holders_only_for_members_and_friends(public, pop_upstream):
+    client, *_ = public
+    client.cookies.clear()
+    assert client.get("/api/v1/wall/p/election/data.json").json()["holders"] == {}   # public: the data, no member positions
+    join_as_guest(client, "Kim")
+    assert client.get("/api/v1/wall/p/election/data.json").json()["holders"]["S-PA"][0]["who"] == "Kim"   # friend
+    client.cookies.clear()
+    for k, v in cookie("300", "Steph").items():
+        client.cookies.set(k, v)
+    assert client.get("/api/v1/wall/p/election/data.json").json()["holders"]["S-PA"]                      # member
+    assert client.get("/api/v1/wall/p/election/map").status_code == 200
+
+
+def test_pop_needs_a_viewer_outside_public_mode_and_survives_an_outage(setup, pop_upstream, monkeypatch):
+    client, *_ = setup
+    client.cookies.clear()
+    assert client.get("/api/v1/wall/p/election/map").status_code == 401
+    for k, v in cookie("300").items():
+        client.cookies.set(k, v)
+    assert client.get("/api/v1/wall/p/election/map").status_code == 200
+
+    async def down(path):
+        raise wall.httpx.ConnectError("down")
+    monkeypatch.setattr(wall, "fetch_pop", down)
+    wall._pop.clear()
+    assert client.get("/api/v1/wall/p/election/map").status_code == 502
+    assert {"/api/v1/wall/p/election/{name}", "/api/v1/wall/p/us-states.json"} <= {getattr(r, "path", "") for r in wall.router.routes}
+
+
+def test_pop_is_rate_limited(setup, pop_upstream):
+    client, *_ = setup
+    for k, v in cookie("300").items():
+        client.cookies.set(k, v)
+    codes = [client.get("/api/v1/wall/p/election/odds.json").status_code for _ in range(60)]
+    assert codes[0] == 200 and 429 in codes   # the wall_guard read bucket (burst 40) applies here too
+
+
 def test_public_me_is_data_only_and_the_key_still_offers_the_join(public):
     client, *_ = public
     client.cookies.clear()

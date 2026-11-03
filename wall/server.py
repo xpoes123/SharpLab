@@ -49,7 +49,9 @@ from wall.breaks import BreakLog
 
 log = logging.getLogger("wall.server")
 TAILNET = ipaddress.ip_network("100.64.0.0/10")
-REMOTE_OK = re.compile(r"^/(healthz|teams|live/[a-z]+|presets|sync|i/discord(/.*)?|hls/discord/[A-Za-z0-9_.]+|p/election/(turnout|exitpoll|swing)\.json)$")
+# p/election/…: the election dashboards + their assets + their data, for the watch page's pop-out (web/wall.py POP_FILE); no other /p/ path
+REMOTE_OK = re.compile(r"^/(healthz|teams|live/[a-z]+|presets|sync|i/discord(/.*)?|hls/discord/[A-Za-z0-9_.]+|p/us-states\.json|"
+                       r"p/election/(map|races|turnout|exitpoll|swing|election\.css|election\.js|(data|odds|turnout|exitpoll|swing)\.json))$")
 HLS_FILE = re.compile(r"^(index\.m3u8|seg\d{6}\.ts)$")
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 PAGES = (Path(__file__).parent / "pages").resolve()
@@ -441,7 +443,8 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         auth = request.headers.get("authorization", "")
         if not cfg.token or not secrets.compare_digest(auth, f"Bearer {cfg.token}"):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        if not REMOTE_OK.match(request.url.path) or (request.url.path == "/presets" and request.method != "GET"):
+        if not REMOTE_OK.match(request.url.path) or \
+                (request.url.path == "/presets" or request.url.path.startswith("/p/")) and request.method not in ("GET", "HEAD"):
             return JSONResponse({"error": "not for remote callers"}, status_code=403)
         return await call_next(request)
 
