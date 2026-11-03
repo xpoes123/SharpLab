@@ -364,6 +364,11 @@ class WallCog(commands.Cog):
         self.announced = started
         self.save()
         ch_id = announce_target(st, self.last, CHANNEL_ID)
+        same = [g for g, (c, _) in self.embeds.items() if c == ch_id]
+        if same:   # that channel already has the /wall embed (restarts, redeploys, repeat starts): update it, no new message
+            for gid in same:
+                await self.refresh(gid)
+            return False
         ch = self.bot.get_channel(ch_id) if ch_id else None
         if ch is None:
             log.info("wall started, but no channel to post the link in (%s)", ch_id)
