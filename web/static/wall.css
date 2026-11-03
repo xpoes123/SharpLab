@@ -147,6 +147,7 @@ button.star[aria-pressed="true"] { color: var(--gold); }
     grid-template-areas: "player player" "bar bar" "viewers ctl" "props props" "chat chat"; }
   .stage, .side { display: contents; }
   .player { grid-area: player; border-radius: 0; }
+  body:not(.public) .player { width: 100%; min-height: calc(100vw * 9 / 16); }   /* never squeezed by a short room */
   /* the phone grid is fixed-height (player · bar · strip · chat): panels without an area pushed the player to 0 px.
      Bets and the live feed live in the Election sheet on phones instead (wall-election.js moves them there). */
   #room > .stage > #betsPanel, #room > .stage > .lv-feed { display: none; }
