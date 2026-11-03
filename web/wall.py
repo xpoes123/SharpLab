@@ -1184,11 +1184,56 @@ async def login(t: str = ""):
     return resp
 
 
+_upstream: httpx.AsyncClient | None = None
+
+
 async def fetch_upstream(name: str) -> tuple[int, bytes, str]:
+    """One kept-alive connection to the wall service: a new one per 1 s segment never got out of TCP slow start, so a
+    0.6 MB segment took ~1.5 s over the homelab's ~8 Mbps uplink and every browser stalled."""
+    global _upstream
     c = cfg()
-    async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.get(f"{c['service']}/hls/discord/{name}", headers={"Authorization": f"Bearer {c['token']}"})
+    if _upstream is None or _upstream.is_closed:
+        _upstream = httpx.AsyncClient(timeout=10, limits=httpx.Limits(max_keepalive_connections=4, keepalive_expiry=60))
+    r = await _upstream.get(f"{c['service']}/hls/discord/{name}", headers={"Authorization": f"Bearer {c['token']}"})
     return r.status_code, r.content, r.headers.get("content-type", "")
+
+
+async def hls_get(name: str) -> tuple | None:
+    """(expires, body, content type) from the cache, else one upstream fetch shared by everyone asking; None = down."""
+    playlist = name.endswith(".m3u8")
+    ctype = "application/vnd.apple.mpegurl" if playlist else "video/mp2t"
+    hit = _cache.get(name)
+    if hit and hit[0] >= time.monotonic():
+        return hit
+    async with _locks.setdefault(name, asyncio.Lock()):
+        hit = _cache.get(name)
+        if hit and hit[0] >= time.monotonic():
+            return hit
+        try:
+            code, body, _ = await fetch_upstream(name)
+        except httpx.HTTPError:
+            return None
+        if code != 200:
+            return (0.0, code, ctype)
+        hit = (time.monotonic() + (0.5 if playlist else 60), body, ctype)
+        if playlist:
+            text = body.decode("utf-8", "replace")
+            seq = re.search(r"#EXT-X-MEDIA-SEQUENCE:(\d+)", text)
+            if seq and int(seq.group(1)) < _seq[0]:   # the wall restarted: same segment names, new video
+                for k in [k for k in _cache if k != name]:
+                    _cache.pop(k, None)
+            _seq[0] = int(seq.group(1)) if seq else 0
+            await hub.observe_playlist(text)
+            # prefetch: the newest segments start coming over now, before the first player asks for them
+            for seg in re.findall(r"^(seg\d+\.ts)$", text, re.M)[-3:]:
+                if seg not in _cache and not (_locks.get(seg) and _locks[seg].locked()):
+                    asyncio.create_task(hls_get(seg))
+        _cache[name] = hit
+        for k, v in list(_cache.items()):   # expired segments go now: ~0.5 MB each, on a 2 GB VPS
+            if v[0] < time.monotonic():
+                _cache.pop(k, None)
+                _locks.pop(k, None)
+        return hit
 
 
 @router.get("/hls/{name}")
@@ -1197,35 +1242,11 @@ async def hls(name: str, request: Request):
         return JSONResponse({"error": "log in"}, status_code=401)
     if not _HLS_NAME.match(name):
         return JSONResponse({"error": "no such file"}, status_code=404)
-    playlist = name.endswith(".m3u8")
-    ctype = "application/vnd.apple.mpegurl" if playlist else "video/mp2t"
-    now = time.monotonic()
-    hit = _cache.get(name)
-    if not hit or hit[0] < now:
-        async with _locks.setdefault(name, asyncio.Lock()):
-            hit = _cache.get(name)
-            if not hit or hit[0] < time.monotonic():
-                try:
-                    code, body, _ = await fetch_upstream(name)
-                except httpx.HTTPError:
-                    return JSONResponse({"error": "the wall isn't streaming"}, status_code=502)
-                if code != 200:
-                    return JSONResponse({"error": "the wall isn't streaming"}, status_code=404 if code == 404 else 502)
-                hit = (time.monotonic() + (0.5 if playlist else 60), body, ctype)
-                if playlist:
-                    text = body.decode("utf-8", "replace")
-                    seq = re.search(r"#EXT-X-MEDIA-SEQUENCE:(\d+)", text)
-                    if seq and int(seq.group(1)) < _seq[0]:   # the wall restarted: same segment names, new video
-                        for k in [k for k in _cache if k != name]:
-                            _cache.pop(k, None)
-                    _seq[0] = int(seq.group(1)) if seq else 0
-                    await hub.observe_playlist(text)
-                _cache[name] = hit
-                for k, v in list(_cache.items()):   # expired segments go now: ~0.5 MB each, on a 2 GB VPS
-                    if v[0] < time.monotonic():
-                        _cache.pop(k, None)
-                        _locks.pop(k, None)
-    return Response(hit[1], media_type=ctype, headers={"Cache-Control": "no-store"})   # names repeat across wall restarts
+    hit = await hls_get(name)
+    if hit is None or not isinstance(hit[1], bytes):
+        code = hit[1] if hit else 502
+        return JSONResponse({"error": "the wall isn't streaming"}, status_code=404 if code == 404 else 502)
+    return Response(hit[1], media_type=hit[2], headers={"Cache-Control": "no-store"})   # names repeat across wall restarts
 
 
 # ---- bot API (X-Api-Key = WEB_API_SECRET) ----------------------------------------------------------------------------
