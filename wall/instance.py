@@ -15,7 +15,7 @@ from wall.engine import Driver, Session, sound_tile
 from wall.headless import Headless, free_vram_mb
 from wall.live import LEAGUES, REFRESH_S, LiveRun, Scores, carries, matchup
 from wall.presets import PresetStore, check_url
-from wall.rotate import Rotation, next_url, screen
+from wall.rotate import EVERY_S, MARK, Rotation, next_url, screen
 
 log = logging.getLogger("wall.instance")
 APP_POLL_S = 2.0   # how often a TV wall asks the TV OS what it shows
@@ -305,6 +305,23 @@ class Instance:
             self.live.pinned ^= {i}
             self._bump()
             return self.state()
+
+    def show_screen(self, key: str, for_s: float = 2 * EVERY_S) -> bool:
+        """An event (a race call…): put that data screen ("map?view=S") on a rotating tile nobody is holding, for a while.
+        Nothing when it's already up, every rotating tile is held, or this wall mirrors another."""
+        with self.lock:
+            if not self.urls or self.follow or any(screen(u) == key for u in self.urls):
+                return False
+            now = self.clock()
+            free = [i for i, u in enumerate(self.urls) if screen(u) and self.rot.held.get(i, 0.0) <= now]
+            if not free:
+                return False
+            i = free[0]
+            self.urls[i] = self.urls[i].split(MARK, 1)[0] + MARK + key
+            self.driver.set_tile(i, self.urls[i])
+            self.rot.at[i] = now + for_s
+            self._bump()
+            return True
 
     def rotate(self, i: int, act: str) -> dict:
         """A rotating data tile: "hold" keeps its screen, "next" moves it on now; either way it then stays put HOLD_S."""

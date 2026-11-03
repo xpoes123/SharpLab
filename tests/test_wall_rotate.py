@@ -22,3 +22,20 @@ def test_due_staggers_and_holds():
     assert r.due(URLS, 100 + HOLD_S - 1) == [] or all(i != 0 for i, _ in r.due(URLS, 100 + HOLD_S - 1))
     assert {v["i"]: v["held"] for v in r.view(URLS, 101)} == {0: True, 1: False}
     assert 0 in [i for i, _ in r.due(URLS, 100 + HOLD_S)]            # the hold runs out: rotates again by itself
+
+
+def test_show_screen_skips_held_tiles_and_screens_already_up():
+    from types import SimpleNamespace
+    from wall.instance import Instance
+    t = [100.0]
+    got = []
+    i = Instance.__new__(Instance)
+    import threading
+    i.lock, i.follow, i.clock, i.rot = threading.RLock(), False, lambda: t[0], Rotation()
+    i.urls = [B + "races", B + "map?view=S", URLS[2]]
+    i.driver = SimpleNamespace(set_tile=lambda k, u: got.append((k, u)))
+    i._bump = lambda: None
+    assert not i.show_screen("map?view=S")                # already up
+    i.rot.hold(0, t[0])                                   # a vote holds tile 1
+    assert i.show_screen("map?view=G") and got == [(1, B + "map?view=G")]
+    assert i.rot.at[1] == t[0] + 2 * EVERY_S

@@ -40,6 +40,7 @@ from wall.spotlight import Odds, Spotlight, state_list
 from wall.sync import STEP_S, Runner, SyncStore, tile_games
 from wall.exitpoll import ExitPoll
 from wall.turnout import Turnout
+from wall.events import Events
 
 log = logging.getLogger("wall.server")
 TAILNET = ipaddress.ip_network("100.64.0.0/10")
@@ -269,9 +270,25 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
                         await asyncio.to_thread(odds.refresh)
                     except Exception as e:  # noqa: BLE001
                         log.warning("odds: %s", e)
+        events = Events()
+
+        async def events_ticker():   # election night: a race call / first votes → on top of the spotlight + its map on a tile
+            while True:
+                await asyncio.sleep(5)
+                tv = instances.get("tv")
+                if not results.updated or not (tv and tv.urls):
+                    continue
+                try:
+                    for e in events.check(results.snapshot()):
+                        log.info("event: %s %s", e["by"], e["race"])
+                        await asyncio.to_thread(spot.set, e["state"], e["by"], e["race"])
+                        await asyncio.to_thread(tv.show_screen, f"map?view={e['office']}")
+                except Exception as e:  # noqa: BLE001
+                    log.warning("events: %s", e)
         runner.start()
         tasks = [asyncio.create_task(ticker()), asyncio.create_task(chat_ticker()), asyncio.create_task(bets_ticker()),
-                 asyncio.create_task(spot_ticker()), asyncio.create_task(odds_ticker())]
+                 asyncio.create_task(spot_ticker()), asyncio.create_task(odds_ticker()),
+                 asyncio.create_task(events_ticker())]
         yield
         for task in tasks:
             task.cancel()
