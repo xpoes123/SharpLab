@@ -1070,7 +1070,7 @@ async def bot_chat_post(request: Request, x_api_key: str = Header("")):
         return JSONResponse({"error": "body must be a JSON object"}, status_code=422)
     user = _bot_user(body)
     known = hub.presence.users.get(user["id"])
-    if known and not body.get("name"):
+    if known:   # watching on the page too: the same name + avatar as there
         user = {**user, "name": known["name"], "avatar": known.get("avatar")}
     m, err = await hub.post_chat(user, body.get("text"))
     if not m:

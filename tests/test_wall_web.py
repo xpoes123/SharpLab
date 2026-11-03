@@ -661,8 +661,8 @@ def test_chat_api_feed_after_viewers_and_post_as_owner(setup):
     assert "uid" not in feed["messages"][0] and "avatar" not in feed["messages"][0]
     assert feed["watching"] == 2 and {v["name"] for v in feed["viewers"]} == {"David", "Kim (guest)"}
     clock.t += 2
-    r = client.post("/api/v1/wall/chat", headers=h, json={"discord_id": OWNER, "text": "from the couch"})
-    assert r.status_code == 200 and r.json()["msg"]["name"] == "David"   # the name he watches under
+    r = client.post("/api/v1/wall/chat", headers=h, json={"discord_id": OWNER, "name": "Dave (TV)", "text": "from the couch"})
+    assert r.status_code == 200 and r.json()["msg"]["name"] == "David"   # the name he watches under wins
     after = client.get(f"/api/v1/wall/chat?after={feed['last']}", headers=h).json()
     assert [m["text"] for m in after["messages"]] == ["from the couch"] and len(after["ids"]) == 2
     # the owner's own rate limit applies (1 message / 1.5 s)

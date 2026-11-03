@@ -116,7 +116,7 @@ class ChatFeed:
     def post(self, text: str) -> tuple[int, dict]:
         """POST /chat: as the owner. (status, body) — the web's own answer (429 too fast, 403 muted, 422 empty)."""
         try:
-            status, data = self.http("POST", "/api/v1/wall/chat", {"discord_id": self.owner_id, "text": text})
+            status, data = self.http("POST", "/api/v1/wall/chat", {"discord_id": self.owner_id, "name": self.owner_name, "text": text})
         except (OSError, ValueError) as e:
             return 502, {"error": f"couldn't reach the watch page: {e}"[:160]}
         data = data if isinstance(data, dict) else {}

@@ -98,7 +98,7 @@ def test_post_goes_as_the_owner_and_shows_at_once():
     f, web = feed()
     f.poll(1000.0)
     status, out = f.post("hello from the couch")
-    assert status == 200 and web.calls[-1] == ("POST", "/api/v1/wall/chat", {"discord_id": OWNER, "text": "hello from the couch"})
+    assert status == 200 and web.calls[-1] == ("POST", "/api/v1/wall/chat", {"discord_id": OWNER, "name": "David", "text": "hello from the couch"})
     assert [m["text"] for m in f.messages] == ["hello from the couch"]
     f.poll(1000.0)
     assert len(f.messages) == 1   # the next poll doesn't add it twice
