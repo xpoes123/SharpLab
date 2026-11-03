@@ -281,6 +281,7 @@ class StreamDirector:
             if not e or e.get("important") is None or e["important"] >= HOLD_IMPORTANT:
                 return [], ""
         hot = [u for u in board.fresh() if u not in urls and not own_page(u) and board.is_(u, "coverage", 0, now)
+               and not spectrum.held(u, now)
                and (board.get(u).get("important") or 0) >= JUMP_IMPORTANT and now - self.jumped_to.get(u, -1e9) >= JUMP_STREAM_GAP_S]
         open_ = [i for i in tiles if policy.paused.get(i, 0.0) <= now]
         if not hot or not open_:
