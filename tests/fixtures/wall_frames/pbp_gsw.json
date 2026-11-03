@@ -1,0 +1,284 @@
+{
+"plays": [
+{
+"wallclock": "2026-11-03T04:52:01Z",
+"awayScore": 76,
+"homeScore": 73,
+"scoringPlay": true,
+"text": "Dillon Brooks makes free throw 1 of 2"
+},
+{
+"wallclock": "2026-11-03T04:52:17Z",
+"awayScore": 77,
+"homeScore": 73,
+"scoringPlay": true,
+"text": "Dillon Brooks makes free throw 2 of 2"
+},
+{
+"wallclock": "2026-11-03T04:52:33Z",
+"awayScore": 79,
+"homeScore": 73,
+"scoringPlay": true,
+"text": "Devin Booker makes 1-foot running dunk (Dillon Brooks assist"
+},
+{
+"wallclock": "2026-11-03T04:52:48Z",
+"awayScore": 79,
+"homeScore": 75,
+"scoringPlay": true,
+"text": "Georges Niang makes 5-foot driving floating jump shot (Gary "
+},
+{
+"wallclock": "2026-11-03T04:52:48Z",
+"awayScore": 79,
+"homeScore": 76,
+"scoringPlay": true,
+"text": "Georges Niang makes free throw 1 of 1"
+},
+{
+"wallclock": "2026-11-03T04:53:24Z",
+"awayScore": 81,
+"homeScore": 76,
+"scoringPlay": true,
+"text": "Jalen Green makes driving layup"
+},
+{
+"wallclock": "2026-11-03T04:53:44Z",
+"awayScore": 81,
+"homeScore": 79,
+"scoringPlay": true,
+"text": "Stephen Curry makes 22-foot three pointer (Georges Niang ass"
+},
+{
+"wallclock": "2026-11-03T04:54:07Z",
+"awayScore": 83,
+"homeScore": 79,
+"scoringPlay": true,
+"text": "Oso Ighodaro makes 2-foot dunk (Devin Booker assists)"
+},
+{
+"wallclock": "2026-11-03T04:57:29Z",
+"awayScore": 83,
+"homeScore": 81,
+"scoringPlay": true,
+"text": "Charles Bassey makes 2-foot alley oop dunk (Yaxel Lendeborg "
+},
+{
+"wallclock": "2026-11-03T04:57:43Z",
+"awayScore": 86,
+"homeScore": 81,
+"scoringPlay": true,
+"text": "Dillon Brooks makes 27-foot three point jumper (Oso Ighodaro"
+},
+{
+"wallclock": "2026-11-03T04:58:03Z",
+"awayScore": 86,
+"homeScore": 84,
+"scoringPlay": true,
+"text": "Stephen Curry makes 25-foot three point step back jumpshot"
+},
+{
+"wallclock": "2026-11-03T04:58:23Z",
+"awayScore": 88,
+"homeScore": 84,
+"scoringPlay": true,
+"text": "Dillon Brooks makes driving layup (Jalen Green assists)"
+},
+{
+"wallclock": "2026-11-03T04:59:38Z",
+"awayScore": 88,
+"homeScore": 85,
+"scoringPlay": true,
+"text": "Yaxel Lendeborg makes free throw 1 of 2"
+},
+{
+"wallclock": "2026-11-03T04:59:54Z",
+"awayScore": 88,
+"homeScore": 86,
+"scoringPlay": true,
+"text": "Yaxel Lendeborg makes free throw 2 of 2"
+},
+{
+"wallclock": "2026-11-03T05:00:07Z",
+"awayScore": 90,
+"homeScore": 86,
+"scoringPlay": true,
+"text": "Oso Ighodaro makes 3-foot dunk (Jalen Green assists)"
+},
+{
+"wallclock": "2026-11-03T05:02:33Z",
+"awayScore": 90,
+"homeScore": 87,
+"scoringPlay": true,
+"text": "Yaxel Lendeborg makes free throw 2 of 2"
+},
+{
+"wallclock": "2026-11-03T05:05:09Z",
+"awayScore": 90,
+"homeScore": 88,
+"scoringPlay": true,
+"text": "Charles Bassey makes free throw 1 of 2"
+},
+{
+"wallclock": "2026-11-03T05:05:35Z",
+"awayScore": 90,
+"homeScore": 89,
+"scoringPlay": true,
+"text": "Charles Bassey makes free throw 2 of 2"
+},
+{
+"wallclock": "2026-11-03T05:05:47Z",
+"awayScore": 93,
+"homeScore": 89,
+"scoringPlay": true,
+"text": "Ryan Dunn makes 24-foot three point jumper (Devin Booker ass"
+},
+{
+"wallclock": "2026-11-03T05:09:20Z",
+"awayScore": 93,
+"homeScore": 90,
+"scoringPlay": true,
+"text": "Yaxel Lendeborg makes free throw 1 of 2"
+},
+{
+"wallclock": "2026-11-03T05:09:34Z",
+"awayScore": 93,
+"homeScore": 91,
+"scoringPlay": true,
+"text": "Yaxel Lendeborg makes free throw 2 of 2"
+},
+{
+"wallclock": "2026-11-03T05:10:48Z",
+"awayScore": 93,
+"homeScore": 93,
+"scoringPlay": true,
+"text": "Brandin Podziemski makes 6-foot driving floating jump shot ("
+},
+{
+"wallclock": "2026-11-03T05:15:02Z",
+"awayScore": 93,
+"homeScore": 95,
+"scoringPlay": true,
+"text": "Charles Bassey makes 2-foot layup (Stephen Curry assists)"
+},
+{
+"wallclock": "2026-11-03T05:16:40Z",
+"awayScore": 95,
+"homeScore": 95,
+"scoringPlay": true,
+"text": "Ryan Dunn makes 5-foot layup (Jalen Green assists)"
+},
+{
+"wallclock": "2026-11-03T05:16:59Z",
+"awayScore": 95,
+"homeScore": 97,
+"scoringPlay": true,
+"text": "Stephen Curry makes 3-foot two point shot (De'Anthony Melton"
+},
+{
+"wallclock": "2026-11-03T05:18:06Z",
+"awayScore": 96,
+"homeScore": 97,
+"scoringPlay": true,
+"text": "Miles Bridges makes free throw 1 of 2"
+},
+{
+"wallclock": "2026-11-03T05:18:29Z",
+"awayScore": 97,
+"homeScore": 97,
+"scoringPlay": true,
+"text": "Miles Bridges makes free throw 2 of 2"
+},
+{
+"wallclock": "2026-11-03T05:18:41Z",
+"awayScore": 97,
+"homeScore": 99,
+"scoringPlay": true,
+"text": "Gary Payton II makes layup (Stephen Curry assists)"
+},
+{
+"wallclock": "2026-11-03T05:19:45Z",
+"awayScore": 97,
+"homeScore": 101,
+"scoringPlay": true,
+"text": "Brandin Podziemski makes 11-foot two point shot"
+},
+{
+"wallclock": "2026-11-03T05:21:03Z",
+"awayScore": 97,
+"homeScore": 102,
+"scoringPlay": true,
+"text": "Yaxel Lendeborg makes free throw 1 of 2"
+},
+{
+"wallclock": "2026-11-03T05:21:31Z",
+"awayScore": 97,
+"homeScore": 103,
+"scoringPlay": true,
+"text": "Yaxel Lendeborg makes free throw 2 of 2"
+},
+{
+"wallclock": "2026-11-03T05:24:36Z",
+"awayScore": 97,
+"homeScore": 104,
+"scoringPlay": true,
+"text": "Yaxel Lendeborg makes technical free throw"
+},
+{
+"wallclock": "2026-11-03T05:24:58Z",
+"awayScore": 100,
+"homeScore": 104,
+"scoringPlay": true,
+"text": "Miles Bridges makes 25-foot three point jumper (Oso Ighodaro"
+},
+{
+"wallclock": "2026-11-03T05:25:33Z",
+"awayScore": 102,
+"homeScore": 104,
+"scoringPlay": true,
+"text": "Jalen Green makes driving layup (Miles Bridges assists)"
+},
+{
+"wallclock": "2026-11-03T05:28:57Z",
+"awayScore": 104,
+"homeScore": 104,
+"scoringPlay": true,
+"text": "Jalen Green makes tip in dunk"
+},
+{
+"wallclock": "2026-11-03T05:29:59Z",
+"awayScore": 106,
+"homeScore": 104,
+"scoringPlay": true,
+"text": "Dillon Brooks makes 16-foot pullup jump shot"
+},
+{
+"wallclock": "2026-11-03T05:31:23Z",
+"awayScore": 106,
+"homeScore": 105,
+"scoringPlay": true,
+"text": "Charles Bassey makes free throw 1 of 2"
+},
+{
+"wallclock": "2026-11-03T05:31:23Z",
+"awayScore": 106,
+"homeScore": 106,
+"scoringPlay": true,
+"text": "Charles Bassey makes free throw 2 of 2"
+},
+{
+"wallclock": "2026-11-03T05:33:17Z",
+"awayScore": 106,
+"homeScore": 109,
+"scoringPlay": true,
+"text": "Georges Niang makes 24-foot three point jumper (De'Anthony M"
+},
+{
+"wallclock": "2026-11-03T05:33:32Z",
+"awayScore": 108,
+"homeScore": 109,
+"scoringPlay": true,
+"text": "Devin Booker makes 9-foot floating jump shot (Miles Bridges "
+}
+]
+}

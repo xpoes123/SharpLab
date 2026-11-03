@@ -264,6 +264,11 @@ class Scores:
         live = any(g["state"] == "in" or (g["state"] == "pre" and _ts(g["start"]) < soon) for g in data.get("games") or [])
         return 20 if live else 300
 
+    def peek(self, league: str) -> dict | None:
+        """The cached scoreboard, never a fetch (for state() and the overlay, which must not block on ESPN)."""
+        with self._lock:
+            return self.snaps.get(league, (0.0, None))[1]
+
     def get(self, league: str, fresh: bool = False) -> dict | None:
         if league not in PATHS:
             return None
@@ -288,7 +293,8 @@ def live_games(scores: dict | None, league: str, n: int = 4) -> list[dict]:
     for g in rank(scores):
         u = stream_url(league, g)
         if u:
-            out.append({"id": g["id"], "label": matchup(g), "state": g["state"], "url": u})
+            out.append({"id": g["id"], "label": matchup(g), "state": g["state"], "url": u,
+                        "away": g["away"]["abbr"], "home": g["home"]["abbr"], "start": g.get("start") or ""})
         if len(out) >= n:
             break
     return out

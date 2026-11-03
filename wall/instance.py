@@ -66,6 +66,7 @@ class Instance:
         self.screen_sink = ""                   # whose sound goes with it ("" = the TV's default sink)
         self.tv_on_wall = lambda: True          # is the TV showing its wall right now?
         self._tv_wall, self._wall_at, self._screen_retry = False, 0.0, 0.0
+        self.sync = None                        # wall/sync.SyncStore: the spoiler delay per tile page (set by the server)
 
     # ---- state -------------------------------------------------------------------------------------------------------
     def _bump(self) -> None:
@@ -89,6 +90,8 @@ class Instance:
                    "overlay": {"board": self.board, "visible": self.visible, "layout": self.layout, "view": self.view},
                    "started": self.started, "error": self.error, "stopped": self.stopped_why,
                    "mirror": self.follow, "notice": self.notice, "origin": self.origin}
+            if self.sync is not None:
+                out["sync"] = self.sync_view()
             if self.headless:
                 out["capture"] = "screen" if self.screen else "tiles" if self.urls else ""
             if self.headless:
@@ -291,6 +294,15 @@ class Instance:
         self.ov_rev += 1
         if self.urls:
             self.driver.overlay(self.view, lbar=self.view == "lbar")
+
+    def sync_view(self) -> dict:
+        """The spoiler delay of each tile (+ its game), for the web's Bets panel and the overlay."""
+        from wall.sync import tile_games
+        with self.lock:
+            urls = list(self.urls)
+        games = tile_games(self, self.scores)
+        return {"show": self.sync.show, "default": self.sync.default,
+                "tiles": [{**t, "game": g} for t, g in zip(self.sync.tiles(urls), games)]}
 
     def overlay_view(self) -> dict:
         return {"view": self.view, "rev": self.ov_rev}
