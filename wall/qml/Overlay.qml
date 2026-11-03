@@ -9,7 +9,11 @@
 //            grid (wall.py's KWin script tiles with the same function). One poll: the band reads the sidebar's data.
 //   full:    the whole screen, per-pixel 90 % background.
 //   matchup: the whole screen, opaque: the league the phone opened.
-//   qml6 Overlay.qml -- --api http://127.0.0.1:7790
+//   bands:   (any view but full / matchup) up to two more surfaces, exactly the bands the tiles leave above and below
+//            them (lbar.js wallBands; 2 and 3 tiles leave some, 1 and 4 fill their 16:9 area): Bands.qml, from GET
+//            <--bands>/bands every 2 s (this service, which knows the tiles, their games and their spoiler delays).
+//            Exclusive zone 0: KWin keeps them out of the L-bar's reserved edges, so the bottom one sits on the L-bar's band.
+//   qml6 Overlay.qml -- --api http://127.0.0.1:7790 [--bands http://127.0.0.1:7795/i/tv]
 import QtQuick
 import QtQuick.Window
 import org.kde.layershell 1.0 as LayerShell
@@ -46,6 +50,26 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
         x.send()
     }
     Timer { interval: 500; running: true; repeat: true; triggeredOnStart: true; onTriggered: app.pollView() }
+
+    // the bands around the tiles: their own poll (the wall service, not the --api router)
+    readonly property string bandsApi: arg("--bands", "")
+    property var bands: null
+    property string bandsJson: ""
+    function pollBands() {
+        var x = new XMLHttpRequest()
+        x.onreadystatechange = function () {
+            if (x.readyState !== XMLHttpRequest.DONE) return
+            if (x.status !== 200) { if (app.bandsJson !== "") { app.bandsJson = ""; app.bands = null }; return }
+            if (x.responseText === app.bandsJson) return   // unchanged: no re-render
+            try { app.bands = JSON.parse(x.responseText); app.bandsJson = x.responseText } catch (e) {}
+        }
+        x.open("GET", app.bandsApi + "/bands")
+        x.send()
+    }
+    Timer { interval: 2000; running: app.bandsApi !== ""; repeat: true; triggeredOnStart: true; onTriggered: app.pollBands() }
+    readonly property var bandGeo: app.bands && app.bands.n > 0 ? G.wallBands(app.bands.n, Screen.width, Screen.height, app.bands.lbar) : null
+    readonly property bool bandsOn: app.bandGeo !== null && app.layout !== "full" && app.layout !== "matchup"
+    readonly property real bandMin: Screen.width / 120 * 3   // thinner than 3 rem: not worth a surface
 
     // every picture the matchup panel can show, kept decoded (same source size / fill as Board.qml's Pic) so a matchup
     // opens with its headshots already there; the list only changes when the lineups do
@@ -119,4 +143,29 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
         LayerShell.Window.exclusionZone: app.geo.band
         Board { anchors.fill: parent; unit: Screen.width; layout: "band"; polling: false; v: main.v }
     }
+
+    component BandWindow: Window {   // one band (top / bottom): exactly its rect, over nothing but the kiosk's black
+        id: bw
+        property string edge: "top"
+        readonly property var r: app.bandGeo ? app.bandGeo[edge] : null
+        transientParent: null
+        title: "TV overlay bands " + edge
+        color: "transparent"
+        flags: Qt.FramelessWindowHint | Qt.WindowTransparentForInput | Qt.WindowDoesNotAcceptFocus
+        width: r ? r.w : 1
+        height: r ? Math.max(1, r.h) : 1
+        visible: app.bandsOn && r !== null && r.h >= app.bandMin
+        LayerShell.Window.scope: "tv-overlay"
+        LayerShell.Window.layer: LayerShell.Window.LayerOverlay
+        LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
+        LayerShell.Window.activateOnShow: false
+        LayerShell.Window.exclusionZone: 0
+        Loader {   // a fresh Bands each time it maps, so it fades in again
+            anchors.fill: parent
+            active: bw.visible
+            sourceComponent: Bands { b: app.bands; edge: bw.edge; geo: app.bandGeo; unit: Screen.width }
+        }
+    }
+    BandWindow { edge: "top"; LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorLeft }
+    BandWindow { edge: "bottom"; LayerShell.Window.anchors: LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft }
 }
