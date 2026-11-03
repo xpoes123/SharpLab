@@ -184,25 +184,40 @@ def _tile(i: object, top: int = 3) -> int:
     return i
 
 
+def _origin(o: object) -> dict:
+    """{"origin": {"guild", "channel"}} when a start came from a Discord channel (the bot posts the link there)."""
+    if not isinstance(o, dict):
+        return {}
+    out = {k: str(o[k]) for k in ("guild", "channel") if isinstance(o.get(k), (str, int)) and not isinstance(o.get(k), bool)
+           and str(o[k]).isdigit() and len(str(o[k])) <= 20}
+    return {"origin": out} if "channel" in out else {}
+
+
 def check_action(a: object) -> dict:
-    """A proposal's action, validated (ValueError otherwise): {"op": start|stop|tile|remove|board|sound|layout, …the wall
-    service's body for that call}. Only what the service's control API can do."""
+    """A proposal's action, validated (ValueError otherwise): {"op": start|stop|tile|remove|board|sound|layout|follow, …the
+    wall service's body for that call}. Only what the service's control API can do. {"op": "start", "mirror": true} =
+    stream the TV's wall and follow it; "follow" = follow the TV again."""
     if not isinstance(a, dict):
         raise ValueError("bad action")
     op = a.get("op")
     label = {"label": clean_text(a["label"], 80)} if isinstance(a.get("label"), str) and a["label"].strip() else {}
     if op == "stop":
         return {"op": "stop"}
+    if op == "follow":
+        return {"op": "follow"}
     if op == "start":
+        origin = _origin(a.get("origin"))
+        if a.get("mirror") is True:
+            return {"op": "start", "mirror": True, **origin}
         p = a.get("preset")
         if p is not None:
             if isinstance(p, bool) or not (isinstance(p, int) and 0 <= p < 100 or isinstance(p, str) and 0 < len(p) <= 40):
                 raise ValueError("start needs a preset")
-            return {"op": "start", "preset": p, **label}
+            return {"op": "start", "preset": p, **label, **origin}
         urls = a.get("urls") or []
         live = a.get("live") or ""
         if not isinstance(urls, list) or len(urls) > 4 or live not in ("", "nfl", "nba") or not (urls or live):
-            raise ValueError("start needs a preset, 1–4 URLs or live games")
+            raise ValueError("start needs a preset, 1–4 URLs, live games, or mirror (same as the TV)")
         out = {"op": "start", "urls": [_url(u) for u in urls]}
         if live:
             out["live"] = live
@@ -214,7 +229,7 @@ def check_action(a: object) -> dict:
             out["layout"] = a["layout"]
         if isinstance(a.get("sound"), int) and not isinstance(a["sound"], bool):
             out["sound"] = _tile(a["sound"])
-        return {**out, **label}
+        return {**out, **label, **origin}
     if op == "sound":
         return {"op": "sound", "i": _tile(a.get("i")), **label}
     if op == "remove":
@@ -248,12 +263,16 @@ def check_action(a: object) -> dict:
 def describe(a: dict) -> str:
     op = a["op"]
     if op == "start":
+        if a.get("mirror"):
+            return "start the wall: same as the TV"
         if "preset" in a:
             return f"start {a.get('label') or (a['preset'] if isinstance(a['preset'], str) else 'preset #' + str(a['preset'] + 1))}"
         what = f"live {a['live'].upper()} games" if a.get("live") else f"{len(a['urls'])} tiles"
         return f"start {a.get('label') or what}"
     if op == "stop":
         return "stop the wall"
+    if op == "follow":
+        return "follow the TV again"
     if op == "tile":
         return f"put {a.get('label') or a['url']} on tile {a['i'] + 1}"
     if op == "remove":
@@ -396,6 +415,8 @@ def _route(a: dict) -> tuple[str, str, dict]:
         return "POST", "/i/discord/start", body
     if op == "stop":
         return "POST", "/i/discord/stop", {}
+    if op == "follow":
+        return "POST", "/i/discord/follow", {}
     if op == "tile":
         return "POST", "/i/discord/tile", body
     if op == "remove":
@@ -507,6 +528,7 @@ class Hub:
         self.cids = itertools.count(1)
         self.wall: dict | None = None
         self._viewers_sig: tuple = ()
+        self._seen_notice = False
         self.edge = EdgeClock()
         self._ticker: asyncio.Task | None = None
 
@@ -606,8 +628,13 @@ class Hub:
     async def refresh_wall(self) -> None:
         st = await self.fetch_state()
         if st is not None and st != self.wall:
+            old = (self.wall or {}).get("notice") or {}
+            note = st.get("notice") or {}
             self.wall = st
             await self.broadcast({"t": "wall", "state": st})
+            if self._seen_notice and note.get("text") and (note.get("id"), note.get("at")) != (old.get("id"), old.get("at")):
+                await self.say(note["text"])   # "No longer mirroring the TV", "Skipped on the stream: …"
+            self._seen_notice = True   # the first state we see: its old notice isn't news
 
     # -- periodic: expiry, away, wall state
     async def tick(self) -> None:

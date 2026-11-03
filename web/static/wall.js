@@ -139,9 +139,12 @@
     const on = !!(wall && wall.running);
     $("offline").hidden = on || !wall;
     $("wallName").textContent = on ? wall.name || "" : "";
+    $("mirror").hidden = !(on && wall.mirror);
+    $("followBtn").hidden = !on || !!wall.mirror;
     if (on) startPlayer(); else if (wall) stopPlayer();
     const sel = $("preset"), cur = sel.value;
-    sel.replaceChildren(...((wall && wall.presets) || []).map((n) => { const o = el("option", null, n); o.value = n; return o; }));
+    const tv = el("option", null, "📺 Same as the TV"); tv.value = "";
+    sel.replaceChildren(tv, ...((wall && wall.presets) || []).map((n) => { const o = el("option", null, n); o.value = n; return o; }));
     if (cur) sel.value = cur;
     const tiles = $("tiles"); tiles.replaceChildren();
     if (!on) return;
@@ -216,7 +219,8 @@
 
   document.querySelectorAll("[data-act]").forEach((b) => (b.onclick = () => {
     const act = b.dataset.act;
-    if (act === "start") { const p = $("preset").value; if (p) propose({ op: "start", preset: p }); }
+    if (act === "start") { const p = $("preset").value; propose(p ? { op: "start", preset: p } : { op: "start", mirror: true }); }
+    else if (act === "follow") propose({ op: "follow" });
     else if (act === "stop") propose({ op: "stop" });
     else if (act === "layout") propose({ op: "layout", layout: b.dataset.v });
     else if (act === "board") propose({ op: "board", board: b.dataset.v });

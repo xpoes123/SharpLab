@@ -32,6 +32,7 @@
         <span id="sync" class="pill">syncing…</span>
         <span id="count" class="pill">0 watching</span>
         <span id="wallName" class="muted"></span>
+        <span id="mirror" class="pill" hidden title="The stream follows the living-room TV's wall">📺 mirroring the TV</span>
       </div>
       <div id="tiles" class="tiles"></div>
       <div id="props" class="props"></div>
@@ -41,6 +42,7 @@
           <label>Preset <select id="preset"></select></label>
           <button data-act="start" class="btn">Start</button>
           <button data-act="stop" class="btn">Stop</button>
+          <button data-act="follow" id="followBtn" class="btn" hidden>📺 Follow the TV</button>
         </div>
         <div class="row">
           <span>Layout</span>

@@ -255,6 +255,62 @@ def test_check_action():
             check_action(bad)
 
 
+def test_check_action_mirror_start_follow_and_origin():
+    assert check_action({"op": "start", "mirror": True}) == {"op": "start", "mirror": True}
+    assert check_action({"op": "start", "mirror": True, "origin": {"guild": "12", "channel": 34}}) == \
+        {"op": "start", "mirror": True, "origin": {"guild": "12", "channel": "34"}}
+    assert check_action({"op": "start", "preset": "Live NFL", "origin": {"channel": "1; drop"}}) == {"op": "start", "preset": "Live NFL"}
+    assert check_action({"op": "follow", "x": 1}) == {"op": "follow"}
+    assert wall.describe({"op": "start", "mirror": True}) == "start the wall: same as the TV"
+    assert wall.describe({"op": "follow"}) == "follow the TV again"
+    assert wall._route(check_action({"op": "start", "mirror": True, "origin": {"guild": "1", "channel": "2"}})) == \
+        ("POST", "/i/discord/start", {"mirror": True, "origin": {"guild": "1", "channel": "2"}})
+    assert wall._route({"op": "follow"}) == ("POST", "/i/discord/follow", {})
+    with pytest.raises(ValueError, match="mirror"):
+        check_action({"op": "start", "mirror": "yes"})
+
+
+@pytest.mark.anyio
+async def test_a_mirror_start_goes_to_a_vote_and_the_owner_applies_it():
+    done, states = [], [{"running": False}]
+
+    async def execute(a):
+        done.append(a)
+        return True, ""
+
+    async def fetch_state():
+        return states[-1]
+
+    hub = wall.Hub(clock=Clock(), execute=execute, fetch_state=fetch_state)
+    for cid, uid in ((1, "a"), (2, "b")):
+        hub.presence.join(cid, {"id": uid, "name": uid}, 1000)
+    p, err = await hub.propose({"id": "a", "name": "a"}, {"op": "start", "mirror": True})
+    assert not err and p.status == "open" and not done and "same as the TV" in hub.chat.log[-1]["text"]
+    await hub.vote({"id": "b", "name": "b"}, p.id, True)
+    assert p.status == "passed" and done == [{"op": "start", "mirror": True}]
+    o, _ = await hub.propose({"id": OWNER, "name": "David"}, {"op": "start", "mirror": True})
+    assert o.status == "override" and len(done) == 2
+
+
+@pytest.mark.anyio
+async def test_wall_notices_reach_the_chat_once():
+    states = [{"running": True, "mirror": True, "notice": {"id": 1, "text": "old news", "at": 5}}]
+
+    async def fetch_state():
+        return states[-1]
+
+    async def execute(a):
+        return True, ""
+
+    hub = wall.Hub(clock=Clock(), execute=execute, fetch_state=fetch_state)
+    await hub.refresh_wall()
+    assert not any("old news" in m["text"] for m in hub.chat.log)   # what was there before we looked isn't news
+    states.append({"running": True, "mirror": False, "notice": {"id": 2, "text": "No longer mirroring the TV", "at": 9}})
+    await hub.refresh_wall()
+    await hub.refresh_wall()
+    assert [m["text"] for m in hub.chat.log].count("No longer mirroring the TV") == 1
+
+
 @pytest.mark.anyio
 async def test_hub_owner_applies_instantly_and_others_wait():
     clock, done = Clock(), []
