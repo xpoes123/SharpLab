@@ -210,7 +210,7 @@ async def test_web_paths_and_key():
     assert all(h["x-api-key"] == "sec" for _, _, h, _ in seen)
     assert seen[1][3] == {"discord_id": "5", "name": "Kim", "avatar": None, "action": {"op": "stop"}}
     assert seen[2][3] == {"discord_id": "5", "proposal_id": "p1", "yes": False}
-    assert web.watch_url == "https://s/wall"
+    assert web.watch_url == "https://s/wall.html"
 
 
 async def test_link_message_falls_back_to_login_hint():

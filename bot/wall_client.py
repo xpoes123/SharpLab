@@ -84,7 +84,7 @@ class WallWeb:
 
     @property
     def watch_url(self) -> str:
-        return f"{self.base}/wall"
+        return f"{self.base}/wall.html"   # Caddy serves the page statically; /wall needs deploy/caddy-wall.snippet
 
     async def _call(self, method: str, path: str, body: dict | None = None):
         try:
