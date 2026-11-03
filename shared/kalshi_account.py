@@ -250,6 +250,23 @@ def slates(settles: list[dict]) -> dict[str, dict]:
     return out
 
 
+def board(settles_by_user: dict[str, list[dict]], since_ts: int, until_ts: int | None = None) -> list[dict]:
+    """Settled-market leaderboard over [since_ts, until_ts): per user pnl, staked, record, best/worst
+    market. Best PnL first; users with nothing settled are left off."""
+    out = []
+    for uid, settles in settles_by_user.items():
+        rows = [(st["ticker"], settled_pnl(st), _f(st.get("yes_total_cost_dollars")) + _f(st.get("no_total_cost_dollars")))
+                for st in settles
+                if since_ts <= _iso_ts(st.get("settled_time")) < (until_ts or 2 ** 62)]
+        if not rows:
+            continue
+        by_pnl = sorted(rows, key=lambda r: r[1])
+        out.append({"uid": uid, "pnl": sum(r[1] for r in rows), "cost": sum(r[2] for r in rows),
+                    "n": len(rows), "won": sum(r[1] > 0 for r in rows),
+                    "best": by_pnl[-1][:2], "worst": by_pnl[0][:2]})
+    return sorted(out, key=lambda r: -r["pnl"])
+
+
 _EVENT_TITLES: dict[str, str] = {}
 
 

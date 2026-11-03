@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 _ET = ZoneInfo("America/New_York")
 _RECAP_TIME = dtime(hour=10, minute=0, tzinfo=_ET)  # daily slate recap
+_WEEK_TIME = dtime(hour=10, minute=5, tzinfo=_ET)    # Monday Kalshi week board (in the trade feed)
 RECAP_CHANNEL_ID = 1515214409079853116
 FILLS_CHANNEL_ID = 1563303484697350286  # live trade feed
 FILLS_ROLE_NAME = "Kalshi Trades"  # self-assign via the ⚡ panel in #roles
@@ -149,10 +150,12 @@ class MarketsCog(commands.Cog):
         self.bot = bot
         self.recap_loop.start()
         self.fills_loop.start()
+        self.week_loop.start()
 
     def cog_unload(self) -> None:
         self.recap_loop.cancel()
         self.fills_loop.cancel()
+        self.week_loop.cancel()
 
     # ── Live trade feed: new Kalshi fills for linked accounts, polled every minute (FILLS_CHANNEL_ID) ──
 
@@ -189,7 +192,10 @@ class MarketsCog(commands.Cog):
                     embed = await _fills_embed(ka.group_fills(fills))
                     user = self.bot.get_user(int(uid)) or await self.bot.fetch_user(int(uid))
                     embed.set_author(name=user.display_name, icon_url=user.display_avatar.url)
-                    await channel.send(embed=embed)
+                    embed.set_footer(text="🫡 tail · 🙅 fade")
+                    msg = await channel.send(embed=embed)
+                    for emoji in ("🫡", "🙅"):
+                        await msg.add_reaction(emoji)
             except Exception:
                 log.warning("kalshi fills poll failed for %s", uid, exc_info=True)
         try:
@@ -246,6 +252,30 @@ class MarketsCog(commands.Cog):
 
     @recap_loop.before_loop
     async def _before_recap(self) -> None:
+        await self.bot.wait_until_ready()
+
+    # ── Kalshi week board: Monday morning in the trade feed ──
+    @tasks.loop(time=_WEEK_TIME)
+    async def week_loop(self) -> None:
+        now = datetime.now(_ET)
+        if now.weekday() != 0:
+            return
+        end = ka.day_start(now)
+        label = end.date().isoformat()
+        if await queries.get_bot_setting("kalshi_week_board") == label:
+            return
+        try:
+            embed = await _board_embed(self.bot, int((end - timedelta(days=7)).timestamp()), int(end.timestamp()),
+                                       f"🏆 Kalshi week — {(end - timedelta(days=7)):%b %-d} – {(end - timedelta(days=1)):%b %-d}")
+            if embed:
+                channel = self.bot.get_channel(FILLS_CHANNEL_ID) or await self.bot.fetch_channel(FILLS_CHANNEL_ID)
+                await channel.send(embed=embed)
+            await queries.set_bot_setting("kalshi_week_board", label)
+        except Exception:
+            log.warning("kalshi week board failed", exc_info=True)
+
+    @week_loop.before_loop
+    async def _before_week(self) -> None:
         await self.bot.wait_until_ready()
 
     async def _kalshi_impl(self, interaction: discord.Interaction, game: str, sport: str) -> None:
@@ -445,6 +475,16 @@ class MarketsCog(commands.Cog):
             return
         await interaction.followup.send(embed=embed or discord.Embed(
             description=f"No settled Kalshi markets on the {slate} slate."), ephemeral=True)
+
+    @kalshi_group.command(name="leaderboard", description="Kalshi leaderboard for linked accounts (settled markets)")
+    @app_commands.describe(days="Look back this many days (default 7)")
+    async def kalshi_leaderboard(self, interaction: discord.Interaction,
+                                 days: app_commands.Range[int, 1, 90] = 7) -> None:
+        await interaction.response.defer(thinking=True)
+        embed = await _board_embed(self.bot, int(time.time()) - days * 86400, None,
+                                   f"🏆 Kalshi leaderboard — last {days} day{'s' * (days != 1)}")
+        await interaction.followup.send(embed=embed or discord.Embed(
+            description=f"Nothing settled in the last {days} days. `/kalshi link` to get on the board."))
 
     @kalshi_group.command(name="unlink", description="Delete your stored Kalshi API key")
     async def kalshi_unlink(self, interaction: discord.Interaction) -> None:
@@ -714,6 +754,47 @@ async def _recap_embed(uid: str, slate: str) -> discord.Embed | None:
         f"`{datetime.fromisoformat(d).strftime('%a %m/%d')}` {s['won']}-{s['n'] - s['won']} · **{s['pnl']:+,.2f}**"
         for d, s in week))
     embed.set_footer(text="All markets, grouped by game date · /kalshi recap to re-check")
+    return embed
+
+
+async def _board_embed(bot: commands.Bot, since_ts: int, until_ts: int | None, title: str) -> discord.Embed | None:
+    """Leaderboard of linked accounts' settled markets in the window, or None if nobody settled anything."""
+    by_user = {}
+    for uid in await queries.list_kalshi_account_users():
+        row = await queries.get_kalshi_account(uid)
+        if not row:
+            continue
+        try:
+            async with httpx.AsyncClient(timeout=20) as c:
+                by_user[uid] = await ka._all(c, row[0], ka.load_key(ka.decrypt(row[1])),
+                                             f"/portfolio/settlements?min_ts={since_ts}", "settlements")
+        except Exception:
+            log.warning("kalshi board: settlements failed for %s", uid, exc_info=True)
+    rows = ka.board(by_user, since_ts, until_ts)
+    if not rows:
+        return None
+    async def name(uid: str) -> str:
+        u = bot.get_user(int(uid)) or await bot.fetch_user(int(uid))
+        return discord.utils.escape_markdown(u.display_name)
+    best = max(rows, key=lambda r: r["best"][1])
+    worst = min(rows, key=lambda r: r["worst"][1])
+    try:
+        titles = await ka.market_titles([best["best"][0], worst["worst"][0]])
+    except Exception:
+        titles = {}
+    medals = {0: "🥇", 1: "🥈", 2: "🥉"}
+    lines = [f"{medals.get(i, f'`#{i + 1}`')} **{await name(r['uid'])}** **{r['pnl']:+,.2f}** · "
+             f"{r['won']}-{r['n'] - r['won']}" + (f" · {r['pnl'] / r['cost'] * 100:+.0f}% ROI" if r["cost"] else "")
+             for i, r in enumerate(rows)]
+    embed = discord.Embed(title=title, description="\n".join(lines),
+                          color=0x22C55E if rows[0]["pnl"] >= 0 else 0xEF4444)
+    if best["best"][1] > 0:
+        embed.add_field(name="🎯 Biggest hit", inline=False,
+                        value=f"**{await name(best['uid'])}** {best['best'][1]:+,.2f} · {titles.get(best['best'][0], best['best'][0])[:90]}")
+    if worst["worst"][1] < 0:
+        embed.add_field(name="💀 Worst beat", inline=False,
+                        value=f"**{await name(worst['uid'])}** {worst['worst'][1]:+,.2f} · {titles.get(worst['worst'][0], worst['worst'][0])[:90]}")
+    embed.set_footer(text="Not on the board? /kalshi link — read-only key, takes 2 minutes")
     return embed
 
 
