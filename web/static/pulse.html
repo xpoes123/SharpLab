@@ -50,6 +50,13 @@
   <div id="gate" hidden><p>Log in to see this: <a href="/api/v1/auth/discord/login?next=/pulse.html">Continue with Discord</a>, or join as a guest on the <a href="/wall.html">Wall</a> and come back.</p></div>
 
   <div id="app" hidden>
+    <h2>Feedback → Claude</h2>
+    <p class="note">Want another market, a different number, think the model's off? Write it here — a Claude Code session is
+      watching and replies in this thread (and can change the page while you watch).</p>
+    <form id="fbForm" class="bar"><input id="fbText" type="search" maxlength="2000" placeholder="e.g. add NJ county turnout vs 2022…" />
+      <button class="ui-btn" type="submit">Send</button><span id="fbMsg" class="muted small"></span></form>
+    <div id="fb" class="small"></div>
+
     <h2>National House</h2>
     <div class="grid" id="house"></div>
     <div class="two">
@@ -192,6 +199,29 @@
       $("meta").innerHTML = `<span class="err">Couldn't refresh (${esc(e.message)}); retrying.</span>`;
     }
   }
+  async function loadFb() {
+    try {
+      const r = await fetch("/api/v1/wall/election/pulse/feedback", { credentials: "same-origin" });
+      if (!r.ok) return;
+      const items = (await r.json()).items.slice().reverse();
+      $("fb").innerHTML = items.map((x) => `<div class="stat" style="margin:6px 0"><span class="muted">${t(x.t)} · ${esc(x.who)}</span>
+        <div style="white-space:pre-wrap">${esc(x.text)}</div>
+        ${x.reply ? `<div style="white-space:pre-wrap;margin-top:6px;border-left:2px solid var(--accent);padding-left:8px"><span class="muted">${t(x.reply_t)} · Claude</span><br>${esc(x.reply)}</div>`
+                  : `<div class="muted" style="margin-top:4px">Claude is on it…</div>`}</div>`).join("");
+    } catch (e) { /* the next tick retries */ }
+  }
+  $("fbForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = $("fbText").value.trim();
+    if (!text) return;
+    const r = await fetch("/api/v1/wall/election/pulse/feedback", { method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+    const j = await r.json().catch(() => ({}));
+    $("fbMsg").textContent = r.ok ? "Sent." : j.error || "Couldn't send.";
+    if (r.ok) { $("fbText").value = ""; loadFb(); }
+  });
+  loadFb();
+  setInterval(loadFb, 10000);
   $("q").addEventListener("input", () => { shown = 40; renderRaces(); });
   $("fHot").addEventListener("change", renderRaces);
   $("fIn").addEventListener("change", renderRaces);

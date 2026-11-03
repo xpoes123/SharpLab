@@ -362,6 +362,71 @@ async def get_pulse_mine(request: Request):
     return {"linked": True, "positions": out}
 
 
+# ---- Pulse feedback: members write, the Claude Code session watching it replies (X-API-Key) ------------------------------
+# ponytail: one JSON file + the single uvicorn worker's lock; a table if this outlives election night
+FEEDBACK = Path(os.environ.get("WALL_STATE_DIR") or "data") / "pulse-feedback.json"
+_fb_lock = asyncio.Lock()
+_fb_last: dict[str, float] = {}
+
+
+def _fb_load() -> list[dict]:
+    try:
+        return json.loads(FEEDBACK.read_text())
+    except (OSError, ValueError):
+        return []
+
+
+def _fb_save(items: list[dict]) -> None:
+    tmp = FEEDBACK.with_suffix(".tmp")
+    tmp.write_text(json.dumps(items[-300:]))
+    os.replace(tmp, FEEDBACK)
+
+
+@router.get("/pulse/feedback")
+async def get_feedback(request: Request):
+    if not who(request)[1]:
+        return _deny()
+    return {"items": [{k: x.get(k) for k in ("id", "t", "who", "text", "reply", "reply_t")} for x in _fb_load()[-60:]]}
+
+
+@router.post("/pulse/feedback")
+async def post_feedback(request: Request):
+    user = wall.session_user(wall.auth.read_session(request))
+    if not user:
+        return JSONResponse({"error": "Log in with Discord to send feedback."}, status_code=401)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    text = (body.get("text") if isinstance(body, dict) else "") or ""
+    text = text.strip()[:2000] if isinstance(text, str) else ""
+    if not text:
+        return JSONResponse({"error": "Write something first."}, status_code=422)
+    now = time.time()
+    if now - _fb_last.get(user["id"], 0) < 10:
+        return JSONResponse({"error": "One message every 10 s."}, status_code=429)
+    _fb_last[user["id"]] = now
+    async with _fb_lock:
+        items = _fb_load()
+        item = {"id": f"{int(now * 1000):x}", "t": now, "uid": user["id"], "who": user["name"], "text": text, "reply": None, "reply_t": None}
+        _fb_save(items + [item])
+    return {"id": item["id"]}
+
+
+@router.post("/pulse/feedback/{fid}/reply")
+async def reply_feedback(fid: str, request: Request, x_api_key: str = Header("")):
+    wall._need_key(x_api_key)
+    body = await request.json()
+    async with _fb_lock:
+        items = _fb_load()
+        hit = next((x for x in items if x["id"] == fid), None)
+        if not hit:
+            return JSONResponse({"error": "no such feedback"}, status_code=404)
+        hit["reply"], hit["reply_t"] = str(body.get("text") or "")[:4000], time.time()
+        _fb_save(items)
+    return {"ok": True}
+
+
 @router.get("/shapes")
 async def get_shapes(request: Request):
     if not who(request)[1]:
