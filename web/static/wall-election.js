@@ -370,7 +370,7 @@
       box.append(el("div", "es-chart-ph muted small", c.error || "No price history yet."));
       return;
     }
-    const W = 640, H = 210, L = 34, Rm = 46, T = 10, B = 24;
+    const W = phone() ? 420 : 640, H = phone() ? 190 : 210, L = 34, Rm = 40, T = 10, B = 24;
     const now = c.now, split = c.split;
     const t0 = Math.min(...c.lines.map((l) => (l.older[0] || l.today[0] || [split])[0]));
     const xs = L + (W - L - Rm) * 0.36;   // the older days take the left 36 %, today's session the rest
@@ -384,17 +384,18 @@
     svg.append(svgEl("line", { x1: xs, x2: xs, y1: T, y2: H - B, class: "split" }));
     const lab = (tx, t, anchor) => { const e = svgEl("text", { x: tx, y: H - 8, class: "ax", "text-anchor": anchor || "middle" }); e.textContent = t; svg.append(e); };
     // day ticks on the older side, hour ticks on today's
-    const d0 = new Date(t0 * 1000); d0.setHours(0, 0, 0, 0);
-    for (let d = d0.getTime() / 1000 + 86400; d < split; d += 86400) {
+    const day = new Date(t0 * 1000); day.setHours(0, 0, 0, 0);
+    for (day.setDate(day.getDate() + 1); day.getTime() / 1000 < split - 3 * 3600; day.setDate(day.getDate() + 1)) {   // by date: DST-safe
+      const d = day.getTime() / 1000;
       svg.append(svgEl("line", { x1: x(d), x2: x(d), y1: H - B, y2: H - B + 3, class: "g" }));
-      lab(x(d), new Date(d * 1000).toLocaleDateString([], { weekday: "short" }));
+      lab(x(d), day.toLocaleDateString([], { weekday: "short" }));
     }
     const span = now - split, step = span > 8 * 3600 ? 3 * 3600 : span > 4 * 3600 ? 2 * 3600 : 3600;
     for (let h = Math.ceil(split / step) * step; h < now - step / 3; h += step) {
       svg.append(svgEl("line", { x1: x(h), x2: x(h), y1: H - B, y2: H - B + 3, class: "g" }));
       lab(x(h), new Date(h * 1000).toLocaleTimeString([], { hour: "numeric" }));
     }
-    lab(xs + 4, "today", "start");
+    const lt = svgEl("text", { x: xs + 4, y: T + 9, class: "mk" }); lt.textContent = "last 12 h →"; svg.append(lt);
     for (const m of c.marks || []) {
       if (m.t < t0 || m.t > now + 3600) continue;
       const mx = x(Math.min(m.t, now));

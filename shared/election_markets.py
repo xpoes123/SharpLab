@@ -138,7 +138,7 @@ def call_times(calls: list[dict]) -> dict[str, float]:
 
 def race_view(r: dict, rows: list[dict], called_at: float | None = None) -> dict:
     out = {k: r.get(k) for k in RACE_KEYS}
-    out["cands"] = [{k: c.get(k) for k in ("name", "full", "party", "pct", "votes", "winner", "inc")} for c in r.get("cands") or []][:6]
+    out["cands"] = [{k: c.get(k) for k in ("name", "full", "party", "pct", "votes", "winner", "inc")} for c in r.get("cands") or []][:4]
     out["called_at"] = called_at or None
     out["markets"] = rows
     out["chart"] = chart_tickers(rows)
