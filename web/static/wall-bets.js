@@ -151,15 +151,18 @@
     } finally { busy = false; }
   }
 
-  (async () => {
+  // Starts once wall.js knows who's watching (window.__wallMe / "wall:me"): a guest or a logged-out visitor never calls
+  // these member-only endpoints at all.
+  async function start(who) {
+    if (!who || who.guest || me) return;
     const r = await api("/me");
-    if (!r.ok) return;   // a guest (403) or logged out (401): no panel at all
-    let uid = null;
-    try { const w = await fetch("/api/v1/wall/me", { credentials: "same-origin" }); uid = (await w.json()).id; } catch (e) { uid = null; }
-    me = { ...r.j, uid };
+    if (!r.ok) return;
+    me = { ...r.j, uid: who.id };
     root.hidden = false;
     render();
     refresh();
     setInterval(() => { if (!document.hidden) refresh(); }, POLL_MS);
-  })();
+  }
+  if (window.__wallMe) start(window.__wallMe);
+  else window.addEventListener("wall:me", (e) => start(e.detail), { once: true });
 })();

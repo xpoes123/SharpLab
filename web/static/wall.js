@@ -103,7 +103,9 @@
     b.querySelector(".ico").textContent = video.muted ? "🔇" : "🔊";
     b.querySelector(".lbl").textContent = video.muted ? " Sound off" : " Sound on";
     b.setAttribute("aria-label", video.muted ? "Sound off" : "Sound on");
-    $("unmute").hidden = !video.muted;
+    const live = !!(wall && wall.running);   // nothing to hear while the wall is off: no sound controls at all
+    $("unmute").hidden = !video.muted || !live;
+    b.hidden = !live;
   };
   const toggleMute = () => { video.muted = !video.muted; if (!video.muted) video.play().catch(() => {}); showMute(); };
   $("unmute").onclick = toggleMute;
@@ -173,6 +175,7 @@
         if (m.pdt_off != null) pdtOff = m.pdt_off;
         $("ownerNote").textContent = me.owner ? "· you're the owner: changes apply at once" : me.guest ? "· as a guest you can vote, and change sound / layout / board" : "";
         document.querySelectorAll("[data-member]").forEach((x) => (x.hidden = !!me.guest));
+        $("offSub").textContent = me.guest ? "It'll be back on soon." : "Start it from “Change the wall” below.";
         $("msgs").replaceChildren(); m.history.forEach(addMsg);
         renderViewers(m.viewers);
         props.clear(); m.proposals.forEach((p) => props.set(p.id, p)); renderProps();
@@ -194,6 +197,8 @@
     wall = st || null;
     const on = !!(wall && wall.running);
     $("offline").hidden = on || !wall;
+    video.closest(".player").classList.toggle("off", !on);
+    showMute(); wake();
     $("wallName").textContent = on ? wall.name || "" : "";
     $("mirror").hidden = !(on && wall.mirror);
     $("followBtn").hidden = !on || !!wall.mirror;
@@ -324,10 +329,10 @@
     pinned = !pinned; clearTimeout(hideT); chatOn(pinned);
     if (pinned) setUnread(0); else chatIn.blur();
   };
-  function wake() {
+  function wake() {   // landscape: controls fade only over a running stream (with the wall off there's nothing to see behind them)
     document.body.classList.remove("idle");
     clearTimeout(idleT);
-    if (LANDSCAPE.matches) idleT = setTimeout(() => document.body.classList.add("idle"), 4000);
+    if (LANDSCAPE.matches) idleT = setTimeout(() => { if (wall && wall.running) document.body.classList.add("idle"); }, 4000);
   }
   document.addEventListener("pointerdown", wake, { passive: true });
 
@@ -433,7 +438,8 @@
       }
     }
   }
-  loadLive(); setInterval(loadLive, 30000);
+  let liveT = null;
+  const startLive = () => { if (!liveT) { loadLive(); liveT = setInterval(loadLive, 30000); } };   // only once we're in (no 401s)
   function renderProps() {
     const box = $("props"); box.replaceChildren();
     for (const p of props.values()) {
@@ -484,11 +490,15 @@
     if (n) parts.push(n + (n === 1 ? " person" : " people") + " watching");
     $("peekText").textContent = parts.join(" · ");
     $("gatePeek").classList.toggle("on", !!name);
-    $("gatePeek").hidden = !parts.length;
+    $("gatePeek").classList.toggle("empty", !parts.length);   // keeps its space either way: nothing below it jumps
   }
   function nickError(msg) {
     $("nickErr").textContent = msg || "";
     if (msg) $("nick").setAttribute("aria-invalid", "true"); else $("nick").removeAttribute("aria-invalid");
+  }
+  if (Date.now() < Date.UTC(2026, 10, 5, 12)) {   // US midterms, 3 Nov 2026: say so on the join card
+    $("gateTitle").textContent = "Election Night";
+    $("gateLede").textContent = "Live map, NBC + PBS, Kalshi odds, chat. Results from 6 PM ET.";
   }
   const qs = new URLSearchParams(location.search), err = qs.get("error"), key = qs.get("k") || "";
   try { const n = localStorage.getItem("wall.nick"); if (n) $("nick").value = n; } catch (e) { /* storage blocked: start empty */ }
@@ -502,6 +512,9 @@
         return;
       }
       $("navRight").textContent = j.name + (j.guest ? " (guest)" : "");
+      window.__wallMe = j;   // wall-bets.js / wall-election.js start from this (a guest never calls member-only endpoints)
+      window.dispatchEvent(new CustomEvent("wall:me", { detail: j }));
+      startLive();
       $("gate").hidden = true;
       $("room").hidden = false;
       document.body.classList.add("inroom");
@@ -517,14 +530,29 @@
     btn.disabled = true; btn.textContent = "Joining…"; nickError("");
     fetch("/api/v1/wall/guest", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" },
                                   body: JSON.stringify({ k: key, name }) })
-      .then((r) => r.json().then((j) => ({ ok: r.ok, j })))
-      .then(({ ok, j }) => {
+      .then((r) => r.json().then((j) => ({ ok: r.ok, j, wait: +(r.headers.get("Retry-After") || j.retry_after || 0) })))
+      .then(({ ok, j, wait }) => {
+        if (!ok && wait > 0) { holdJoin(wait, j.error); return; }
         if (!ok) { nickError(j.error || "Couldn't join."); $("nick").focus(); return; }
         try { localStorage.setItem("wall.nick", name); } catch (e) { /* not remembered next time, still joined */ }
         boot();
       })
       .catch(() => nickError("Couldn't reach SharpLab."))
-      .finally(() => { btn.disabled = false; btn.textContent = "Join"; });
+      .finally(() => { if (!holdT) { btn.disabled = false; btn.textContent = "Join"; } });
   };
+  // Too many joins from this network just now: count down on the button, then let them try again.
+  let holdT = null;
+  function holdJoin(secs, msg) {
+    const btn = $("joinBtn"), end = Date.now() + secs * 1000;
+    clearInterval(holdT);
+    const tick = () => {
+      const left = Math.ceil((end - Date.now()) / 1000);
+      if (left <= 0) { clearInterval(holdT); holdT = null; btn.disabled = false; btn.textContent = "Join"; nickError(""); return; }
+      const t = left >= 60 ? `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` : `${left} s`;
+      btn.disabled = true; btn.textContent = t;
+      nickError(`${msg || "Too many joins from this network just now."} Try again in ${t}.`);
+    };
+    tick(); holdT = setInterval(tick, 1000);
+  }
   boot();
 })();

@@ -528,6 +528,11 @@ class RateLimit:
     def __init__(self, n: int, window: float) -> None:
         self.n, self.window, self.hits = n, window, {}
 
+    def wait(self, key: str, now: float) -> int:
+        """Seconds until key may go again (0 = now): for Retry-After."""
+        q = [t for t in self.hits.get(key, []) if now - t < self.window]
+        return 0 if len(q) < self.n else max(1, int(q[0] + self.window - now + 0.999))
+
     def allow(self, key: str, now: float) -> bool:
         q = [t for t in self.hits.get(key, []) if now - t < self.window]
         if len(q) >= self.n:
@@ -541,8 +546,13 @@ class RateLimit:
         return True
 
 
-guest_joins = RateLimit(10, 60)    # guest socket connects per IP
-guest_names = RateLimit(5, 300)    # nicknames picked per IP
+# Guests share IPs (one apartment wifi, a dorm, carrier NAT): the per-IP limits are loose and only stop a flood; the tight
+# ones are per browser (the guest cookie's id for sockets, a browser-token cookie for nicknames).
+guest_joins = RateLimit(20, 60)     # guest socket connects per guest
+guest_joins_ip = RateLimit(240, 60) # … and per IP
+guest_names = RateLimit(8, 300)     # new nicknames per browser
+guest_names_ip = RateLimit(60, 300) # … and per IP
+GUEST_BROWSER = "sharplab_wall_gb"
 
 
 def watch_url() -> str:
@@ -872,7 +882,7 @@ async def wall_websocket(ws: WebSocket) -> None:
         return
     h = hub
     if user.get("guest"):
-        if not guest_joins.allow(client_ip(ws), h.clock()):
+        if not (guest_joins.allow(user["id"], h.clock()) and guest_joins_ip.allow(client_ip(ws), h.clock())):
             await ws.close(code=4429, reason="Too many connects — wait a minute")
             return
         others = {u["name"] for uid, u in h.presence.users.items() if uid != user["id"] and uid in h.presence.watching()}
@@ -1013,17 +1023,30 @@ async def guest(request: Request):
         body = None
     if not isinstance(body, dict) or not key_ok(body.get("k")):
         return JSONResponse({"error": "This link isn't valid — log in with Discord instead."}, status_code=403)
-    if not guest_names.allow(client_ip(request), time.time()):
-        return JSONResponse({"error": "Too many nicknames from here — wait a few minutes."}, status_code=429)
     try:
         name = clean_nick(body.get("name"))
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=422)
+    held = read_guest(request)
+    if held and held["name"].lower() in (name.lower(), unique_name(name, {name}).lower()) or \
+            held and held["name"].lower().startswith(name.lower() + " (guest"):   # this browser already has that nickname: rejoining is free
+        return {"id": held["id"], "name": held["name"], "guest": True}
+    now, ip = time.time(), client_ip(request)
+    gb = request.cookies.get(GUEST_BROWSER) or ""
+    if not re.fullmatch(r"[0-9a-f]{32}", gb):
+        gb = secrets.token_hex(16)
+    wait = max(guest_names.wait(gb, now), guest_names_ip.wait(ip, now))
+    if wait:
+        return JSONResponse({"error": "Lots of people just joined from this network. Use Continue with Discord above, or wait a moment.",
+                             "retry_after": wait}, status_code=429, headers={"Retry-After": str(wait)})
+    guest_names.allow(gb, now)
+    guest_names_ip.allow(ip, now)
     taken = {hub.presence.users[u]["name"] for u in hub.presence.watching() if u in hub.presence.users}
     name = unique_name(name, taken)
     raw, g = make_guest_cookie(name)
     resp = JSONResponse({"id": g["id"], "name": name, "guest": True})
     resp.set_cookie(GUEST_COOKIE, raw, max_age=GUEST_TTL, httponly=True, secure=True, samesite="lax")
+    resp.set_cookie(GUEST_BROWSER, gb, max_age=30 * 86400, httponly=True, secure=True, samesite="lax")
     return resp
 
 

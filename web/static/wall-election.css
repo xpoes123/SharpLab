@@ -21,7 +21,8 @@
 .el-chip:hover, .el-segbtn:hover { color: var(--fg); }
 .el-bal { margin: 10px 0 4px; }
 .el-nums { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-.el-nums b { font-size: 18px; font-variant-numeric: tabular-nums; }
+.el-nums b { font-size: 18px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+@media (max-width: 700px) { .el-nums b { font-size: 15px; } .el-nums .muted { font-size: 12px; } }
 .el-nums .muted { text-align: center; }
 .D { color: var(--e-dem); } .R { color: var(--e-rep); } .I { color: var(--e-ind); }
 .el-bar { position: relative; display: flex; height: 10px; border-radius: 3px; overflow: visible; background: var(--e-none); margin-top: 6px; }
@@ -112,6 +113,28 @@
 .es-prow.up .pc { color: var(--green); } .es-prow.down .pc { color: var(--red); }
 .es-prow .hl { grid-column: 1 / -1; } .es-prow .hl.won { color: var(--green); } .es-prow .hl.lost { color: var(--muted); }
 
+.el-note { margin: 4px 0 0; }
+.el-loading { margin: 0; padding: 24px 0; text-align: center; min-height: 120px; }
+.es-mk tr.evh td { padding-top: 10px; font-size: 12px; white-space: normal; border-bottom: 1px solid var(--line-strong); color: var(--fg-2); }
+.es-mk tr.evh + tr td { border-top: 0; }
+.es-key-ev { font-weight: 600; color: var(--muted); font-size: 11px; }
+.es-novotes { margin: 0; grid-column: 1 / -1; }
+.es-cands.no-votes .es-cbar { visibility: hidden; }
+.elec-btn .lbl { font-weight: 600; }
+
+/* phones — portrait, or landscape (keep in step with phone() in wall-election.js): the panel is a sheet from the bar's button */
+@media (max-width: 700px), (orientation: landscape) and (max-height: 500px) {
+  .elec { display: none; }
+  .elec.as-sheet { display: block; position: fixed; left: 0; right: 0; bottom: 0; z-index: 65; max-height: calc(var(--vvh, 100dvh) - 60px);
+    overflow-y: auto; overscroll-behavior: contain; border-radius: 16px 16px 0 0; margin: 0; box-shadow: var(--shadow-lg);
+    border-top: 1px solid var(--line-strong); padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
+  .elec.as-sheet .el-done { display: inline-block; min-height: 44px; padding: 0 16px; }
+}
+@media (orientation: landscape) and (max-height: 500px) {
+  .elec.as-sheet { left: auto; top: 0; width: min(560px, 100vw); max-height: none; border-radius: 0; border-top: 0; border-left: 1px solid var(--line-strong); }
+  .elec.as-sheet .el-map svg { max-height: 60vh; }
+}
+
 @media (max-width: 700px) {
   .es-sheet { top: auto; left: 0; width: 100%; max-height: 88dvh; border-left: 0; border-top: 1px solid var(--line-strong);
     border-radius: 16px 16px 0 0; transform: translateY(100%); padding: 0 max(14px, env(safe-area-inset-right)) calc(20px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left)); }
@@ -124,11 +147,6 @@
   .es-mk { font-size: 12.5px; }
   .el-segbtn, .el-chip { min-height: 44px; }
   .el-select { min-height: 44px; font-size: 16px; flex: 1 1 100%; }
-  /* the panel itself is a sheet on phones, opened from the bar's 🗺 button */
-  .elec { display: none; }
-  .elec.as-sheet { display: block; position: fixed; left: 0; right: 0; bottom: 0; z-index: 65; max-height: calc(var(--vvh, 100dvh) - 60px);
-    overflow-y: auto; overscroll-behavior: contain; border-radius: 16px 16px 0 0; margin: 0; box-shadow: var(--shadow-lg);
-    border-top: 1px solid var(--line-strong); padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
 }
 @media (prefers-reduced-motion: reduce) {
   .es-sheet, .es-scrim, .el-map path, .el-bar i, .es-cbar i { transition: none; }

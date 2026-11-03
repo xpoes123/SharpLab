@@ -171,7 +171,7 @@ def state_view(state: str, races: list[dict], markets: dict[str, list[dict]], ca
 
 def map_races(races: list[dict]) -> list[dict]:
     """What the map colours from, per race (the watch page computes fills exactly like the TV's map)."""
-    keep = ("id", "office", "state", "district", "special", "called", "leader", "pct", "votes", "margin", "flip", "watch")
+    keep = ("id", "office", "state", "district", "special", "called", "leader", "pct", "votes", "margin", "flip", "watch", "closes")
     return [{k: r.get(k) for k in keep} for r in races]
 
 

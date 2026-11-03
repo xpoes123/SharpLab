@@ -4,7 +4,16 @@
 
 .player { position: relative; background: #000; border-radius: var(--r-lg); overflow: hidden; aspect-ratio: 16 / 9; }
 .player video { width: 100%; height: 100%; display: block; background: #000; }
-.offline { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; background: var(--panel); }
+.offline { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; background: var(--panel);
+  pointer-events: none; overflow-y: auto; }   /* never eats taps meant for the controls; its own buttons opt back in */
+.offline button, .offline a, .offline select { pointer-events: auto; }
+.off-in { padding: 16px; max-width: 560px; width: 100%; }
+/* wall off: the box sizes to the pre-show instead of a fixed 16:9 black hole */
+.player.off { aspect-ratio: auto; min-height: 200px; }
+.player.off video { display: none; }
+.player.off .offline { position: relative; inset: auto; min-height: 200px; }
+.player.off .chat-toggle { z-index: 2; }
+[data-member][hidden], .controls .row[hidden], .controls .btn[hidden], .controls input[hidden] { display: none !important; }
 .unmute { position: absolute; left: 12px; bottom: 12px; border: 0; border-radius: var(--r-pill); padding: 8px 14px; min-height: 44px;
   background: rgba(17,18,26,.8); color: var(--fg); font: inherit; cursor: pointer; }
 .unmute[hidden], .offline[hidden], #room[hidden], #gate[hidden], .scrim[hidden], .badge[hidden] { display: none; }
@@ -120,6 +129,8 @@
     border-bottom: 1px solid var(--line); }
   .bar .btn { min-width: 44px; min-height: 44px; padding: 0 8px; font-size: 18px; display: inline-grid; place-items: center; flex: none; }
   .bar .lbl, .bar .act, #wallName, #mirror { display: none; }
+  .bar #elecBtn .lbl { display: inline; font-size: 14px; font-weight: 600; }
+  .bar #elecBtn { display: inline-flex; gap: 4px; align-items: center; }
   .bar #sync { margin-left: auto; }
   .bar .pill:not(.btn) { white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
@@ -197,12 +208,18 @@
   .player video { object-fit: contain; }
   .unmute { left: max(12px, env(safe-area-inset-left)); bottom: max(12px, env(safe-area-inset-bottom)); z-index: 4; }
   .viewers, .controls, #wallName, #mirror, .bar .lbl, .bar .act { display: none; }
+  .bar #elecBtn .lbl { display: inline; font-size: 14px; font-weight: 600; }
+  .bar #elecBtn { display: inline-flex; gap: 4px; align-items: center; }
+  .player.off { position: fixed; inset: 0; min-height: 0; }
+  .player.off .offline { position: absolute; inset: 0; min-height: 0; padding-top: 56px; }
 
-  .bar { position: fixed; z-index: 5; margin: 0; flex-wrap: nowrap; gap: 6px;
-    top: max(8px, env(safe-area-inset-top)); left: max(8px, env(safe-area-inset-left)); transition: opacity .4s ease; }
+  .bar { position: fixed; z-index: 5; margin: 0; flex-wrap: nowrap; gap: 6px; pointer-events: none;
+    top: max(8px, env(safe-area-inset-top)); left: max(8px, env(safe-area-inset-left)); }
+  .bar > * { pointer-events: auto; transition: opacity .4s ease; }
   .bar .pill { background: rgba(17,18,26,.66); }
   .bar .btn { min-width: 44px; min-height: 44px; font-size: 18px; display: inline-grid; place-items: center; padding: 0 10px; }
-  body.idle .bar { opacity: 0; pointer-events: none; }
+  /* idle over a running stream: everything fades but the Election button */
+  body.idle .bar > :not(#elecBtn) { opacity: 0; pointer-events: none; }
 
   .props { position: fixed; z-index: 5; margin: 0; left: max(8px, env(safe-area-inset-left)); top: 64px;
     max-width: min(46vw, 360px); max-height: calc(100% - 140px); overflow-y: auto; }
@@ -254,7 +271,8 @@
 .gate-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
 .gate-peek.on { color: var(--text); }
 .gate-peek.on .gate-dot { background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }   /* steady, never pulses */
-.gate-peek[hidden], .gate-guest[hidden], .gate-roles[hidden] { display: none; }
+.gate-peek.empty { visibility: hidden; }   /* reserved, so the buttons below never move when it fills in */
+.gate-guest[hidden], .gate-roles[hidden] { display: none; }
 .gate-msg { margin: 14px 0 0; font-size: 14px; color: var(--gold); }
 .gate-msg:empty { display: none; }
 
@@ -285,11 +303,7 @@
 .gate-err:empty { display: none; }
 .gate-discord:focus-visible, .gate-join:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
 
-.gate-roles { display: grid; gap: 8px; margin: 24px 0 0; padding: 14px 16px; border-radius: 12px; background: var(--bg);
-  border: 1px solid var(--border); font-size: 14px; line-height: 1.4; }
-.gate-roles div { display: flex; gap: 10px; }
-.gate-roles dt { flex: none; width: 72px; font-weight: 700; color: var(--text); }
-.gate-roles dd { margin: 0; color: var(--text-muted); }
+.gate-roles { margin: 20px 0 0; font-size: 13px; line-height: 1.45; color: var(--text-muted); text-align: center; }
 
 @media (max-width: 560px) {
   body:not(.inroom) { min-height: 100dvh; display: flex; flex-direction: column; }
@@ -298,4 +312,24 @@
   .gate-card { max-width: none; border-radius: 22px 22px 0 0; border-bottom: 0; border-left: 0; border-right: 0;
     padding: 28px 20px calc(28px + env(safe-area-inset-bottom)); box-shadow: 0 -8px 28px rgba(0,0,0,.35); }
   .gate h1 { font-size: 28px; }
+}
+
+/* ---- the pre-show while the wall is off (filled by wall-election.js on election night) ---- */
+.offline:has(.preshow:not([hidden])) #offGeneric { display: none; }
+.preshow[hidden] { display: none; }
+.preshow { display: grid; gap: 10px; text-align: center; }
+.ps-kicker { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+.ps-title { margin: 0; text-transform: none; letter-spacing: 0; font-size: clamp(18px, 3.4vw, 26px); line-height: 1.2; font-weight: 800; color: var(--fg); }
+.ps-count { margin: 0; font-size: clamp(22px, 5vw, 34px); font-weight: 800; font-variant-numeric: tabular-nums; color: var(--gold); }
+.ps-next { margin: 0; font-size: 13px; line-height: 1.5; color: var(--fg-2); }
+.ps-next b { color: var(--fg); }
+.ps-bal { text-align: left; }
+.ps-bal .el-nums b { white-space: nowrap; font-size: 16px; }
+.ps-open { justify-self: center; display: inline-flex; align-items: center; gap: 8px; min-height: 48px; padding: 0 22px; border: 0;
+  border-radius: 12px; background: var(--accent); color: var(--accent-ink); font: inherit; font-size: 16px; font-weight: 700; cursor: pointer; }
+.ps-open:hover { filter: brightness(1.08); }
+.ps-open:focus-visible { outline: 2px solid var(--fg); outline-offset: 3px; }
+@media (orientation: landscape) and (max-height: 500px) {
+  .preshow { gap: 6px; }
+  .ps-next { font-size: 12px; }
 }

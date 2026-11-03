@@ -89,11 +89,14 @@
     return 200;
   }
 
-  (async function start() {
+  async function start() {   // once wall.js says someone's in ("wall:me"): never polled into 401s before joining
     let st = await loadFeed();
-    while (st === 401 || st === 403 || st === 0) { await new Promise((r) => setTimeout(r, 8000)); st = await loadFeed(); }
+    if (st === 401 || st === 403) return;
+    while (st === 0) { await new Promise((r) => setTimeout(r, 8000)); st = await loadFeed(); }
     setInterval(() => { if (!document.hidden) loadFeed(); }, FEED_MS);
-  })();
+  }
+  if (window.__wallMe) start();
+  else window.addEventListener("wall:me", start, { once: true });
 
   // ---- the sheet: each race's detail ----------------------------------------------------------------------------------
   const det = {}, ui = {};       // race id → its last /race payload; race id → { tab, counties, updates } open state
