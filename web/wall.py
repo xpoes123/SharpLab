@@ -1056,7 +1056,10 @@ class Hub:
             self.wall = st
             await self.broadcast({"t": "wall", "state": st})
             if self._seen_notice and note.get("text") and (note.get("id"), note.get("at")) != (old.get("id"), old.get("at")):
-                await self.say(note["text"])   # "No longer mirroring the TV", "Skipped on the stream: …"
+                text = note["text"]
+                if text.startswith("📊"):   # the dashboard director's reason pick isn't reliable ("polls just closed" at 5:36): just the numbers
+                    text = text.split(" — ", 1)[0]
+                await self.say(text)   # "No longer mirroring the TV", "Skipped on the stream: …"
             self._seen_notice = True   # the first state we see: its old notice isn't news
 
     # -- periodic: expiry, away, wall state

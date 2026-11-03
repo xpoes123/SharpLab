@@ -331,7 +331,7 @@
     video.closest(".player").classList.toggle("off", !on);
     showMute(); wake();
     $("wallName").textContent = on ? wall.name || "" : "";
-    $("mirror").hidden = !(on && wall.mirror);
+    $("mirror").hidden = !(on && wall.mirror) || /mirroring the tv/i.test((wall && wall.name) || "");
     $("followBtn").hidden = !on || !!wall.mirror;
     setMedia();
     if (on && runId !== null && wall.started !== runId) stopPlayer();   // the wall restarted: new segment numbers
