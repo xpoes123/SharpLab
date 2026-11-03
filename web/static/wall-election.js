@@ -159,7 +159,53 @@
     sel.onchange = () => { if (sel.value) openState(sel.value); sel.value = ""; };
     pickRow.append(sel, legend);
     const foot = el("p", "el-foot muted small");
-    root.append(head, bal, mapBox, pickRow, foot);
+    root.append(head, dashRow(), bal, mapBox, pickRow, foot);
+  }
+
+  // ---- pop-out: any of the TV's election dashboards, full size and live, in a modal (web/wall.py proxies them) --------
+  const POP = "/api/v1/wall/p/election/";
+  const DASHES = [["Senate map", "map?view=S"], ["House map", "map?view=H"], ["Governor map", "map?view=G"], ["Key races", "races"],
+                  ["Turnout", "turnout"], ["Exit polls", "exitpoll"], ["vs 2024", "swing"]];
+  function dashRow() {
+    const row = el("div", "el-dash");
+    row.append(el("span", "el-dash-lbl muted small", "Dashboards"));
+    for (const [label, path] of DASHES) {
+      const b = el("button", "el-chip", label);
+      b.type = "button"; b.dataset.dash = path; b.title = `Open the TV's ${label} dashboard, full size`;
+      b.onclick = () => openDash(label, path);
+      row.append(b);
+    }
+    return row;
+  }
+  let pop = null, popFrom = null;
+  function closeDash() {
+    if (!pop || pop.hidden) return;
+    pop.hidden = true;
+    pop.querySelector("iframe").src = "about:blank";   // stop its polling
+    document.body.classList.remove("pop-on");
+    popFrom?.focus?.();
+  }
+  function openDash(label, path) {
+    if (!pop) {
+      pop = el("div", "el-pop"); pop.hidden = true;
+      pop.setAttribute("role", "dialog"); pop.setAttribute("aria-modal", "true");
+      pop.innerHTML = `<div class="el-pop-box"><div class="el-pop-head"><b class="el-pop-title"></b>` +
+        `<a class="el-pop-tab small" target="_blank" rel="noopener">↗ new tab</a>` +
+        `<button class="es-close el-pop-x" type="button" aria-label="Close">✕</button></div>` +
+        `<div class="el-pop-frame"><iframe title="Election dashboard"></iframe></div></div>`;
+      pop.addEventListener("click", (e) => { if (e.target === pop) closeDash(); });
+      pop.querySelector(".el-pop-x").onclick = closeDash;
+      document.addEventListener("keydown", (e) => { if (e.key === "Escape" && pop && !pop.hidden) { e.stopPropagation(); closeDash(); } }, true);
+      document.body.append(pop);
+    }
+    popFrom = document.activeElement;
+    pop.querySelector(".el-pop-title").textContent = label;
+    pop.querySelector(".el-pop-tab").href = POP + path;
+    pop.querySelector("iframe").src = POP + path;
+    pop.setAttribute("aria-label", label);
+    pop.hidden = false;
+    document.body.classList.add("pop-on");
+    pop.querySelector(".el-pop-x").focus();
   }
 
   function drawMap() {
@@ -665,5 +711,5 @@
   }
   if (window.__wallMe) start();
   else window.addEventListener("wall:me", start, { once: true });
-  window.__wallElection = { openState, openControl };   // renders / tests
+  window.__wallElection = { openState, openControl, openDash, closeDash };   // renders / tests
 })();

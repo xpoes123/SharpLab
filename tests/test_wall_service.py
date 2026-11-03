@@ -424,6 +424,27 @@ def test_api_gate(api):
     assert client(app).get("/i/tv").status_code == 200
 
 
+def test_remote_may_get_exactly_the_election_dashboards(api):
+    """The watch page's pop-out (web/wall.py POP_FILE): the dashboards, their assets + data, read-only, with the bearer only."""
+    from wall.server import REMOTE_OK
+    app, _ = api
+    remote = client(app, "100.81.31.34", "s3cret")
+    for path, ctype in [("/p/election/map", "text/html"), ("/p/election/swing", "text/html"), ("/p/election/election.css", "text/css"),
+                        ("/p/election/election.js", "text/javascript"), ("/p/us-states.json", "application/json")]:
+        r = remote.get(path)
+        assert r.status_code == 200 and r.headers["content-type"].startswith(ctype), path
+    for f in ("data", "odds", "turnout", "exitpoll", "swing"):
+        assert REMOTE_OK.match(f"/p/election/{f}.json")
+    assert client(app, "100.81.31.34").get("/p/election/map").status_code == 401          # no bearer
+    assert client(app, "100.81.31.34", "nope").get("/p/election/map").status_code == 401
+    assert client(app, "203.0.113.9", "s3cret").get("/p/election/map").status_code == 403  # off the tailnet
+    for path in ("/p/election/board.json", "/p/election/map.html", "/p/election/other", "/p/election/", "/p/elsewhere.html",
+                 "/p/election/map/x", "/p/us-states.jsonx"):
+        assert remote.get(path).status_code == 403, path
+    assert remote.post("/p/election/data.json").status_code == 403
+    assert remote.put("/p/election/map").status_code == 403
+
+
 def test_loopback_refuses_web_pages(api):
     """A tile page on this box can POST to 127.0.0.1 without CORS (text/plain) or via DNS rebinding: refuse browsers."""
     app, _ = api
