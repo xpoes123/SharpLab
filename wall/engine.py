@@ -21,6 +21,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 log = logging.getLogger("wall.engine")
 QML_DIR = Path(__file__).parent / "qml"
@@ -71,6 +72,24 @@ PROBE_JS = """(() => {
   return {t: v.currentTime, paused: v.paused, ended: v.ended, ready: v.readyState, buffered: r(v.buffered),
           seekable_end: sk.length ? sk[sk.length - 1][1] : 0};
 })()"""
+
+
+PAGE_PORT = int(os.environ.get("WALL_PORT", "7795"))
+
+
+def own_page(url: str) -> bool:
+    """A data tile: one of this service's own pages (/p/…, e.g. the election map), served on loopback. No video, so no
+    fullscreening, no stall watchdog and no sound; the discord wall may stream it (it's ours, not the LAN)."""
+    try:
+        u = urlsplit(url)
+        return u.scheme == "http" and u.hostname in ("127.0.0.1", "localhost") and (u.port or 80) == PAGE_PORT \
+            and u.path.startswith("/p/")
+    except ValueError:
+        return False
+
+
+def page_url(path: str) -> str:
+    return f"http://127.0.0.1:{PAGE_PORT}/p/{path.lstrip('/')}"
 
 
 @dataclass
@@ -124,6 +143,13 @@ class Session:
 
     def child_env(self) -> dict:
         return {**os.environ, **self.env}
+
+
+def sound_tile(urls: list[str], want: int) -> int:
+    """The tile that gets the sound: `want`, unless it's a data tile — then the first tile with video (0 if none)."""
+    if 0 <= want < len(urls) and not own_page(urls[want]):
+        return want
+    return next((k for k, u in enumerate(urls) if not own_page(u)), 0)
 
 
 def tile_map(n: int) -> tuple[int, int, list[tuple[float, float, float, float]]]:
@@ -297,12 +323,17 @@ class Driver:
         self.on_change = lambda: None   # tile died / relaunched → the owner bumps its rev
 
         self._stalls: dict[int, Stall] = {}   # slot → stall watchdog
+        self.pages: set[int] = set()          # slots showing one of our own pages (no video: left alone by _tend)
 
     @property
     def procs(self) -> list[subprocess.Popen]:
         return [p for p, _ in self.tiles if p]
 
     def _launch(self, url: str, slot: int) -> subprocess.Popen | None:
+        if own_page(url):
+            self.pages.add(slot)
+        else:
+            self.pages.discard(slot)
         try:
             return subprocess.Popen(
                 [*GPU_ENV, "chromium", f"--user-data-dir={Path(self.s.profiles) / f'chromium-wall-{self.s.prefix}{slot}'}",
@@ -320,6 +351,7 @@ class Driver:
         self._stop = threading.Event()
         self.sound = 0
         self._stalls = {}
+        self.pages = set()
         self.tiles = [(self._launch(u, i), i) for i, u in enumerate(urls[:4])]
         self._layout_until = time.monotonic() + 15
         if self.procs:
@@ -389,7 +421,8 @@ class Driver:
     def focus(self, i: int) -> None:
         """Keys + sound to tile i (the sound follows on the worker's next round, within 2 s; this does it now)."""
         if 0 <= i < len(self.tiles):
-            self.sound = i
+            if self.tiles[i][1] not in self.pages:   # a data tile takes the keys but never the sound (it has none)
+                self.sound = i
             if self.tiles[i][0]:
                 kwin(f"for (const w of workspace.windowList()) if (w.pid == {self.tiles[i][0].pid}) workspace.activeWindow = w;",
                      f"{self.s.name}-focus", self.s.child_env())
@@ -410,7 +443,10 @@ class Driver:
             self._mute(pids)
 
     def _tend(self, slot: int) -> None:
-        """One round for one tile over CDP: keep its video fullscreen, and unstick it when it stalls."""
+        """One round for one tile over CDP: keep its video fullscreen, and unstick it when it stalls. A data tile (our own
+        page) has no video: nothing to fullscreen, and "stuck" would only mean a reload loop."""
+        if slot in self.pages:
+            return
         port = self.s.cdp_base + slot
         try:
             with cdp_page(port) as call:

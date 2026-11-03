@@ -79,7 +79,7 @@ def inst(tmp_path, data, presets=None, check=None, headless=None, **kw):
 # ---- presets ---------------------------------------------------------------------------------------------------------------
 def test_presets_validate_persist_and_import_the_tvs(tmp_path):
     s = PresetStore(str(tmp_path))
-    assert [p["name"] for p in s.presets] == ["Sample", "Live NFL", "Live NBA"]
+    assert [p["name"] for p in s.presets] == ["Sample", "Live NFL", "Live NBA", "Election Night", "Election + NBA", "Election map + NBA"]
     assert s.put([{"name": "L", "urls": [], "live": "nba", "tiles": 2}]) == [{"name": "L", "urls": [], "live": "nba", "tiles": 2}]
     assert s.put([{"name": "L", "urls": [], "live": "nfl", "tiles": 4}]) == [{"name": "L", "urls": [], "live": "nfl"}]
     for bad in ([{"name": "x", "urls": []}], [{"name": "x", "urls": [], "live": "mlb"}], [{"name": "x", "urls": ["--flag"]}],
@@ -90,7 +90,7 @@ def test_presets_validate_persist_and_import_the_tvs(tmp_path):
     tv = tmp_path / "tv-wall.json"
     tv.write_text(json.dumps([{"name": "Sunday", "urls": ["https://a.tv"]}]))
     imported = PresetStore(str(tmp_path / "new"), str(tv))
-    assert imported.presets == [{"name": "Sunday", "urls": ["https://a.tv"]}] and (tmp_path / "new" / "wall.json").exists()
+    assert imported.presets[0] == {"name": "Sunday", "urls": ["https://a.tv"]} and imported.presets[1]["name"] == "Election Night" and (tmp_path / "new" / "wall.json").exists()
     assert imported.find("sunday") == imported.find(0) and imported.find(5) is None
 
 
@@ -261,7 +261,7 @@ def test_board_and_overlay(tmp_path):
     assert st["overlay"]["view"] == "full" and d.overlays[-1] == ("full", False)
     assert i.overlay_view()["view"] == "full"
     data = i.overlay_data()
-    assert data["shown"] == "nfl" and data["data"]["kind"] == "scores" and {b["id"] for b in data["boards"]} == {"nfl", "nba"}
+    assert data["shown"] == "nfl" and data["data"]["kind"] == "scores" and {b["id"] for b in data["boards"]} == {"nfl", "nba", "election"}
     assert i.set_board(visible=False)["overlay"]["view"] == ""
     with pytest.raises(WallError):
         i.set_board("fantasy")

@@ -358,6 +358,36 @@ The mirror stream captures the TV's screen, bets included — hence the opt-in.
 **Not built here:** the TV phone remote's buttons (xpoes123/tv — the service API above is ready: `GET /sync`,
 `POST /sync {"show"}`, `{"url", "nudge"}`, `{"url", "tap": true}`), price-jump annotations with the play that caused them.
 
+## Data tiles + Election night (2026-11-03)
+
+**Data tiles.** A tile may be one of this service's own pages, `http://127.0.0.1:7795/p/<page>` (`wall/pages/`), instead of a
+website. `engine.own_page(url)` marks them: the CDP round (fullscreen + stall watchdog) skips them, so a page without video can
+never fall into "stalled → reload"; a data tile never takes the sound (`sound_tile`: a start, or a tap on it on the phone,
+leaves the sound on the first tile with video); the discord wall may stream them (`public_url` lets `/p/` through — nothing
+private there). The gate lets GET/HEAD `/p/*` through from browser contexts on loopback (the tile reading its own
+`data.json`); every other path still refuses them.
+
+**Pages.** `/p/election/map` — the rotating results map: Senate → House → Governors every 40 s (`?every=`, `?view=S|H|G` pins
+one), a 2 s crossfade, states coloured won / leading (dimmed) / no votes yet / no race, the balance bar (won + not up, leading,
+not counted, the control line), net change, flips, the clock. `/p/election/races` — key races (CNN's races to watch: Senate,
+Governors, then the closest House ones once counting), 5 a page every 12 s: candidates, %, bars, % in, margin, ✓ + whose call.
+Both read `/p/election/data.json` every 30 s and say "Unofficial results · calls: <desk>". Calm: no blinking, colours ease.
+
+**Feed** (`wall/election.py`, `Results`): CNN (`politics.api.cnn.io/results/national-races/2026-{SG,GG,HG}.json` +
+`bop/2026-*-US.json`; CNN Decision Desk calls) → NYT (`static01.nyt.com/elections-assets/pages/data/2026-11-03/results-*.json`,
+AP calls) → Fox (`feeds-elections.foxnews.com/…/2026_Generals/*/national_level_summary/file.json`). The first source that
+answers with races wins each round; all three are the public JSON behind those sites' own results pages (no key, no login). It
+polls every 30 s only while a page / the board asked in the last 3 min. New calls are logged with their time
+(`$WALL_STATE_DIR/election-calls.json`). `WALL_ELECTION_REPLAY=<dir>[:share]` replays recorded CNN files (2024's final night is in
+`tests/fixtures/wall/election`; `:0.6` = as if 60 % were in) for renders and a dry run.
+
+**Board** `election` (BOARDS): the L-bar sidebar = balance per office (Senate, House, Governors) + the latest calls; the band's
+ticker = race calls as they happen (then close races, then the next poll closings); full = the three offices side by side +
+calls. Not held back by the spoiler delay (`board.js delayed`). The TV router reads it from `GET /p/election/board.json`.
+
+**Presets** (seeded once, `wall-election-seeded` marker): "Election Night" (map, key races, NBC News NOW, PBS News), "Election +
+NBA" and "Election map + NBA" (`fixed: true`: the preset's URLs stay as fixed tiles, live NBA games fill the rest).
+
 ## `/wall` in Discord (`bot/cogs/wall.py`)
 
 `/wall start [preset]`, `/wall stop`, `/wall status`, `/wall set` (layout / board / sound / tile from a live game, a
