@@ -16,6 +16,7 @@ import json
 import logging
 import math
 import os
+from urllib.parse import quote
 from pathlib import Path
 import re
 import secrets
@@ -1430,13 +1431,37 @@ async def guest(request: Request):
     return resp
 
 
+ALT_HOSTS = {h.strip() for h in os.environ.get("WALL_ALT_HOSTS", "live.djiang.xyz").split(",") if h.strip()}
+
+
+@router.get("/handoff")
+async def handoff(request: Request, to: str = "", back: str = "/wall.html", login: int = 0):
+    """The watch page on another of our hosts (live.djiang.xyz): a SharpLab member signed in here goes there signed in
+    (a one-time login link minted for that host); anyone else goes straight back as they were — or, with login=1 (the
+    page's "Log in"), through Discord here first. Only our hosts, only a path back."""
+    if to not in ALT_HOSTS or not back.startswith("/") or back.startswith("//"):
+        return JSONResponse({"error": "bad handoff"}, status_code=400)
+    user = session_user(auth.read_session(request))
+    if user:
+        sess = auth.read_session(request) or {}
+        link = mint_link(user["id"], sess.get("username") or user["name"], sess.get("avatar"))
+        return RedirectResponse(f"https://{to}/api/v1/wall/login?t={link.split('?t=', 1)[1]}&back={quote(back, safe='')}")
+    if login:
+        nxt = f"/api/v1/wall/handoff?to={quote(to)}&back={quote(back, safe='')}"
+        return RedirectResponse(f"/api/v1/auth/discord/login?next={quote(nxt, safe='')}")
+    sep = "&" if "?" in back else "?"
+    return RedirectResponse(f"https://{to}{back}{sep}nohandoff=1")
+
+
 @router.get("/login")
-async def login(t: str = ""):
-    """A bot-minted link: sets the normal SharpLab session cookie for that member, then the watch page."""
+async def login(t: str = "", back: str = ""):
+    """A bot-minted link: sets the normal SharpLab session cookie for that member, then the watch page (on whichever of our
+    hosts it was opened — sharplab.djiang.xyz or live.djiang.xyz)."""
     data = redeem_link(t)
+    dest = back if back.startswith("/") and not back.startswith("//") else PAGE
     if not data:
-        return RedirectResponse(f"{auth.WEB_BASE_URL}{PAGE}?error=link_expired")
-    resp = RedirectResponse(f"{auth.WEB_BASE_URL}{PAGE}")
+        return RedirectResponse(f"{PAGE}?error=link_expired")
+    resp = RedirectResponse(dest)
     resp.set_cookie(auth.COOKIE_NAME, auth.make_session_cookie(data), max_age=auth.SESSION_TTL,
                     httponly=True, secure=True, samesite="lax")
     return resp
