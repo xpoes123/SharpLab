@@ -470,18 +470,34 @@
   setInterval(ping, 15000);
   setInterval(syncTick, 250);
 
-  // ---- boot ----
+  // ---- boot: the join screen until /me says who you are ----
   function showGate(msg) {
     $("room").hidden = true; $("gate").hidden = false;
     document.body.classList.remove("inroom");
     if (msg) $("gateErr").textContent = msg;
   }
+  function showPeek(p) {
+    // Logged-out peek: the running wall's name and a head count, nothing else (never the stream before joining).
+    const n = (p && p.watching) || 0, name = p && p.name;
+    const parts = [];
+    if (name) parts.push("Live now: " + name);
+    if (n) parts.push(n + (n === 1 ? " person" : " people") + " watching");
+    $("peekText").textContent = parts.join(" · ");
+    $("gatePeek").classList.toggle("on", !!name);
+    $("gatePeek").hidden = !parts.length;
+  }
+  function nickError(msg) {
+    $("nickErr").textContent = msg || "";
+    if (msg) $("nick").setAttribute("aria-invalid", "true"); else $("nick").removeAttribute("aria-invalid");
+  }
   const qs = new URLSearchParams(location.search), err = qs.get("error"), key = qs.get("k") || "";
+  try { const n = localStorage.getItem("wall.nick"); if (n) $("nick").value = n; } catch (e) { /* storage blocked: start empty */ }
   function boot() {
     fetch("/api/v1/wall/me?k=" + encodeURIComponent(key), { credentials: "same-origin" }).then((r) => r.json().then((j) => ({ ok: r.ok, j }))).then(({ ok, j }) => {
       if (!ok) {
         if (j.login) $("loginBtn").href = j.login;
-        $("guestForm").hidden = !j.guest_ok;   // demo mode with the keyed link: a nickname is enough
+        $("guestForm").hidden = $("gateRoles").hidden = !j.guest_ok;   // demo mode with the keyed link: a nickname is enough
+        showPeek(j.peek);
         showGate(err === "link_expired" ? "That link expired — use Get my link again, or log in." : "");
         return;
       }
@@ -493,13 +509,22 @@
       connect();
     }).catch(() => showGate("Couldn't reach SharpLab."));
   }
+  $("nick").oninput = () => nickError("");
   $("guestForm").onsubmit = (e) => {
     e.preventDefault();
+    const name = $("nick").value.trim(), btn = $("joinBtn");
+    if (btn.disabled) return;
+    btn.disabled = true; btn.textContent = "Joining…"; nickError("");
     fetch("/api/v1/wall/guest", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" },
-                                  body: JSON.stringify({ k: key, name: $("nick").value.trim() }) })
+                                  body: JSON.stringify({ k: key, name }) })
       .then((r) => r.json().then((j) => ({ ok: r.ok, j })))
-      .then(({ ok, j }) => { if (ok) boot(); else $("gateErr").textContent = j.error || "Couldn't join."; })
-      .catch(() => ($("gateErr").textContent = "Couldn't reach SharpLab."));
+      .then(({ ok, j }) => {
+        if (!ok) { nickError(j.error || "Couldn't join."); $("nick").focus(); return; }
+        try { localStorage.setItem("wall.nick", name); } catch (e) { /* not remembered next time, still joined */ }
+        boot();
+      })
+      .catch(() => nickError("Couldn't reach SharpLab."))
+      .finally(() => { btn.disabled = false; btn.textContent = "Join"; });
   };
   boot();
 })();
