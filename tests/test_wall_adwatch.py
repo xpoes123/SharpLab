@@ -371,3 +371,15 @@ def test_classify_jev_first_escalates_when_unsure(monkeypatch):
     assert asyncio.run(wel.classify(ABC, "mumble", now=0)) == {"label": "break", "confidence": 0.8, "src": "llm"}   # unsure → Haiku
     assert asyncio.run(wel.classify(CBS, "no key", now=0))["src"] == "llm"                                          # no Jev answer → Haiku
     assert len(llm_calls) == 2
+
+
+def test_music_only_window_goes_to_the_model_as_no_speech(monkeypatch):
+    seen = []
+    w = adwatch.Watcher(env={"WALL_ADWATCH_POOL": NBC}, stt=lambda pcm: "", classify=lambda u, t: seen.append(t) or ("break", 0.9),
+                        post=lambda b: None, walls=lambda: {"tv": {"running": True, "urls": [NBC]}}, live=lambda u: True,
+                        clock=lambda: 5000.0)
+    monkeypatch.setattr(adwatch, "Stream", lambda u, q: StubStream(u))
+    w.sync_streams([NBC])
+    w.streams[NBC].add("", False, 4980)        # audio (not quiet) but whisper heard no words: music
+    w.streams[NBC].add("", False, 4995)
+    assert w.cycle(5000.0)["streams"][NBC]["label"] == "break" and seen == [adwatch.NO_SPEECH]
