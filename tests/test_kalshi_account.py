@@ -84,11 +84,12 @@ def test_group_fills_weights_partials_and_handles_cent_prices():
     rows = ka.group_fills([
         {"ticker": "KXNBAGAME-A", "action": "buy", "side": "yes", "count_fp": "10", "yes_price_dollars": "0.40", "ts": 2},
         {"ticker": "KXNBAGAME-A", "action": "buy", "side": "yes", "count": 30, "yes_price": 60, "ts": 1},
-        {"ticker": "KXNBAGAME-A", "action": "sell", "side": "no", "count": 5, "no_price": 20, "ts": 3},
+        {"ticker": "KXNBAGAME-A", "action": "sell", "side": "no", "count": 5, "no_price": 8, "yes_price": 92, "ts": 3},
     ])
     buy, sell = rows
     assert (buy["qty"], buy["avg"]) == (40, pytest.approx(0.55))
-    assert (sell["action"], sell["side"], sell["avg"]) == ("sell", "no", pytest.approx(0.20))
+    # Kalshi reports "sold 5 YES @ 92¢" as sell/no @ 8¢
+    assert (sell["action"], sell["side"], sell["avg"]) == ("sell", "yes", pytest.approx(0.92))
 
 
 def test_market_url():

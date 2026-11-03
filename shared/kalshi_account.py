@@ -280,9 +280,16 @@ async def market_titles(tickers: list[str]) -> dict[str, str]:
             + (m.get("title") or m["ticker"]) for m in markets}
 
 
-def fill_price(f: dict) -> float:
-    """Price paid per contract on the side traded, in dollars."""
+def fill_side(f: dict) -> str:
+    """Contract actually traded. Kalshi reports a sell by the side it buys into: selling YES @92 comes back
+    as action=sell side=no @8, so flip sells back to what the user sold."""
     side = f.get("side", "yes")
+    return ({"yes": "no", "no": "yes"}[side]) if f.get("action") == "sell" else side
+
+
+def fill_price(f: dict) -> float:
+    """Price per contract on the side traded, in dollars."""
+    side = fill_side(f)
     p = f.get(f"{side}_price_dollars") or f.get(f"{side}_price_fixed")
     return _f(p) if p is not None else _f(f.get(f"{side}_price")) / 100
 
@@ -291,7 +298,7 @@ def group_fills(fills: list[dict]) -> list[dict]:
     """Collapse partial fills into one row per (ticker, action, side) with a size-weighted avg price."""
     out: dict[tuple, dict] = {}
     for f in sorted(fills, key=lambda f: _f(f.get("ts"))):
-        k = (f["ticker"], f.get("action", "buy"), f.get("side", "yes"))
+        k = (f["ticker"], f.get("action", "buy"), fill_side(f))
         g = out.setdefault(k, {"ticker": k[0], "action": k[1], "side": k[2], "qty": 0.0, "cost": 0.0, "fee": 0.0})
         q = _f(f.get("count_fp") or f.get("count"))
         g["qty"] += q
