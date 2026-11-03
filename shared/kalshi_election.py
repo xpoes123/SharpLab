@@ -155,7 +155,17 @@ def resolve(c: dict | None, p: dict, races: dict[str, dict]) -> dict | None:
                 return r
         elif c.get("year") == 2026:
             return r
+    if p.get("name") and c.get("year") == 2026:   # Kalshi filed it under the wrong state (SENATELA-26 lists Kentucky's Barr /
+        hits = [r for r in races.values()          # Booker): the one race of that office with this person, first + last name
+                if r["office"] == c["office"] and (k := find_cand(r, p)) and _first_matches(k, p)]
+        if len(hits) == 1:
+            return hits[0]
     return None
+
+
+def _first_matches(cand: dict, p: dict) -> bool:
+    first = [t for t in _norm(cand.get("full") or "") if t not in _norm(cand.get("name") or "")]
+    return bool(first) and first[0] in _norm(p["name"])
 
 
 def market_label(c: dict, p: dict, m: dict) -> str:
