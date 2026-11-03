@@ -384,6 +384,7 @@ class Votes:
 # ---- login links (the bot's "Get my link") ---------------------------------------------------------------------------
 _link_signer = URLSafeTimedSerializer(auth.SESSION_SECRET, salt="sharplab-wall-link")
 _used_links: dict[str, float] = {}
+_seq = [0]   # the playlist's last media sequence (a drop = the wall restarted)
 
 
 def mint_link(discord_id: str, username: str, avatar: str | None) -> str:
@@ -962,13 +963,19 @@ async def hls(name: str, request: Request):
                     return JSONResponse({"error": "the wall isn't streaming"}, status_code=404 if code == 404 else 502)
                 hit = (time.monotonic() + (0.5 if playlist else 60), body, ctype)
                 if playlist:
-                    await hub.observe_playlist(body.decode("utf-8", "replace"))
+                    text = body.decode("utf-8", "replace")
+                    seq = re.search(r"#EXT-X-MEDIA-SEQUENCE:(\d+)", text)
+                    if seq and int(seq.group(1)) < _seq[0]:   # the wall restarted: same segment names, new video
+                        for k in [k for k in _cache if k != name]:
+                            _cache.pop(k, None)
+                    _seq[0] = int(seq.group(1)) if seq else 0
+                    await hub.observe_playlist(text)
                 _cache[name] = hit
                 for k, v in list(_cache.items()):   # expired segments go now: ~0.5 MB each, on a 2 GB VPS
                     if v[0] < time.monotonic():
                         _cache.pop(k, None)
                         _locks.pop(k, None)
-    return Response(hit[1], media_type=ctype, headers={"Cache-Control": "no-cache" if playlist else "private, max-age=60"})
+    return Response(hit[1], media_type=ctype, headers={"Cache-Control": "no-store"})   # names repeat across wall restarts
 
 
 # ---- bot API (X-Api-Key = WEB_API_SECRET) ----------------------------------------------------------------------------

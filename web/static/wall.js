@@ -38,6 +38,7 @@
     return null;
   }
 
+  let runId = null;
   function startPlayer() {
     if (hls || video.src) return;
     if (window.Hls && Hls.isSupported()) {
@@ -50,9 +51,9 @@
       });
       hls.on(Hls.Events.ERROR, (_, d) => {
         if (!d.fatal) return;
-        if (d.type === Hls.ErrorTypes.NETWORK_ERROR) setTimeout(() => hls && hls.startLoad(), 3000);
-        else if (d.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
-        else { hls.destroy(); hls = null; setTimeout(startPlayer, 5000); }
+        if (d.type === Hls.ErrorTypes.MEDIA_ERROR) { hls.recoverMediaError(); return; }
+        // network or other fatal: a fresh player (a restarted wall renumbers its segments, which a resumed load never finds)
+        stopPlayer(); setTimeout(() => { if (wall && wall.running) startPlayer(); }, 3000);
       });
       hls.loadSource(HLS_URL);
       hls.attachMedia(video);
@@ -142,6 +143,8 @@
     $("wallName").textContent = on ? wall.name || "" : "";
     $("mirror").hidden = !(on && wall.mirror);
     $("followBtn").hidden = !on || !!wall.mirror;
+    if (on && runId !== null && wall.started !== runId) stopPlayer();   // the wall restarted: new segment numbers
+    runId = on ? wall.started : null;
     if (on) startPlayer(); else if (wall) stopPlayer();
     const sel = $("preset"), cur = sel.value;
     const tv = el("option", null, "📺 Same as the TV"); tv.value = "";
