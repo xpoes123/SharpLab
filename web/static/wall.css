@@ -459,3 +459,7 @@ body.public .fchat-form, body.public #fsayBtn { display: none !important; }
 /* phones: the Bets panel and the Live updates feed are sections of the Election sheet (wall-election.js placePanels) */
 .elec .lv-feed, .elec .bets { margin: 16px 0 0; padding: 12px 0 0; border: 0; border-top: 1px solid var(--line); border-radius: 0;
   background: none; box-shadow: none; }
+
+/* no votes: only the owner/admins get the wall controls; everyone else asks DJ Jev in chat */
+body.no-control .controls, body.no-control #props, body.no-control .tile button { display: none !important; }
+body.no-control #chatIn::placeholder { color: var(--muted); }

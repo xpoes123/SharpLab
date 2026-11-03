@@ -61,6 +61,7 @@ def cfg() -> dict:
         "sound_approvals": max(1, int(e("WALL_SOUND_APPROVALS", "2"))),
         "vote_s": float(e("WALL_VOTE_S", "60")),
         "notices": e("WALL_JOIN_NOTICES", "0") == "1",
+        "no_votes": e("WALL_NO_VOTES", "0") == "1",   # election night: the owner drives, others ask DJ Jev
         # demo mode: anyone with the keyed link (/wall.html?k=WALL_DEMO_KEY) joins under a nickname as a "friend" (a
         # member's powers on this page). Public mode: the plain page is data-only for anyone (map, results, the live feed,
         # chat read-only) — no stream, no votes, no Kalshi. WALL_GUEST_OPEN=1 is its old name and still turns it on.
@@ -834,6 +835,7 @@ class Hub:
         self._alert_ids = itertools.count(-1, -1)
         self.votes = Votes()
         self.socks: dict[int, tuple[WebSocket, dict]] = {}
+        self.kicked: dict[str, float] = {}   # uid or "ip:<addr>" → until (the owner's kick)
         self.pubs: dict[int, WebSocket] = {}   # public viewers: chat read-only + a head count, nothing else
         self._count_sig: tuple = ()
         self.cids = itertools.count(1)
@@ -924,7 +926,7 @@ class Hub:
             await self.broadcast({"t": "clock", "pdt_off": self.edge.off})
 
     # -- votes
-    async def propose(self, user: dict, action: object) -> tuple[Proposal | None, str]:
+    async def propose(self, user: dict, action: object, via_jev: bool = False) -> tuple[Proposal | None, str]:
         try:
             a = check_action(action)
         except ValueError as e:
@@ -932,11 +934,15 @@ class Hub:
         key = (user["id"], "propose", json.dumps(a, sort_keys=True))
         if (same := self.guard.seen(key, self.clock())) is not None:   # a double tap / resend: the first one stands
             return same
-        res = await self._propose(user, a)
+        res = await self._propose(user, a, via_jev)
         self.guard.remember(key, res, self.clock())
         return res
 
-    async def _propose(self, user: dict, a: dict) -> tuple[Proposal | None, str]:
+    async def _propose(self, user: dict, a: dict, via_jev: bool = False) -> tuple[Proposal | None, str]:
+        # WALL_NO_VOTES=1: no votes — the owner (and admins) change the wall directly; everyone else through DJ Jev in chat
+        nv = cfg()["no_votes"]
+        if nv and not via_jev and not self.is_admin(user["id"]):
+            return None, "Ask DJ Jev in chat to change the wall — e.g. “jev put abc on” or “jev show the senate map”."
         if a["op"] == "tile" and spectrum.find(a["url"]) and not verified(user):
             return None, "The Spectrum streams are for verified viewers — log in with Discord."
         if self.wall and "running" in self.wall and (why := noop(a, self.wall)):   # no votes on changes that change nothing (state unknown: let it through)
@@ -950,12 +956,13 @@ class Hub:
             return None, "Only the owner and admins can switch the auto-director."
         if a["op"] == "tvchat" and not self.is_admin(user["id"]):
             return None, "Only the owner and admins can switch the TV chat."
-        owner = self.is_owner(user["id"])
+        owner = self.is_owner(user["id"]) or (nv and (self.is_admin(user["id"]) or via_jev))   # Jev's picks apply directly too
         p, err = self.votes.propose(user, a, now, cfg()["vote_s"], owner=owner)
         if not p:
             return None, err
         if owner:
-            await self.apply(p, f"{p.name} (owner) changed it: {describe(a)}.")
+            await self.apply(p, f"{p.name} via DJ Jev: {describe(a)}." if via_jev and not self.is_admin(user["id"])
+                             else f"{p.name} (owner) changed it: {describe(a)}.")
         else:
             await self.say(f"{p.name} proposes to {describe(a)} — vote ✓/✗ on the page ({int(cfg()['vote_s'])} s).", proposal=p.id)
             await self.settle(p)
@@ -1031,7 +1038,7 @@ class Hub:
                 if explicit:
                     await self.say(msg)
                 return
-            p, err = await self.propose(user, action)
+            p, err = await self.propose(user, action, via_jev=True)
             await self.say(wall_jev.reply(p, err, action, name, conf))
         except Exception as e:  # noqa: BLE001 — a background task: log, never raise into the loop
             log.warning("jev command failed: %s", e)
@@ -1169,6 +1176,9 @@ async def wall_websocket(ws: WebSocket) -> None:
             return
         others = {u["name"] for uid, u in h.presence.users.items() if uid != user["id"] and uid in h.presence.watching()}
         user = {**user, "name": unique_name(user["name"], others)}
+    if h.kicked.get(user["id"], 0) > h.clock() or h.kicked.get("ip:" + client_ip(ws), 0) > h.clock():
+        await ws.close(code=4403, reason="Removed from the watch party")
+        return
     await ws.accept()
     cid = next(h.cids)
     now = h.clock()
@@ -1182,7 +1192,7 @@ async def wall_websocket(ws: WebSocket) -> None:
                                             "owner": h.is_owner(user["id"])},
                       "now": now * 1000, "pdt_off": h.edge.off, "history": list(h.chat.log), "viewers": h.viewers(),
                       "proposals": [h.pub(p) for p in h.votes.open()], "wall": h.wall,
-                      "cfg": {"delay": c["delay"], "vote_s": c["vote_s"], "sound_approvals": c["sound_approvals"],
+                      "cfg": {"delay": c["delay"], "vote_s": c["vote_s"], "sound_approvals": c["sound_approvals"], "no_votes": c["no_votes"],
                               "chat_max": CHAT_MAX}})
     if h.is_admin(user["id"]):
         for line in h.timeout_lines():
@@ -1291,6 +1301,22 @@ async def handle(h: Hub, cid: int, ws: WebSocket, user: dict, msg: dict) -> None
         _, err = await h.vote(user, msg.get("id"), msg.get("yes"))
         if err:
             await h.send(ws, {"t": "error", "text": err})
+    elif t == "kick" and isinstance(msg.get("uid"), str):   # the owner / admins: out of the party for 30 min
+        if not h.is_admin(user["id"]) or h.is_admin(msg["uid"]):
+            await h.send(ws, {"t": "error", "text": "Only David and admins can kick (and never each other)."})
+            return
+        who = h.presence.users.get(msg["uid"], {}).get("name", "someone")
+        until = now + 1800
+        h.kicked[msg["uid"]] = until
+        for c2, (w2, u2) in list(h.socks.items()):
+            if u2["id"] == msg["uid"]:
+                if u2.get("guest"):
+                    h.kicked["ip:" + client_ip(w2)] = until   # a guest can't just rejoin under a new nickname
+                try:
+                    await w2.close(code=4403, reason="Removed from the watch party")
+                except RuntimeError:
+                    pass
+        await h.say(f"{who} was removed from the watch party.")
     elif t in ("del", "mute"):
         if not h.is_admin(user["id"]):
             await h.send(ws, {"t": "error", "text": "Only David and admins can moderate."})
