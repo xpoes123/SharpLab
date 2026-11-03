@@ -213,6 +213,8 @@ def noop(a: dict, wall: dict | None) -> str:
         return "That tile already has the sound." if a["i"] == w.get("sound") else "There's no such tile." if a["i"] >= len(urls) else ""
     if op == "remove":
         return "There's no such tile." if a["i"] >= len(urls) else ""
+    if op == "promote":
+        return "That's already the main tile." if a["i"] == 0 else "There's no such tile." if a["i"] >= len(urls) else ""
     if op == "tile":
         if a["i"] < len(urls) and urls[a["i"]] == a["url"]:
             return "That's already on that tile."
@@ -267,6 +269,8 @@ def check_action(a: object) -> dict:
         return {"op": "sound", "i": _tile(a.get("i")), **label}
     if op == "remove":
         return {"op": "remove", "i": _tile(a.get("i")), **label}
+    if op == "promote":   # the big tile is tile 1: move this one there
+        return {"op": "promote", "i": _tile(a.get("i")), **label}
     if op == "tile":
         return {"op": "tile", "i": _tile(a.get("i"), 4), "url": _url(a.get("url")), **label}
     if op == "layout":
@@ -310,6 +314,8 @@ def describe(a: dict) -> str:
         return f"put {a.get('label') or a['url']} on tile {a['i'] + 1}"
     if op == "remove":
         return f"remove tile {a['i'] + 1}"
+    if op == "promote":
+        return f"make {a.get('label') or 'tile ' + str(a['i'] + 1)} the main tile"
     if op == "sound":
         return f"move the sound to tile {a['i'] + 1}"
     if op == "layout":
@@ -552,6 +558,8 @@ def _route(a: dict) -> tuple[str, str, dict]:
         return "POST", "/i/discord/tile", body
     if op == "remove":
         return "DELETE", f"/i/discord/tile/{a['i']}", {}
+    if op == "promote":
+        return "POST", "/i/discord/move", {"i": a["i"], "j": 0}
     if op == "sound":
         return "POST", "/i/discord/sound", body
     if op == "layout":

@@ -669,3 +669,9 @@ def test_a_game_already_on_the_wall_cant_be_added_again():
     w = {"running": True, "urls": ["https://a.tv", "https://b.tv"]}
     assert wall.noop({"op": "tile", "i": 0, "url": "https://b.tv"}, w) == "That's already on the wall."
     assert wall.noop({"op": "tile", "i": 2, "url": "https://a.tv"}, w) and not wall.noop({"op": "tile", "i": 2, "url": "https://c.tv"}, w)
+def test_promote_moves_a_tile_to_the_main_spot():
+    a = wall.check_action({"op": "promote", "i": 2})
+    assert a == {"op": "promote", "i": 2} and wall.describe(a) == "make tile 3 the main tile"
+    assert wall._route(a) == ("POST", "/i/discord/move", {"i": 2, "j": 0})
+    w = {"running": True, "urls": ["https://a.tv", "https://b.tv"]}
+    assert wall.noop({"op": "promote", "i": 0}, w) and wall.noop({"op": "promote", "i": 3}, w) and not wall.noop({"op": "promote", "i": 1}, w)
