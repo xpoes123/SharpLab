@@ -23,6 +23,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import ValidationError
 
+from wall.chat import POLL_S, ChatFeed
 from wall.engine import Session
 from wall.headless import Headless
 from wall.instance import BOARDS, Instance, WallError
@@ -119,11 +120,17 @@ class Cfg:
         self.llm_guard = env.get("WALL_LLM_GUARD", "unload")   # unload | stop | off (wall/llm.py)
         self.max_load = float(env.get("WALL_MAX_LOAD", "16"))
         self.min_avail_mb = int(env.get("WALL_MIN_AVAIL_MB", "3072"))
+        # the watch party's chat on the TV (wall/chat.py): sharplab-web's bot API, over Tailscale; unset = no chat
+        self.web_url = env.get("WALL_WEB_URL", "")
+        self.web_key = env.get("WALL_WEB_KEY", "")         # = WEB_API_SECRET on the VPS
+        self.owner_id = env.get("WALL_OWNER_ID", "")       # the TV's phones post as him
+        self.owner_name = env.get("WALL_OWNER_NAME", "David")
 
 
 def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, scores: Scores | None = None,
-          store: PresetStore | None = None, guard: LLMGuard | None = None) -> FastAPI:
+          store: PresetStore | None = None, guard: LLMGuard | None = None, chat: ChatFeed | None = None) -> FastAPI:
     cfg = cfg or Cfg()
+    chat = chat or ChatFeed(cfg.web_url, cfg.web_key, cfg.owner_id, cfg.owner_name)
     guard = guard or LLMGuard(cfg.ollama, cfg.llm_guard)
     scores = scores or Scores()
     store = store or PresetStore(str(cfg.state), cfg.import_from)
@@ -165,14 +172,26 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
                         await asyncio.to_thread(inst.tick)
                     except Exception as e:  # noqa: BLE001
                         log.warning("tick %s: %s", inst.name, e)
-        task = asyncio.create_task(ticker())
+        async def chat_ticker():   # only while the discord wall runs: the TV shows its watch party's chat
+            while True:
+                await asyncio.sleep(POLL_S)
+                d = instances.get("discord")
+                try:
+                    if chat.configured and d is not None and d.urls:
+                        await asyncio.to_thread(chat.poll, d.started)
+                    else:
+                        chat.idle()
+                except Exception as e:  # noqa: BLE001
+                    log.warning("chat: %s", e)
+        tasks = [asyncio.create_task(ticker()), asyncio.create_task(chat_ticker())]
         yield
-        task.cancel()
+        for task in tasks:
+            task.cancel()
         for inst in instances.values():
             await asyncio.to_thread(inst.stop, "service stopped")
 
     app = FastAPI(title="sharplab-wall", lifespan=lifespan)
-    app.state.instances, app.state.store, app.state.scores, app.state.guard = instances, store, scores, guard
+    app.state.instances, app.state.store, app.state.scores, app.state.guard, app.state.chat = instances, store, scores, guard, chat
 
     @app.middleware("http")
     async def gate(request: Request, call_next):
@@ -354,6 +373,28 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
     @app.get("/i/{name}/api/overlay")
     async def ov_data(name: str, board: str = "") -> dict:
         return await asyncio.to_thread(inst(name).overlay_data, board)
+
+    # ---- the watch party's chat, for the TV router (loopback only: not in REMOTE_OK) ----
+    def party_on() -> bool:
+        d = instances.get("discord")
+        return d is not None and bool(d.urls)
+
+    @app.get("/chat")
+    def get_chat() -> dict:
+        return chat.view(party_on())
+
+    @app.post("/chat")
+    async def post_chat(request: Request) -> Response:
+        d = await body(request)
+        text = d.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("text is a non-empty string")
+        if not chat.configured:
+            return JSONResponse({"error": "the watch-party chat isn't set up here (WALL_WEB_URL / WALL_WEB_KEY / WALL_OWNER_ID)"}, status_code=409)
+        if not party_on():
+            return JSONResponse({"error": "no watch party is on (the discord wall isn't running)"}, status_code=409)
+        status, out = await asyncio.to_thread(chat.post, text[:300])
+        return JSONResponse(out, status_code=status)
 
     # ---- HLS ----
     @app.get("/hls/{name}/{file}")
