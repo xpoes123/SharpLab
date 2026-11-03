@@ -1,0 +1,267 @@
+"""sharplab-wall: the wall engine's HTTP API (docs/wall-service.md). Runs on the homelab as a user unit:
+
+    uv run python -m wall.server          (WALL_HOST=0.0.0.0, WALL_PORT=7795)
+
+Who may call: loopback (the TV OS router) → everything. Tailscale (100.64.0.0/10, the VPS bot / web) → only with
+`Authorization: Bearer $WALL_API_TOKEN`, and only the discord instance, its HLS, and read-only preset / live lookups.
+Anyone else → 403. Nothing here is meant to be public; sharplab-web gates viewers with SharpLab sessions.
+"""
+from __future__ import annotations
+
+import asyncio
+import ipaddress
+import logging
+import os
+import re
+import secrets
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse, Response
+from pydantic import ValidationError
+
+from wall.engine import Session
+from wall.headless import Headless
+from wall.instance import BOARDS, Instance, WallError
+from wall.live import LEAGUES, STREAM, TEAMS, Scores, live_games
+from wall.presets import PresetStore, errors
+
+log = logging.getLogger("wall.server")
+TAILNET = ipaddress.ip_network("100.64.0.0/10")
+REMOTE_OK = re.compile(r"^/(healthz|teams|live/[a-z]+|presets|i/discord(/.*)?|hls/discord/[A-Za-z0-9_.]+)$")
+HLS_FILE = re.compile(r"^(index\.m3u8|seg\d{6}\.ts)$")
+
+
+class Cfg:
+    def __init__(self, env=os.environ) -> None:
+        self.state = Path(env.get("WALL_STATE_DIR") or os.path.expanduser("~/.local/state/sharplab-wall"))
+        self.token = env.get("WALL_API_TOKEN", "")
+        self.import_from = env.get("WALL_IMPORT_FROM", os.path.expanduser("~/.local/state/tv/wall.json"))
+        self.tv_profiles = env.get("WALL_TV_PROFILES", os.path.expanduser("~/.local/state/tv"))
+        self.tv_overlay_api = env.get("WALL_TV_OVERLAY_API", "http://127.0.0.1:7790")
+        self.port = int(env.get("WALL_PORT", "7795"))
+        self.host = env.get("WALL_HOST", "0.0.0.0")
+        self.idle_s = float(env.get("WALL_IDLE_S", "600"))
+        self.first_viewer_s = float(env.get("WALL_FIRST_VIEWER_S", "900"))
+        self.max_hours = float(env.get("WALL_MAX_HOURS", "6"))
+        self.min_free_mb = int(env.get("WALL_MIN_FREE_MB", "2500"))
+        self.discord = env.get("WALL_DISCORD", "1") not in ("0", "false", "")
+
+
+def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, scores: Scores | None = None,
+          store: PresetStore | None = None) -> FastAPI:
+    cfg = cfg or Cfg()
+    scores = scores or Scores()
+    store = store or PresetStore(str(cfg.state), cfg.import_from)
+    if instances is None:
+        instances = {"tv": Instance("tv", Session("tv", cdp_base=9231, profiles=cfg.tv_profiles, overlay_api=cfg.tv_overlay_api,
+                                                  unmute_on_stop=True), store, scores)}
+        if cfg.discord:
+            instances["discord"] = Instance(
+                "discord", Session("discord", cdp_base=9241, profiles=str(cfg.state), prefix="discord-",
+                                   overlay_api=f"http://127.0.0.1:{cfg.port}/i/discord", extra_flags=["--ozone-platform=wayland"]),
+                store, scores, headless=Headless("discord", cfg.state), idle_s=cfg.idle_s, first_viewer_s=cfg.first_viewer_s,
+                max_hours=cfg.max_hours, min_free_mb=cfg.min_free_mb)
+
+    @asynccontextmanager
+    async def lifespan(app):
+        async def ticker():
+            while True:
+                await asyncio.sleep(1)
+                for inst in instances.values():
+                    try:
+                        await asyncio.to_thread(inst.tick)
+                    except Exception as e:  # noqa: BLE001
+                        log.warning("tick %s: %s", inst.name, e)
+        task = asyncio.create_task(ticker())
+        yield
+        task.cancel()
+        for inst in instances.values():
+            await asyncio.to_thread(inst.stop, "service stopped")
+
+    app = FastAPI(title="sharplab-wall", lifespan=lifespan)
+    app.state.instances, app.state.store, app.state.scores = instances, store, scores
+
+    @app.middleware("http")
+    async def gate(request: Request, call_next):
+        host = request.client.host if request.client else ""
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            ip = None
+        if ip is not None and ip.is_loopback:
+            return await call_next(request)
+        if ip is None or ip not in TAILNET:
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        auth = request.headers.get("authorization", "")
+        if not cfg.token or not secrets.compare_digest(auth, f"Bearer {cfg.token}"):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not REMOTE_OK.match(request.url.path) or (request.url.path == "/presets" and request.method != "GET"):
+            return JSONResponse({"error": "not for remote callers"}, status_code=403)
+        return await call_next(request)
+
+    def inst(name: str) -> Instance:
+        if name not in instances:
+            raise WallError(f"no wall instance {name!r}")
+        return instances[name]
+
+    @app.exception_handler(WallError)
+    async def wall_error(request: Request, e: WallError):
+        return JSONResponse({"error": str(e)}, status_code=404 if str(e).startswith("no wall instance") else 409)
+
+    @app.exception_handler(ValueError)
+    async def value_error(request: Request, e: ValueError):
+        return JSONResponse({"error": str(e)[:300]}, status_code=422)
+
+    async def body(request: Request) -> dict:
+        try:
+            data = await request.json()
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            raise ValueError("body must be a JSON object")
+        return data
+
+    def num(d: dict, k: str) -> int:
+        v = d.get(k)
+        if not isinstance(v, int) or isinstance(v, bool):
+            raise ValueError(f"{k} must be an integer")
+        return v
+
+    @app.get("/healthz")
+    def healthz() -> dict:
+        return {"ok": True, "instances": {k: v.state()["running"] for k, v in instances.items()}}
+
+    # ---- presets / lookups ----
+    @app.get("/presets")
+    def get_presets() -> list[dict]:
+        return store.presets
+
+    @app.put("/presets")
+    async def put_presets(request: Request) -> Response:
+        try:
+            data = await request.json()
+        except ValueError:
+            return JSONResponse({"error": "bad json"}, status_code=400)
+        try:
+            return JSONResponse(store.put(data))
+        except ValidationError as e:
+            return JSONResponse({"error": errors(e)}, status_code=422)
+
+    @app.get("/live/{league}")
+    def get_live(league: str, n: int = 4) -> Response:
+        if league not in LEAGUES:
+            return JSONResponse({"error": "league is nfl or nba"}, status_code=404)
+        return JSONResponse(live_games(scores.get(league, True), league, max(1, min(4, n))))
+
+    @app.get("/teams")
+    def get_teams() -> dict:
+        return {"stream": STREAM, **TEAMS}
+
+    # ---- instances ----
+    @app.get("/i")
+    def all_states() -> dict:
+        return {k: v.state() for k, v in instances.items()}
+
+    @app.get("/i/{name}")
+    def get_state(name: str) -> dict:
+        return inst(name).state()
+
+    @app.post("/i/{name}/start")
+    async def start(name: str, request: Request) -> dict:
+        d = await body(request)
+        i = inst(name)
+        preset = d.get("preset")
+        if preset is not None and not isinstance(preset, (int, str)):
+            raise ValueError("preset is an index or a name")
+        urls = d.get("urls")
+        if urls is not None and not (isinstance(urls, list) and all(isinstance(u, str) for u in urls)):
+            raise ValueError("urls is a list of strings")
+        board, layout = d.get("board"), d.get("layout")
+        tiles = d.get("tiles", 4)
+        if not isinstance(tiles, int) or not 1 <= tiles <= 4:
+            raise ValueError("tiles is 1–4")
+        return await asyncio.to_thread(i.start, preset=preset, urls=urls, live=d.get("live") or "", tiles=tiles,
+                                       board=board, layout=layout, sound=d.get("sound", 0) if isinstance(d.get("sound", 0), int) else 0)
+
+    @app.post("/i/{name}/stop")
+    async def stop(name: str) -> dict:
+        return await asyncio.to_thread(inst(name).stop)
+
+    @app.post("/i/{name}/tile")
+    async def tile(name: str, request: Request) -> dict:
+        d = await body(request)
+        if not isinstance(d.get("url"), str):
+            raise ValueError("url is a string")
+        return await asyncio.to_thread(inst(name).set_tile, num(d, "i"), d["url"])
+
+    @app.delete("/i/{name}/tile/{i}")
+    async def rm_tile(name: str, i: int) -> dict:
+        return await asyncio.to_thread(inst(name).remove_tile, i)
+
+    @app.post("/i/{name}/move")
+    async def move(name: str, request: Request) -> dict:
+        d = await body(request)
+        return await asyncio.to_thread(inst(name).move, num(d, "i"), num(d, "j"))
+
+    @app.post("/i/{name}/sound")
+    async def sound(name: str, request: Request) -> dict:
+        d = await body(request)
+        return await asyncio.to_thread(inst(name).sound, num(d, "i"))
+
+    @app.post("/i/{name}/pin")
+    async def pin(name: str, request: Request) -> dict:
+        d = await body(request)
+        return await asyncio.to_thread(inst(name).pin, num(d, "i"))
+
+    @app.post("/i/{name}/board")
+    async def board(name: str, request: Request) -> dict:
+        d = await body(request)
+        if d.get("visible") is not None and not isinstance(d.get("visible"), bool):
+            raise ValueError("visible is a boolean")
+        return await asyncio.to_thread(inst(name).set_board, d.get("board"), d.get("visible"), d.get("layout"))
+
+    @app.post("/i/{name}/overlay")
+    async def overlay(name: str, request: Request) -> dict:
+        d = await body(request)
+        return await asyncio.to_thread(inst(name).overlay, d.get("view") or "", bool(d.get("lbar")))
+
+    # ---- the overlay process of a service-owned overlay polls these (under its --api) ----
+    @app.get("/i/{name}/api/overlay/view")
+    def ov_view(name: str) -> dict:
+        return inst(name).overlay_view()
+
+    @app.get("/i/{name}/api/overlay")
+    async def ov_data(name: str, board: str = "") -> dict:
+        return await asyncio.to_thread(inst(name).overlay_data, board)
+
+    # ---- HLS ----
+    @app.get("/hls/{name}/{file}")
+    def hls(name: str, file: str) -> Response:
+        i = inst(name)
+        if not i.headless or not HLS_FILE.match(file):
+            return JSONResponse({"error": "not found"}, status_code=404)
+        path = i.headless.hls / file
+        if not path.exists():
+            return JSONResponse({"error": "not found"}, status_code=404)
+        if file.endswith(".m3u8"):
+            i.seen()
+            return FileResponse(path, media_type="application/vnd.apple.mpegurl", headers={"Cache-Control": "no-cache"})
+        return FileResponse(path, media_type="video/mp2t", headers={"Cache-Control": "max-age=60"})
+
+    app.state.boards = BOARDS
+    return app
+
+
+def main() -> None:
+    import uvicorn
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    cfg = Cfg()
+    if not cfg.token:
+        log.warning("WALL_API_TOKEN is not set: only loopback callers will get in")
+    uvicorn.run(build(cfg), host=cfg.host, port=cfg.port, log_level="info", access_log=False)
+
+
+if __name__ == "__main__":
+    main()
