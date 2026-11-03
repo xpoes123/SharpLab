@@ -33,6 +33,14 @@ DASHBOARDS = {
 }
 
 
+IMPLICIT_CONF = 0.85   # a chat line NOT addressed to Jev ("can i see the 2024 dashboard?"): act only when this sure, never reply
+
+
+def is_implicit(text: object) -> bool:
+    """Any other line worth a look: a short request-sized message (Jev decides whether it's a wall request at all)."""
+    return isinstance(text, str) and 6 <= len(text.strip()) <= 200 and not is_command(text)
+
+
 def is_command(text: object) -> bool:
     return isinstance(text, str) and bool(TRIGGER.match(text))
 

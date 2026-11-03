@@ -163,8 +163,9 @@ async def test_public_and_unverified_cant_and_other_chat_is_untouched():
     h, done = make(jev)
     assert h.jev_command(wall.PUBLIC, "jev races") == ""
     assert h.jev_command({"id": "g-x", "name": "Nick", "guest": True}, "jev races") == ""
-    assert await run(h, MEMBER, "hey jev races") == [] and await run(h, MEMBER, "races please") == []
-    assert not jev.calls and not done
+    assert not jev.calls and not done                                   # public / unverified: Jev never asked
+    h2, done2 = make(Jev("none", 0.99))                                 # members' ordinary chat: asked, but nothing happens
+    assert await run(h2, MEMBER, "hey jev races") == [] and await run(h2, MEMBER, "lol what a night") == [] and not done2
 
 
 class WS:
@@ -187,3 +188,13 @@ async def test_socket_chat_posts_first_then_jev_answers():
     h.clock.t += 2
     await wall.handle(h, 2, ws, MEMBER, {"t": "chat", "text": "jev again"})
     assert ws.sent[-1] == {"t": "error", "text": "One Jev command every 10 s.", "chat": True}
+
+
+@pytest.mark.anyio
+async def test_plain_lines_act_only_when_sure_and_never_reply():
+    h, done = make(Jev("d_swing", 0.96))
+    assert await run(h, DAVID, "can i see the 2024 dashboard?") == ["🎧 DJ Jev: putting vs 2024 on tile 2 (96%)"]
+    h, done = make(Jev("d_swing", 0.6))
+    assert await run(h, DAVID, "the 2024 numbers were wild") == [] and not done      # unsure: silent, nothing changes
+    h, done = make(Jev("none", 0.99))
+    assert await run(h, DAVID, "lol this is great") == [] and not done
