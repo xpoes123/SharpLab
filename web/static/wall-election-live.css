@@ -34,7 +34,7 @@
 .lv-stat span { line-height: 1.25; }
 .lv-note { margin: 6px 0 0; }
 .lv-sec { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
-.lv-sec > summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--fg-2, var(--fg)); min-height: 28px; line-height: 28px; }
+.lv-sec > summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--fg-2, var(--fg)); line-height: 1.35; padding: 5px 0; }
 .lv-tabs { margin: 6px 0; flex-wrap: wrap; }
 .lv-tabs .el-segbtn { padding: 4px 10px; min-height: 30px; font-size: 12px; }
 .lv-ctwrap { overflow-x: auto; }

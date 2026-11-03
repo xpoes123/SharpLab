@@ -104,7 +104,7 @@
   function stats(d) {
     const t = d.totals, row = el("div", "lv-stats");
     row.append(stat(n0(t.votes), "votes counted"));
-    row.append(t.votes ? stat(`${t.leader} +${n0(t.margin_votes)}`, `margin · ${sgn(t.margin, 2)} pts`, pcls(t.party)) : stat("–", "no votes yet"));
+    row.append(t.votes ? stat(`+${n0(t.margin_votes)}`, `${t.leader} leads · ${sgn(t.margin, 2)} pts`, pcls(t.party)) : stat("–", "no votes yet"));
     row.append(stat(`${Math.round(t.pct)}%`, t.expected ? "of the expected vote in" : "reporting"));
     row.append(stat(t.left == null ? "–" : t.left === 0 ? "0" : "~" + big(t.left), t.left == null ? "votes left: no estimate yet" : `votes left · ${t.left_how}`));
     return row;
