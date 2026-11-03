@@ -127,10 +127,44 @@ function electionItems(d, now) {   // the ticker: the calls as they come (newest
     return calls.slice(0, 12).concat(watch, next);
 }
 
+// members' midterm positions (wall/election.py trades(): opt-in filtered, live — results aren't a picture)
+function tradeItem(t) {
+    var l = betLine(t);
+    return { who: l.who, side: t.side || "", what: t.label || "", px: l.px, pct: l.pct, dir: l.dir, size: l.size, pnl: l.pnl,
+             status: t.status || "", chip: t.chip || "", won: t.won === true ? "won" : t.won === false ? "lost" : "",
+             highlight: t.highlight || "" };
+}
+
+function tradeTicker(d) {   // a call on a race someone holds first ("✓ CALLED · Hansen wins +38%"), then every position
+    var called = [], open = [];
+    (d.trades || []).forEach(function (t) {
+        var l = tradeItem(t);
+        if (l.highlight) called.push({ head: l.highlight.replace(/ [+−]\d+%$/, ""), text: l.side + " " + l.what,
+                                       tail: (l.highlight.match(/[+−]\d+%$/) || [""])[0],
+                                       tone: l.won === "won" ? "ok" : "", called: true });
+        else open.push({ head: l.who, text: l.side + " " + l.what + (l.status ? " · " + l.status : ""),
+                         tail: l.px.replace("@", "").replace(" → ", "→") + (l.pct ? " " + l.pct.replace(" ", "") : ""),
+                         tone: l.dir === "up" ? "ok" : l.dir === "down" ? "danger" : "" });
+    });
+    return called.concat(open);
+}
+
+function interleave(a, b) {   // the ticker: race calls and positions take turns, so neither crowds the other out
+    var out = [], i = 0;
+    for (; i < Math.max(a.length, b.length); i++) {
+        if (i < a.length) out.push(a[i]);
+        if (i < b.length) out.push(b[i]);
+    }
+    return out;
+}
+
 var KINDS = {
     election: function (d, now) {
-        return { cells: [], plays: [], side: false, ticker: electionItems(d, now), kicker: (d.calls || []).length ? "Race calls" : "Election",
-                 elec: { offices: (d.offices || []).map(bop), calls: (d.calls || []).slice(0, 10).map(function (c) { return callItem(c, now); }),
+        var tt = tradeTicker(d), calledFirst = tt.filter(function (x) { return x.called; });
+        var items = electionItems(d, now);
+        return { cells: [], plays: [], side: false, ticker: calledFirst.concat(interleave(items, tt.slice(calledFirst.length))),
+                 kicker: (d.calls || []).length ? "Race calls" : "Election",
+                 elec: { offices: (d.offices || []).map(bop), trades: (d.trades || []).map(tradeItem), calls: (d.calls || []).slice(0, 10).map(function (c) { return callItem(c, now); }),
                          source: "Unofficial · calls: " + (d.source === "NYT (AP)" ? "AP" : d.source || "–"), counting: d.counting || 0,
                          next: (d.next || []).length ? "Polls close " + clock(d.next[0].t) + " · " + d.next[0].states.join(" ") : "" } };
     },
