@@ -53,20 +53,16 @@ def streams() -> dict[str, dict]:
 def criteria() -> dict[str, str]:
     out = {k: v[2] for k, v in DASHBOARDS.items()}
     for k, s in streams().items():
-        hosts = f"; anchors/hosts: {s['hosts']}" if s.get("hosts") else ""
-        out[k] = f"the {s['name']} live stream ({s['group']}{hosts}), e.g. '{s['name'].lower()}'"
+        # anchors as example phrases ("kornacki"): Jev resolves those, not a hosts list (0.48 → 0.94 live)
+        ex = [s["name"].lower()] + [h.split()[-1].lower() for h in s.get("hosts", "").split(", ") if h]
+        out[k] = f"the {s['name']} live stream ({s['group']}), e.g. " + ", ".join(f"'{e}'" for e in ex)
     out["none"] = "not a request to change what the wall shows, or unclear which screen or stream they mean"
     return out
 
 
-def state(text: str, wall: dict | None = None) -> str:
-    """The line, plus what's on the wall now so "this guy" / "turn on his audio" can resolve."""
-    out = "A viewer wrote in the watch-party chat: " + " ".join(str(text).split())[:STATE_MAX]
-    names = {s["url"]: s["name"] for s in streams().values()}
-    w = wall or {}
-    on = [f"tile {i + 1} {names[u]}" + (" (has the sound)" if i == w.get("sound") else "")
-          for i, u in enumerate(w.get("urls") or []) if u in names]
-    return out + (". On the wall now: " + ", ".join(on) if on else "")
+def state(text: str) -> str:
+    # no "on the wall now" context: tried live, it pulled Jev toward the tile with the sound (0.94 → 0.5)
+    return "A viewer wrote in the watch-party chat: " + " ".join(str(text).split())[:STATE_MAX]
 
 
 def questions() -> dict:

@@ -1020,7 +1020,7 @@ class Hub:
         """explicit ("jev …"): act at MIN_CONF and always answer; any other line: act only at IMPLICIT_CONF, silent otherwise."""
         try:
             try:
-                a = await asyncio.wait_for(self.ask_jev(wall_jev.state(text, self.wall), wall_jev.questions()), wall_jev.TIMEOUT_S)
+                a = await asyncio.wait_for(self.ask_jev(wall_jev.state(text), wall_jev.questions()), wall_jev.TIMEOUT_S)
             except Exception as e:  # noqa: BLE001 — a timeout or a failure: Jev wasn't reached
                 log.warning("jev command: %s", type(e).__name__)
                 a = None

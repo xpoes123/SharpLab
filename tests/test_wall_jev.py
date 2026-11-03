@@ -70,10 +70,7 @@ def test_question_shape():
     assert "2024" in c["d_swing"] and "'fox news'" in c[sid("Fox News")]
     assert wall_jev.is_command("Jev put fox on") and wall_jev.is_command("  jev, senate") and not wall_jev.is_command("jevvy")
     assert len(wall_jev.state("x" * 1000)) == len("A viewer wrote in the watch-party chat: ") + 300
-    assert "Steve Kornacki" in c[sid("NBC News")]
-    nbc, dw = (s["url"] for s in wall_jev.streams().values() if s["name"] in ("NBC News", "Daily Wire"))
-    assert wall_jev.state("hi", {"urls": ["x", "y", nbc, dw], "sound": 3}).endswith(
-        "On the wall now: tile 3 NBC News, tile 4 Daily Wire (has the sound)")
+    assert "'kornacki'" in c[sid("NBC News")]
 
 
 @pytest.mark.anyio
