@@ -30,7 +30,8 @@ def test_projection_and_ladder():
     assert sen["shares"][0]["name"] == "Smith" and sen["shares"][0]["model"] is None
 
 
-def test_national_house_and_margin_buckets():
+def test_national_house_and_margin_buckets(monkeypatch):
+    monkeypatch.setattr(ep, "NATIONAL_MIN", 4)
     races = [_race("H", "PA", i, 100, 300_000, 160_000, 140_000) for i in range(1, 5)]
     mk = {ep.HOUSE_TURNOUT: [_m("T-A", 10, 20, lo=0, hi=1_199_999, kind="between"), _m("T-B", 10, 20, lo=1_200_000)],
           ep.HOUSE_MARGIN: [{**_m("M-R", 5, 6, lo=0, hi=0, kind="between"), "yes_sub_title": "Republicans win"},
@@ -53,3 +54,9 @@ def test_wall_status_line_carries_projection():
     from shared import election_markets as em
     assert em.status_line(_race("H", "NJ", 7, 50, 150_000, 80_000, 70_000)).endswith("~300K votes projected")
     assert "projected" not in em.status_line(_race("H", "NJ", 7, 2, 1000, 600, 400))
+
+
+def test_national_waits_for_enough_districts():
+    races = [_race("H", "IN", i, 30, 70_000, 40_000, 30_000) for i in range(1, 5)]
+    h = ep.national_house(races, {})
+    assert h["reporting"] == 4 and h["proj"] is None and h["margin"] is None
