@@ -159,23 +159,44 @@
     sel.onchange = () => { if (sel.value) openState(sel.value); sel.value = ""; };
     pickRow.append(sel, legend);
     const foot = el("p", "el-foot muted small");
-    root.append(head, dashRow(), bal, mapBox, pickRow, foot);
+    root.append(head, bal, mapBox, pickRow, foot, dashWidget());
   }
 
   // ---- pop-out: any of the TV's election dashboards, full size and live, in a modal (web/wall.py proxies them) --------
   const POP = "/api/v1/wall/p/election/";
   const DASHES = [["Senate map", "map?view=S"], ["House map", "map?view=H"], ["Governor map", "map?view=G"], ["Key races", "races"],
                   ["Turnout", "turnout"], ["Exit polls", "exitpoll"], ["vs 2024", "swing"]];
-  function dashRow() {
-    const row = el("div", "el-dash");
-    row.append(el("span", "el-dash-lbl muted small", "Dashboards"));
+  // the widget under the map: the TV's dashboards, live, one at a time (tabs); ↗ opens one in its own window (no framing needed)
+  function dashWidget() {
+    const box = el("div", "el-dw");
+    const tabs = el("div", "el-dash");
+    tabs.append(el("span", "el-dash-lbl muted small", "Dashboards"));
+    const frame = el("div", "el-pop-frame el-dw-frame");
+    const ifr = el("iframe"); ifr.title = "Election dashboard"; ifr.loading = "lazy";
+    frame.append(ifr);
+    const win = el("button", "el-chip el-dw-win", "↗ open in window");
+    win.type = "button";
+    let cur = null;
+    const show = (label, path, b) => {
+      cur = [label, path];
+      tabs.querySelectorAll(".el-chip[data-dash]").forEach((x) => x.setAttribute("aria-selected", String(x === b)));
+      ifr.src = POP + path;
+    };
+    let first = null;
     for (const [label, path] of DASHES) {
       const b = el("button", "el-chip", label);
-      b.type = "button"; b.dataset.dash = path; b.title = `Open the TV's ${label} dashboard, full size`;
-      b.onclick = () => openDash(label, path);
-      row.append(b);
+      b.type = "button"; b.dataset.dash = path; b.title = `Show the TV's ${label} dashboard here`;
+      b.onclick = () => show(label, path, b);
+      tabs.append(b);
+      if (path === "races") first = [label, path, b];
     }
-    return row;
+    win.onclick = () => { if (cur) window.open(POP + cur[1], "dash-" + cur[1].replace(/\W/g, ""), "popup,width=1280,height=760"); };
+    tabs.append(win);
+    box.append(tabs, frame);
+    // load only once it's on screen (it polls live data)
+    new IntersectionObserver((es, o) => { if (es.some((e) => e.isIntersecting) && first) { show(...first); first = null; o.disconnect(); } })
+      .observe(box);
+    return box;
   }
   let pop = null, popFrom = null;
   function closeDash() {

@@ -181,3 +181,9 @@ body.pop-on { overflow: hidden; }
   .es-sheet, .es-scrim, .el-map path, .el-bar i, .es-cbar i { transition: none; }
 }
 a.el-chip { text-decoration: none; display: inline-flex; align-items: center; }
+
+/* dashboards widget under the map */
+.el-dw { margin-top: 14px; display: grid; gap: 8px; }
+.el-dw .el-chip[aria-selected="true"] { background: var(--accent, #FFB000); color: #111; border-color: transparent; }
+.el-dw-win { margin-left: auto; }
+.el-dw-frame { border-radius: 10px; overflow: hidden; }
