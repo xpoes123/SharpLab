@@ -104,3 +104,16 @@ def test_fixed_over_the_api_too(api):
     app, _ = api
     st = client(app).post("/i/tv/start", json={"urls": [MAP], "live": "nfl", "tiles": 3, "fixed": True}).json()
     assert st["urls"][0] == MAP and len(st["urls"]) == 3 and st["live"]["games"][0] is None and st["sound"] == 1
+
+
+def test_a_start_from_the_tv_os_never_asks_it_back(api):
+    """The TV OS calls /start synchronously from its event loop: asking its /healthz back would deadlock until the timeouts
+    (a 2 s stall that failed every preset play, so its board never opened). It says app="wall" instead."""
+    app, _ = api
+    tv = app.state.instances["tv"]
+
+    def blocked():
+        raise AssertionError("asked the TV OS during its own call")
+    tv.host_app = blocked
+    st = client(app).post("/i/tv/start", json={"urls": [MAP, "https://a.tv"], "app": "wall"}).json()
+    assert st["running"] and tv.app == "wall" and tv.tv_owned
