@@ -131,7 +131,7 @@ def test_today_pnl():
     held = {"ticker": "A", "qty": 10, "mark": 0.6, "prev_mark": 0.5, "unreal": 3.0}   # held overnight: 24h move
     new = {"ticker": "B", "qty": 10, "mark": 0.6, "prev_mark": 0.0, "unreal": -1.0}   # new market: cost basis
     traded = {"ticker": "C", "qty": 5, "mark": 0.4, "prev_mark": 0.3, "unreal": 0.25}  # bought today: cost basis
-    st = {"revenue": 1000, "yes_count_fp": "10", "no_count_fp": "0", "yes_total_cost_dollars": "6",
+    st = {"ticker": "S", "revenue": 1000, "yes_count_fp": "10", "no_count_fp": "0", "yes_total_cost_dollars": "6",
           "no_total_cost_dollars": "0", "fee_cost": "0"}
     t = ka.today_pnl([held, new, traded], [st], {"C"})
     assert t["open_move"] == pytest.approx(1.0 - 1.0 + 0.25)
@@ -154,3 +154,15 @@ def test_fees_reduce_unrealized_and_sum_on_fills():
     g = ka.group_fills([{"ticker": "A", "count_fp": "5", "yes_price_dollars": "0.4", "fee_cost": "0.1", "ts": 1},
                         {"ticker": "A", "count_fp": "5", "yes_price_dollars": "0.4", "fee_cost": "0.15", "ts": 2}])
     assert g[0]["fee"] == pytest.approx(0.25)
+
+
+def test_today_pnl_counts_sales_on_unsettled_markets():
+    # harsha 2026-11-02: SJ ML bought YES @52, sold @5 (Kalshi books it as NO @95, paired at settle);
+    # SJ team total bought YES @44, dumped @1-2¢, 0.88 left open — only Kalshi's realized_pnl carries that loss.
+    sj = {"ticker": "SJ", "fee_cost": "1.0399", "market_result": "no", "no_count_fp": "50.00",
+          "no_total_cost_dollars": "47.5", "yes_count_fp": "50.00", "yes_total_cost_dollars": "26"}
+    sj4 = {"ticker": "SJ4", "qty": 0.88, "mark": 0.0, "prev_mark": 0.0, "unreal": -1.28}
+    t = ka.today_pnl([sj4], [sj], {"SJ", "SJ4"}, {"SJ4": -21.11, "SJ": -23.5})
+    assert t["settled"] == pytest.approx(-24.54 - 21.11, abs=0.01)  # SJ's realized not double-counted
+    assert t["total"] == pytest.approx(-24.54 - 21.11 - 1.28, abs=0.01)
+    assert ka.resolutions({"u": [dict(sj, settled_time="2026-11-03T04:43:07Z")]}, {"u": 0})["SJ"]["holders"][0][1] == "SOLD"
