@@ -375,7 +375,8 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
             await asyncio.to_thread(lambda: [public_url(u) for u in urls])
         return await asyncio.to_thread(i.start, preset=preset, urls=urls, live=d.get("live") or "", tiles=tiles,
                                        board=board, layout=layout, sound=d.get("sound", 0) if isinstance(d.get("sound", 0), int) else 0,
-                                       origin=origin, fixed=d.get("fixed") is True)
+                                       origin=origin, fixed=d.get("fixed") is True,
+                                       app=d["app"] if isinstance(d.get("app"), str) and not i.headless else None)
 
     def target(name: str) -> Instance:
         """Where a change made on `name` lands. The stream is always the TV while it mirrors: a change made on the stream

@@ -88,6 +88,38 @@ def own_page(url: str) -> bool:
         return False
 
 
+YT_LIVE = re.compile(r"^https://(www\.|m\.)?youtube\.com/(@[\w.-]+|channel/[\w-]+|c/[\w.-]+|user/[\w.-]+)/live/?$")
+YT_CANON = re.compile(rb'<link rel="canonical" href="https://www\.youtube\.com/watch\?v=([\w-]{11})"')
+_yt_cache: dict[str, tuple[float, str]] = {}
+
+
+def resolve_live(url: str, fetch=None, ttl: float = 600) -> str:
+    """A YouTube channel's /live page (youtube.com/@NBCNews/live) → its current stream's watch?v= page. The /live page
+    renders the watch UI inside the channel shell, where requestFullscreen never resolves and the CSS pin sits under the
+    masthead and sidebar; a watch?v= page fullscreens like every other YouTube tile. Anything else, or no answer, = as is."""
+    if not YT_LIVE.match(url):
+        return url
+    hit = _yt_cache.get(url)
+    if hit and time.monotonic() - hit[0] < ttl:
+        return hit[1]
+    try:
+        if fetch is None:
+            import urllib.request
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                                                       "Chrome/140.0 Safari/537.36", "Accept-Language": "en-US,en;q=0.9"})
+            with urllib.request.urlopen(req, timeout=4) as r:
+                body = r.read(1_500_000)
+        else:
+            body = fetch(url)
+        m = YT_CANON.search(body)
+    except Exception as e:  # noqa: BLE001 — the channel page as it is beats no tile
+        log.info("youtube live %s: %s", url, e)
+        return url
+    out = f"https://www.youtube.com/watch?v={m.group(1).decode()}" if m else url
+    _yt_cache[url] = (time.monotonic(), out)
+    return out
+
+
 def page_url(path: str) -> str:
     return f"http://127.0.0.1:{PAGE_PORT}/p/{path.lstrip('/')}"
 
@@ -339,7 +371,7 @@ class Driver:
                 [*GPU_ENV, "chromium", f"--user-data-dir={Path(self.s.profiles) / f'chromium-wall-{self.s.prefix}{slot}'}",
                  "--profile-directory=Wall", "--no-first-run", *GPU_FLAGS, *self.s.extra_flags, *QUIET_FLAGS, "--noerrdialogs",
                  "--disable-session-crashed-bubble", "--autoplay-policy=no-user-gesture-required",
-                 f"--remote-debugging-port={self.s.cdp_base + slot}", f"--app={url}"],
+                 f"--remote-debugging-port={self.s.cdp_base + slot}", f"--app={resolve_live(url)}"],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=self.s.child_env(),
                 preexec_fn=no_core)
         except OSError as e:
