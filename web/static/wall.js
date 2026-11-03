@@ -105,7 +105,16 @@
     b.setAttribute("aria-label", video.muted ? "Sound off" : "Sound on");
     const live = !!(wall && wall.running);   // nothing to hear while the wall is off: no sound controls at all
     $("unmute").hidden = !video.muted || !live;
-    b.hidden = !live;
+    b.hidden = !live; $("vol").hidden = !live;
+    $("vol").value = String(video.muted ? 0 : Math.round(video.volume * 100));
+  };
+  // Volume: this viewer's player only (the TV and other viewers are untouched); remembered in this browser.
+  try { const v = localStorage.getItem("wall.vol"); if (v != null && +v > 0) video.volume = Math.min(1, +v / 100); } catch (e) { /* default volume */ }
+  $("vol").oninput = () => {
+    const v = +$("vol").value;
+    if (v > 0) { video.volume = v / 100; if (video.muted) { video.muted = false; video.play().catch(() => {}); } }
+    else video.muted = true;
+    try { if (v > 0) localStorage.setItem("wall.vol", String(v)); } catch (e) { /* not remembered */ }
   };
   const toggleMute = () => { video.muted = !video.muted; if (!video.muted) video.play().catch(() => {}); showMute(); };
   $("unmute").onclick = toggleMute;
@@ -211,17 +220,22 @@
     sel.replaceChildren(tv, ...((wall && wall.presets) || []).map((n) => { const o = el("option", null, n); o.value = n; return o; }));
     if (cur) sel.value = cur;
     if (lastGames) renderLive(lastGames);
+    const elecMode = !!(wall && ((wall.overlay && wall.overlay.board === "election") || (wall.running && (wall.urls || []).some(ownPage))));
+    document.querySelectorAll("[data-sports]").forEach((x) => (x.hidden = elecMode));
+    document.querySelectorAll("[data-elec]").forEach((x) => (x.hidden = !elecMode));
+    if (elecMode) renderElec();
     const tiles = $("tiles"); tiles.replaceChildren();
     if (!on) return;
     const labels = (wall.live && wall.live.labels) || [];
     (wall.urls || []).forEach((u, i) => {
+      const name = tileName(u, labels[i]);
       const t = el("div", "tile" + (wall.sound === i ? " sound" : ""));
-      t.append(el("b", null, String(i + 1)), el("span", "lbl", labels[i] || shortUrl(u)));
+      t.append(el("b", null, String(i + 1)), el("span", "lbl", name));
       if (wall.sound === i) t.append(el("span", null, "🔊"));
-      else { const b = el("button", null, "🔊 here"); b.onclick = () => propose({ op: "sound", i }); t.append(b); }
+      else if (!ownPage(u)) { const b = el("button", null, "🔊 here"); b.onclick = () => propose({ op: "sound", i }); t.append(b); }   // our data pages are silent
       if (i > 0 && (wall.urls || []).length >= 2) {   // tile 1 is the big one
         const p = el("button", null, "⬆ main"); p.title = "Make this the main (big) tile";
-        p.onclick = () => propose({ op: "promote", i, label: labels[i] || shortUrl(u) }); t.append(p);
+        p.onclick = () => propose({ op: "promote", i, label: name }); t.append(p);
       }
       const rot = (wall.rotate || []).find((r) => r.i === i);   // an election data tile: rotates every minute
       if (rot) {
@@ -233,6 +247,50 @@
       }
       tiles.append(t);
     });
+  }
+  // Election night: our own /p/election/<screen> pages and local stations get names, not URLs
+  const OWN = "http://127.0.0.1:7795/p/election/";
+  const ELEC_SCREENS = [["map?view=S", "Senate map"], ["map?view=H", "House map"], ["map?view=G", "Governor map"],
+    ["races", "Key races"], ["turnout", "Turnout"], ["exitpoll", "Exit polls"]];
+  const ownPage = (u) => { try { return new URL(u).pathname.startsWith("/p/election/"); } catch { return false; } };
+  function ownName(u) {
+    const x = new URL(u), scr = x.pathname.slice("/p/election/".length).replace(/\/$/, "");
+    if (scr === "map") return { S: "Senate map", H: "House map", G: "Governor map" }[x.searchParams.get("view")] || "Election map";
+    return { races: "Key races", turnout: "Turnout", exitpoll: "Exit polls" }[scr] || "Election " + scr;
+  }
+  let localNews = null;   // {ST: [{name, url}]}: YouTube channels' /live pages
+  fetch("/local-news.json").then((r) => r.json()).then((j) => { localNews = j; if (!$("newsSt").closest("[data-elec]").hidden) renderElec(); }).catch(() => {});
+  function tileName(u, label) {
+    if (ownPage(u)) return ownName(u);
+    const yt = /youtube\.com\/(@[^/?#]+)\/live/i.exec(u);
+    if (!yt) return label || shortUrl(u);
+    const h = yt[1].toLowerCase();
+    for (const list of Object.values(localNews || {})) {
+      const n = list.find((s) => s.url.toLowerCase().includes("/" + h + "/live"));
+      if (n) return n.name;
+    }
+    return yt[1] + " live";
+  }
+  const pickTile = () => {   // the Tile menu's pick, or the next empty one
+    const n = (wall && wall.urls) ? wall.urls.length : 0, picked = +$("tileI").value;
+    return picked < n ? picked : Math.min(n, 3);
+  };
+  function renderElec() {
+    const onWall = new Set((wall && wall.running && wall.urls) || []);
+    const pick = (url, label) => {
+      const b = el("button", "btn", label + (onWall.has(url) ? " · on the wall" : ""));
+      b.disabled = onWall.has(url);
+      b.onclick = () => propose({ op: "tile", i: pickTile(), url, label });
+      return b;
+    };
+    $("elecScreens").replaceChildren(...ELEC_SCREENS.map(([scr, label]) => pick(OWN + scr, label)));
+    const sel = $("newsSt");
+    if (localNews && !sel.options.length) {
+      sel.replaceChildren(...Object.keys(localNews).sort().map((st) => { const o = el("option", null, st); o.value = st; return o; }));
+      try { const s = localStorage.getItem("wall.newsSt"); if (s && localNews[s]) sel.value = s; } catch (e) { /* first state */ }
+      sel.onchange = () => { try { localStorage.setItem("wall.newsSt", sel.value); } catch (e) { /* not remembered */ } renderElec(); };
+    }
+    $("newsBtns").replaceChildren(...((localNews && localNews[sel.value]) || []).map((n) => pick(n.url, n.name)));
   }
   const shortUrl = (u) => { try { const x = new URL(u); return (x.hostname.replace(/^www\./, "") + x.pathname).replace(/\/$/, ""); } catch { return u; } };
 
@@ -438,11 +496,7 @@
         const b = el("button", "btn", (g.league === "nfl" ? "🏈 " : "🏀 ") + g.label + (onWall.has(g.url) ? " · on the wall" : ""));
         b.disabled = onWall.has(g.url);
         b.title = "Put on tile " + (+$("tileI").value + 1);
-        b.onclick = () => {
-          const n = (wall && wall.urls) ? wall.urls.length : 0;
-          const picked = +$("tileI").value;
-          propose({ op: "tile", i: picked < n ? picked : Math.min(n, 3), url: g.url, label: g.label });
-        };
+        b.onclick = () => propose({ op: "tile", i: pickTile(), url: g.url, label: g.label });
         box.append(b);
       }
     }
