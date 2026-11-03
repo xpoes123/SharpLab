@@ -128,6 +128,9 @@
     else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
   };
 
+  // double-click (or double-tap) the video: full screen and back, like any player
+  video.parentElement.addEventListener("dblclick", (e) => { if (e.target.closest("button")) return; e.preventDefault(); $("fsBtn").click(); });
+
   // Hotkeys (not while typing): m mute, f fullscreen, space pause / back to live (the sync loop catches it up), ↑ ↓ volume
   document.addEventListener("keydown", (e) => {
     const t = e.target;
