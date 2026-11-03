@@ -434,6 +434,26 @@ async def get_shapes(request: Request):
     return Response(SHAPES.read_bytes(), media_type="application/json", headers={"Cache-Control": "private, max-age=86400"})
 
 
+_turnout: dict = {"at": 0.0, "data": None}
+
+
+@router.get("/turnout")
+async def get_turnout(request: Request):
+    """Official turnout by state from the wall service (wall/turnout.py), cached a minute: the state sheet's turnout block."""
+    _, ok = who(request)
+    if not ok:
+        return _deny()
+    if time.monotonic() - _turnout["at"] > 60 or _turnout["data"] is None:
+        c = wall.cfg()
+        try:
+            async with httpx.AsyncClient(timeout=8) as client:
+                r = await client.get(c["service"] + "/p/election/turnout.json", headers={"Authorization": f"Bearer {c['token']}"})
+            _turnout.update(at=time.monotonic(), data=r.json())
+        except (httpx.HTTPError, ValueError):
+            _turnout["at"] = time.monotonic()   # try again in a minute; keep the last numbers
+    return _turnout["data"] or {"states": {}}
+
+
 @router.get("/state/{st}")
 async def get_state(st: str, request: Request):
     user, ok = who(request)

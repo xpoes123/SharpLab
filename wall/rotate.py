@@ -1,11 +1,11 @@
-"""Election night: the wall's own data pages (/p/election/map, /p/election/races) rotate on their tiles so the data tiles
+"""Election night: the wall's own data pages (/p/election/map, races, turnout) rotate on their tiles so the data tiles
 don't sit on one screen all night. Each rotating tile moves to the next screen not already on the wall every EVERY_S, the
 tiles staggered by half that so two never change together. A vote holds a tile ("hold") or moves it on now ("next");
 either way it stays put HOLD_S and then rotates again by itself, so nobody has to remember to unlock it.
 """
 from __future__ import annotations
 
-SCREENS = ("map?view=S", "map?view=H", "map?view=G", "races")
+SCREENS = ("map?view=S", "map?view=H", "map?view=G", "races", "turnout")
 EVERY_S, HOLD_S = 60.0, 300.0
 MARK = "/p/election/"
 
@@ -15,7 +15,7 @@ def screen(url: str) -> str | None:
     if MARK not in url:
         return None
     rest = url.split(MARK, 1)[1]
-    return rest if rest.split("?")[0] in ("map", "races") else None
+    return rest if rest.split("?")[0] in ("map", "races", "turnout") else None
 
 
 def next_url(urls: list[str], i: int) -> str | None:
