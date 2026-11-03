@@ -374,3 +374,40 @@ body.public .controls, body.public .viewers, body.public #props { display: none 
 /* DJ Jev in the viewer list and the chat */
 .jev .who, #viewers li.jev > span:nth-child(2) { color: #BB9AF7; font-weight: 700; }
 .viewers li .tag.jev-tag { background: linear-gradient(90deg, #7AA2F7, #BB9AF7); color: #15161E; font-weight: 700; padding: 1px 7px; border-radius: 999px; }
+
+/* ---- full screen: the chat floating over the video, Twitch-style (wall.js fchat) ----
+   body.fs = the player box is fullscreen (requestFullscreen) or pseudo-fullscreen (body.pfs: iPhone, where only the bare
+   <video> can go native-fullscreen and nothing overlays that — the box is pinned over the whole viewport instead). */
+.fchat, .fs-ctl { display: none; }
+body.pfs { overflow: hidden; overscroll-behavior: none; }
+body.pfs .player { position: fixed; inset: 0; z-index: 90; width: 100vw; height: 100vh; height: 100dvh; max-width: none;
+  aspect-ratio: auto; border-radius: 0; margin: 0; background: #000; }
+body.pfs .player video { width: 100%; height: 100%; object-fit: contain; }
+body.fs .chat-toggle { display: none !important; }
+body.fs .fchat { display: flex; flex-direction: column; justify-content: flex-end; gap: 8px; position: absolute; z-index: 3;
+  right: max(14px, env(safe-area-inset-right)); bottom: calc(max(12px, env(safe-area-inset-bottom)) + 56px);
+  width: min(44%, 400px); max-height: 60%; pointer-events: none; }
+.fmsgs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
+.fmsgs li { color: #fff; font-size: clamp(14px, 1.7vw, 24px); line-height: 1.3; font-weight: 500; overflow-wrap: anywhere;
+  text-shadow: 0 0 2px #000, 0 0 2px #000, 0 1px 3px rgba(0,0,0,.95), 0 0 8px rgba(0,0,0,.6);
+  animation: fchat-in .25s ease-out both; transition: opacity 1s ease; }
+.fmsgs li b { font-weight: 700; margin-right: .4em; }
+.fmsgs li.guest b { color: #e6e6e6; }
+.fmsgs li.sys { color: var(--accent, #FFB000); font-weight: 600; }
+.fmsgs li.gone { opacity: 0; }
+@keyframes fchat-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+body.fchat-off .fmsgs { display: none; }
+.fchat-form { display: flex; gap: 6px; pointer-events: auto; }
+.fchat-form[hidden] { display: none; }
+.fchat-form input { flex: 1; min-width: 0; font-size: 16px; min-height: 40px; border-radius: 10px; padding: 0 10px;
+  border: 1px solid rgba(255,255,255,.18); background: rgba(17,18,26,.82); color: var(--fg); }
+.fchat-form .btn { min-height: 40px; }
+body.fs .fs-ctl { display: flex; gap: 8px; position: absolute; z-index: 4;
+  right: max(12px, env(safe-area-inset-right)); bottom: max(12px, env(safe-area-inset-bottom)); }
+.fs-ctl button { width: 44px; height: 44px; border-radius: 50%; border: 1px solid rgba(255,255,255,.14); cursor: pointer;
+  background: rgba(17,18,26,.6); color: var(--fg); font-size: 18px; display: grid; place-items: center; padding: 0;
+  transition: opacity .4s ease; }
+.fs-ctl button[hidden] { display: none; }
+#fchatBtn[aria-pressed="false"] { opacity: .5; }
+body.fs.fs-idle .fs-ctl button { opacity: 0; }
+body.public .fchat-form, body.public #fsayBtn { display: none !important; }
