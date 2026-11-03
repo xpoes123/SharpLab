@@ -1,0 +1,36 @@
+/* The watch page's Bets panel (wall-bets.js). Calm: price moves tint a row for a few seconds, nothing blinks. */
+.bets { margin-bottom: 10px; }
+.bets[hidden] { display: none; }
+.bets-head { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+.bets-head h3 { margin: 0; font-size: 15px; margin-right: auto; }
+.bets .opt { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; cursor: pointer; }
+.bets .bet-note:empty { display: none; }
+.bets .bet-note { color: var(--gold); }
+.bet-owner { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+.bet-game { border-top: 1px solid var(--line); padding: 10px 0 6px; }
+.bet-game.on-wall .bet-game-head b { color: var(--accent); }
+.bet-game-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; margin-bottom: 6px; }
+.bet-row { display: grid; grid-template-columns: 110px minmax(0, 1fr) 92px 72px 64px 84px 118px; gap: 4px 10px;
+  align-items: center; font-size: 13px; padding: 4px 6px; border-radius: var(--r-sm); transition: background-color 1.5s ease; }
+.bet-row .b-who { font-weight: 600; color: var(--accent2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bet-row .b-who.you::after { content: " (you)"; color: var(--muted); font-weight: 400; }
+.bet-row .b-what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bet-row .b-side { font-size: 11px; padding: 1px 5px; border-radius: 4px; background: var(--panel2); }
+.bet-row .b-side.yes { color: var(--green); }
+.bet-row .b-side.no { color: var(--red); }
+.bet-row .b-px, .bet-row .b-pct, .bet-row .b-book, .bet-row .b-size { font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
+.bet-row.up .b-pct { color: var(--green); }
+.bet-row.down .b-pct { color: var(--red); }
+.bet-row.moved-up { background: var(--green-soft); }
+.bet-row.moved-down { background: var(--red-soft); }
+.bet-row .spark polyline.up { stroke: var(--green); }
+.bet-row .spark polyline.down { stroke: var(--red); }
+.bet-row .spark { width: 72px; height: 22px; }
+.bet-sync { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.bet-sync .btn { padding: 3px 10px; font-size: 12px; }
+@media (max-width: 700px) {
+  .bet-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .bet-row .b-size { grid-column: 1 / -1; }
+  .bet-row .b-who { grid-column: 1 / -1; }
+  .bet-row .b-book, .bet-row .spark { display: none; }
+}

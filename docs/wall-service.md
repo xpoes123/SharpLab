@@ -197,7 +197,7 @@ Found missing (not needed, so nothing to install): gst `pulsesrc`/`mp4mux` (gst-
 
 ## The bands around the tiles (`wall/bands.py`, `wall/qml/Bands.qml`)
 2 and 3 tiles leave bands above and below the 16:9 arrangement (with or without the L-bar; 1 and 4 fill their area).
-The overlay process gets `--bands http://127.0.0.1:7795/i/<name>` and maps up to two more OVERLAY layer-shell
+The overlay process (its `--bets http://127.0.0.1:7795/i/<name>`, the same service) maps up to two more OVERLAY layer-shell
 surfaces sized exactly to those bands (`lbar.js wallBands`; exclusive zone 0 so the bottom one sits on the L-bar's band),
 hidden while the full / matchup board is up. Every 2 s it reads `GET /i/<name>/bands`:
 `{n, sound, lbar, view, title, league, tiles: [{url, host, delay, src, game, synced}], ticker, delay, chat}`.
@@ -205,13 +205,14 @@ hidden while the full / matchup board is up. Every 2 s it reads `GET /i/<name>/b
   score, period + clock, a speaker on the sound tile, the tile's delay.
 * Spoilers: `ScoreTape` keeps each scoreboard with the time it was first seen; a header shows the one as of
   now − the tile's delay, the strip the one as of now − the default. No snapshot that old yet (a wall that just
-  started) → teams + "syncing", never a score. The delay comes from `build(delay=...)`, `(url) -> (seconds, src)`,
-  default 45 s everywhere (`bands.default_delay`); wire the per-tile SyncStore (`sync.delay`) in there when it lands.
+  started) → teams + "syncing", never a score. Delays are the SyncStore's (`sync.delay(url)`) and the tile → game
+  mapping is `sync.tile_games`, the same as `/api/overlay/bets` hands the L-bar's boards. Where the overlay's own
+  delayed board holds the game, the header takes that copy (`qml/bands.js headerGame`), so header and sidebar agree.
 * Backdrop: dark base tinted by each tile's team colours, faint court arcs (NBA) / yard lines (NFL), a drift stepped
   every 2 s over a 4-minute period. Nothing flashes or pulses; the strip changes page every 14 s with a slow fade.
 * Bottom band without the L-bar: the other games (delayed) + the watch party's chat (the L-bar's sidebar has the chat
   when the L-bar is up).
-* Preview: `QT_QPA_PLATFORM=offscreen qml6 wall/qml/Preview.qml -- --layout none --tiles 2 --bands http://127.0.0.1:7795/i/tv --out /tmp/b.png`.
+* Preview: `QT_QPA_PLATFORM=offscreen qml6 wall/qml/Preview.qml -- --layout none --n 2 --bets http://127.0.0.1:7795/i/tv --out /tmp/b.png`.
 
 ## Watch page, sync, chat, viewers, votes (sharplab-web, `web/wall.py`)
 
@@ -275,6 +276,71 @@ hidden while the full / matchup board is up. Every 2 s it reads `GET /i/<name>/b
   (`http://100.81.31.34:8796`, only `/api/v1/wall/chat`); `https://sharplab.djiang.xyz` works too.
 * Discord ↔ web chat mirroring: **not built** (it would need the bot to relay both ways and map identities; easy to add
   later with the same bot API).
+
+## Bets on the wall + the spoiler delay
+
+Members' open Kalshi positions (from the keys `/kalshi link` stores) on the watch page and on the TV overlay — and, since
+the stream is a capture of the TV, on the stream too.
+
+**Privacy.** Opt-in per member, default off: `/kalshi wall share:True [exact:True]` or the toggle on the watch page
+(table `kalshi_wall_optin`). Only members who share *and* have a linked key are read at all. Guests (demo nicknames)
+never get the panel (403). Sizes are buckets (`<10`, `10+`, `50+`, `250+`, `1k+` contracts) and P&L is a % unless the
+member also chose exact numbers. Balances are never read. Turning sharing off drops that member's history at once.
+
+**Spoilers.** Kalshi reacts to a play within a second; the video shows it 20–60 s later, and a web viewer is a further
+`WALL_SYNC_DELAY_S` behind the TV. So nothing is shown "now":
+
+* Every price and position the poller sees is kept with the time it was seen (`shared/kalshi_wall.Tape`); a view is
+  built **as of** a past instant and can't contain anything seen after it — not the price, not the P&L, not the ▲/▼.
+* **D** = how far a tile's picture runs behind real life, per tile page (`wall/sync.py`, `$WALL_STATE_DIR/sync.json`):
+  manual (− 5 s / + 5 s, or **Score just changed**) > auto (scorebug OCR) > default `WALL_BETS_DELAY_S` (45 s).
+* TV overlay: each tile's badge as of `now − D(tile)`. Watch page: as of `(this viewer's picture) − D(tile)`, where the
+  picture is the stream's program-date-time it is playing, mapped to the server clock with the playlist offset the page
+  already tracks for sync (`window.__wallSync`), capped at `now − WALL_SYNC_DELAY_S`. Other live games: the default D.
+* The **scoreboard + ticker** are held back the same way (`board.js` `delayed()`): the overlay keeps a few minutes of
+  board polls and draws every game from the newest poll at least that game's tile delay old ("Syncing · 45 s" until it
+  has one). The fantasy board uses the default D. (The matchup panel is not delayed.)
+
+**Auto-calibration (scorebug OCR).** Every 2 s, for each tile showing a live game, while bets or a board are shown, the
+service grabs the tile's frame read-only over CDP (`Page.captureScreenshot` with a clip scale, so the video comes at its
+own resolution, ~1920 px across; once the bug is found only its box is grabbed) and reads the scorebug with tesseract
+(`wall/scorebug.py`: three image versions — as is, dark ink, light ink; a digits-only one-line read per score cell, two
+versions must agree). Finding the bug = the bottom (then top) band's numbers that form a recent ESPN score, side by side
+or stacked. When the on-screen score changes to a score in ESPN's play-by-play (`summary?event=`, `wallclock` of each
+play) and reads the same twice running, lag = first sighting − that play's wall clock; D = median of the last 5, 0–120 s.
+A bug unreadable for ~30 s (replays, ads) is searched for again (at most every 20 s, alternating 1× / 1.5× upscale for
+small 720p bugs). Measured on the box 2026-11-03: Warriors broadcast 38–42 s behind ESPN's play clock. Hard case: the
+Clippers' dark-digits-on-grey bug reads on some grabs only (the retries cover it; the fixture test is a non-strict xfail).
+No tesseract → no auto; manual + default still apply.
+
+**Tap calibration.** "Score just changed" (owner on the watch page; the TV's phones can `POST /sync {"url", "tap": true}`
+on loopback) → the scoring play whose wall clock is closest to `tap − current D` within 2.5 min → D = tap − its wall
+clock, as a manual setting. "Auto" goes back to the OCR value.
+
+**Kalshi load.** One poller in sharplab-web for everyone, only while someone looks (the page or the TV feed asked in the
+last 2 min): every 20 s one signed `GET /portfolio/positions` per sharer + one public `/markets?tickers=` batch, through a
+token bucket (5/s, burst 10). Viewers read the shared book; requests never reach Kalshi.
+
+**Paths.**
+
+| who | call |
+|---|---|
+| watch page (members) | `GET /api/v1/wall/bets?at=<picture ms>` → `{games: [{key, label, tile, url, delay, src, as_of, rows}], show, default, owner}` |
+| watch page (members) | `GET`/`POST /api/v1/wall/bets/me` `{share, exact}` |
+| watch page (owner/admins) | `POST /api/v1/wall/bets/sync` `{show}` / `{default}` / `{url, nudge: ±1}` / `{url, auto: true}` / `{url, tap: ms}` → wall service `POST /sync` (bearer) |
+| wall service → web | `POST /api/v1/wall/bets/feed` (X-Api-Key) `{games: [{league, id, away, home, start, delay}]}` → rows already delayed per game, every 5 s while a wall runs and bets are shown |
+| overlay → wall service | `GET /i/{inst}/api/overlay/bets` (loopback) → `{show, n, view, tiles: [{i, delay, src, rows}], delays: {espnId: D}, default}`; the overlay process gets `--bets http://127.0.0.1:7795/i/{inst}` |
+| TV phones / web → wall service | `GET /sync`, `POST /sync` (loopback, or tailnet + bearer) |
+| wall state | `GET /i/{inst}` carries `sync: {show, default, tiles: [{url, delay, src, samples, game}]}` |
+
+**How the overlay data reaches the TV.** The TV's overlay (`qml6 Overlay.qml`, started by this service for both walls)
+polls `--api` (the TV router, :7790) for its view + board as before, and now also `--bets` (this service on loopback) every
+2 s. The service gets the rows from sharplab-web over `WALL_WEB_URL` with `WALL_WEB_KEY` (the chat's path). Badges are a
+transparent layer-shell surface over the tiles' area (the L-bar corner, or the whole screen with the L-bar off), hidden
+under a full-screen board. The mirror stream captures the TV's screen, badges included — hence the opt-in.
+
+**Not built here:** the TV phone remote's buttons (xpoes123/tv — the service API above is ready: `GET /sync`,
+`POST /sync {"show"}`, `{"url", "nudge"}`, `{"url", "tap": true}`), price-jump annotations with the play that caused them.
 
 ## `/wall` in Discord (`bot/cogs/wall.py`)
 

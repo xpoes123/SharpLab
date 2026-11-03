@@ -4,8 +4,10 @@ party's chat. The overlay polls GET /i/<inst>/bands (loopback) every 2 s.
 
 Spoilers: a tile's video runs D seconds behind real life, so its header shows the scoreboard as it was D seconds ago
 (ScoreTape keeps every scoreboard with the time we first saw it; nothing seen after now − D can reach the header). D comes
-from `delay(url) -> (seconds, src)`: the same per-tile setting the bets use (wall/sync.py's SyncStore.delay on the
-wall-kalshi branch); until that lands, default_delay = 45 s for every tile. The strip's other games use the default.
+from `delay(url) -> (seconds, src)`: the same per-tile setting the bets and the L-bar's boards use (wall/sync.py
+SyncStore.delay; default_delay = 45 s everywhere is only the fallback for tests / previews). The strip uses the default.
+The overlay prefers its own delayed board (Board.qml, same delays) for a game it holds, so a header and the sidebar
+never disagree (qml/bands.js headerGame).
 Right after a wall starts there is no snapshot that old yet: the header shows the teams and "syncing", never a score.
 """
 from __future__ import annotations
@@ -14,7 +16,7 @@ import time
 from collections import deque
 from urllib.parse import urlsplit
 
-from wall.live import LEAGUES, stream_urls
+from wall.live import LEAGUES
 
 DEFAULT_DELAY_S = 45.0
 KEEP_S = 600.0          # the tape's memory (delays are clamped to 120 s)
@@ -24,7 +26,7 @@ CHAT_FRESH_S = 20.0
 
 
 def default_delay(url: str) -> tuple[float, str]:
-    """The spoiler delay hook: (seconds, src). Swap for the shared per-tile setting (SyncStore.delay) when it lands."""
+    """(seconds, src) without a SyncStore (tests, previews); the service passes SyncStore.delay."""
     return DEFAULT_DELAY_S, "default"
 
 
@@ -88,21 +90,6 @@ def compact(league: str, g: dict, score: bool = True) -> dict:
             "close": bool(g.get("close")) and score, "away": _side(g["away"], score), "home": _side(g["home"], score)}
 
 
-def tile_games(urls: list[str], live_league: str, live_ids: list, boards: dict[str, dict | None]) -> list[tuple[str, str] | None]:
-    """Each tile's (league, ESPN id): the live plan's game, else the game whose team page is on the tile (live first)."""
-    rank = {"in": 0, "pre": 1, "post": 2}
-    out: list[tuple[str, str] | None] = []
-    for k, u in enumerate(urls):
-        gid = live_ids[k] if k < len(live_ids) else None
-        if live_league and gid:
-            out.append((live_league, str(gid)))
-            continue
-        hits = [(rank.get(g.get("state"), 3), lg, str(g.get("id"))) for lg, b in boards.items()
-                for g in (b or {}).get("games") or [] if g.get("id") and u.rstrip("/") in stream_urls(lg, g)]
-        out.append(min(hits)[1:] if hits else None)
-    return out
-
-
 def host(url: str) -> str:
     h = (urlsplit(url).hostname or "").removeprefix("www.")
     return h[:40]
@@ -116,15 +103,16 @@ def chat_lines(view: dict | None, now: float) -> list[dict]:
             for m in (view.get("messages") or [])[-CHAT_LINES:]]
 
 
-def build_view(*, urls: list[str], sound: int, lbar: bool, view: str, title: str, live_league: str, live_ids: list,
+def build_view(*, urls: list[str], games: list[dict | None], sound: int, lbar: bool, view: str, title: str, live_league: str,
                scores, tape: ScoreTape, delay=default_delay, chat: dict | None = None, now: float | None = None) -> dict:
-    """GET /i/<inst>/bands. scores.get(league) → the cached parsed scoreboard (fetches when stale)."""
+    """GET /i/<inst>/bands. games = wall/sync.py tile_games (each tile's {league, id, …} or None, the same mapping the
+    bets and the boards' delays use); scores.get(league) → the cached parsed scoreboard (fetches when stale)."""
     now = time.time() if now is None else now
     leagues = list(LEAGUES)
     for lg in leagues:
         tape.see(lg, now, scores.get(lg))
     latest = {lg: tape.latest(lg) for lg in leagues}
-    picks = tile_games(urls, live_league, live_ids, latest)
+    picks = [(g["league"], str(g["id"])) if g else None for g in games] + [None] * (len(urls) - len(games))
     tiles, on_tiles, seen_lg = [], set(), []
     for u, pick in zip(urls, picks):
         d, src = delay(u)

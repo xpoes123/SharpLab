@@ -6,10 +6,12 @@
 // changes page with a slow fade; a new score just appears.
 import QtQuick
 import "lbar.js" as G
+import "bands.js" as BJ
 
 Item {
     id: root
     property var b: null                 // the /bands payload
+    property var boardData: null         // the overlay's own delayed board (Board.qml last.data): wins for a game it holds
     property string edge: "top"          // top | bottom
     property var geo: null               // G.wallBands(...)
     property real unit: 1920             // the screen width: 1 rem = unit / 120, like Board.qml
@@ -34,7 +36,7 @@ Item {
     readonly property bool heads: headH >= 3.2 * rem
     // tile i's header lives in this band
     function owns(i) { return geo !== null && heads && geo.head[i] === edge }
-    function game(i) { return b && b.tiles && i < b.tiles.length ? b.tiles[i].game : null }
+    function game(i) { return b && b.tiles && i < b.tiles.length ? BJ.headerGame(b.tiles[i].game, boardData) : null }
     function ownsAny() { if (!geo) return false; for (var i = 0; i < geo.tiles.length; i++) if (owns(i)) return true; return false }
 
     // ---- the slow drift: a phase stepped every 2 s (period 4 min), never animated per frame ----
@@ -156,7 +158,7 @@ Item {
             required property var modelData
             required property int index
             readonly property var tile: root.b && root.b.tiles && index < root.b.tiles.length ? root.b.tiles[index] : null
-            readonly property var g: tile ? tile.game : null
+            readonly property var g: root.game(index)
             readonly property bool sound: root.b !== null && root.b.sound === index
             readonly property real s: height   // the header's own scale
             visible: root.owns(index)
@@ -290,7 +292,7 @@ Item {
             id: cells
             x: label.x + label.width + 1.2 * root.rem; height: parent.height
             Repeater {
-                model: root.b ? root.b.ticker.slice((tick.shown % tick.pages) * tick.per, (tick.shown % tick.pages + 1) * tick.per) : []
+                model: root.b ? root.b.ticker.map(function (g) { return BJ.headerGame(g, root.boardData) }).slice((tick.shown % tick.pages) * tick.per, (tick.shown % tick.pages + 1) * tick.per) : []
                 Item {
                     required property var modelData
                     width: tick.cellW; height: cells.height

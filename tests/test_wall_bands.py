@@ -12,11 +12,12 @@ from starlette.testclient import TestClient
 
 from tests.test_wall_service import FakeDriver, FakeHeadless, FakeScores, board, url
 from wall.bands import DEFAULT_DELAY_S, ScoreTape, build_view, default_delay, status
-from wall.engine import LBAR_JS, Session, overlay_cmd
+from wall.engine import LBAR_JS, Session
 from wall.instance import Instance
 from wall.llm import LLMGuard
 from wall.presets import PresetStore
 from wall.server import Cfg, build
+from wall.sync import SyncStore
 
 QML = Path(__file__).resolve().parent.parent / "wall" / "qml"
 BAL_BUF = "401873026"   # BAL 7–10 BUF, Q2 14:14 in the fixture
@@ -40,8 +41,10 @@ class Seq:
 
 
 def view(scores, tape, now, urls=(), live_ids=(), live="nfl", delay=default_delay, chat=None, sound=0, lbar=False):
-    return build_view(urls=list(urls), sound=sound, lbar=lbar, view="", title="Live NFL", live_league=live,
-                      live_ids=list(live_ids), scores=scores, tape=tape, delay=delay, chat=chat, now=now)
+    """live_ids stand in for wall/sync.py tile_games (the endpoint test runs the real one)."""
+    games = [{"league": live, "id": g} if g else None for g in live_ids]
+    return build_view(urls=list(urls), games=games, sound=sound, lbar=lbar, view="", title="Live NFL", live_league=live,
+                      scores=scores, tape=tape, delay=delay, chat=chat, now=now)
 
 
 def test_tape_is_as_of_and_forgets_a_stale_run():
@@ -86,21 +89,9 @@ def test_each_tile_has_its_own_delay():
     assert b["game"]["away"]["score"] is None and b["game"]["status"] == "syncing"            # as of 985: none yet
 
 
-def test_tiles_without_a_live_plan_find_their_game_by_team_page():
-    nfl = board("nfl")
-    s, tape = Seq(nfl), ScoreTape()
-    view(s, tape, 900, live="")
-    v = view(s, tape, 1000, live="", urls=[url("nfl", "bengals"), url("nfl", "rams"), "https://www.example.com/x"])
-    a, b, c = v["tiles"]
-    assert a["game"]["id"] == TEN_CIN and a["game"]["away"]["score"] == 13
-    assert b["game"]["state"] == "pre" and b["game"]["status"] == "4:05 PM" and b["synced"]
-    assert c["game"] is None and c["host"] == "example.com"
-    assert v["league"] == "nfl"
-
-
 def test_pregame_shows_its_start_even_before_the_tape_catches_up():
     s, tape = Seq(board("nfl")), ScoreTape()
-    v = view(s, tape, 1000, live="", urls=[url("nfl", "rams")])
+    v = view(s, tape, 1000, urls=[url("nfl", "rams")], live_ids=["401873032"])
     assert v["tiles"][0]["game"]["status"] == "4:05 PM" and v["tiles"][0]["synced"]
 
 
@@ -133,30 +124,41 @@ def test_status_strings():
     assert status({"state": "post", "detail": "Final/OT"}) == "Final/OT"
 
 
-def test_bands_endpoint(tmp_path, monkeypatch):
+def _app(tmp_path, monkeypatch, lbar=True):
     monkeypatch.setattr("wall.server.tv_active", lambda api: None)
     cfg = Cfg({"WALL_STATE_DIR": str(tmp_path), "WALL_API_TOKEN": "s3cret", "WALL_IMPORT_FROM": "", "WALL_TV_OUTPUT": ""})
     store = PresetStore(str(tmp_path))
-    store.put([{"name": "Live NFL", "urls": [], "live": "nfl"}])
     data = {"nfl": board("nfl")}
     drv = FakeDriver()
-    drv.lbar = True
+    drv.lbar = lbar
     tv = Instance("tv", Session("tv"), store, FakeScores(data), driver=drv, run=lambda f: None)
-    app = build(cfg, {"tv": tv}, FakeScores(data), store, guard=LLMGuard(mode="off"),
-                delay=lambda u: (30.0, "manual"))
-    c = TestClient(app, base_url="http://127.0.0.1:7795", client=("127.0.0.1", 5555))
+    sync = SyncStore(tmp_path / "sync.json")
+    app = build(cfg, {"tv": tv}, FakeScores(data), store, guard=LLMGuard(mode="off"), sync=sync)
+    return app, sync, TestClient(app, base_url="http://127.0.0.1:7795", client=("127.0.0.1", 5555))
+
+
+def test_bands_endpoint_uses_the_sync_stores_delays(tmp_path, monkeypatch):
+    app, sync, c = _app(tmp_path, monkeypatch)
     assert c.get("/i/tv/bands").json()["n"] == 0
     c.post("/i/tv/start", json={"live": "nfl", "tiles": 2})
+    urls = c.get("/i/tv").json()["urls"]
+    sync.set_manual(urls[1], 30)
     v = c.get("/i/tv/bands").json()
     assert v["n"] == 2 and v["lbar"] is True and v["title"] == "Live NFL" and v["league"] == "nfl"
-    assert [t["delay"] for t in v["tiles"]] == [30.0, 30.0] and all(t["game"] for t in v["tiles"])
+    assert [(t["delay"], t["src"]) for t in v["tiles"]] == [(45.0, "default"), (30.0, "manual")]
+    assert all(t["game"] for t in v["tiles"])
 
 
-def test_overlay_gets_its_bands_url():
-    assert overlay_cmd("http://r", "http://127.0.0.1:7795/i/tv")[-2:] == ["--bands", "http://127.0.0.1:7795/i/tv"]
-    assert "--bands" not in overlay_cmd("http://r")
-    srv = build(Cfg({"WALL_IMPORT_FROM": "", "WALL_PORT": "7795", "WALL_DISCORD": "0"}), guard=LLMGuard(mode="off"))
-    assert srv.state.instances["tv"].session.bands_api == "http://127.0.0.1:7795/i/tv"
+def test_bands_and_the_boards_share_one_tile_game_mapping_and_delays(tmp_path, monkeypatch):
+    """/bands (the headers) and /api/overlay/bets (the delays the L-bar's boards are held back by) agree per game."""
+    app, sync, c = _app(tmp_path, monkeypatch)
+    c.post("/i/tv/start", json={"urls": [url("nfl", "bengals"), url("nfl", "rams"), "https://example.com/x"]})
+    sync.set_manual(url("nfl", "bengals"), 20)
+    bands, bets = c.get("/i/tv/bands").json(), c.get("/i/tv/api/overlay/bets").json()
+    a, b, x = bands["tiles"]
+    assert a["game"]["id"] == TEN_CIN and b["game"]["state"] == "pre" and x["game"] is None and x["host"] == "example.com"
+    assert {t["game"]["id"]: t["delay"] for t in bands["tiles"] if t["game"]} == bets["delays"]
+    assert bands["delay"] == bets["default"]
 
 
 @pytest.mark.skipif(not shutil.which("node"), reason="needs node")
@@ -191,7 +193,7 @@ def test_band_layer_renders(tmp_path):
 
     class H(BaseHTTPRequestHandler):
         def do_GET(self):
-            b = json.dumps(body if self.path.endswith("/bands") else {}).encode()
+            b = json.dumps(body if self.path.endswith("/bands") else {"default": 45, "delays": {}, "show": False, "n": 0, "tiles": []} if self.path.endswith("/bets") else {}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -205,8 +207,8 @@ def test_band_layer_renders(tmp_path):
 
     def render(name, bands):
         out = tmp_path / f"{name}.png"
-        args = ["qml6", str(QML / "Preview.qml"), "--", "--layout", "none", "--tiles", "2", "--size", "1920x1080",
-                "--out", str(out), "--wait", "2500"] + (["--bands", f"http://127.0.0.1:{srv.server_port}/i/tv"] if bands else [])
+        args = ["qml6", str(QML / "Preview.qml"), "--", "--layout", "none", "--n", "2", "--size", "1920x1080",
+                "--out", str(out), "--wait", "2500"] + (["--bets", f"http://127.0.0.1:{srv.server_port}/i/tv"] if bands else [])
         r = subprocess.run(args, env={"QT_QPA_PLATFORM": "offscreen", "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
                            capture_output=True, text=True, timeout=30)
         return out, [l for l in r.stderr.splitlines() if "Error" in l or "Unable to assign" in l or "is not defined" in l
@@ -220,3 +222,33 @@ def test_band_layer_renders(tmp_path):
         srv.server_close()
     assert errs_on == [] and errs_off == []
     assert on.exists() and off.exists() and on.read_bytes() != off.read_bytes()
+
+
+BJ = QML / "bands.js"
+BOARD = QML / "board.js"
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="needs node")
+def test_header_and_sidebar_agree():
+    """The header takes the board's delayed copy of its game (board.js delayed, the sidebar's data) whenever the board
+    has it: even if the service's own tape caught a newer or older snapshot, both show the same score."""
+    lib = lambda p: p.read_text().replace(".pragma library", "")
+    prog = f"""
+const B = (function () {{ {lib(BOARD)}; return {{ delayed }}; }})();
+const H = (function () {{ {lib(BJ)}; return {{ headerGame }}; }})();
+const g = (a, h) => ({{id: "1", state: "in", period: 4, clock: "2:41", detail: "2:41 - 4th", away: {{abbr: "BOS", score: a}}, home: {{abbr: "ORL", score: h}}}});
+const snap = (a, h) => ({{shown: "nba", updated: 0, data: {{kind: "scores", league: "nba", games: [g(a, h)]}}}});
+const hist = [{{t: 1000, s: snap(88, 91)}}, {{t: 1050, s: snap(158, 91)}}];   // the 158 is a spoiler until 1095
+const tile = {{league: "nba", id: "1", state: "in", status: "Q4 2:40", away: {{abbr: "BOS", color: "#0", score: 90}}, home: {{abbr: "ORL", color: "#1", score: 91}}}};
+const out = [];
+for (const now of [1060, 1094, 1095]) {{
+  const side = B.delayed(hist, now, {{"1": 45}}, 45).data;
+  const head = H.headerGame(tile, side);
+  out.push([side.games[0].away.score, head.away.score, head.status, head.away.color]);
+}}
+const syncing = B.delayed([hist[1]], 1060, {{"1": 45}}, 45).data;   // the board has nothing that old: the service's version
+out.push(H.headerGame(tile, syncing).away.score);
+process.stdout.write(JSON.stringify(out));"""
+    r = subprocess.run(["node", "-e", prog], capture_output=True, text=True, timeout=20)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == [[88, 88, "Q4 2:41", "#0"], [88, 88, "Q4 2:41", "#0"], [158, 158, "Q4 2:41", "#0"], 90]
