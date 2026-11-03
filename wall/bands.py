@@ -16,6 +16,7 @@ import time
 from collections import deque
 from urllib.parse import urlsplit
 
+from wall.engine import own_page, tile_map
 from wall.live import LEAGUES, TEAMS, stream_urls, team_slug
 
 DEFAULT_DELAY_S = 45.0
@@ -133,6 +134,16 @@ def chat_lines(view: dict | None, now: float) -> list[dict]:
             for m in (view.get("messages") or [])[-CHAT_LINES:]]
 
 
+def speaker(urls: list[str], sound: int) -> dict | None:
+    """The overlay's speaker badge (qml/Speaker.qml): which tile has the sound + its rect as fractions of the tiles' block
+    (engine.tile_map; the overlay places it with lbar.js wallTiles, the same arrangement). None = no badge: fewer than two
+    tiles with video (nothing to tell apart), or the sound index is on one of our /p/ data pages (they have no sound)."""
+    video = [k for k, u in enumerate(urls) if not own_page(u)]
+    if len(video) < 2 or sound not in video:
+        return None
+    return {"tile": sound, "rect": [round(v, 4) for v in tile_map(len(urls))[2][sound]]}
+
+
 def build_view(*, urls: list[str], games: list[dict | None], sound: int, lbar: bool, view: str, title: str, live_league: str,
                scores, tape: ScoreTape, delay=default_delay, chat: dict | None = None, now: float | None = None) -> dict:
     """GET /i/<inst>/bands. games = wall/sync.py tile_games (each tile's {league, id, …} or None, the same mapping the
@@ -174,4 +185,4 @@ def build_view(*, urls: list[str], games: list[dict | None], sound: int, lbar: b
     ticker.sort(key=lambda g: (order.get(g["state"], 3), not g["close"]))
     main = max(set(seen_lg), key=seen_lg.count) if seen_lg else live_league
     return {"n": len(urls), "sound": sound, "lbar": lbar, "view": view, "title": title, "league": main or "",
-            "tiles": tiles, "ticker": ticker[:TICKER_MAX], "delay": d0, "chat": chat_lines(chat, now)}
+            "tiles": tiles, "speaker": speaker(urls, sound), "ticker": ticker[:TICKER_MAX], "delay": d0, "chat": chat_lines(chat, now)}

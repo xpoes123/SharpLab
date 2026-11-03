@@ -17,6 +17,8 @@
 //            room — the L-bar's corner while the L-bar is up, else the whole screen (lbar.js wallBands): BandLayer.qml.
 //            A header per tile (its game as of now − its delay; the board's own delayed copy wins when it has the game,
 //            so header and sidebar agree), a calm backdrop, and without the L-bar the other games + the chat.
+//   speaker: (polls the same /bands) one transparent surface over the tiles' area: a small badge in the corner of the tile
+//            with the sound (SpeakerBadge.qml), fading when the sound moves; none with < 2 video tiles (bands.speaker).
 //   qml6 Overlay.qml -- --api http://127.0.0.1:7790 --bets http://127.0.0.1:7795/i/tv
 import QtQuick
 import QtQuick.Window
@@ -185,6 +187,26 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
         LayerShell.Window.anchors: LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
         LayerShell.Window.exclusionZone: app.geo.band
         Board { anchors.fill: parent; unit: Screen.width; layout: "band"; polling: false; v: main.v; bets: app.bets }
+    }
+
+    readonly property var spkArea: app.bands && app.bands.n > 0 ? G.wallArea(Screen.width, Screen.height, !!app.bands.lbar) : null
+    Window {   // speaker: a transparent surface over the tiles' area (top-left, like the bands), the badge on the sound tile
+        id: spkWin
+        transientParent: null
+        title: "TV overlay speaker"
+        color: "transparent"
+        flags: Qt.FramelessWindowHint | Qt.WindowTransparentForInput | Qt.WindowDoesNotAcceptFocus
+        width: app.spkArea ? app.spkArea.w : 1
+        height: app.spkArea ? app.spkArea.h : 1
+        visible: app.spkArea !== null && app.hostOk && app.bands.on !== false && !!app.bands.speaker
+            && app.layout !== "full" && app.layout !== "matchup"
+        LayerShell.Window.scope: "tv-overlay"
+        LayerShell.Window.layer: LayerShell.Window.LayerOverlay
+        LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
+        LayerShell.Window.activateOnShow: false
+        LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorLeft
+        LayerShell.Window.exclusionZone: -1
+        SpeakerBadge { anchors.fill: parent; b: app.bands; area: app.spkArea; unit: Screen.width }
     }
 
     Window {   // bands: one surface over the region the band layer owns (the L-bar's corner, or the whole screen without
