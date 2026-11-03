@@ -16,6 +16,7 @@ from wall.headless import Headless, free_vram_mb
 from wall.live import LEAGUES, REFRESH_S, LiveRun, Scores, carries, matchup
 from wall.presets import PresetStore, check_url
 from wall.rotate import EVERY_S, MARK, Rotation, next_url, screen
+from wall import streams
 
 log = logging.getLogger("wall.instance")
 APP_POLL_S = 2.0   # how often a TV wall asks the TV OS what it shows
@@ -109,6 +110,7 @@ class Instance:
                    "tv_app": self.app if self.host_app is not None else None, "overlay_on": self.overlay_on()}
             rot = self.source.rot if self.follow and self.source is not None else self.rot   # mirroring: the TV's clocks
             out["rotate"] = rot.view(self.urls, self.clock())
+            out["streams"] = [streams.peek(u) for u in self.urls]   # YouTube tiles: live now / starts at (wall/streams.py)
             if self.sync is not None:
                 out["sync"] = self.sync_view()
             if self.headless:
@@ -303,6 +305,30 @@ class Instance:
             if not (self.live and i < len(self.live.games) and self.live.games[i] is not None):
                 raise WallError("only a live game's tile can be pinned")
             self.live.pinned ^= {i}
+            self._bump()
+            return self.state()
+
+    def reset(self, urls: list[str]) -> dict:
+        """Back to the default screens: each tile that differs swaps in place, extra tiles go, missing ones come; the
+        rotation starts over (no holds)."""
+        with self.lock:
+            self._need()
+            self._own()
+            urls = [check_url(u) for u in urls][:4]
+            for i, u in enumerate(urls):
+                if i < len(self.urls):
+                    if self.urls[i] != u:
+                        self.urls[i] = u
+                        self.driver.set_tile(i, u)
+                else:
+                    self.urls.append(u)
+                    self.driver.add_tile(u)
+            while len(self.urls) > max(1, len(urls)):
+                self.driver.remove_tile(len(self.urls) - 1)
+                self.urls.pop()
+            if self.live:
+                self.live = None
+            self.rot.reset()
             self._bump()
             return self.state()
 
