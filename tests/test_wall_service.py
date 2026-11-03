@@ -69,6 +69,7 @@ def inst(tmp_path, data, presets=None, check=None, headless=None, **kw):
     store = PresetStore(str(tmp_path))
     store.put(presets or [{"name": "Live NFL", "urls": [], "live": "nfl"}])
     clock, d = Clock(), FakeDriver()
+    kw.setdefault("sysload", lambda: (1.0, 64000))
     i = Instance("tv", Session("tv"), store, FakeScores(data), driver=d, check=lambda lg, u: (check or (lambda u: True))(u),
                  run=lambda f: f(), clock=clock, headless=headless, **kw)
     return i, d, clock
@@ -267,10 +268,11 @@ def test_board_and_overlay(tmp_path):
 
 
 class FakeHeadless:
-    def __init__(self, tmp): self.hls, self.up, self.calls = tmp, True, []
-    def start(self): self.calls.append("start"); return {"WAYLAND_DISPLAY": "wall-x"}
+    def __init__(self, tmp): self.hls, self.up, self.calls, self.mode = tmp, True, [], ""
+    def start(self): self.calls.append("start"); self.mode = "tiles"; return {"WAYLAND_DISPLAY": "wall-x"}
     def begin_capture(self): self.calls.append("capture")
-    def stop(self): self.calls.append("stop")
+    def capture_screen(self, output, sink=""): self.calls.append(("screen", output)); self.mode = "screen"
+    def stop(self): self.calls.append("stop"); self.mode = ""
 
 
 def test_headless_idle_auto_stop_and_vram_budget(tmp_path):
@@ -390,14 +392,14 @@ def api(tmp_path, monkeypatch):
     fake_dns = {"a.tv": "93.184.216.34", "b.tv": "93.184.216.35", "lan.example": "192.168.1.1", "ts.example": "100.81.31.34", "localhost": "127.0.0.1"}
     monkeypatch.setattr("wall.server.resolve", lambda h: [(2, 1, 6, "", (fake_dns.get(h) or h, 0))])
     monkeypatch.setattr("wall.server.tv_active", lambda api: None)
-    cfg = Cfg({"WALL_STATE_DIR": str(tmp_path), "WALL_API_TOKEN": "s3cret", "WALL_IMPORT_FROM": ""})
+    cfg = Cfg({"WALL_STATE_DIR": str(tmp_path), "WALL_API_TOKEN": "s3cret", "WALL_IMPORT_FROM": "", "WALL_TV_OUTPUT": ""})
     store = PresetStore(str(tmp_path))
     data = {"nfl": board("nfl")}
     tv = Instance("tv", Session("tv"), store, FakeScores(data), driver=FakeDriver(), run=lambda f: None)
     h = FakeHeadless(tmp_path / "hls")
     (tmp_path / "hls").mkdir()
     disc = Instance("discord", Session("discord"), store, FakeScores(data), driver=FakeDriver(), run=lambda f: None, headless=h,
-                    vram=lambda: None)
+                    vram=lambda: None, sysload=lambda: (1.0, 64000))
     app = build(cfg, {"tv": tv, "discord": disc}, FakeScores(data), store)
     return app, tmp_path
 
@@ -529,3 +531,200 @@ def test_nested_session_bus_activates_nothing():
     import wall.headless as hl
     assert hl.QUIET_ENV["GTK_USE_PORTAL"] == "0" and "--password-store=basic" in engine.QUIET_FLAGS
     assert "VaapiOnNvidiaGPUs" in engine.GPU_FLAGS[0] and "VaapiVideoDecoder" in engine.GPU_FLAGS[0]
+
+
+# ---- stall watchdog --------------------------------------------------------------------------------------------------------
+def test_stall_watchdog_jumps_gaps_then_the_edge_then_reloads():
+    st = engine.Stall()
+    gap = {"t": 333.8, "paused": False, "ended": False, "ready": 1, "buffered": [[348.1, 354.0]], "seekable_end": 360.0}
+    assert engine.stall_action(st, gap, 0) is None          # first look
+    assert engine.stall_action(st, gap, 2) is None          # not 3 s yet
+    assert engine.stall_action(st, gap, 3.5) == ("seek", pytest.approx(348.4))
+    playing = {**gap, "t": 348.5}
+    assert engine.stall_action(st, playing, 4) is None and st.since == 4   # moving again: reset
+    stuck = {**gap, "t": 350.0, "buffered": [[340.0, 350.0]], "seekable_end": 362.0}
+    assert engine.stall_action(st, stuck, 5) is None
+    assert engine.stall_action(st, stuck, 9) is None                 # nothing buffered ahead: wait for 10 s
+    assert engine.stall_action(st, stuck, 15.5) == ("seek", 359.0)   # live edge − 3, once
+    assert engine.stall_action(st, stuck, 20) is None
+    assert engine.stall_action(st, stuck, 35.5) == ("reload", 0.0)
+    assert engine.stall_action(st, {**stuck, "paused": True}, 40) is None and st.t == -1   # paused by the user: not a stall
+    assert engine.stall_action(st, None, 41) is None
+
+
+class FakeCdp:
+    """A fake tile: answers Runtime.evaluate (fullscreen, probe, seek) and Page.reload."""
+    def __init__(self, probe):
+        self.probe, self.calls = probe, []
+
+    def __call__(self, port):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def cm():
+            def call(method, params=None):
+                expr = (params or {}).get("expression", "")
+                self.calls.append((method, expr[:40]))
+                if expr == engine.PROBE_JS:
+                    return {"result": {"value": self.probe}}
+                if "currentTime =" in expr:
+                    self.probe = {**self.probe, "t": float(expr.split("currentTime = ")[1].split(";")[0])}
+                return {"result": {"value": True}}
+            yield call
+        return cm()
+
+
+def test_stall_watchdog_over_cdp(monkeypatch):
+    fake = FakeCdp({"t": 333.8, "paused": False, "ended": False, "ready": 1, "buffered": [[348.1, 354.0]], "seekable_end": 360.0})
+    monkeypatch.setattr(engine, "cdp_page", fake)
+    t = [100.0]
+    monkeypatch.setattr(engine.time, "monotonic", lambda: t[0])
+    d = Driver(Session("tv", cdp_base=9231))
+    d._tend(3)
+    t[0] += 4
+    d._tend(3)
+    assert fake.probe["t"] == pytest.approx(348.4) and any("currentTime" in e or m == "Runtime.evaluate" for m, e in fake.calls)
+    fake.probe = {**fake.probe, "buffered": [], "seekable_end": 0}
+    for _ in range(20):
+        t[0] += 2
+        d._tend(3)
+    assert ("Page.reload", "") in fake.calls
+
+
+# ---- mirroring the TV ------------------------------------------------------------------------------------------------------
+def _mirror(api, monkeypatch, screen=False):
+    app, _ = api
+    local, remote = client(app), client(app, "100.81.31.34", "s3cret")
+    tv, disc = app.state.instances["tv"], app.state.instances["discord"]
+    disc.capture_output = "HDMI-A-1" if screen else ""
+    assert local.post("/i/tv/start", json={"urls": ["https://a.tv/1", "https://b.tv/2"], "board": "nfl"}).json()["running"]
+    monkeypatch.setattr("wall.server.tv_active", lambda api: "wall")
+    st = remote.post("/i/discord/start", json={"mirror": True, "origin": {"guild": "1", "channel": "22"}}).json()
+    assert st["mirror"] and st["origin"] == {"guild": "1", "channel": "22"} and st["name"] == "Mirroring the TV"
+    return local, remote, tv, disc, st
+
+
+def test_mirror_follows_the_tv_live(api, monkeypatch):
+    local, remote, tv, disc, st = _mirror(api, monkeypatch)
+    assert st["urls"] == ["https://a.tv/1", "https://b.tv/2"] and st["capture"] == "tiles" and st["overlay"]["board"] == "nfl"
+    local.post("/i/tv/tile", json={"i": 1, "url": "https://b.tv/3"})       # swap
+    local.post("/i/tv/tile", json={"i": 2, "url": "https://a.tv/4"})       # add
+    local.post("/i/tv/sound", json={"i": 2})
+    local.post("/i/tv/board", json={"board": "nba", "visible": True, "layout": "full"})
+    disc.tick()
+    st = remote.get("/i/discord").json()
+    assert st["urls"] == ["https://a.tv/1", "https://b.tv/3", "https://a.tv/4"] and st["sound"] == 2 and st["mirror"]
+    assert st["overlay"]["board"] == "nba" and st["overlay"]["layout"] == "full" and st["overlay"]["visible"]
+    assert ("set", 1, "https://b.tv/3") in disc.driver.live and ("add", "https://a.tv/4") in disc.driver.live
+    local.post("/i/tv/move", json={"i": 2, "j": 0})                        # a reorder moves tiles, never reloads them
+    disc.driver.live.clear()
+    disc.tick()
+    assert remote.get("/i/discord").json()["urls"][0] == "https://a.tv/4" and all(x[0] == "mv" for x in disc.driver.live)
+    local.delete("/i/tv/tile/0")                                           # remove
+    disc.tick()
+    assert remote.get("/i/discord").json()["urls"] == ["https://a.tv/1", "https://b.tv/3"]
+    local.post("/i/tv/stop")                                               # the TV stops: the stream keeps its last tiles
+    disc.tick()
+    st = remote.get("/i/discord").json()
+    assert st["running"] and st["urls"] == ["https://a.tv/1", "https://b.tv/3"] and st["mirror"]
+
+
+def test_a_change_on_the_stream_breaks_the_mirror_and_follow_restores_it(api, monkeypatch):
+    local, remote, tv, disc, _ = _mirror(api, monkeypatch)
+    st = remote.post("/i/discord/tile", json={"i": 0, "url": "https://b.tv/9"}).json()   # a vote that passed
+    assert not st["mirror"] and "No longer mirroring" in st["notice"]["text"]
+    local.post("/i/tv/tile", json={"i": 1, "url": "https://a.tv/7"})
+    disc.tick()
+    assert remote.get("/i/discord").json()["urls"] == ["https://b.tv/9", "https://b.tv/2"]   # not following
+    st = remote.post("/i/discord/follow").json()
+    assert st["mirror"] and st["urls"] == ["https://a.tv/1", "https://a.tv/7"]
+    st = remote.post("/i/discord/start", json={"mirror": True}).json()   # "same as the TV" while on = follow again too
+    assert st["mirror"] and st["running"]
+
+
+def test_mirror_skips_tiles_that_may_not_be_streamed(api, monkeypatch):
+    local, remote, tv, disc, _ = _mirror(api, monkeypatch)
+    local.post("/i/tv/tile", json={"i": 0, "url": "http://192.168.1.1/cam"})   # a LAN page on the TV
+    local.post("/i/tv/sound", json={"i": 1})
+    disc.tick()
+    st = remote.get("/i/discord").json()
+    assert st["urls"] == ["https://b.tv/2"] and st["sound"] == 0 and "192.168.1.1" in st["notice"]["text"] and st["mirror"]
+    n = st["notice"]["id"]
+    local.post("/i/tv/sound", json={"i": 0})
+    disc.tick()
+    assert remote.get("/i/discord").json()["notice"]["id"] == n   # the same refusal isn't announced again
+
+
+def test_mirror_start_with_only_refused_tiles_fails_cleanly(api, monkeypatch):
+    app, _ = api
+    local, remote = client(app), client(app, "100.81.31.34", "s3cret")
+    local.post("/i/tv/start", json={"urls": ["http://192.168.1.50:8096/"]})
+    monkeypatch.setattr("wall.server.tv_active", lambda api: "wall")
+    r = remote.post("/i/discord/start", json={"mirror": True})
+    assert r.status_code == 409 and "can be streamed" in r.json()["error"]
+    monkeypatch.setattr("wall.server.tv_active", lambda api: None)
+    r = remote.post("/i/discord/start", json={"mirror": True})
+    assert r.status_code == 409 and "isn't on the wall" in r.json()["error"]
+
+
+def test_mirror_streams_the_tvs_screen_and_leaves_with_it(api, monkeypatch):
+    local, remote, tv, disc, st = _mirror(api, monkeypatch, screen=True)
+    assert st["capture"] == "screen" and ("screen", "HDMI-A-1") in disc.headless.calls and not disc.driver.started
+    local.post("/i/tv/tile", json={"i": 1, "url": "https://b.tv/3"})
+    disc.tick()
+    st = remote.get("/i/discord").json()
+    assert st["urls"][1] == "https://b.tv/3" and st["capture"] == "screen" and not disc.driver.live   # state only: no tiles
+    local.post("/i/tv/tile", json={"i": 0, "url": "http://192.168.1.1/"})   # a page we may not stream: our own tiles, without it
+    disc.tick()
+    st = remote.get("/i/discord").json()
+    assert st["capture"] == "tiles" and st["urls"] == ["https://b.tv/3"] and st["mirror"]
+    local.post("/i/tv/tile", json={"i": 0, "url": "https://a.tv/1"})       # fine again: back to the TV's screen
+    disc.tick()
+    assert remote.get("/i/discord").json()["capture"] == "screen"
+    disc.seen()                                                             # someone watches; the TV leaves the wall
+    monkeypatch.setattr("wall.server.tv_active", lambda api: "casino")
+    disc._wall_at = 0
+    disc.tick()
+    st = remote.get("/i/discord").json()
+    assert st["running"] and st["capture"] == "tiles" and st["urls"] == ["https://a.tv/1", "https://b.tv/3"]
+    assert "left the wall" in st["notice"]["text"]
+
+
+def test_screen_mirror_stops_when_the_tv_leaves_and_nobody_watches(api, monkeypatch):
+    local, remote, tv, disc, _ = _mirror(api, monkeypatch, screen=True)
+    monkeypatch.setattr("wall.server.tv_active", lambda api: "football")
+    disc._wall_at = 0
+    disc.tick()
+    st = remote.get("/i/discord").json()
+    assert not st["running"] and "left the wall" in st["stopped"]
+
+
+def test_a_vote_on_the_screen_mirror_turns_it_into_tiles(api, monkeypatch):
+    local, remote, tv, disc, _ = _mirror(api, monkeypatch, screen=True)
+    st = remote.post("/i/discord/sound", json={"i": 1}).json()
+    assert st["capture"] == "tiles" and not st["mirror"] and st["sound"] == 1 and disc.driver.started[-1] == ["https://a.tv/1", "https://b.tv/2"]
+    st = remote.post("/i/discord/follow").json()
+    assert st["mirror"] and st["capture"] == "screen"
+
+
+def test_resource_guard(tmp_path):
+    h = FakeHeadless(tmp_path)
+    load = [20.0, 64000]
+    i, d, clock = inst(tmp_path, {}, headless=h, sysload=lambda: tuple(load))
+    with pytest.raises(WallError, match="busy"):
+        i.start(urls=["https://a.tv"])
+    load[:] = [2.0, 1000]
+    with pytest.raises(WallError, match="memory"):
+        i.start(urls=["https://a.tv"])
+    load[:] = [2.0, 8000]
+    assert i.start(urls=["https://a.tv"])["running"]
+    i.seen()
+    load[:] = [30.0, 8000]
+    i.tick()
+    clock.t += 20
+    i.tick()
+    assert i.urls   # a spike under 30 s is tolerated
+    clock.t += 15
+    i.seen()
+    i.tick()
+    assert not i.urls and "overloaded" in i.stopped_why

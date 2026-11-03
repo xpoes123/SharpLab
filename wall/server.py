@@ -50,6 +50,25 @@ def tv_active(api: str) -> str | None:
         return None
 
 
+def tv_board(api: str) -> str:
+    """Which board the TV router's wall overlay has (its overlay state lives there, not here)."""
+    import json, urllib.request
+    try:
+        with urllib.request.urlopen(api.rstrip("/") + "/api/overlay", timeout=3) as r:
+            return json.load(r).get("board") or ""
+    except (OSError, ValueError):
+        return ""
+
+
+def clean_origin(o: object) -> dict | None:
+    """Where a start came from ({"guild": id, "channel": id} — Discord snowflakes), for the bot to post the link there."""
+    if not isinstance(o, dict):
+        return None
+    out = {k: str(o[k]) for k in ("guild", "channel") if isinstance(o.get(k), (str, int)) and not isinstance(o.get(k), bool)
+           and str(o[k]).isdigit() and len(str(o[k])) <= 20}
+    return out if "channel" in out else None
+
+
 def browserish(request: Request) -> bool:
     """A request a web page made: the tiles are arbitrary sites in Chromium on this box, so a page's no-CORS POST (or a
     DNS-rebound one) would arrive from loopback. Real callers (the TV router's urllib, the qml6 overlay's XHR) send no
@@ -93,6 +112,10 @@ class Cfg:
         self.min_free_mb = int(env.get("WALL_MIN_FREE_MB", "2500"))
         self.discord = env.get("WALL_DISCORD", "1") not in ("0", "false", "")
         self.tv = env.get("WALL_TV", "1") not in ("0", "false", "")
+        self.tv_output = env.get("WALL_TV_OUTPUT", "HDMI-A-1")   # mirror mode streams this output of the TV ("" = copy with tiles)
+        self.tv_sink = env.get("WALL_TV_SINK", "")                # and this sink's sound ("" = the default sink)
+        self.max_load = float(env.get("WALL_MAX_LOAD", "16"))
+        self.min_avail_mb = int(env.get("WALL_MIN_AVAIL_MB", "3072"))
 
 
 def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, scores: Scores | None = None,
@@ -110,7 +133,13 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
                 "discord", Session("discord", cdp_base=9241, profiles=str(cfg.state), prefix="discord-",
                                    overlay_api=f"http://127.0.0.1:{cfg.port}/i/discord", extra_flags=["--ozone-platform=wayland"]),
                 store, scores, headless=Headless("discord", cfg.state), idle_s=cfg.idle_s, first_viewer_s=cfg.first_viewer_s,
-                max_hours=cfg.max_hours, min_free_mb=cfg.min_free_mb)
+                max_hours=cfg.max_hours, min_free_mb=cfg.min_free_mb, max_load=cfg.max_load, min_avail_mb=cfg.min_avail_mb)
+    disc, tv = instances.get("discord"), instances.get("tv")
+    if disc is not None and disc.headless and tv is not None and disc.source is None:   # the discord wall can mirror the TV's
+        disc.source, disc.vet = tv, public_url
+        disc.source_board = lambda: tv_board(cfg.tv_overlay_api)
+        disc.tv_on_wall = lambda: tv_active(cfg.tv_overlay_api) == "wall"
+        disc.capture_output, disc.screen_sink = cfg.tv_output, cfg.tv_sink
 
     @asynccontextmanager
     async def lifespan(app):
@@ -232,18 +261,31 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         tiles = d.get("tiles", 4)
         if not isinstance(tiles, int) or not 1 <= tiles <= 4:
             raise ValueError("tiles is 1–4")
+        mirror, origin = d.get("mirror") is True, clean_origin(d.get("origin"))
+        if i.headless and i.urls and mirror:   # already on: "same as the TV" = follow it again
+            return await asyncio.to_thread(i.follow_source)
         if i.headless and not i.urls:   # anyone may start the discord wall, but only while nobody is using the TV
             busy = await asyncio.to_thread(tv_active, cfg.tv_overlay_api)
             tv = instances.get("tv")
-            if busy == "wall" and tv and tv.urls:   # the TV is on the wall: stream the same tiles, layout, board and sound
-                preset, urls, d = None, list(tv.urls), {**d, "live": "", "sound": tv.driver.sound}
-                board, layout, tiles = (tv.board if tv.visible else ""), tv.layout, len(tv.urls)
+            if busy == "wall" and tv and tv.urls and i.source is not None:   # the TV is on the wall: stream it, and follow it
+                return await asyncio.to_thread(i.start_mirror, origin)
             elif busy:
                 raise WallError(f"the TV is in use ({busy}) — try again when it's free")
+            elif mirror or (preset is None and not urls and not d.get("live")):
+                raise WallError("the TV isn't on the wall — open the wall on the TV first, or pick a preset, live games or URLs")
         if i.headless and urls:
             await asyncio.to_thread(lambda: [public_url(u) for u in urls])
         return await asyncio.to_thread(i.start, preset=preset, urls=urls, live=d.get("live") or "", tiles=tiles,
-                                       board=board, layout=layout, sound=d.get("sound", 0) if isinstance(d.get("sound", 0), int) else 0)
+                                       board=board, layout=layout, sound=d.get("sound", 0) if isinstance(d.get("sound", 0), int) else 0,
+                                       origin=origin)
+
+    @app.post("/i/{name}/follow")
+    async def follow(name: str) -> dict:
+        """Mirror the TV again after a change on this wall stopped the following."""
+        i = inst(name)
+        if not i.headless:
+            raise WallError("only the discord wall follows the TV")
+        return await asyncio.to_thread(i.follow_source)
 
     @app.post("/i/{name}/stop")
     async def stop(name: str) -> dict:
