@@ -142,6 +142,7 @@ async def gather_achievement_stats(uid: str) -> dict:
         # Voice / Chat
         "voice_minutes": eng["voice_minutes"],
         "messages": eng["messages"],
+        "requests_shipped": await queries.count_shipped_requests(uid),
     }
 
 
@@ -164,6 +165,8 @@ def _achievement_checks(s: dict) -> list[tuple[str, bool]]:
         ("explore_5", s["distinct"] >= 5),
         ("explore_15", s["distinct"] >= 15),
         ("explore_all", s["distinct"] >= TOTAL_GAMES),
+        ("request_shipped", s.get("requests_shipped", 0) >= 1),
+        ("request_shipped_5", s.get("requests_shipped", 0) >= 5),
         ("duel_win", s["duel_wins"] >= 1),
         ("duel_10", s["duel_wins"] >= 10),
         ("tourney_win", s["tourney_wins"] >= 1),
