@@ -66,6 +66,20 @@ Window {
             x.send()
         }
     }
+    readonly property string spotApi: arg("--spot", arg("--bets", ""))   // --spot <url> = the state spotlight (default: --bets)
+    property var spot: null
+    Timer {
+        interval: 1000; running: w.spotApi !== ""; repeat: true; triggeredOnStart: true
+        onTriggered: {
+            var x = new XMLHttpRequest()
+            x.onreadystatechange = function () {
+                if (x.readyState !== XMLHttpRequest.DONE || x.status !== 200) return
+                try { w.spot = JSON.parse(x.responseText).spot || null } catch (e) { }
+            }
+            x.open("GET", w.spotApi + "/api/overlay/spot")
+            x.send()
+        }
+    }
     readonly property string bandsApi: arg("--bands", arg("--bets", ""))
     property var bands: null
     Timer {   // the band layer's data, like Overlay.qml
@@ -93,7 +107,7 @@ Window {
         x: w.geo.gridW; width: w.geo.side; height: w.height; unit: w.width
         layout: "side"; board: w.arg("--board", ""); api: w.arg("--api", "http://127.0.0.1:7790"); polling: w.lbar
         dflt: w.arg("--bets", "") === "" ? 0 : w.bets ? w.bets["default"] : 45; delays: (w.bets && w.bets.delays) || ({})
-        bets: w.bets
+        bets: w.bets; spot: w.spot
     }
     Timer {   // the watch party's chat, from the view poll like Overlay.qml
         interval: 500; running: w.lbar; repeat: true; triggeredOnStart: true

@@ -277,6 +277,11 @@ def check_action(a: object) -> dict:
         if a.get("layout") not in LAYOUTS:
             raise ValueError("layout is lbar or full")
         return {"op": "layout", "layout": a["layout"]}
+    if op == "spotlight":   # election night: a state's races + Kalshi prices on the TV's sidebar for ~30 s ("" = dismiss)
+        st = a.get("state")
+        if not isinstance(st, str) or not (st == "" or re.fullmatch(r"[A-Z]{2}", st)):
+            raise ValueError("state is a two-letter code")
+        return {"op": "spotlight", "state": st}
     if op == "board":
         out = {"op": "board"}
         if "board" in a:
@@ -320,6 +325,8 @@ def describe(a: dict) -> str:
         return f"move the sound to tile {a['i'] + 1}"
     if op == "layout":
         return f"switch the overlay to {'L-bar' if a['layout'] == 'lbar' else 'full'}"
+    if op == "spotlight":
+        return f"spotlight {a['state']} on the TV" if a["state"] else "close the TV's state spotlight"
     parts = []
     if "board" in a:
         parts.append(f"show the {a['board'].upper()} board" if a["board"] else "hide the board")
@@ -449,7 +456,7 @@ def redeem_link(token: str, now: float | None = None) -> dict | None:
 # ---- demo mode: guests with the keyed link pick a nickname ------------------------------------------------------------
 GUEST_COOKIE = "sharplab_wall_guest"
 GUEST_TTL = 24 * 3600
-GUEST_OPS = {"start", "stop", "tile"}   # what a guest may not propose: no starting/stopping, no arbitrary pages on stream
+GUEST_OPS = {"start", "stop", "tile", "spotlight"}   # what a guest may not propose: no starting/stopping, no arbitrary pages on stream
 _guest_signer = URLSafeTimedSerializer(auth.SESSION_SECRET, salt="sharplab-wall-guest")
 _NICK = re.compile(r"^[\w .'-]{2,24}$")
 
@@ -564,6 +571,8 @@ def _route(a: dict) -> tuple[str, str, dict]:
         return "POST", "/i/discord/sound", body
     if op == "layout":
         return "POST", "/i/discord/board", {"layout": a["layout"], "visible": True}
+    if op == "spotlight":
+        return "POST", "/i/discord/spotlight", {"state": a["state"]}
     if body.get("board") == "":   # "no board" = hide it
         body = {k: v for k, v in body.items() if k != "board"} | {"visible": False}
     elif "board" in body and "visible" not in body:

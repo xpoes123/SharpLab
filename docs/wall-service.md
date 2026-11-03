@@ -414,6 +414,26 @@ is mapped to a race in the results feed:
   resolves once N is reached; the others resolve when every race is called.
 * Turning "Show bets on the TV overlay" off hides the trades and the chips too. Nothing is ever drawn over video.
 
+**Election map + Kalshi on the watch page** (`web/wall_election.py`, `shared/election_markets.py`, `web/static/wall-election.*`).
+An "Election" panel under the player: a US map coloured like the TV's (won / leading / no votes yet / no race), Senate / House /
+Gov toggles, the balance bar, and "Control of Senate / House" chips. Click or tap a state (or pick it from the list — small
+states are hard to tap) → a sheet (a drawer on desktop, a bottom sheet on phones) with each race: candidates, % in, margin,
+✓ + whose call; its Kalshi markets (bid / ask / last, implied %, 24 h change from Kalshi's day-ago book); a chart of implied %
+(hourly candles for the last 4 days on the left 36 %, minute candles for the last 12 h on the rest; poll close and the call
+time marked); and, for members only, the opted-in members' positions there. Senate / Governor charts load with the sheet,
+House ones on "Show price chart". On phones the panel itself is a sheet opened from the bar's 🗺 button.
+* Results: sharplab-web runs its own `wall.election.Results` (same sources, same order, only while someone looks).
+* Which markets: Kalshi's Elections series list (`GET /series?category=Elections`, cached 6 h) → the series naming the state
+  (`SENATEGA`, `GOVPARTYPA`, `HOUSEPA7`…) + `KXHOUSERACE` (every district, one call); each series is one public
+  `GET /markets?series_ticker=` (cached 45 s); a market goes to a race by `kalshi_election.resolve`.
+* Charts: `GET /series/{s}/markets/{t}/candlesticks` (public, no auth; checked 2026-11-03): today's window cached 45 s, the
+  older days 15 min. A candle's % = the mid of its closing yes bid / ask when the spread is ≤ 15¢, else its last trade.
+* Load: everything on demand (a state opened, its sheet's 30 s refresh, a chart's 60 s refresh), cached and shared across
+  viewers with single flight, through the bets poller's token bucket, at most 3 Kalshi calls at once, one retry on a 429.
+* API (`/api/v1/wall/election/…`): `map`, `shapes`, `state/{ST}`, `control/{S|H}`, `chart/{race id | CTRL-S | CTRL-H}`
+  (only that race's own markets) — any viewer, guests included (public data); `positions` only in a member's answer.
+  `POST spotlight {state}` (members) and `GET spot/{ST}` (the wall service, `X-Api-Key`) are the TV spotlight's.
+
 **Presets** (seeded once, `wall-election-seeded` marker): "Election Night" (map, key races, NBC News NOW, PBS News), "Election +
 NBA" and "Election map + NBA" (`fixed: true`: the preset's URLs stay as fixed tiles, live NBA games fill the rest).
 
