@@ -21,6 +21,7 @@ OPTIONS = {
     "races": "Key races board with Kalshi odds: close key races are counting, or markets are moving",
     "turnout": "Turnout dashboard: before results, or when official turnout numbers just updated",
     "exitpoll": "Exit polls: early in the evening once exit poll results are out and few votes are counted",
+    "swing": "vs 2024 board: once results are counting — how tonight's margins and turnout compare to 2024, county swings",
 }
 OFF = {"S": "Senate", "H": "House", "G": "Governor"}
 REASONS = {"close": "polls just closed or are about to close somewhere that matters", "calls": "races are being called",

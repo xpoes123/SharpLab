@@ -39,6 +39,7 @@ from wall.presets import PresetStore, check_url, errors
 from wall.spotlight import Odds, Spotlight, state_list
 from wall.sync import STEP_S, Runner, SyncStore, tile_games
 from wall.exitpoll import ExitPoll
+from wall.swing import Swing
 from wall.turnout import Turnout
 from wall.events import Events
 from wall.director import Director, summary as night_summary
@@ -48,7 +49,7 @@ from wall.breaks import BreakLog
 
 log = logging.getLogger("wall.server")
 TAILNET = ipaddress.ip_network("100.64.0.0/10")
-REMOTE_OK = re.compile(r"^/(healthz|teams|live/[a-z]+|presets|sync|i/discord(/.*)?|hls/discord/[A-Za-z0-9_.]+|p/election/(turnout|exitpoll)\.json)$")
+REMOTE_OK = re.compile(r"^/(healthz|teams|live/[a-z]+|presets|sync|i/discord(/.*)?|hls/discord/[A-Za-z0-9_.]+|p/election/(turnout|exitpoll|swing)\.json)$")
 HLS_FILE = re.compile(r"^(index\.m3u8|seg\d{6}\.ts)$")
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 PAGES = (Path(__file__).parent / "pages").resolve()
@@ -175,7 +176,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
           sync: SyncStore | None = None, bets: BetsFeed | None = None, runner: Runner | None = None,
           results: Results | None = None, spot: Spotlight | None = None, turnout: Turnout | None = None,
           exitpoll: ExitPoll | None = None, odds: Odds | None = None, board: onair.Board | None = None,
-          favs: onair.Favorites | None = None) -> FastAPI:
+          favs: onair.Favorites | None = None, swing: Swing | None = None) -> FastAPI:
     cfg = cfg or Cfg()
     airs = board or onair.Board(log=BreakLog(cfg.state / "breaks.jsonl"))   # (not "board": the overlay endpoint below takes that name)
     favs = favs or onair.Favorites(cfg.state / "favorites.json")
@@ -183,6 +184,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
     sync = sync or SyncStore(cfg.state / "sync.json", cfg.sync_default)
     turnout = turnout or Turnout(state_dir=cfg.state)
     exitpoll = exitpoll or ExitPoll()
+    swing = swing or Swing(results)
     bets = bets or BetsFeed(cfg.web_url, cfg.web_key)
     spot = spot or Spotlight(urllib_http(cfg.web_url, cfg.web_key, timeout=8) if cfg.web_url and cfg.web_key else None)
     odds = odds or Odds(urllib_http(cfg.web_url, cfg.web_key, timeout=6) if cfg.web_url and cfg.web_key else None, idle_s=ELECTION_IDLE_S)
@@ -874,6 +876,13 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         """NBC's national exit poll (wall/exitpoll.py), All voters; ?groups=1 adds the other voter groups' crosstabs."""
         exitpoll.touch()
         return JSONResponse(exitpoll.snapshot(groups=bool(groups)), headers={"Cache-Control": "no-store"})
+
+    @app.get("/p/election/swing.json")
+    def swing_json() -> Response:
+        """Tonight vs 2024 (wall/swing.py): key races' swing, county swing, turnout vs 2024; polling keeps the fetchers going."""
+        results.touch()
+        swing.touch()
+        return JSONResponse(swing.snapshot(), headers={"Cache-Control": "no-store"})
 
     @app.get("/p/election/board.json")
     def election_board_json() -> dict:
