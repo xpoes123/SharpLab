@@ -24,6 +24,11 @@ Item {
     property var v: B.view(null, 0)
     property var m: null                 // B.matchup(...) while a matchup is open
     property int pageNo: 0
+    // spoiler delay (Overlay.qml sets them from the service's bets poll): scores + plays are shown as of (now − the
+    // game's tile delay), never newer; dflt for everything else. 0 / {} = live (a preview without --bets).
+    property var delays: ({})
+    property real dflt: 0
+    property var hist: []
     // the watch party's chat while the discord wall runs (the TV router's /api/overlay/view "chat"; null = none):
     // {count, who, lines: [{id, name, guest, text, sys, fresh}]} — the sidebar gives it its lower half. A line kept in
     // chatLines by id, so an old one (fresh false, ~20 s) dims slowly instead of being redrawn. Nothing blinks or pulses.
@@ -80,11 +85,17 @@ Item {
         var x = new XMLHttpRequest()
         x.onreadystatechange = function () {
             if (x.readyState !== XMLHttpRequest.DONE) return
-            var s = null
+            var s = null, t = Date.now() / 1000
             if (x.status === 200) { try { s = JSON.parse(x.responseText) } catch (e) { s = null } }
-            if (s) last = s
+            if (s) {
+                if (hist.length && hist[hist.length - 1].s.shown !== s.shown) hist = []   // another board: its own history
+                var keep = dflt + 30
+                for (var k in delays) keep = Math.max(keep, delays[k] + 30)
+                hist = B.trim(hist.concat([{ t: t, s: s }]), t, keep)
+                last = B.delayed(hist, t, delays, dflt)
+            }
             else if (last) last.error = "router unreachable"
-            if (last) { v = B.view(last, Date.now() / 1000); m = B.matchup(last.matchup) }
+            if (last) { v = B.view(last, t); m = B.matchup(last.matchup) }
         }
         x.open("GET", api + "/api/overlay" + (board ? "?board=" + encodeURIComponent(board) : ""))
         x.send()

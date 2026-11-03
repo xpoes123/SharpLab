@@ -23,6 +23,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import ValidationError
 
+from wall.bets import POLL_S as BETS_POLL_S, BetsFeed, badge_rows
 from wall.chat import POLL_S, ChatFeed
 from wall.engine import Session
 from wall.headless import Headless
@@ -30,10 +31,11 @@ from wall.instance import BOARDS, Instance, WallError
 from wall.llm import LLMGuard
 from wall.live import LEAGUES, STREAM, TEAMS, Scores, live_games
 from wall.presets import PresetStore, check_url, errors
+from wall.sync import STEP_S, Runner, SyncStore, tile_games
 
 log = logging.getLogger("wall.server")
 TAILNET = ipaddress.ip_network("100.64.0.0/10")
-REMOTE_OK = re.compile(r"^/(healthz|teams|live/[a-z]+|presets|i/discord(/.*)?|hls/discord/[A-Za-z0-9_.]+)$")
+REMOTE_OK = re.compile(r"^/(healthz|teams|live/[a-z]+|presets|sync|i/discord(/.*)?|hls/discord/[A-Za-z0-9_.]+)$")
 HLS_FILE = re.compile(r"^(index\.m3u8|seg\d{6}\.ts)$")
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
@@ -125,11 +127,16 @@ class Cfg:
         self.web_key = env.get("WALL_WEB_KEY", "")         # = WEB_API_SECRET on the VPS
         self.owner_id = env.get("WALL_OWNER_ID", "")       # the TV's phones post as him
         self.owner_name = env.get("WALL_OWNER_NAME", "David")
+        self.sync_default = float(env.get("WALL_BETS_DELAY_S", "45"))   # the spoiler delay until a tile is calibrated
+        self.sync_ocr = env.get("WALL_SYNC_OCR", "1") not in ("0", "false", "")   # 0 = no scorebug OCR (manual + default only)
 
 
 def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, scores: Scores | None = None,
-          store: PresetStore | None = None, guard: LLMGuard | None = None, chat: ChatFeed | None = None) -> FastAPI:
+          store: PresetStore | None = None, guard: LLMGuard | None = None, chat: ChatFeed | None = None,
+          sync: SyncStore | None = None, bets: BetsFeed | None = None, runner: Runner | None = None) -> FastAPI:
     cfg = cfg or Cfg()
+    sync = sync or SyncStore(cfg.state / "sync.json", cfg.sync_default)
+    bets = bets or BetsFeed(cfg.web_url, cfg.web_key)
     chat = chat or ChatFeed(cfg.web_url, cfg.web_key, cfg.owner_id, cfg.owner_name)
     guard = guard or LLMGuard(cfg.ollama, cfg.llm_guard)
     scores = scores or Scores()
@@ -138,11 +145,12 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         instances = {}
         if cfg.tv:
             instances["tv"] = Instance("tv", Session("tv", cdp_base=9231, profiles=cfg.tv_profiles, overlay_api=cfg.tv_overlay_api,
-                                                     unmute_on_stop=True), store, scores)
+                                                     bets_api=f"http://127.0.0.1:{cfg.port}/i/tv", unmute_on_stop=True), store, scores)
         if cfg.discord:
             instances["discord"] = Instance(
                 "discord", Session("discord", cdp_base=9241, profiles=str(cfg.state), prefix="discord-",
-                                   overlay_api=f"http://127.0.0.1:{cfg.port}/i/discord", extra_flags=["--ozone-platform=wayland"]),
+                                   overlay_api=f"http://127.0.0.1:{cfg.port}/i/discord", bets_api=f"http://127.0.0.1:{cfg.port}/i/discord",
+                                   extra_flags=["--ozone-platform=wayland"]),
                 store, scores, headless=Headless("discord", cfg.state), idle_s=cfg.idle_s, first_viewer_s=cfg.first_viewer_s,
                 max_hours=cfg.max_hours, min_free_mb=cfg.min_free_mb, max_load=cfg.max_load, min_avail_mb=cfg.min_avail_mb)
     disc, tv = instances.get("discord"), instances.get("tv")
@@ -154,6 +162,19 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
     for i in instances.values():
         if i.headless:
             i.before_start = guard.park   # the LLM's VRAM is free before the budget check
+        i.sync = sync
+    runner = runner or Runner(sync, instances, scores)
+    runner.enabled = runner.enabled and cfg.sync_ocr
+
+    def tile_feed() -> list[dict]:
+        """Every tile's game (both walls, each once) with its delay: what the web is asked for."""
+        out, seen = [], set()
+        for i in instances.values():
+            for u, g in zip(list(i.urls), tile_games(i, scores)):
+                if g and g["id"] not in seen:
+                    seen.add(g["id"])
+                    out.append({**{k: g[k] for k in ("league", "id", "away", "home", "start")}, "delay": sync.delay(u)[0]})
+        return out
 
     @asynccontextmanager
     async def lifespan(app):
@@ -183,7 +204,18 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
                         chat.idle()
                 except Exception as e:  # noqa: BLE001
                     log.warning("chat: %s", e)
-        tasks = [asyncio.create_task(ticker()), asyncio.create_task(chat_ticker())]
+        async def bets_ticker():   # while a wall runs and bets are shown: the tiles' (delayed) positions from the web
+            while True:
+                await asyncio.sleep(BETS_POLL_S)
+                try:
+                    if bets.configured and sync.show and any(i.urls for i in instances.values()):
+                        await asyncio.to_thread(bets.poll, tile_feed())
+                    else:
+                        bets.idle()
+                except Exception as e:  # noqa: BLE001
+                    log.warning("bets: %s", e)
+        runner.start()
+        tasks = [asyncio.create_task(ticker()), asyncio.create_task(chat_ticker()), asyncio.create_task(bets_ticker())]
         yield
         for task in tasks:
             task.cancel()
@@ -192,6 +224,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
 
     app = FastAPI(title="sharplab-wall", lifespan=lifespan)
     app.state.instances, app.state.store, app.state.scores, app.state.guard, app.state.chat = instances, store, scores, guard, chat
+    app.state.sync, app.state.bets, app.state.runner = sync, bets, runner
 
     @app.middleware("http")
     async def gate(request: Request, call_next):
@@ -265,7 +298,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
     def get_live(league: str, n: int = 4) -> Response:
         if league not in LEAGUES:
             return JSONResponse({"error": "league is nfl or nba"}, status_code=404)
-        return JSONResponse(live_games(scores.get(league, True), league, max(1, min(4, n))))
+        return JSONResponse(live_games(scores.get(league, True), league, max(1, min(16, n))))
 
     @app.get("/teams")
     def get_teams() -> dict:
@@ -388,6 +421,68 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
     @app.get("/i/{name}/api/overlay")
     async def ov_data(name: str, board: str = "") -> dict:
         return await asyncio.to_thread(inst(name).overlay_data, board)
+
+    @app.get("/i/{name}/api/overlay/bets")
+    def ov_bets(name: str) -> dict:
+        """The overlay's badges + the spoiler delays it holds the board back by. Rows come from the web already delayed
+        by each tile's D and filtered to members who opted in."""
+        i = inst(name)
+        with i.lock:
+            urls, view = list(i.urls), i.view
+        games = tile_games(i, scores)
+        tiles, delays = [], {}
+        for k, (u, g) in enumerate(zip(urls, games)):
+            d, src = sync.delay(u)
+            if g:
+                delays[g["id"]] = d
+            rows = badge_rows(bets.games.get(f"{g['league']}:{g['id']}", [])) if g and sync.show else []
+            tiles.append({"i": k, "delay": d, "src": src, "label": g["label"] if g else "", "rows": rows})
+        return {"show": sync.show, "n": len(urls), "view": view, "tiles": tiles, "delays": delays, "default": sync.default,
+                "rev": sync.rev}
+
+    # ---- spoiler sync: the delay of each tile page + "show bets on the overlay" (loopback: the TV's phones; tailnet: the
+    # watch page's owner controls through sharplab-web) ----
+    @app.get("/sync")
+    def get_sync() -> dict:
+        return {"show": sync.show, "default": sync.default, "auto": runner.enabled,
+                "walls": {k: [{**t, "status": runner.status.get(t["url"], "")} for t in v.sync_view()["tiles"]]
+                          for k, v in instances.items() if v.urls}}
+
+    @app.post("/sync")
+    async def post_sync(request: Request) -> dict:
+        """{"show": bool} | {"default": s} | {"url", "nudge": ±1} (steps of 5 s) | {"url", "auto": true} (back to auto)
+        | {"url", "tap": ms | true} ("the score on screen just changed", at that time — true = now)."""
+        d = await body(request)
+        if "show" in d:
+            if not isinstance(d["show"], bool):
+                raise ValueError("show is a boolean")
+            sync.set_show(d["show"])
+        if "default" in d:
+            if not isinstance(d["default"], (int, float)) or isinstance(d["default"], bool):
+                raise ValueError("default is seconds")
+            sync.set_default(d["default"])
+        if any(k in d for k in ("nudge", "auto", "tap")):
+            url = d.get("url")
+            if not isinstance(url, str) or not any(url in i.urls for i in instances.values()):
+                raise ValueError("url is one of the tiles' pages")
+            if "nudge" in d:
+                n = d["nudge"]
+                if not isinstance(n, (int, float)) or isinstance(n, bool) or not -12 <= n <= 12:
+                    raise ValueError("nudge is a number of 5 s steps")
+                sync.nudge(url, n * STEP_S)
+            elif d.get("auto") is True:
+                sync.use_auto(url)
+            elif "tap" in d:
+                tap = d["tap"]
+                at = runner.clock() if tap is True else tap / 1000 if isinstance(tap, (int, float)) and not isinstance(tap, bool) else None
+                if at is None or abs(at - runner.clock()) > 600:
+                    raise ValueError("tap is true (now) or the time in ms")
+                got = await asyncio.to_thread(runner.tap, url, at)
+                if got is None:
+                    raise WallError("no scoring play of that tile's game fits — try again right after the score changes")
+        for i in instances.values():
+            i._bump()
+        return get_sync()
 
     # ---- the watch party's chat, for the TV router (loopback only: not in REMOTE_OK) ----
     def party_on() -> bool:

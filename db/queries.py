@@ -6193,6 +6193,35 @@ async def list_kalshi_account_users() -> list[str]:
             return [r[0] for r in await cur.fetchall()]
 
 
+async def get_kalshi_wall_optin(discord_user: str) -> dict:
+    """{share, exact, name} — both off for anyone who never chose."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT share, exact, name FROM kalshi_wall_optin WHERE discord_user = ?",
+                              (discord_user,)) as cur:
+            row = await cur.fetchone()
+    return {"share": bool(row and row[0]), "exact": bool(row and row[1]), "name": row[2] if row else ""}
+
+
+async def set_kalshi_wall_optin(discord_user: str, share: bool, exact: bool, name: str = "") -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO kalshi_wall_optin (discord_user, name, share, exact, updated_at) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(discord_user) DO UPDATE SET share = excluded.share, exact = excluded.exact, "
+            "name = CASE WHEN excluded.name != '' THEN excluded.name ELSE kalshi_wall_optin.name END, "
+            "updated_at = excluded.updated_at",
+            (discord_user, name[:40], int(bool(share)), int(bool(exact)), datetime.now(timezone.utc).isoformat()))
+        await db.commit()
+
+
+async def list_kalshi_wall_sharers() -> list[dict]:
+    """Members sharing on the wall who also have a linked Kalshi key: [{uid, name, exact}]."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+                "SELECT o.discord_user, o.name, o.exact FROM kalshi_wall_optin o "
+                "JOIN kalshi_accounts a ON a.discord_user = o.discord_user WHERE o.share = 1") as cur:
+            return [{"uid": r[0], "name": r[1] or "Member", "exact": bool(r[2])} for r in await cur.fetchall()]
+
+
 # ── Poké Hoops (verified 82-game seasons; leaderboard = each player's best) ──────────
 
 
