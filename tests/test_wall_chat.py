@@ -158,3 +158,16 @@ def test_service_chat_is_loopback_only_and_refuses_pages(svc):
     assert c.post("/chat", json={"text": "x"}, headers={"Origin": "https://evil.example"}).status_code == 403   # a tile's page
     assert c.get("/chat", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
     assert set(c.get("/chat").json()) == {"on", "rev", "messages", "viewers", "watching", "active", "error", "owner", "configured"}
+
+
+def test_chat_log_survives_a_restart(tmp_path):
+    from web.wall import Chat
+    p = tmp_path / "chat.jsonl"
+    c = Chat(path=str(p))
+    a = c.add({"kind": "chat", "uid": "1", "name": "Ann", "text": "hi"}, 1.0)
+    b = c.add({"kind": "chat", "uid": "2", "name": "Bo", "text": "spam"}, 2.0)
+    c.system("DJ Jev: hello", 3.0)
+    c.delete(b["id"])
+    c2 = Chat(path=str(p))                                  # a restart
+    assert [m["text"] for m in c2.log] == ["hi", "DJ Jev: hello"]
+    assert c2.add({"kind": "chat", "uid": "1", "name": "Ann", "text": "again"}, 4.0)["id"] > 3   # ids keep counting
