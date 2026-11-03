@@ -78,11 +78,12 @@
     const target = serverNow() + (pdtOff || 0) - cfg.delay * 1000;
     const err = (pdt - target) / 1000;                 // + = ahead of the others
     sync.pdt = pdt; sync.target = target; sync.err = err;
-    if (Math.abs(err) > 3) {
+    // with sound on, never touch the speed: rate nudges make phone audio stutter. Drift that big gets one clean seek.
+    if (Math.abs(err) > (video.muted ? 3 : 4)) {
       video.currentTime = Math.max(0, video.currentTime - err);
       video.playbackRate = 1; sync.seeks++;
-    } else if (Math.abs(err) > 0.05) {
-      video.playbackRate = Math.min(1.05, Math.max(0.95, 1 - err * 0.1));
+    } else if (video.muted && Math.abs(err) > 0.25) {
+      video.playbackRate = Math.min(1.03, Math.max(0.97, 1 - err * 0.05));
     } else video.playbackRate = 1;
     sync.rate = video.playbackRate;
     showSync();
