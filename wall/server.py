@@ -41,6 +41,7 @@ from wall.sync import STEP_S, Runner, SyncStore, tile_games
 from wall.exitpoll import ExitPoll
 from wall.turnout import Turnout
 from wall.events import Events
+from wall.director import Director, summary as night_summary
 from wall import onair, streams
 
 log = logging.getLogger("wall.server")
@@ -277,6 +278,20 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
                         bets.idle()
                 except Exception as e:  # noqa: BLE001
                     log.warning("bets: %s", e)
+        director = Director(urllib_http(cfg.web_url, cfg.web_key, timeout=6) if cfg.web_url and cfg.web_key else None)
+
+        async def director_ticker():   # election night: Jev ranks the dashboard screens every 30 s while the TV wall runs
+            while True:
+                await asyncio.sleep(5)
+                tv = instances.get("tv")
+                if not (tv and tv.urls and results.updated and director.due()):
+                    continue
+                try:
+                    state = night_summary(results.snapshot(), turnout.snapshot(), exitpoll.snapshot(), odds.view(), time.time())
+                    await asyncio.to_thread(director.refresh, state)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("director: %s", e)
+
         async def spot_ticker():   # election night: the TV spotlight's card, refreshed from the web while it shows
             while True:
                 await asyncio.sleep(1)
@@ -320,7 +335,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         runner.start()
         tasks = [asyncio.create_task(ticker()), asyncio.create_task(chat_ticker()), asyncio.create_task(bets_ticker()),
                  asyncio.create_task(spot_ticker()), asyncio.create_task(odds_ticker()),
-                 asyncio.create_task(events_ticker()), asyncio.create_task(streams_ticker())]
+                 asyncio.create_task(events_ticker()), asyncio.create_task(director_ticker()), asyncio.create_task(streams_ticker())]
         yield
         for task in tasks:
             task.cancel()

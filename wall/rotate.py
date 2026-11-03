@@ -8,6 +8,12 @@ from __future__ import annotations
 SCREENS = ("map?view=S", "map?view=H", "map?view=G", "races", "turnout", "exitpoll")
 EVERY_S, HOLD_S = 60.0, 300.0
 MARK = "/p/election/"
+STALE_S = 180.0
+RANK: dict = {"order": [], "at": 0.0}   # wall/director.py: Jev's preferred screens, best first (empty / stale = plain order)
+
+
+def set_rank(order: list[str], at: float) -> None:
+    RANK.update(order=[s for s in order if s in SCREENS], at=at)
 
 
 def screen(url: str) -> str | None:
@@ -23,13 +29,16 @@ def kind(s: str | None) -> str | None:
     return s.split("?")[0] if s else None
 
 
-def next_url(urls: list[str], i: int) -> str | None:
-    """Tile i's next screen: not one already on the wall, nor the same kind as another dashboard (None: nothing else)."""
+def next_url(urls: list[str], i: int, now: float | None = None) -> str | None:
+    """Tile i's next screen: not one already on the wall, nor the same kind as another dashboard (None: nothing else).
+    Jev's order when it's fresh (wall/director.py), else the plain cycle after the current screen."""
+    import time
     cur, taken = screen(urls[i]), {screen(u) for u in urls}
     others = {kind(screen(u)) for j, u in enumerate(urls) if j != i and screen(u)}
     start = SCREENS.index(cur) if cur in SCREENS else -1
-    for k in range(1, len(SCREENS) + 1):
-        s = SCREENS[(start + k) % len(SCREENS)]
+    cycle = [SCREENS[(start + k) % len(SCREENS)] for k in range(1, len(SCREENS) + 1)]
+    fresh = RANK["order"] and (time.time() if now is None else now) - RANK["at"] < STALE_S
+    for s in (RANK["order"] if fresh else cycle):
         if s not in taken and kind(s) not in others:
             return urls[i].split(MARK, 1)[0] + MARK + s
     return None
