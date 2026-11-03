@@ -20,6 +20,8 @@
   const partyCls = (p) => ({ D: "D", R: "R", I: "I" })[p] || "O";
 
   let data = null, shapes = null, office = "S", sheet = null, timers = [];
+  let localNews = null;   // {ST: [{name, url}]}: local-news.json, YouTube channels' /live pages
+  fetch("/local-news.json").then((r) => r.json()).then((j) => (localNews = j)).catch(() => {});
   // phones, portrait or landscape (keep in step with wall-election.css): the panel opens as a sheet from the bar's button
   const phone = () => matchMedia("(max-width: 700px), (orientation: landscape) and (max-height: 500px)").matches;
   const COVERAGE = Date.UTC(2026, 10, 3, 23);            // 6 PM ET, 3 Nov 2026: the first polls close
@@ -312,6 +314,20 @@
       bar.append(sp);
     }
     if (bar.childNodes.length) nodes.push(bar);
+    const local = (localNews || {})[s.st] || [];
+    if (data.member && local.length && window.wallPropose) {
+      const row = el("div", "es-local");
+      row.append(el("span", "muted small", "Local coverage → tile 4"));
+      for (const n of local) {
+        const b = el("button", "btn small", "📡 " + n.name);
+        b.type = "button";
+        b.title = "Vote to put this station's live stream on tile 4 (the owner's applies at once)";
+        // ponytail: always tile 4 (the election preset's spare slot); use the Tile menu if people want to pick
+        b.onclick = () => { window.wallPropose({ op: "tile", i: 3, url: n.url, label: n.name }); b.disabled = true; setTimeout(() => (b.disabled = false), 6000); };
+        row.append(b);
+      }
+      nodes.push(row);
+    }
     const races = d.races.filter((x) => x.office === s.office);
     if (!races.length) nodes.push(el("p", "muted", "No races here tonight."));
     for (const r of races) nodes.push(raceCard(r, d.positions));

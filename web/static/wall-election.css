@@ -64,6 +64,8 @@
 .es-close { border: 0; background: var(--panel2); color: var(--fg); border-radius: 50%; width: 36px; height: 36px; font-size: 15px; cursor: pointer; flex: none; }
 .es-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; padding: 10px 0 2px; }
 .es-spot { padding: 5px 12px; font-size: 13px; }
+.es-local { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 0 2px; }
+.es-local .btn { padding: 4px 10px; font-size: 13px; }
 .es-race { border-bottom: 1px solid var(--line); padding: 14px 0; }
 .es-race:last-child { border-bottom: 0; }
 .es-rh { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }

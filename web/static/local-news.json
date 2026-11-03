@@ -1,0 +1,668 @@
+{
+ "AL": [
+  {
+   "name": "WSFA 12 News Montgomery",
+   "url": "https://www.youtube.com/@wsfa12/live"
+  },
+  {
+   "name": "ABC 33/40 Birmingham",
+   "url": "https://www.youtube.com/@abc3340/live"
+  }
+ ],
+ "AK": [
+  {
+   "name": "Alaska's News Source (KTUU)",
+   "url": "https://www.youtube.com/@alaskasnewssource/live"
+  },
+  {
+   "name": "Alaska Public Media",
+   "url": "https://www.youtube.com/@alaskapublic/live"
+  }
+ ],
+ "AZ": [
+  {
+   "name": "12 News Phoenix (KPNX)",
+   "url": "https://www.youtube.com/@12NewsAZ/live"
+  },
+  {
+   "name": "ABC15 Arizona",
+   "url": "https://www.youtube.com/@abc15/live"
+  },
+  {
+   "name": "FOX 10 Phoenix",
+   "url": "https://www.youtube.com/@fox10phoenix/live"
+  }
+ ],
+ "AR": [
+  {
+   "name": "THV11 Little Rock",
+   "url": "https://www.youtube.com/@THV11/live"
+  },
+  {
+   "name": "KATV 7 Little Rock",
+   "url": "https://www.youtube.com/@katvchannel7/live"
+  },
+  {
+   "name": "KARK 4 News",
+   "url": "https://www.youtube.com/@ArkansasmattersOfficial/live"
+  }
+ ],
+ "CA": [
+  {
+   "name": "ABC7 Los Angeles",
+   "url": "https://www.youtube.com/@ABC7/live"
+  },
+  {
+   "name": "NBC Los Angeles",
+   "url": "https://www.youtube.com/@NBCLA/live"
+  },
+  {
+   "name": "KCRA 3 Sacramento",
+   "url": "https://www.youtube.com/@KCRA/live"
+  }
+ ],
+ "CO": [
+  {
+   "name": "9NEWS Denver",
+   "url": "https://www.youtube.com/@9NEWS/live"
+  },
+  {
+   "name": "Denver7",
+   "url": "https://www.youtube.com/@denver7/live"
+  },
+  {
+   "name": "CBS Colorado",
+   "url": "https://www.youtube.com/@cbscolorado/live"
+  }
+ ],
+ "CT": [
+  {
+   "name": "NBC Connecticut",
+   "url": "https://www.youtube.com/@NBCConnecticut/live"
+  },
+  {
+   "name": "WFSB 3 Hartford",
+   "url": "https://www.youtube.com/@WFSB/live"
+  },
+  {
+   "name": "FOX61 Hartford",
+   "url": "https://www.youtube.com/@FOX61/live"
+  }
+ ],
+ "DE": [
+  {
+   "name": "WBOC 16 Delmarva",
+   "url": "https://www.youtube.com/@WBOC/live"
+  },
+  {
+   "name": "6abc Philadelphia",
+   "url": "https://www.youtube.com/@6abcActionNews/live"
+  }
+ ],
+ "DC": [
+  {
+   "name": "WUSA9",
+   "url": "https://www.youtube.com/@WUSA9news/live"
+  },
+  {
+   "name": "NBC4 Washington",
+   "url": "https://www.youtube.com/@NBCWashington/live"
+  },
+  {
+   "name": "FOX 5 DC",
+   "url": "https://www.youtube.com/@fox5dc/live"
+  }
+ ],
+ "FL": [
+  {
+   "name": "WPLG Local 10 Miami",
+   "url": "https://www.youtube.com/@WPLGLocal10/live"
+  },
+  {
+   "name": "WFTV 9 Orlando",
+   "url": "https://www.youtube.com/@WFTV/live"
+  },
+  {
+   "name": "FOX 13 Tampa Bay",
+   "url": "https://www.youtube.com/@fox13tampa/live"
+  }
+ ],
+ "GA": [
+  {
+   "name": "WSB-TV Atlanta",
+   "url": "https://www.youtube.com/@wsbtv/live"
+  },
+  {
+   "name": "11Alive Atlanta",
+   "url": "https://www.youtube.com/@11Alive/live"
+  },
+  {
+   "name": "FOX 5 Atlanta",
+   "url": "https://www.youtube.com/@FOX5Atlanta/live"
+  }
+ ],
+ "HI": [
+  {
+   "name": "Hawaii News Now",
+   "url": "https://www.youtube.com/@hawaiinews/live"
+  },
+  {
+   "name": "KHON2 News",
+   "url": "https://www.youtube.com/@KHONNewsHawaii/live"
+  },
+  {
+   "name": "KITV Island News",
+   "url": "https://www.youtube.com/@kitv/live"
+  }
+ ],
+ "ID": [
+  {
+   "name": "KTVB 7 Boise",
+   "url": "https://www.youtube.com/@ktvb7/live"
+  },
+  {
+   "name": "Idaho News 6 (KIVI)",
+   "url": "https://www.youtube.com/@KiviTVNews/live"
+  }
+ ],
+ "IL": [
+  {
+   "name": "ABC7 Chicago",
+   "url": "https://www.youtube.com/@ABC7Chicago/live"
+  },
+  {
+   "name": "NBC Chicago",
+   "url": "https://www.youtube.com/@NBCChicago/live"
+  },
+  {
+   "name": "WGN News",
+   "url": "https://www.youtube.com/@wgntv/live"
+  }
+ ],
+ "IN": [
+  {
+   "name": "WTHR 13 Indianapolis",
+   "url": "https://www.youtube.com/@WTHR13News/live"
+  },
+  {
+   "name": "WISH-TV 8 Indianapolis",
+   "url": "https://www.youtube.com/@WISHNews8/live"
+  },
+  {
+   "name": "FOX59 Indianapolis",
+   "url": "https://www.youtube.com/@Fox59WXIN/live"
+  }
+ ],
+ "IA": [
+  {
+   "name": "KCCI 8 Des Moines",
+   "url": "https://www.youtube.com/@KCCI/live"
+  },
+  {
+   "name": "WHO 13 Des Moines",
+   "url": "https://www.youtube.com/@WHOtv/live"
+  },
+  {
+   "name": "Iowa PBS",
+   "url": "https://www.youtube.com/@IowaPBS/live"
+  }
+ ],
+ "KS": [
+  {
+   "name": "KSN Wichita",
+   "url": "https://www.youtube.com/@KSNTV/live"
+  },
+  {
+   "name": "KWCH 12 Wichita",
+   "url": "https://www.youtube.com/@KWCH12/live"
+  },
+  {
+   "name": "KAKE News Wichita",
+   "url": "https://www.youtube.com/@KAKENewsOnYourSide/live"
+  }
+ ],
+ "KY": [
+  {
+   "name": "WLKY Louisville",
+   "url": "https://www.youtube.com/@WLKY/live"
+  },
+  {
+   "name": "WHAS11 Louisville",
+   "url": "https://www.youtube.com/@WHAS11News/live"
+  },
+  {
+   "name": "LEX18 Lexington",
+   "url": "https://www.youtube.com/@LEX18NEWS/live"
+  }
+ ],
+ "LA": [
+  {
+   "name": "WWL-TV 4 New Orleans",
+   "url": "https://www.youtube.com/@WWLTV/live"
+  },
+  {
+   "name": "WDSU 6 New Orleans",
+   "url": "https://www.youtube.com/@wdsu/live"
+  },
+  {
+   "name": "WAFB 9 Baton Rouge",
+   "url": "https://www.youtube.com/@WAFB9/live"
+  }
+ ],
+ "ME": [
+  {
+   "name": "WMTW 8 Portland",
+   "url": "https://www.youtube.com/@WMTW/live"
+  },
+  {
+   "name": "NEWS CENTER Maine",
+   "url": "https://www.youtube.com/@newscentermaine/live"
+  },
+  {
+   "name": "CBS 13 Portland (WGME)",
+   "url": "https://www.youtube.com/@CBS13News/live"
+  }
+ ],
+ "MD": [
+  {
+   "name": "WBAL-TV 11 Baltimore",
+   "url": "https://www.youtube.com/@WBALTV11/live"
+  },
+  {
+   "name": "WJZ 13 Baltimore",
+   "url": "https://www.youtube.com/@WJZ13TV/live"
+  },
+  {
+   "name": "WMAR-2 Baltimore",
+   "url": "https://www.youtube.com/@WMAR2News/live"
+  }
+ ],
+ "MA": [
+  {
+   "name": "WCVB 5 Boston",
+   "url": "https://www.youtube.com/@WCVB/live"
+  },
+  {
+   "name": "Boston 25 News",
+   "url": "https://www.youtube.com/@boston25news/live"
+  },
+  {
+   "name": "NBC10 Boston",
+   "url": "https://www.youtube.com/@NBC10Boston/live"
+  }
+ ],
+ "MI": [
+  {
+   "name": "WXYZ 7 Detroit",
+   "url": "https://www.youtube.com/@wxyztvdetroit/live"
+  },
+  {
+   "name": "WDIV Local 4 Detroit",
+   "url": "https://www.youtube.com/@ClickOnDetroitLocal4WDIV/live"
+  },
+  {
+   "name": "FOX 2 Detroit",
+   "url": "https://www.youtube.com/@FOX2Detroit/live"
+  }
+ ],
+ "MN": [
+  {
+   "name": "KARE 11 Minneapolis",
+   "url": "https://www.youtube.com/@KARE11/live"
+  },
+  {
+   "name": "WCCO CBS Minnesota",
+   "url": "https://www.youtube.com/@WCCO/live"
+  },
+  {
+   "name": "FOX 9 Minneapolis",
+   "url": "https://www.youtube.com/@fox9/live"
+  }
+ ],
+ "MS": [
+  {
+   "name": "WLBT 3 Jackson",
+   "url": "https://www.youtube.com/@WLBT3OnYourSide/live"
+  },
+  {
+   "name": "WJTV 12 Jackson",
+   "url": "https://www.youtube.com/@WJTV12News/live"
+  },
+  {
+   "name": "16 WAPT Jackson",
+   "url": "https://www.youtube.com/@16WAPTNews/live"
+  }
+ ],
+ "MO": [
+  {
+   "name": "KSDK 5 St. Louis",
+   "url": "https://www.youtube.com/@ksdk/live"
+  },
+  {
+   "name": "KMOV 4 St. Louis",
+   "url": "https://www.youtube.com/@KMOVStLouis/live"
+  },
+  {
+   "name": "KMBC 9 Kansas City",
+   "url": "https://www.youtube.com/@kmbc/live"
+  }
+ ],
+ "MT": [
+  {
+   "name": "KTVQ 2 Billings",
+   "url": "https://www.youtube.com/@KTVQNews/live"
+  },
+  {
+   "name": "Montana PBS",
+   "url": "https://www.youtube.com/@MontanaPBS/live"
+  }
+ ],
+ "NE": [
+  {
+   "name": "KETV 7 Omaha",
+   "url": "https://www.youtube.com/@KETV/live"
+  },
+  {
+   "name": "WOWT 6 Omaha",
+   "url": "https://www.youtube.com/@wowt6/live"
+  },
+  {
+   "name": "10/11 News Lincoln (KOLN)",
+   "url": "https://www.youtube.com/@1011_News/live"
+  }
+ ],
+ "NV": [
+  {
+   "name": "8 News Now Las Vegas (KLAS)",
+   "url": "https://www.youtube.com/@8NewsNow/live"
+  },
+  {
+   "name": "KTNV 13 Las Vegas",
+   "url": "https://www.youtube.com/@KTNV/live"
+  },
+  {
+   "name": "News 3 Las Vegas",
+   "url": "https://www.youtube.com/@News3LasVegas/live"
+  }
+ ],
+ "NH": [
+  {
+   "name": "WMUR 9",
+   "url": "https://www.youtube.com/@WMUR/live"
+  }
+ ],
+ "NJ": [
+  {
+   "name": "NJ Spotlight News",
+   "url": "https://www.youtube.com/@NJSpotlightNews/live"
+  },
+  {
+   "name": "News 12",
+   "url": "https://www.youtube.com/@news12/live"
+  }
+ ],
+ "NM": [
+  {
+   "name": "KOB 4 Albuquerque",
+   "url": "https://www.youtube.com/@KOB4/live"
+  },
+  {
+   "name": "KOAT 7 Albuquerque",
+   "url": "https://www.youtube.com/@KOAT/live"
+  },
+  {
+   "name": "KRQE 13 Albuquerque",
+   "url": "https://www.youtube.com/@Krqenews13/live"
+  }
+ ],
+ "NY": [
+  {
+   "name": "ABC7 New York",
+   "url": "https://www.youtube.com/@ABC7NY/live"
+  },
+  {
+   "name": "NBC New York",
+   "url": "https://www.youtube.com/@NBCNewYork/live"
+  },
+  {
+   "name": "NY1",
+   "url": "https://www.youtube.com/@SpectrumNewsNY1/live"
+  }
+ ],
+ "NC": [
+  {
+   "name": "WRAL 5 Raleigh",
+   "url": "https://www.youtube.com/@WRAL5/live"
+  },
+  {
+   "name": "ABC11 Raleigh-Durham",
+   "url": "https://www.youtube.com/@ABC11WTVD/live"
+  },
+  {
+   "name": "WSOC 9 Charlotte",
+   "url": "https://www.youtube.com/@WSOC/live"
+  }
+ ],
+ "ND": [
+  {
+   "name": "KFYR Bismarck",
+   "url": "https://www.youtube.com/@KFYR-TV/live"
+  },
+  {
+   "name": "Valley News Live Fargo",
+   "url": "https://www.youtube.com/@valleynewslive/live"
+  }
+ ],
+ "OH": [
+  {
+   "name": "10TV Columbus (WBNS)",
+   "url": "https://www.youtube.com/@WBNS/live"
+  },
+  {
+   "name": "News 5 Cleveland",
+   "url": "https://www.youtube.com/@news5cleveland/live"
+  },
+  {
+   "name": "WCPO 9 Cincinnati",
+   "url": "https://www.youtube.com/@Wcpo9/live"
+  }
+ ],
+ "OK": [
+  {
+   "name": "KOCO 5 Oklahoma City",
+   "url": "https://www.youtube.com/@KOCO/live"
+  },
+  {
+   "name": "KFOR 4 Oklahoma City",
+   "url": "https://www.youtube.com/@kfor4news/live"
+  },
+  {
+   "name": "News 9 / News On 6 (Oklahoma's Own)",
+   "url": "https://www.youtube.com/@OklahomasOwn/live"
+  }
+ ],
+ "OR": [
+  {
+   "name": "KGW 8 Portland",
+   "url": "https://www.youtube.com/@KGWNews8/live"
+  },
+  {
+   "name": "KATU 2 Portland",
+   "url": "https://www.youtube.com/@KATU/live"
+  },
+  {
+   "name": "KOIN 6 Portland",
+   "url": "https://www.youtube.com/@KOIN6/live"
+  }
+ ],
+ "PA": [
+  {
+   "name": "6abc Philadelphia",
+   "url": "https://www.youtube.com/@6abcActionNews/live"
+  },
+  {
+   "name": "CBS Philadelphia",
+   "url": "https://www.youtube.com/@cbsphiladelphia/live"
+  },
+  {
+   "name": "WTAE 4 Pittsburgh",
+   "url": "https://www.youtube.com/@WTAE/live"
+  }
+ ],
+ "RI": [
+  {
+   "name": "WPRI 12 Providence",
+   "url": "https://www.youtube.com/@WPRI/live"
+  },
+  {
+   "name": "NBC 10 WJAR Providence",
+   "url": "https://www.youtube.com/@NBC10WJAR/live"
+  },
+  {
+   "name": "ABC6 Providence",
+   "url": "https://www.youtube.com/@wlneABC6/live"
+  }
+ ],
+ "SC": [
+  {
+   "name": "WIS 10 Columbia",
+   "url": "https://www.youtube.com/@wisnews10/live"
+  },
+  {
+   "name": "WYFF 4 Greenville",
+   "url": "https://www.youtube.com/@WYFFNews4/live"
+  },
+  {
+   "name": "Live 5 News Charleston",
+   "url": "https://www.youtube.com/@live5news-wcsc/live"
+  }
+ ],
+ "SD": [
+  {
+   "name": "KELOLAND News",
+   "url": "https://www.youtube.com/@kelolandnews/live"
+  },
+  {
+   "name": "Dakota News Now",
+   "url": "https://www.youtube.com/@Dakota_News_Now/live"
+  }
+ ],
+ "TN": [
+  {
+   "name": "NewsChannel 5 Nashville",
+   "url": "https://www.youtube.com/@NewsChannel5/live"
+  },
+  {
+   "name": "WSMV 4 Nashville",
+   "url": "https://www.youtube.com/@WSMV4/live"
+  },
+  {
+   "name": "WREG 3 Memphis",
+   "url": "https://www.youtube.com/@WREGNewsChannel3/live"
+  }
+ ],
+ "TX": [
+  {
+   "name": "WFAA 8 Dallas",
+   "url": "https://www.youtube.com/@Wfaa8/live"
+  },
+  {
+   "name": "ABC13 Houston",
+   "url": "https://www.youtube.com/@abc13houston/live"
+  },
+  {
+   "name": "KSAT 12 San Antonio",
+   "url": "https://www.youtube.com/@KSAT12/live"
+  }
+ ],
+ "UT": [
+  {
+   "name": "KSL 5 Salt Lake City",
+   "url": "https://www.youtube.com/@KSLNews/live"
+  },
+  {
+   "name": "KUTV 2 Salt Lake City",
+   "url": "https://www.youtube.com/@KUTV2News/live"
+  },
+  {
+   "name": "FOX 13 Utah",
+   "url": "https://www.youtube.com/@fox13now/live"
+  }
+ ],
+ "VT": [
+  {
+   "name": "WCAX 3 Burlington",
+   "url": "https://www.youtube.com/@wcax-tvchannel3news/live"
+  },
+  {
+   "name": "Vermont Public",
+   "url": "https://www.youtube.com/@VermontPublic/live"
+  }
+ ],
+ "VA": [
+  {
+   "name": "WTVR CBS 6 Richmond",
+   "url": "https://www.youtube.com/@WTVRCBS6/live"
+  },
+  {
+   "name": "WAVY 10 Norfolk",
+   "url": "https://www.youtube.com/@WAVY/live"
+  },
+  {
+   "name": "NBC12 Richmond",
+   "url": "https://www.youtube.com/@12OnYourSide/live"
+  }
+ ],
+ "WA": [
+  {
+   "name": "KING 5 Seattle",
+   "url": "https://www.youtube.com/@KING5Seattle/live"
+  },
+  {
+   "name": "KOMO 4 Seattle",
+   "url": "https://www.youtube.com/@KOMONews/live"
+  },
+  {
+   "name": "KIRO 7 Seattle",
+   "url": "https://www.youtube.com/@kiro7/live"
+  }
+ ],
+ "WV": [
+  {
+   "name": "WSAZ 3 Huntington",
+   "url": "https://www.youtube.com/@wsaznewschannel3/live"
+  },
+  {
+   "name": "WCHS 8 Charleston",
+   "url": "https://www.youtube.com/@WCHS-TV/live"
+  },
+  {
+   "name": "West Virginia Public Broadcasting",
+   "url": "https://www.youtube.com/@WestVirginiaPublicBroadcasting/live"
+  }
+ ],
+ "WI": [
+  {
+   "name": "WISN 12 Milwaukee",
+   "url": "https://www.youtube.com/@WISN/live"
+  },
+  {
+   "name": "TMJ4 Milwaukee",
+   "url": "https://www.youtube.com/@TMJ4/live"
+  },
+  {
+   "name": "FOX6 Milwaukee",
+   "url": "https://www.youtube.com/@fox6milwaukee/live"
+  }
+ ],
+ "WY": [
+  {
+   "name": "Wyoming News Now (KGWN)",
+   "url": "https://www.youtube.com/@kgwntv/live"
+  },
+  {
+   "name": "Wyoming PBS",
+   "url": "https://www.youtube.com/@WyomingPBS/live"
+  }
+ ]
+}

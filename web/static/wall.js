@@ -411,6 +411,7 @@
 
   // ---- votes ----
   function propose(action) { send({ t: "propose", action }); }
+  window.wallPropose = propose;   // wall-election.js: a state's local coverage onto a tile
 
   // Live now: one tap puts that game on the tile picked in the Tile menu (or the next empty one)
   async function loadLive() {
