@@ -218,3 +218,11 @@ async def test_link_message_falls_back_to_login_hint():
     msg = await w.link_message(WallWeb("https://s", "x", transport=httpx.MockTransport(nope)),
                                SimpleNamespace(id=5, display_name="K", name="k", avatar=None))
     assert "not a member" in msg and "https://s/wall" in msg
+
+
+async def test_link_message_suppresses_the_preview():
+    """The link is single-use: an unfurl fetch by Discord would spend it before the member clicks."""
+    def ok(req): return httpx.Response(200, json={"url": "https://s/api/v1/wall/login?t=abc", "ttl": 600})
+    msg = await w.link_message(WallWeb("https://s", "x", transport=httpx.MockTransport(ok)),
+                               SimpleNamespace(id=5, display_name="K", name="k", avatar=None))
+    assert "<https://s/api/v1/wall/login?t=abc>" in msg

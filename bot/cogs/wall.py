@@ -647,7 +647,8 @@ async def link_message(web: WallWeb, user) -> str:
     except WallError as e:
         return (f"Couldn't make your link ({e}). Log in at {web.watch_url} with Discord — your SharpLab account is "
                 "your Discord account in this server; if it says you're not a member, join the server first.")
-    return f"Your watch link (valid 10 min, just for you — don't share it): {url}"
+    # <…>: no link preview. Discord's unfurler would GET the link first and spend it (it's single-use).
+    return f"Your watch link (valid 10 min, one use, just for you — don't share it): <{url}>"
 
 
 async def setup(bot: commands.Bot) -> None:
