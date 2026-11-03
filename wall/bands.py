@@ -24,6 +24,7 @@ KEEP_S = 600.0          # the tape's memory (delays are clamped to 120 s)
 TICKER_MAX = 12
 CHAT_LINES = 4
 CHAT_FRESH_S = 20.0
+TVCHAT_LINES = 6   # the chat floating over the tiles (qml/ChatFloat.qml)
 
 
 def default_delay(url: str) -> tuple[float, str]:
@@ -126,12 +127,12 @@ def team_label(url: str, boards: dict[str, dict | None]) -> str:
     return slug
 
 
-def chat_lines(view: dict | None, now: float) -> list[dict]:
+def chat_lines(view: dict | None, now: float, n: int = CHAT_LINES) -> list[dict]:
     if not view or not view.get("on"):
         return []
     return [{"id": m["id"], "name": m.get("name") or "", "guest": bool(m.get("guest")), "text": m.get("text") or "",
              "sys": m.get("kind") == "system", "fresh": now - float(m.get("ts") or 0) < CHAT_FRESH_S}
-            for m in (view.get("messages") or [])[-CHAT_LINES:]]
+            for m in (view.get("messages") or [])[-n:]]
 
 
 def speaker(urls: list[str], sound: int) -> dict | None:

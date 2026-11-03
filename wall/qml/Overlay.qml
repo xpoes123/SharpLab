@@ -19,6 +19,8 @@
 //            so header and sidebar agree), a calm backdrop, and without the L-bar the other games + the chat.
 //   speaker: (polls the same /bands) one transparent surface over the tiles' area: a small badge in the corner of the tile
 //            with the sound (SpeakerBadge.qml), fading when the sound moves; none with < 2 video tiles (bands.speaker).
+//   tvchat:  (the same /bands) one transparent surface over the tiles' area: the watch party's chat floating at its top
+//            right, Twitch-style (ChatFloat.qml), while the owner's toggle (bands.tvchat.on) is on.
 //   qml6 Overlay.qml -- --api http://127.0.0.1:7790 --bets http://127.0.0.1:7795/i/tv
 import QtQuick
 import QtQuick.Window
@@ -207,6 +209,28 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
         LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorLeft
         LayerShell.Window.exclusionZone: -1
         SpeakerBadge { anchors.fill: parent; b: app.bands; area: app.spkArea; unit: Screen.width }
+    }
+
+    // tvchat: the watch party's chat floating over the tiles (ChatFloat.qml), the owner's toggle in /bands' tvchat.on.
+    // Its own transparent surface over the tiles' area, like the speaker's; up whenever the toggle is on (the lines fade
+    // on their own, and an empty transparent surface costs nothing), cleared when it goes down.
+    readonly property bool chatUp: app.spkArea !== null && app.hostOk && app.bands.on !== false && !!app.bands.tvchat
+        && app.bands.tvchat.on === true && app.layout !== "full" && app.layout !== "matchup"
+    Window {
+        transientParent: null
+        title: "TV overlay chat"
+        color: "transparent"
+        flags: Qt.FramelessWindowHint | Qt.WindowTransparentForInput | Qt.WindowDoesNotAcceptFocus
+        width: app.spkArea ? app.spkArea.w : 1
+        height: app.spkArea ? app.spkArea.h : 1
+        visible: app.chatUp
+        LayerShell.Window.scope: "tv-overlay"
+        LayerShell.Window.layer: LayerShell.Window.LayerOverlay
+        LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
+        LayerShell.Window.activateOnShow: false
+        LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorLeft
+        LayerShell.Window.exclusionZone: -1
+        ChatFloat { anchors.fill: parent; b: app.bands; area: app.spkArea; unit: Screen.width; shown: app.chatUp }
     }
 
     Window {   // bands: one surface over the region the band layer owns (the L-bar's corner, or the whole screen without

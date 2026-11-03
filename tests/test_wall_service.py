@@ -845,3 +845,32 @@ def test_stream_gain_and_artifact_tiles():
     from wall.engine import ARTIFACT
     assert "volume=2" in gst_cmd(104, "wall_discord", gain=2.0) and "volume=1" in gst_cmd(104, "wall_discord")
     assert ARTIFACT.match("https://claude.ai/artifact/5wcVpgfhN4J5hggdCeJy4S") and not ARTIFACT.match("https://www.youtube.com/@x/live")
+
+
+# ---- the TV chat overlay toggle (qml/ChatFloat.qml): owner's switch, kept across restarts, in /bands + the state ----
+def test_tvchat_toggle_persists_and_reaches_the_overlay(api):
+    import time as _time
+    app, tmp = api
+    c = client(app)
+    assert c.get("/i/discord").json()["tvchat"] == {"on": True}            # default on
+    b = c.get("/i/tv/bands").json()["tvchat"]
+    assert b["on"] is True and b["lines"] == []                            # no party: no lines
+    assert c.post("/i/discord/tvchat", json={"on": "no"}).status_code == 422
+    remote = client(app, "100.81.31.34", "s3cret")                         # the web, over the tailnet
+    assert remote.post("/i/discord/tvchat", json={"on": False}).json()["tvchat"] == {"on": False}
+    assert (tmp / "tvchat-on").read_text() == "0"
+    assert c.get("/i/tv/bands").json()["tvchat"]["on"] is False and c.get("/i/tv").json()["tvchat"]["on"] is False
+    # a restart reads the file back
+    cfg = Cfg({"WALL_STATE_DIR": str(tmp), "WALL_API_TOKEN": "s3cret", "WALL_IMPORT_FROM": "", "WALL_TV_OUTPUT": ""})
+    app2 = build(cfg, app.state.instances, app.state.scores, app.state.store, guard=LLMGuard(mode="off"))
+    assert client(app2).get("/i/tv/bands").json()["tvchat"]["on"] is False
+    # the lines: the party's last six, fresh = arrived in the last 20 s
+    chat = app.state.chat
+    chat.configured = True
+    now = _time.time()
+    chat.messages = [{"id": k, "ts": now - (100 if k < 5 else 1), "kind": "system" if k == 8 else "chat", "name": f"u{k}",
+                      "guest": False, "text": f"t{k}"} for k in range(1, 10)]
+    app.state.instances["discord"].urls = ["https://a.tv/x"]
+    lines = c.get("/i/tv/bands").json()["tvchat"]["lines"]
+    assert [m["id"] for m in lines] == [4, 5, 6, 7, 8, 9] and [m["fresh"] for m in lines] == [False] + [True] * 5
+    assert lines[4]["sys"] is True and lines[5] == {"id": 9, "name": "u9", "guest": False, "text": "t9", "sys": False, "fresh": True}
