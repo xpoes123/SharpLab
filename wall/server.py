@@ -26,7 +26,7 @@ from pydantic import ValidationError
 
 from wall.bands import ScoreTape, build_view
 from wall.bets import POLL_S as BETS_POLL_S, BetsFeed, badge_rows
-from wall.chat import POLL_S, ChatFeed
+from wall.chat import POLL_S, ChatFeed, urllib_http
 from shared import kalshi_election as ke
 from wall.election import IDLE_S as ELECTION_IDLE_S, Results, board as election_board, holders as election_holders, \
     replay, trades as election_trades
@@ -36,6 +36,7 @@ from wall.instance import BOARDS, Instance, WallError
 from wall.llm import LLMGuard
 from wall.live import LEAGUES, STREAM, TEAMS, Scores, live_games
 from wall.presets import PresetStore, check_url, errors
+from wall.spotlight import Spotlight, state_list
 from wall.sync import STEP_S, Runner, SyncStore, tile_games
 
 log = logging.getLogger("wall.server")
@@ -145,11 +146,12 @@ class Cfg:
 def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, scores: Scores | None = None,
           store: PresetStore | None = None, guard: LLMGuard | None = None, chat: ChatFeed | None = None,
           sync: SyncStore | None = None, bets: BetsFeed | None = None, runner: Runner | None = None,
-          results: Results | None = None) -> FastAPI:
+          results: Results | None = None, spot: Spotlight | None = None) -> FastAPI:
     cfg = cfg or Cfg()
     results = results or Results(replay(cfg.election_replay) if cfg.election_replay else None, cfg.state)
     sync = sync or SyncStore(cfg.state / "sync.json", cfg.sync_default)
     bets = bets or BetsFeed(cfg.web_url, cfg.web_key)
+    spot = spot or Spotlight(urllib_http(cfg.web_url, cfg.web_key, timeout=8) if cfg.web_url and cfg.web_key else None)
     tape = ScoreTape()   # every scoreboard as first seen: the band headers' delayed scores
     chat = chat or ChatFeed(cfg.web_url, cfg.web_key, cfg.owner_id, cfg.owner_name)
     guard = guard or LLMGuard(cfg.ollama, cfg.llm_guard)
@@ -245,8 +247,18 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
                         bets.idle()
                 except Exception as e:  # noqa: BLE001
                     log.warning("bets: %s", e)
+        async def spot_ticker():   # election night: the TV spotlight's card, refreshed from the web while it shows
+            while True:
+                await asyncio.sleep(1)
+                if spot.due():
+                    spot.fetched = time.time()
+                    try:
+                        await asyncio.to_thread(spot.refresh)
+                    except Exception as e:  # noqa: BLE001
+                        log.warning("spotlight: %s", e)
         runner.start()
-        tasks = [asyncio.create_task(ticker()), asyncio.create_task(chat_ticker()), asyncio.create_task(bets_ticker())]
+        tasks = [asyncio.create_task(ticker()), asyncio.create_task(chat_ticker()), asyncio.create_task(bets_ticker()),
+                 asyncio.create_task(spot_ticker())]
         yield
         for task in tasks:
             task.cancel()
@@ -257,6 +269,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
     app.state.instances, app.state.store, app.state.scores, app.state.guard, app.state.chat = instances, store, scores, guard, chat
     app.state.sync, app.state.bets, app.state.runner = sync, bets, runner
     app.state.tape = tape
+    app.state.spot = spot
 
     @app.middleware("http")
     async def gate(request: Request, call_next):
@@ -564,6 +577,31 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
             return JSONResponse({"error": "no watch party is on (the discord wall isn't running)"}, status_code=409)
         status, out = await asyncio.to_thread(chat.post, text[:300])
         return JSONResponse(out, status_code=status)
+
+    # ---- election night: the TV's state spotlight (one for the box: the TV's sidebar shows it, the discord wall mirrors
+    # the TV). The TV's phones (loopback) and the watch page (tailnet, /i/discord/spotlight: a passed vote / the owner) set
+    # it; the overlay polls /api/overlay/spot. wall/spotlight.py. ----
+    @app.post("/i/{name}/spotlight")
+    async def set_spot(name: str, request: Request) -> dict:
+        inst(name)
+        d = await body(request)
+        st = d.get("state")
+        if not isinstance(st, str):
+            raise ValueError("state is a two-letter code, or \"\" to close it")
+        by = d.get("by") if isinstance(d.get("by"), str) else ("watch party" if name == "discord" else "TV remote")
+        results.touch()
+        return {"spot": spot.set(st, by), "configured": spot.configured}
+
+    @app.get("/i/{name}/spotlight")
+    def get_spot(name: str) -> dict:
+        """The phone's picker: what shows now + the states with a race tonight (key ones first)."""
+        inst(name)
+        results.touch()
+        return {"spot": spot.view(), "states": state_list(results.snapshot()), "configured": spot.configured}
+
+    @app.get("/i/{name}/api/overlay/spot")
+    def ov_spot(name: str) -> dict:
+        return {"spot": spot.view()}
 
     # ---- the wall's own pages (data tiles: /p/election/map …) + their data; GET only, also from the tiles themselves ----
     @app.get("/p/election/data.json")
