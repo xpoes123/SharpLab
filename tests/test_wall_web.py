@@ -993,3 +993,35 @@ def test_wall_page_nav_is_hidden_until_a_member_and_has_no_discord_invite():
     assert 'class="nav" id="topNav" hidden' in (static / "pulse.html").read_text()
     for f in static.glob("*.html"):
         assert "discord.gg/" not in f.read_text() and "nav-discord" not in f.read_text(), f.name
+
+
+def test_tvchat_op_routes_and_is_admin_only(monkeypatch):
+    import asyncio
+    from web.wall import _route, describe, noop
+    monkeypatch.setenv("WALL_OWNER_ID", OWNER)
+    monkeypatch.setenv("WALL_ADMIN_IDS", ADMIN)
+    assert check_action({"op": "tvchat", "on": False}) == {"op": "tvchat", "on": False}
+    with pytest.raises(ValueError):
+        check_action({"op": "tvchat", "on": 1})
+    assert _route({"op": "tvchat", "on": True}) == ("POST", "/i/discord/tvchat", {"on": True})
+    assert describe({"op": "tvchat", "on": False}) == "turn the TV chat off"
+    w = {"running": True, "urls": [], "tvchat": {"on": True}}
+    assert noop({"op": "tvchat", "on": True}, w) and not noop({"op": "tvchat", "on": False}, w)
+    done = []
+
+    async def execute(a):
+        done.append(a)
+        return True, ""
+
+    async def fetch_state():
+        return {"running": True, "urls": [], "tvchat": {"on": True}}
+
+    async def go():
+        hub = wall.Hub(clock=Clock(), execute=execute, fetch_state=fetch_state)
+        p, err = await hub.propose({"id": "300", "name": "Steph"}, {"op": "tvchat", "on": False})
+        assert p is None and "admins" in err
+        p, err = await hub.propose({"id": ADMIN, "name": "Ad"}, {"op": "tvchat", "on": False})
+        assert p and not err
+        p, err = await hub.propose({"id": OWNER, "name": "David"}, {"op": "tvchat", "on": False})
+        assert p and done and done[-1] == {"op": "tvchat", "on": False}
+    asyncio.run(go())

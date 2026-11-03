@@ -24,7 +24,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import ValidationError
 
-from wall.bands import ScoreTape, build_view
+from wall.bands import TVCHAT_LINES, ScoreTape, build_view, chat_lines as band_chat_lines
 from wall.bets import POLL_S as BETS_POLL_S, BetsFeed, badge_rows
 from wall.chat import POLL_S, ChatFeed, urllib_http
 from shared import kalshi_election as ke
@@ -235,6 +235,9 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
     sdir = StreamDirector(urllib_http(cfg.web_url, cfg.web_key, timeout=6) if cfg.web_url and cfg.web_key else None,
                           on=sdir_file.read_text().strip() != "0" if sdir_file.exists() else True)
 
+    tvchat_file = cfg.state / "tvchat-on"   # the owner's TV chat overlay toggle (qml/ChatFloat.qml; default on)
+    tvchat = {"on": tvchat_file.read_text().strip() != "0" if tvchat_file.exists() else True}
+
     def sdir_view() -> dict:
         tv = instances.get("tv")
         return sdir.view(bool(tv is not None and sdir.active(tv, policies.get("tv"))))
@@ -245,7 +248,8 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         on_wall = set(i.urls)
         out = {"onair": [airs.view(u) for u in i.urls], "favorites": list(favs.urls),
                "adwatch": {**(pol.view() if pol else {"on": False, "orig": {}}),
-                           "pool": [{"url": u, **airs.view(u)} for u in airs.fresh() if u not in on_wall][:12]}}
+                           "pool": [{"url": u, **airs.view(u)} for u in airs.fresh() if u not in on_wall][:12]},
+               "tvchat": {"on": tvchat["on"]}}
         if onair.election_mode(i):   # the Spectrum lineup: labels for the watch page + the web's gate; adwatch listens to it
             out["spectrum"] = spectrum_view()
             out["stream_director"] = sdir_view()   # Jev on tiles 3–4 + the sound (wall/streamdir.py), the TV's
@@ -695,6 +699,22 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
             i._bump()
         return inst(name).state()
 
+    @app.post("/i/{name}/tvchat")
+    async def set_tvchat(name: str, request: Request) -> dict:
+        """{on}: the watch-party chat floating over the TV's tiles (qml/ChatFloat.qml) on / off — the owner's toggle, kept
+        across restarts. One for the box: the Discord stream captures the TV's screen."""
+        d = await body(request)
+        if not isinstance(d.get("on"), bool):
+            raise ValueError("on is a boolean")
+        tvchat["on"] = d["on"]
+        try:
+            tvchat_file.write_text("1" if d["on"] else "0")
+        except OSError as e:
+            log.warning("tvchat toggle: %s", e)
+        target(name)._bump()
+        inst(name)._bump()
+        return inst(name).state()
+
     @app.post("/i/{name}/favorite")
     async def favorite(name: str, request: Request) -> dict:
         """{url, on}: star / unstar a stream (two at most; a third replaces the oldest). A starred stream that isn't up
@@ -847,6 +867,8 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         out = build_view(**args, games=games[:len(args["urls"])], scores=scores, tape=tape, delay=sync.delay,
                          chat=chat.view(party_on()))
         out["on"] = i.overlay_on()   # the TV OS is on its wall app (Overlay.qml draws nothing otherwise)
+        # the chat floating over the tiles (qml/ChatFloat.qml): the owner's toggle + the last few lines
+        out["tvchat"] = {"on": tvchat["on"], "lines": band_chat_lines(chat.view(party_on()), time.time(), TVCHAT_LINES)}
         return out
 
     # ---- the watch party's chat, for the TV router (loopback only: not in REMOTE_OK) ----

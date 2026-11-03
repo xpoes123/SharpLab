@@ -12,10 +12,15 @@ Right after a wall starts there is no snapshot that old yet: the header shows th
 """
 from __future__ import annotations
 
+import json
+import re
 import time
 from collections import deque
+from functools import lru_cache
+from pathlib import Path
 from urllib.parse import urlsplit
 
+from wall import spectrum
 from wall.engine import own_page, tile_map
 from wall.live import LEAGUES, TEAMS, stream_urls, team_slug
 
@@ -24,6 +29,46 @@ KEEP_S = 600.0          # the tape's memory (delays are clamped to 120 s)
 TICKER_MAX = 12
 CHAT_LINES = 4
 CHAT_FRESH_S = 20.0
+TVCHAT_LINES = 6   # the chat floating over the tiles (qml/ChatFloat.qml)
+
+
+LOCAL_NEWS = Path(__file__).resolve().parent.parent / "web" / "static" / "local-news.json"
+# the ad-skip pool's networks (wall/adwatch.py POOL), by YouTube handle (lower case)
+POOL_NAMES = {"@nbcnews": "NBC News", "@pbsnewshour": "PBS NewsHour", "@abcnews": "ABC News", "@cbsnews": "CBS News",
+              "@livenowfox": "LiveNOW from FOX"}
+YT_HANDLE = re.compile(r"youtube\.com/(@[^/?#]+)", re.I)
+
+
+@lru_cache(maxsize=2)
+def _local_news(path: Path = LOCAL_NEWS) -> dict[str, str]:
+    """{handle (lower case): station name} from the watch page's per-state local news list. Missing / broken = none."""
+    try:
+        states = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    out = {}
+    for lst in states.values() if isinstance(states, dict) else []:
+        for s in lst if isinstance(lst, list) else []:
+            m = YT_HANDLE.search(str(s.get("url") or "")) if isinstance(s, dict) else None
+            if m and s.get("name"):
+                out.setdefault(m.group(1).lower(), str(s["name"]))
+    return out
+
+
+def stream_name(url: str) -> str | None:
+    """The outlet's name for a stream tile's chip (qml/SpeakerBadge.qml): the Spectrum catalog, else the local news
+    list, else the ad-skip pool's networks, else the YouTube @handle. None = no name chip (our /p/ pages, or a page that
+    isn't a YouTube stream — the sports tiles have their game header in the bands)."""
+    if not url or own_page(url):
+        return None
+    s = spectrum.find(url)
+    if s:
+        return s["name"]
+    m = YT_HANDLE.search(url)
+    if not m:
+        return None
+    h = m.group(1)
+    return _local_news().get(h.lower()) or POOL_NAMES.get(h.lower()) or h
 
 
 def default_delay(url: str) -> tuple[float, str]:
@@ -126,12 +171,12 @@ def team_label(url: str, boards: dict[str, dict | None]) -> str:
     return slug
 
 
-def chat_lines(view: dict | None, now: float) -> list[dict]:
+def chat_lines(view: dict | None, now: float, n: int = CHAT_LINES) -> list[dict]:
     if not view or not view.get("on"):
         return []
     return [{"id": m["id"], "name": m.get("name") or "", "guest": bool(m.get("guest")), "text": m.get("text") or "",
              "sys": m.get("kind") == "system", "fresh": now - float(m.get("ts") or 0) < CHAT_FRESH_S}
-            for m in (view.get("messages") or [])[-CHAT_LINES:]]
+            for m in (view.get("messages") or [])[-n:]]
 
 
 def speaker(urls: list[str], sound: int) -> dict | None:
@@ -159,7 +204,7 @@ def build_view(*, urls: list[str], games: list[dict | None], sound: int, lbar: b
         d, src = delay(u)
         pick = pick or ended_game(u, latest)
         t = {"url": u, "host": host(u), "label": "" if pick else team_label(u, latest), "delay": round(float(d), 1),
-             "src": src, "game": None, "synced": False}
+             "src": src, "game": None, "synced": False, "name": stream_name(u)}
         if pick:
             lg, gid = pick
             on_tiles.add(pick)

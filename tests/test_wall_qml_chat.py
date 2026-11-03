@@ -50,3 +50,27 @@ def test_overlay_chat_renders_and_only_with_a_chat(tmp_path):
     off, errs_off = render(tmp_path, None, "off")
     assert errs_on == [] and errs_off == []
     assert on.exists() and off.exists() and on.read_bytes() != off.read_bytes()
+
+
+# ---- the chat floating over the tiles (ChatFloat.qml, /bands tvchat) ----------------------------------------------------
+TV_LINES = [
+    {"id": 10, "name": "Kim", "guest": True, "text": "this is old, never shown", "sys": False, "fresh": False},
+    {"id": 11, "name": "", "guest": False, "text": "🎬 Jev: CNN on tile 3, the sound to tile 3", "sys": True, "fresh": True},
+    {"id": 12, "name": "Steph", "guest": False, "text": "PA is so close", "sys": False, "fresh": True},
+    {"id": 13, "name": "Marco", "guest": True, "text": "refs!! a long one that has to wrap onto a second line at TV size to check it", "sys": False, "fresh": True},
+    {"id": 14, "name": "David", "guest": False, "text": "<b>not bold</b> & fine", "sys": False, "fresh": True}]
+
+
+@pytest.mark.skipif(shutil.which("qml6") is None, reason="qml6 not installed")
+@pytest.mark.parametrize("n,sound,lbar", [(4, 1, False), (3, 1, False), (2, 1, True)])
+def test_tv_chat_floats_over_the_tiles_beside_the_badge(tmp_path, n, sound, lbar):
+    import os
+    from tests.test_wall_speaker import bands, render as render_bands
+    on, off = tmp_path / "on.png", tmp_path / "off.png"
+    b = bands(n, sound, lbar)
+    assert render_bands(tmp_path, {**b, "tvchat": {"on": True, "lines": TV_LINES}}, on, "lbar" if lbar else "none") == []
+    assert render_bands(tmp_path, {**b, "tvchat": {"on": False, "lines": TV_LINES}}, off, "lbar" if lbar else "none") == []
+    assert on.read_bytes() != off.read_bytes()
+    keep = os.environ.get("WALL_CHAT_PNG")   # a dir: keep the renders to look at
+    if keep:
+        shutil.copy(on, Path(keep) / f"tvchat-{n}-{sound}-{'lbar' if lbar else 'full'}.png")

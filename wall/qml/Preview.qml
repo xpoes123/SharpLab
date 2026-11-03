@@ -102,6 +102,10 @@ Window {
         b: w.bands; geo: w.bandGeo; unit: w.width; lbarShown: w.lbar; bets: w.bets
         boardData: (w.lbar ? side : whole).last ? (w.lbar ? side : whole).last.data : null
     }
+    ChatFloat {   // the chat floating over the tiles, like Overlay.qml's chat surface
+        width: w.width; height: w.height; b: w.bands; unit: w.width; shown: w.layout !== "full" && w.layout !== "matchup"
+        area: w.bands && w.bands.n > 0 ? G.wallArea(w.width, w.height, !!w.bands.lbar) : null
+    }
     SpeakerBadge {   // the badge on the sound tile, like Overlay.qml's speaker surface
         visible: w.layout !== "full" && w.layout !== "matchup"; width: w.width; height: w.height; b: w.bands; unit: w.width
         area: w.bands && w.bands.n > 0 ? G.wallArea(w.width, w.height, !!w.bands.lbar) : null

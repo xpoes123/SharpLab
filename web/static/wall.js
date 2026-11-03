@@ -7,6 +7,7 @@
   const HLS_URL = "/api/v1/wall/hls/index.m3u8";
 
   let me = null, cfg = { delay: 6, vote_s: 60 }, ws = null, wall = null, retry = 1000;
+  let lastChat = "", lastFromFs = false;   // the last message sent, and whether from the full-screen box
   const props = new Map();          // open proposals by id
   const offsets = [];               // server − local clock samples (ms), low-RTT ones kept
   let offset = 0;
@@ -134,16 +135,88 @@
   $("unmute").onclick = toggleMute;
   $("muteBtn").onclick = toggleMute;
   video.addEventListener("volumechange", showMute);
-  $("fsBtn").onclick = () => {   // the player box (video + overlays) where the browser allows it; iPhone Safari only does the bare video
+  // Full screen = the player box (video + overlays + the floating chat) where the browser allows it. iPhone Safari only
+  // lets the bare <video> go native-fullscreen, and nothing can overlay that, so there the box is pinned over the whole
+  // viewport instead (body.pfs, "pseudo-fullscreen": rotate the phone for landscape). body.fs = either one.
+  const IPHONE = /iPhone|iPod/.test(navigator.userAgent);
+  const nativeFs = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
+  const pseudoFs = () => document.body.classList.contains("pfs");
+  const inFs = () => nativeFs() || pseudoFs();
+  function showFs() {
+    const on = inFs();
+    document.body.classList.toggle("fs", on);
+    $("fsBtn").setAttribute("aria-pressed", String(on));
+    if (!on) { fchatForm(false); $("fmsgs").replaceChildren(); }   // nothing old when it opens again
+    fsWake();
+  }
+  function setPseudo(on) {
+    document.body.classList.toggle("pfs", on);
+    if (on) scrollTo(0, 0);
+    showFs();
+  }
+  $("fsBtn").onclick = () => {
     const box = video.parentElement;
-    if (document.fullscreenElement || document.webkitFullscreenElement) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-    else if (box.requestFullscreen) box.requestFullscreen().catch(() => video.webkitEnterFullscreen && video.webkitEnterFullscreen());
-    else if (box.webkitRequestFullscreen) box.webkitRequestFullscreen();
-    else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+    if (pseudoFs()) setPseudo(false);
+    else if (nativeFs()) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    else if (!IPHONE && box.requestFullscreen) box.requestFullscreen().catch(() => setPseudo(true));
+    else if (!IPHONE && box.webkitRequestFullscreen) box.webkitRequestFullscreen();
+    else setPseudo(true);
   };
+  ["fullscreenchange", "webkitfullscreenchange"].forEach((ev) => document.addEventListener(ev, showFs));
+  $("fsExit").onclick = () => $("fsBtn").click();
+  document.addEventListener("keydown", (e) => {   // Esc leaves the pseudo one (the browser handles its own)
+    if (e.key === "Escape" && pseudoFs() && e.target !== $("fchatIn")) setPseudo(false);
+  });
 
   // double-click (or double-tap) the video: full screen and back, like any player
-  video.parentElement.addEventListener("dblclick", (e) => { if (e.target.closest("button")) return; e.preventDefault(); $("fsBtn").click(); });
+  video.parentElement.addEventListener("dblclick", (e) => { if (e.target.closest("button, input, form")) return; e.preventDefault(); $("fsBtn").click(); });
+
+  // ---- full screen: the chat floating over the video (last 6 lines, each fades ~20 s after it arrived; only what
+  // arrives while it's open), a 💬 to hide / show it (remembered here), ✏️ = a compact send box (not for the public) ----
+  const FCHAT_MAX = 6, FCHAT_LIFE_MS = 20000;
+  let fchatShown = true;
+  try { fchatShown = localStorage.getItem("wall.fchat") !== "0"; } catch (e) { /* storage blocked: on */ }
+  function showFchat() {
+    document.body.classList.toggle("fchat-off", !fchatShown);
+    $("fchatBtn").setAttribute("aria-pressed", String(fchatShown));
+    $("fchatBtn").title = `Chat over the video: ${fchatShown ? "on" : "off"}`;
+  }
+  showFchat();
+  $("fchatBtn").onclick = () => {
+    fchatShown = !fchatShown;
+    try { localStorage.setItem("wall.fchat", fchatShown ? "1" : "0"); } catch (e) { /* not remembered, still toggled */ }
+    showFchat();
+  };
+  function fchatAdd(m) {
+    if (!inFs()) return;
+    const li = el("li", m.kind === "system" ? "sys" : m.guest ? "guest" : ""); li.dataset.id = m.id;
+    if (m.kind !== "system") li.append(el("b", null, m.name || "?"));
+    li.append(document.createTextNode(m.text || ""));
+    const box = $("fmsgs"); box.append(li);
+    while (box.children.length > FCHAT_MAX) box.firstChild.remove();
+    setTimeout(() => li.classList.add("gone"), FCHAT_LIFE_MS - 1000);
+    setTimeout(() => li.remove(), FCHAT_LIFE_MS);
+  }
+  function fchatForm(on) {
+    $("fchatForm").hidden = !on;
+    if (on) { $("fchatIn").focus(); fsWake(); } else $("fchatIn").blur();
+  }
+  $("fsayBtn").onclick = () => { if (me && !me.public) fchatForm($("fchatForm").hidden); };
+  $("fchatForm").onsubmit = (e) => {
+    e.preventDefault();
+    const t = $("fchatIn").value.trim();
+    if (t) { lastChat = t; lastFromFs = true; send({ t: "chat", text: t }); $("fchatIn").value = ""; }
+  };
+  $("fchatIn").addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); fchatForm(false); } });
+  $("fchatIn").addEventListener("blur", () => { if (!$("fchatIn").value.trim()) setTimeout(() => { if (document.activeElement !== $("fchatIn")) $("fchatForm").hidden = true; }, 200); });
+  // the round buttons fade after a few still seconds over the video; a tap / move brings them back
+  let fsIdleT = null;
+  function fsWake() {
+    document.body.classList.remove("fs-idle");
+    clearTimeout(fsIdleT);
+    if (inFs()) fsIdleT = setTimeout(() => { if ($("fchatForm").hidden) document.body.classList.add("fs-idle"); }, 3500);
+  }
+  ["pointerdown", "pointermove"].forEach((ev) => video.parentElement.addEventListener(ev, fsWake, { passive: true }));
 
   // Hotkeys (not while typing): m mute, f fullscreen, space pause / back to live (the sync loop catches it up), ↑ ↓ volume
   document.addEventListener("keydown", (e) => {
@@ -225,14 +298,17 @@
         break;
       case "pong": addOffset(m.c, m.s); if (m.pdt_off != null) pdtOff = m.pdt_off; break;
       case "clock": pdtOff = m.pdt_off; break;
-      case "chat": { const seen = chatInView(); addMsg(m.msg); incoming(m.msg, seen); break; }
-      case "del": { const li = document.querySelector(`#msgs li[data-id="${m.id}"]`); if (li) li.remove(); break; }
+      case "chat": { const seen = chatInView(); addMsg(m.msg); fchatAdd(m.msg); incoming(m.msg, seen); break; }
+      case "del": document.querySelectorAll(`#msgs li[data-id="${m.id}"], #fmsgs li[data-id="${m.id}"]`).forEach((li) => li.remove()); break;
       case "viewers": renderViewers(m.list); break;
       case "count": showCount(m); break;
       case "proposal": if (m.p.status === "open") props.set(m.p.id, m.p); else props.delete(m.p.id); renderProps(); break;
       case "wall": setWall(m.state); break;
       case "error":
-        if (m.chat && !$("chatIn").value) $("chatIn").value = lastChat;   // a refused message goes back in the box
+        if (m.chat && lastFromFs && inFs()) {   // sent from the floating box: back in it, the reason as a line over the video
+          if (!$("fchatIn").value) $("fchatIn").value = lastChat;
+          fchatForm(true); fchatAdd({ id: "err" + Date.now(), kind: "system", text: m.text });
+        } else if (m.chat && !$("chatIn").value) $("chatIn").value = lastChat;   // a refused message goes back in the box
         $("chatErr").textContent = m.text; setTimeout(() => ($("chatErr").textContent = ""), 4000); break;
     }
   }
@@ -256,6 +332,9 @@
     sel.replaceChildren(tv, ...((wall && wall.presets) || []).map((n) => { const o = el("option", null, n); o.value = n; return o; }));
     if (cur) sel.value = cur;
     if (lastGames) renderLive(lastGames);
+    const tc = (wall && wall.tvchat) || null;   // the chat floating over the TV's tiles (wall/qml/ChatFloat.qml)
+    $("tvchatBtn").hidden = !(me && me.admin && tc);
+    if (tc) { $("tvchatBtn").textContent = `TV chat: ${tc.on ? "on" : "off"}`; $("tvchatBtn").onclick = () => propose({ op: "tvchat", on: !tc.on }); }
     const elecMode = !!(wall && ((wall.overlay && wall.overlay.board === "election") || (wall.running && (wall.urls || []).some(ownPage))));
     document.querySelectorAll("[data-sports]").forEach((x) => (x.hidden = elecMode));
     document.querySelectorAll("[data-elec]").forEach((x) => (x.hidden = !elecMode));
@@ -500,12 +579,11 @@
     while (box.children.length > 200) box.firstChild.remove();
     if (stick) box.scrollTop = box.scrollHeight;
   }
-  let lastChat = "";
   $("chatForm").onsubmit = (e) => {
     e.preventDefault();
     const t = $("chatIn").value.trim();
     if (t && me && me.public) { $("chatErr").textContent = "Message @xpoes on Discord to get chat permissions."; return; }
-    if (t) { lastChat = t; send({ t: "chat", text: t }); $("chatIn").value = ""; }
+    if (t) { lastChat = t; lastFromFs = false; send({ t: "chat", text: t }); $("chatIn").value = ""; }
   };
 
   // ---- phone layouts (keep these queries in step with wall.css) ----
@@ -613,7 +691,7 @@
     if (actx.state === "running") play(); else actx.resume().then(play, () => {});
   }
   function chatInView() {
-    if (document.hidden || document.fullscreenElement || document.webkitFullscreenElement || video.webkitDisplayingFullscreen) return false;
+    if (document.hidden || inFs() || video.webkitDisplayingFullscreen) return false;
     if (LANDSCAPE.matches && !document.body.classList.contains("chat-on")) return false;
     if (anySheet()) return false;
     return msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 40;
@@ -623,7 +701,7 @@
     const now = Date.now();
     if (now - lastOther >= BURST_QUIET_MS) dingedBurst = false;   // a new burst
     lastOther = now;
-    if (LANDSCAPE.matches) { if (!pinned) setUnread(unread + 1); peek(); }
+    if (LANDSCAPE.matches && !inFs()) { if (!pinned) setUnread(unread + 1); peek(); }
     if (!dingOn || seen || dingedBurst || now - lastDing < DING_GAP_MS) return;
     lastDing = now; dingedBurst = true;
     chime();

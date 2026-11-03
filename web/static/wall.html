@@ -6,7 +6,7 @@
 <meta name="theme-color" content="var(--bg)" />
 <title>SharpLab Wall</title>
 <link rel="stylesheet" href="/hqstyle.css" />
-<link rel="stylesheet" href="/wall.css?v=20261103tag" />
+<link rel="stylesheet" href="/wall.css?v=20261103fc3" />
 <link rel="stylesheet" href="/wall-bets.css?v=20261103c" />
 <link rel="stylesheet" href="/wall-election.css?v=20261103w" />
 <link rel="stylesheet" href="/wall-election-live.css?v=20261103a" />
@@ -60,6 +60,19 @@
         </div>
         <button id="unmute" class="unmute" hidden>🔇 Tap for sound</button>
         <button id="chatToggle" class="chat-toggle" type="button" aria-label="Chat" aria-pressed="false">💬<span id="unread" class="badge" hidden></span></button>
+        <!-- full screen only: the chat floating over the video, Twitch-style (wall.js fchat) -->
+        <div id="fchat" class="fchat">
+          <ol id="fmsgs" class="fmsgs" aria-live="polite"></ol>
+          <form id="fchatForm" class="fchat-form" hidden>
+            <input id="fchatIn" maxlength="300" autocomplete="off" enterkeyhint="send" placeholder="Say something…" aria-label="Chat message" />
+            <button class="btn primary" type="submit">Send</button>
+          </form>
+        </div>
+        <div class="fs-ctl">
+          <button id="fsayBtn" type="button" aria-label="Write in the chat" title="Write in the chat">✏️</button>
+          <button id="fchatBtn" type="button" aria-label="Chat over the video" aria-pressed="true" title="Chat over the video: on">💬</button>
+          <button id="fsExit" type="button" aria-label="Exit full screen" title="Exit full screen (Esc)">✕</button>
+        </div>
       </div>
       <div class="bar">
         <button id="elecBtn" class="pill btn elec-btn" type="button" aria-label="Election map" hidden><span class="ico">🗺</span><span class="lbl"> Election</span></button>
@@ -92,6 +105,7 @@
           <span data-sports>Scoreboard L-bar</span>
           <button data-act="board" data-v="nfl" class="btn" data-sports>NFL</button>
           <button data-act="board" data-v="nba" class="btn" data-sports>NBA</button>
+          <button id="tvchatBtn" class="btn" type="button" title="The watch party's chat floating over the TV's tiles (the stream shows it too)" hidden>TV chat</button>
         </div>
         <div class="row live-row" data-sports><span>Live now</span><span id="liveGames" class="muted small">loading…</span></div>
         <div class="row live-row" data-elec hidden><span>Election screens</span><span id="elecScreens" class="live-games"></span></div>
@@ -131,7 +145,7 @@
   <aside id="elecSheet" class="es-sheet" hidden aria-hidden="true" aria-label="State results and markets"></aside>
 </main>
 <script src="/vendor/hls.min.js"></script>
-<script src="/wall.js?v=20261103swap"></script>
+<script src="/wall.js?v=20261103fc3"></script>
 <script src="/wall-bets.js?v=20261103tier"></script>
 <script src="/wall-election.js?v=20261103w"></script>
 <script src="/wall-election-live.js?v=20261103q"></script>

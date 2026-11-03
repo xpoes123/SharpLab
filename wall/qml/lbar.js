@@ -39,6 +39,12 @@ function wallTiles(n, area) {
     return out;
 }
 
+// The height of a tile's corner chip (SpeakerBadge.qml: the stream's name + the 🔊), inset 0.6 × this from the tile's
+// top-right corner; ChatFloat.qml starts its stack under that row. sw = the screen width (1 rem = sw / 120).
+function chipH(tileW, sw) {
+    return Math.round(Math.max(0.032 * tileW, 2 * sw / 120));
+}
+
 // What the tiles leave uncovered (the overlay's band layer, Bands.qml): {outer, tiles, top, bottom, left, right, head}.
 // outer = the region the band layer owns: the L-bar's corner while the L-bar is drawn (useL and lbarShown), else the
 // whole screen — tiles placed for the L-bar with no L-bar on screen leave its sidebar + band to the bands too, so nothing
