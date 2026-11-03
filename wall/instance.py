@@ -76,6 +76,9 @@ class Instance:
         self.app = None                          # the last answer ("" = never asked)
         self._app_at, self._away_since = 0.0, 0.0
         self.tv_owned = False                    # the TV OS was on its wall app when this wall started
+        # the L-bar asked for (lbar_req) vs brought up for the bets (auto_lbar: 1 or 4 tiles, no L-bar, bets shown —
+        # the bets live in the L-bar, never over the video; 2 and 3 tiles have the bands instead)
+        self.lbar_req, self.auto_lbar, self._bets_seen = False, False, 0.0
 
     # ---- state -------------------------------------------------------------------------------------------------------
     def _bump(self) -> None:
@@ -182,6 +185,7 @@ class Instance:
             self.headless.stop()
             self.session.env = {}
         self.urls, self.live = [], None
+        self.auto_lbar = False
         self.preset_name, self.preset = "", -1
         self.board, self.visible, self.matchup, self.view = "", False, "", ""
         self.follow, self.src_rev, self._refused = False, -1, ()
@@ -278,7 +282,8 @@ class Instance:
         with self.lock:
             self.view = view if view in ("lbar", "full", "matchup") else ""
             self.ov_rev += 1   # a mirror re-reads the board on this
-            self.driver.overlay(self.view, lbar=lbar)
+            self.lbar_req = lbar
+            self.driver.overlay(self.view, lbar=lbar or self.auto_lbar)
             self._bump()
             return self.state()
 
@@ -306,7 +311,8 @@ class Instance:
         self.view = self.layout if self.visible and self.urls else ""
         self.ov_rev += 1
         if self.urls:
-            self.driver.overlay(self.view, lbar=self.view == "lbar")
+            self.lbar_req = self.view == "lbar"
+            self.driver.overlay(self.view, lbar=self.lbar_req or self.auto_lbar)
 
     def sync_view(self) -> dict:
         """The spoiler delay of each tile (+ its game), for the web's Bets panel and the overlay."""
@@ -587,6 +593,21 @@ class Instance:
     def seen(self) -> None:
         """A playlist fetch = someone is watching."""
         self.last_fetch = self.clock()
+
+    def bets_lbar(self, has_bets: bool, now: float) -> None:
+        """Bring the L-bar up for the bets on a 1- or 4-tile wall with no L-bar (and let it go 30 s after they're gone):
+        the tiles re-tile into the L-bar's corner, the overlay draws the L-bar (bets payload "auto_lbar")."""
+        with self.lock:
+            want = has_bets and len(self.urls) in (1, 4) and self.view == "" and self.overlay_on()
+            if want:
+                self._bets_seen = now
+            on = want or (self.auto_lbar and len(self.urls) in (1, 4) and self.view == "" and self.overlay_on()
+                          and now - self._bets_seen < 30)
+            if on != self.auto_lbar:
+                self.auto_lbar = on
+                if self.urls:
+                    self.driver.overlay(self.view, lbar=self.lbar_req or on)
+                self._bump()
 
     # ---- the TV OS's active app (tv) ----------------------------------------------------------------------------------
     def _ask_app(self) -> str | None:

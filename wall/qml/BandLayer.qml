@@ -11,6 +11,7 @@ Item {
     property real unit: 1920
     property bool lbarShown: false
     property var boardData: null
+    property var bets: null
     Repeater {
         model: bl.geo ? ["top", "bottom", "left", "right"] : []
         Bands {
@@ -18,7 +19,7 @@ Item {
             readonly property var r: bl.geo[modelData]
             visible: r.w > 0 && r.h > 0
             x: r.x - bl.geo.outer.x; y: r.y - bl.geo.outer.y; width: r.w; height: r.h
-            b: bl.b; edge: modelData; geo: bl.geo; unit: bl.unit; lbarShown: bl.lbarShown; boardData: bl.boardData
+            b: bl.b; edge: modelData; geo: bl.geo; unit: bl.unit; lbarShown: bl.lbarShown; boardData: bl.boardData; bets: bl.bets
         }
     }
 }

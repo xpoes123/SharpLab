@@ -34,6 +34,10 @@ Item {
     // chatLines by id, so an old one (fresh false, ~20 s) dims slowly instead of being redrawn. Nothing blinks or pulses.
     property var chat: null
     ListModel { id: chatLines }
+    // members' Kalshi bets (the service's /api/overlay/bets, already delayed per tile; null = none): the sidebar's Bets
+    // section, and with bets.ticker a bets line in the band's crawl. Never drawn over the video.
+    property var bets: null
+    readonly property var betRows: B.betRows(bets, bets ? bets.n : 0)
     onChatChanged: {
         var ls = (chat && chat.lines) || [], want = {}
         for (var i = 0; i < ls.length; i++) want[ls[i].id] = true
@@ -352,7 +356,7 @@ Item {
                 Item {
                     id: cells
                     anchors.top: shead.bottom; anchors.topMargin: root.gap
-                    anchors.bottom: chatBox.top; anchors.bottomMargin: chatBox.on ? root.gap : 0
+                    anchors.bottom: betsBox.top; anchors.bottomMargin: betsBox.on || chatBox.on ? root.gap : 0
                     width: parent.width
                     clip: true
                     visible: !fan
@@ -384,7 +388,7 @@ Item {
 
                 Item {
                     anchors.top: shead.bottom; anchors.topMargin: root.gap
-                    anchors.bottom: chatBox.top; anchors.bottomMargin: chatBox.on ? root.gap : 0
+                    anchors.bottom: betsBox.top; anchors.bottomMargin: betsBox.on || chatBox.on ? root.gap : 0
                     width: parent.width
                     clip: true
                     visible: fan
@@ -397,6 +401,77 @@ Item {
                             delegate: FeedPlay { required property var modelData; required property int index; p: modelData; opacity: Math.max(0.45, 1 - index * 0.05) }
                         }
                         Caps { visible: root.v.plays.length === 0; width: parent.width; text: root.v.empty || "No plays yet"; size: root.tLabel; color: root.cMuted }
+                    }
+                }
+
+                // members' bets on the wall's games: solid rows (tile number, who, side + market, entry → now, ▲/▼ %),
+                // above the chat; the row takes a calm green / red tint when its price moved, easing over 1.5 s
+                Item {
+                    id: betsBox
+                    readonly property bool on: root.betRows.length > 0
+                    readonly property real rowH: 6.6 * root.rem
+                    readonly property real cap: parent.height * (chatBox.on ? 0.3 : 0.45)
+                    readonly property int fits: Math.max(1, Math.floor((cap - bhead.height - 0.8 * root.rem) / (rowH + 0.5 * root.rem)))
+                    visible: on
+                    anchors.bottom: chatBox.top; anchors.bottomMargin: on && chatBox.on ? root.gap : 0
+                    width: parent.width
+                    height: on ? Math.min(cap, bhead.height + 0.8 * root.rem + Math.min(fits, root.betRows.length) * (rowH + 0.5 * root.rem)) : 0
+                    Rectangle { id: brule; width: parent.width; height: root.hair; color: root.cRule }
+                    Item {
+                        id: bhead
+                        y: brule.height + 0.8 * root.rem
+                        width: parent.width; height: btitle.implicitHeight
+                        Mono { id: btitle; text: "BETS"; weight: 600; color: root.cAccent }
+                        Mono {
+                            anchors.right: parent.right; color: root.cMuted
+                            text: (root.betRows.length > betsBox.fits ? "+" + (root.betRows.length - betsBox.fits) + " more · " : "") + "delayed"
+                        }
+                    }
+                    Column {
+                        anchors.top: bhead.bottom; anchors.topMargin: 0.8 * root.rem
+                        width: parent.width
+                        spacing: 0.5 * root.rem
+                        Repeater {
+                            model: root.betRows.slice(0, betsBox.fits)
+                            delegate: Rectangle {
+                                id: br
+                                required property var modelData
+                                readonly property color tone: modelData.dir === "up" ? root.cOk : modelData.dir === "down" ? root.cDanger : root.cMuted
+                                width: parent.width; height: betsBox.rowH
+                                color: modelData.dir === "up" ? Qt.tint(root.cSurface, "#228ED07A") : modelData.dir === "down" ? Qt.tint(root.cSurface, "#22FF9580") : root.cSurface
+                                Behavior on color { ColorAnimation { duration: 1500; easing.type: Easing.InOutQuad } }
+                                Rectangle {   // the tile it's on
+                                    id: tno
+                                    x: 0.5 * root.rem; anchors.verticalCenter: parent.verticalCenter
+                                    width: 2.2 * root.rem; height: 2.2 * root.rem; color: root.cSurface2
+                                    border.color: root.cRuleStrong; border.width: root.hair
+                                    T { anchors.centerIn: parent; text: String(br.modelData.tile); size: 1.5 * root.rem; weight: 800; wdth: 68 }
+                                }
+                                T {
+                                    id: bwho
+                                    x: tno.x + tno.width + 0.6 * root.rem; y: 0.35 * root.rem
+                                    width: Math.min(implicitWidth, 7 * root.rem)
+                                    text: br.modelData.who; size: 1.75 * root.rem; weight: 700; wdth: 68; color: root.cAccent
+                                }
+                                T {   // side + market on its own line: the sidebar is narrow, and this is the part that matters
+                                    x: bwho.x; anchors.top: bwho.bottom
+                                    width: parent.width - x - 0.6 * root.rem
+                                    text: br.modelData.what; size: 1.75 * root.rem; weight: 600; wdth: 68
+                                }
+                                Mono {
+                                    id: bpct
+                                    anchors.right: parent.right; anchors.rightMargin: 0.6 * root.rem; anchors.baseline: bwho.baseline
+                                    text: br.modelData.pct; size: 1.6 * root.rem; weight: 600; color: br.tone
+                                    Behavior on color { ColorAnimation { duration: 1500 } }
+                                }
+                                Mono {
+                                    x: bwho.x; anchors.bottom: parent.bottom; anchors.bottomMargin: 0.35 * root.rem
+                                    width: parent.width - x - 0.6 * root.rem
+                                    text: br.modelData.px + (br.modelData.size ? "  " + br.modelData.size : "") + (br.modelData.pnl ? "  " + br.modelData.pnl : "")
+                                    size: 1.45 * root.rem; color: root.cInk
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -515,7 +590,7 @@ Item {
         id: bandView
         Item {
             id: band
-            readonly property var items: root.v.ticker || []
+            readonly property var items: (root.v.ticker || []).concat(B.betTicker(root.bets, root.bets ? root.bets.n : 0))
             readonly property var feat: items.length ? items[root.pageNo % Math.min(items.length, 3)] : null
             Rectangle { width: parent.width; height: root.hair; color: root.cAccent }
             Item {

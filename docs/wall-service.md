@@ -337,15 +337,23 @@ token bucket (5/s, burst 10). Viewers read the shared book; requests never reach
 | watch page (members) | `GET`/`POST /api/v1/wall/bets/me` `{share, exact}` |
 | watch page (owner/admins) | `POST /api/v1/wall/bets/sync` `{show}` / `{default}` / `{url, nudge: ±1}` / `{url, auto: true}` / `{url, tap: ms}` → wall service `POST /sync` (bearer) |
 | wall service → web | `POST /api/v1/wall/bets/feed` (X-Api-Key) `{games: [{league, id, away, home, start, delay}]}` → rows already delayed per game, every 5 s while a wall runs and bets are shown |
-| overlay → wall service | `GET /i/{inst}/api/overlay/bets` (loopback) → `{show, n, view, tiles: [{i, delay, src, rows}], delays: {espnId: D}, default}`; the overlay process gets `--bets http://127.0.0.1:7795/i/{inst}` |
-| TV phones / web → wall service | `GET /sync`, `POST /sync` (loopback, or tailnet + bearer) |
+| overlay → wall service | `GET /i/{inst}/api/overlay/bets` (loopback) → `{show, n, view, tiles: [{i, delay, src, label, rows}], delays: {espnId: D}, default, ticker, auto_lbar, on}`; the overlay process gets `--bets http://127.0.0.1:7795/i/{inst}` |
+| TV phones / web → wall service | `GET /sync`, `POST /sync` (loopback, or tailnet + bearer); `{"ticker": bool}` = a bets line in the L-bar's ticker too |
 | wall state | `GET /i/{inst}` carries `sync: {show, default, tiles: [{url, delay, src, samples, game}]}` |
 
 **How the overlay data reaches the TV.** The TV's overlay (`qml6 Overlay.qml`, started by this service for both walls)
 polls `--api` (the TV router, :7790) for its view + board as before, and now also `--bets` (this service on loopback) every
-2 s. The service gets the rows from sharplab-web over `WALL_WEB_URL` with `WALL_WEB_KEY` (the chat's path). Badges are a
-transparent layer-shell surface over the tiles' area (the L-bar corner, or the whole screen with the L-bar off), hidden
-under a full-screen board. The mirror stream captures the TV's screen, badges included — hence the opt-in.
+2 s. The service gets the rows from sharplab-web over `WALL_WEB_URL` with `WALL_WEB_KEY` (the chat's path).
+
+**Where the bets draw: the L layout, never over the video** (the tile-corner badges are gone — they covered the game):
+* L-bar up: a solid **Bets** section in the sidebar above the chat — per position the tile number, who, side + market,
+  entry → now, ▲/▼ % (a calm green / red row tint easing over 1.5 s, nothing flashes). With `ticker` on, the bottom
+  band's crawl carries a bets line too ("David YES GSW −3.5 42¢→51¢ ▲21%").
+* No L-bar, 2 or 3 tiles: each band header gets a "2 BETS ▲" chip; the bottom band shows the rows (above the
+  "Elsewhere" strip, or in the strip itself when there's no room).
+* No L-bar, 1 or 4 tiles (no bands): while bets are shared and shown, the service brings the L-bar up by itself
+  (`auto_lbar`: the tiles re-tile into the corner, the overlay draws the L-bar) and lets it go 30 s after the last one.
+The mirror stream captures the TV's screen, bets included — hence the opt-in.
 
 **Not built here:** the TV phone remote's buttons (xpoes123/tv — the service API above is ready: `GET /sync`,
 `POST /sync {"show"}`, `{"url", "nudge"}`, `{"url", "tap": true}`), price-jump annotations with the play that caused them.
