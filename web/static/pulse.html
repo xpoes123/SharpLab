@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><link rel="stylesheet" href="https://share.djiang.xyz/ui/ui.css">
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Election Pulse</title>
+<link rel="stylesheet" href="/hqstyle.css" />
+<style>
+  /* layout for this page only; colours are the shared theme's tokens */
+  :root { --e-dem: var(--party-d, var(--info)); --e-rep: var(--party-r, var(--bad)); }
+  main { max-width: 1100px; margin: 0 auto; padding: 12px 16px 60px; }
+  h1 { font-size: 22px; margin: 8px 0 2px; } h2 { font-size: 16px; margin: 22px 0 8px; }
+  .muted { color: var(--muted); } .small { font-size: 12px; }
+  .D { color: var(--e-dem); } .R { color: var(--e-rep); } .I, .O { color: var(--muted); }
+  .err { color: var(--warn); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+  .stat { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius, 8px); padding: 10px 12px; }
+  .stat b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; } @media (max-width: 760px) { .two { grid-template-columns: 1fr; } }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th, td { padding: 4px 6px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; } th { color: var(--muted); font-weight: 500; }
+  td.pos { color: var(--ok); font-weight: 600; } td.neg { color: var(--bad); font-weight: 600; }
+  tr.hot td { background: var(--surface-2); }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+  .bar input[type=search] { flex: 1 1 200px; min-height: 36px; padding: 6px 10px; background: var(--surface); color: var(--text);
+    border: 1px solid var(--line); border-radius: var(--radius, 8px); font: inherit; }
+  .bar label { font-size: 13px; display: inline-flex; gap: 5px; align-items: center; }
+  details.race { border: 1px solid var(--line); border-radius: var(--radius, 8px); margin: 6px 0; background: var(--surface); }
+  details.race > summary { cursor: pointer; padding: 8px 10px; display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; list-style: none; }
+  details.race > summary::-webkit-details-marker { display: none; }
+  details.race > summary .lbl { font-weight: 600; min-width: 120px; }
+  details.race .body { padding: 0 10px 10px; }
+  .pill { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .pill.hot { border-color: var(--accent); color: var(--accent); }
+  .note { font-size: 12px; color: var(--muted); line-height: 1.5; }
+  a { color: var(--accent); }
+  #more { margin: 10px 0; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><a href="/">Sharp<span>Lab</span> HQ</a></div>
+  <nav class="nav"><a href="/">Server</a><a href="/wall.html">Wall</a><a href="/pulse.html" class="on">Pulse</a></nav>
+</header>
+<main>
+  <h1>Election Pulse</h1>
+  <div id="meta" class="muted small">Loading…</div>
+  <div id="gate" hidden><p>Log in to see this: <a href="/api/v1/auth/discord/login?next=/pulse.html">Continue with Discord</a>, or join as a guest on the <a href="/wall.html">Wall</a> and come back.</p></div>
+
+  <div id="app" hidden>
+    <h2>National House</h2>
+    <div class="grid" id="house"></div>
+    <div class="two">
+      <div class="scroll"><h2>House turnout <span class="muted small">KXHOUSETURNOUT</span></h2><table id="hTurn"></table></div>
+      <div class="scroll"><h2>House popular-vote margin <span class="muted small">KXHOUSEPOPVOTEMARGIN</span></h2><table id="hMargin"></table></div>
+    </div>
+
+    <h2>Races with turnout / vote-share markets</h2>
+    <div class="bar">
+      <input id="q" type="search" placeholder="Filter: NJ, Senate, Ossoff, CA-22…" />
+      <label><input id="fHot" type="checkbox" /> edge ≥ <span id="edgeN">12</span> only</label>
+      <label><input id="fIn" type="checkbox" /> votes in only</label>
+    </div>
+    <div id="races"></div>
+    <button id="more" class="ui-btn" hidden>Show more</button>
+
+    <div class="two">
+      <div class="scroll"><h2>Statewide turnout</h2><table id="states"></table></div>
+      <div><h2>Latest calls</h2><div id="calls" class="small"></div><h2>Next poll closings</h2><div id="next" class="small"></div></div>
+    </div>
+
+    <h2>How to read this</h2>
+    <p class="note">
+      <b>Projected</b> = votes counted ÷ the source's "% expected vote in" (CNN, falling back to NYT/AP, then Fox). It assumes the
+      uncounted vote looks like the counted vote, so watch for the classic traps: mail/early counted first (D-leaning
+      early, R-leaning election-day in most states), big urban counties dumping late, and states that count for weeks
+      (CA, WA, OR, AZ, NV, AK). <b>±</b> is a rough 1σ that shrinks as more is in. <b>Model</b> = P(yes) from a normal
+      around the projection; <b>edge</b> = model − market mid (green = model says yes is cheap). Nothing projects until
+      <span id="minIn">3</span>% is in. Turnout markets settle on <i>certified</i> totals, which include late provisionals; the
+      projection doesn't know about those. It's a scratchpad, not a forecast: sanity-check any edge against the county map
+      before you size up. Refreshes every 30 s.
+    </p>
+  </div>
+</main>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const n = (v) => v == null ? "—" : v >= 1e6 ? (v / 1e6).toFixed(2) + "M" : v >= 1e4 ? Math.round(v / 1e3) + "K" : v.toLocaleString();
+  const c = (v) => v == null ? "—" : v.toFixed(v < 10 && v % 1 ? 1 : 0);
+  const t = (s) => s ? new Date(s * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "—";
+  const edge = (e) => `<td class="${e == null ? "" : e >= 0 ? "pos" : "neg"}">${e == null ? "—" : (e > 0 ? "+" : "") + e.toFixed(0)}</td>`;
+  const kal = (tk) => `https://kalshi.com/markets/${esc(tk.split("-")[0].toLowerCase())}`;
+  const mrow = (label, m) => `<tr class="${m.hot ? "hot" : ""}"><td><a href="${kal(m.ticker)}" target="_blank" rel="noopener">${label}</a></td>
+    <td>${c(m.bid)}</td><td>${c(m.ask)}</td><td>${c(m.model)}</td>${edge(m.edge)}<td class="muted">${n(m.vol)}</td></tr>`;
+  const head = (first) => `<tr><th>${first}</th><th>bid¢</th><th>ask¢</th><th>model%</th><th>edge</th><th>vol</th></tr>`;
+  let data = null, shown = 40;
+
+  function renderHouse(h) {
+    const m = h.margin;
+    $("house").innerHTML = [
+      ["Counted", n(h.counted)],
+      ["Projected total", h.proj ? `${n(h.proj)} <span class="muted small">± ${n(h.sd)}</span>` : "—"],
+      ["Districts projecting", `${h.reporting} / ${h.districts}`],
+      ["Proj. margin (D−R)", m == null ? "—" : `<span class="${m >= 0 ? "D" : "R"}">${m >= 0 ? "D" : "R"}+${Math.abs(m).toFixed(1)}</span> <span class="muted small">± ${h.margin_sd}</span>`],
+    ].map(([k, v]) => `<div class="stat"><span class="muted small">${k}</span><b>${v}</b></div>`).join("");
+    $("hTurn").innerHTML = head("bucket") + h.turnout.map((x) => mrow(esc(x.label), x)).join("");
+    $("hMargin").innerHTML = head("bucket") + h.margin_mkts.map((x) => mrow(esc(x.label), x)).join("");
+  }
+
+  function raceHtml(r) {
+    const cs = r.cands.map((x) => `<span class="${x.party}">${esc(x.name)} ${r.votes ? x.pct.toFixed(1) + "%" : ""}${x.winner ? " ✓" : ""}</span>`).join(" · ");
+    const best = [...r.turnout, ...r.shares].filter((x) => x.edge != null).sort((a, b) => Math.abs(b.edge) - Math.abs(a.edge))[0];
+    let body = "";
+    if (r.turnout.length) body += `<div class="scroll"><table>${head("total votes &gt;")}${r.turnout.map((x) => mrow(n(x.strike), x)).join("")}</table></div>`;
+    if (r.shares.length) body += `<div class="scroll"><table><tr><th>vote share ≥</th><th>now</th><th>bid¢</th><th>ask¢</th><th>model%</th><th>edge</th><th>vol</th></tr>${
+      r.shares.map((x) => `<tr class="${x.hot ? "hot" : ""}"><td><a class="${x.party}" href="${kal(x.ticker)}" target="_blank" rel="noopener">${esc(x.name)} ${x.strike}%</a></td>
+        <td>${x.now == null ? "—" : x.now.toFixed(1)}</td><td>${c(x.bid)}</td><td>${c(x.ask)}</td><td>${c(x.model)}</td>${edge(x.edge)}<td class="muted">${n(x.vol)}</td></tr>`).join("")}</table></div>`;
+    return `<details class="race" data-id="${esc(r.id)}"><summary><span class="lbl">${esc(r.label)} ${{ S: "Sen", G: "Gov", H: "" }[r.office]}</span>
+      <span class="muted small">${r.votes ? `${r.pct}% in · ${n(r.votes)} counted` : r.closes ? "polls close " + t(r.closes) : "no votes yet"}</span>
+      ${r.proj ? `<span class="small">→ <b>${n(r.proj)}</b> <span class="muted">± ${n(r.sd)}</span></span>` : ""}
+      <span class="small">${cs}</span>${r.called ? `<span class="pill">called ${r.called}</span>` : ""}
+      ${r.hot ? `<span class="pill hot">${r.hot} edge</span>` : best ? `<span class="pill">best ${best.edge > 0 ? "+" : ""}${best.edge.toFixed(0)}</span>` : ""}</summary>
+      <div class="body">${body}</div></details>`;
+  }
+
+  function renderRaces() {
+    if (!data) return;
+    const q = $("q").value.trim().toLowerCase(), hot = $("fHot").checked, inn = $("fIn").checked;
+    const rs = data.races.filter((r) => (!hot || r.hot) && (!inn || r.votes) &&
+      (!q || `${r.label} ${r.state} ${{ S: "senate", G: "governor", H: "house" }[r.office]} ${r.cands.map((x) => x.name).join(" ")}`.toLowerCase().includes(q)));
+    const open = new Set([...document.querySelectorAll("details.race[open]")].map((d) => d.dataset.id));
+    $("races").innerHTML = rs.slice(0, shown).map(raceHtml).join("") || `<p class="muted">No races match.</p>`;
+    document.querySelectorAll("details.race").forEach((d) => { if (open.has(d.dataset.id)) d.open = true; });
+    $("more").hidden = rs.length <= shown;
+    $("more").textContent = `Show more (${rs.length - shown} left)`;
+  }
+
+  function render() {
+    renderHouse(data.house);
+    renderRaces();
+    $("states").innerHTML = `<tr><th>state</th><th>basis</th><th>counted</th><th>% in</th><th>projected</th><th>±</th></tr>` +
+      data.states.map((s) => `<tr><td>${s.state}</td><td class="muted">${esc(s.basis)}</td><td>${n(s.votes)}</td><td>${s.pct ?? "—"}</td><td>${n(s.proj)}</td><td class="muted">${n(s.sd)}</td></tr>`).join("");
+    $("calls").innerHTML = data.calls.map((x) => `<div><span class="muted">${t(x.t)}</span> <span class="${x.party}">${esc(x.text)}</span> <span class="muted">· ${esc(x.by)}</span></div>`).join("") || `<span class="muted">None yet.</span>`;
+    $("next").innerHTML = data.next.map((x) => `<div><b>${t(x.t)}</b> ${x.states.join(", ")}</div>`).join("") || `<span class="muted">All polls closed.</span>`;
+    $("edgeN").textContent = data.model.edge;
+    $("minIn").textContent = Math.round(data.model.min_in * 100);
+    $("meta").innerHTML = `Results: ${esc(data.source || "—")} · updated ${t(data.updated)} · Kalshi prices live` +
+      (data.error ? ` · <span class="err">${esc(data.error)}</span>` : "");
+  }
+
+  async function load() {
+    try {
+      const r = await fetch("/api/v1/wall/election/pulse", { credentials: "same-origin" });
+      if (r.status === 401) { $("gate").hidden = false; $("meta").textContent = ""; return; }
+      data = await r.json();
+      $("gate").hidden = true; $("app").hidden = false;
+      render();
+    } catch (e) {
+      $("meta").innerHTML = `<span class="err">Couldn't refresh (${esc(e.message)}); retrying.</span>`;
+    }
+  }
+  $("q").addEventListener("input", () => { shown = 40; renderRaces(); });
+  $("fHot").addEventListener("change", renderRaces);
+  $("fIn").addEventListener("change", renderRaces);
+  $("more").addEventListener("click", () => { shown += 40; renderRaces(); });
+  load();
+  setInterval(load, 30000);
+})();
+</script>
+</body>
+</html>
