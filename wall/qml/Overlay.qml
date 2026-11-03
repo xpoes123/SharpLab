@@ -73,6 +73,20 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
         x.send()
     }
     Timer { interval: 2000; running: app.betsApi !== ""; repeat: true; triggeredOnStart: true; onTriggered: app.pollBets() }
+    // election night: the state spotlight (wall/spotlight.py), drawn at the top of the sidebar
+    property var spot: null
+    function pollSpot() {
+        var x = new XMLHttpRequest()
+        x.onreadystatechange = function () {
+            if (x.readyState !== XMLHttpRequest.DONE) return
+            var sp = null
+            if (x.status === 200) { try { sp = JSON.parse(x.responseText).spot || null } catch (e) { sp = null } }
+            if (JSON.stringify(sp) !== JSON.stringify(app.spot)) app.spot = sp
+        }
+        x.open("GET", app.betsApi + "/api/overlay/spot")
+        x.send()
+    }
+    Timer { interval: 2000; running: app.betsApi !== ""; repeat: true; triggeredOnStart: true; onTriggered: app.pollSpot() }
     // no answer from the service = the default delay still holds (never live by accident)
     readonly property real dflt: app.betsApi === "" ? 0 : app.bets ? app.bets["default"] : 45
 
@@ -151,7 +165,7 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
         // exclusiveEdge in QML). Shown first, so KWin gives it the full height and the band the width left of it.
         LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorRight
         LayerShell.Window.exclusionZone: app.geo.side
-        Board { anchors.fill: parent; unit: Screen.width; layout: "side"; polling: false; v: main.v; chat: app.chat; bets: app.bets }
+        Board { anchors.fill: parent; unit: Screen.width; layout: "side"; polling: false; v: main.v; chat: app.chat; bets: app.bets; spot: app.spot }
     }
 
     Window {   // lbar: the band (bottom edge, under the tiles only)

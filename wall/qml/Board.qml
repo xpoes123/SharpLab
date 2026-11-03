@@ -37,6 +37,8 @@ Item {
     // members' Kalshi bets (the service's /api/overlay/bets, already delayed per tile; null = none): the sidebar's Bets
     // section, and with bets.ticker a bets line in the band's crawl. Never drawn over the video.
     property var bets: null
+    // election night: the state spotlight (the service's /api/overlay/spot; null = none) — a card at the top of the sidebar
+    property var spot: null
     readonly property var betRows: B.betRows(bets, bets ? bets.n : 0)
     onChatChanged: {
         var ls = (chat && chat.lines) || [], want = {}
@@ -255,6 +257,11 @@ Item {
     Rectangle {
         anchors.fill: parent
         color: root.layout === "full" ? Qt.rgba(0.055, 0.059, 0.047, 0.9) : root.cBg
+    }
+    Spot {   // over the top of the sidebar only (never the band, never full screen: nothing over the video)
+        z: 5; b: root; spot: root.layout === "side" ? root.spot : null
+        anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+        height: Math.min(implicitHeight, parent.height)
     }
     Loader {
         anchors.fill: parent
