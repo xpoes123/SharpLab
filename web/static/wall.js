@@ -169,6 +169,10 @@
       t.append(el("b", null, String(i + 1)), el("span", "lbl", labels[i] || shortUrl(u)));
       if (wall.sound === i) t.append(el("span", null, "🔊"));
       else { const b = el("button", null, "🔊 here"); b.onclick = () => propose({ op: "sound", i }); t.append(b); }
+      if (i > 0 && (wall.urls || []).length >= 2) {   // tile 1 is the big one
+        const p = el("button", null, "⬆ main"); p.title = "Make this the main (big) tile";
+        p.onclick = () => propose({ op: "promote", i, label: labels[i] || shortUrl(u) }); t.append(p);
+      }
       tiles.append(t);
     });
   }
