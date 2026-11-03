@@ -128,6 +128,10 @@
 .lb-tab { background: transparent; color: var(--muted); border: 0; padding: 8px 18px; cursor: pointer;
   font-family: inherit; font-size: 13px; font-weight: 600; }
 .lb-tab.on { background: var(--accent); color: var(--accent-ink); }
+.lb-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.lb-chip { background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 999px;
+  padding: 4px 12px; font-family: inherit; font-size: 13px; cursor: pointer; }
+.lb-chip.on { border-color: var(--accent); color: var(--fg); }
 .lb-card { margin-top: 12px; }
 .lb-card table { width: 100%; border-collapse: collapse; }
 .lb-card th, .lb-card td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); font-size: 14px; }

@@ -67,6 +67,7 @@ const D = {
   submitting: false,
   submitted: false,
   lbTab: "today",
+  lbGame: "overall", // all-time tab: "overall" or a game id
 };
 
 const $ = (id) => document.getElementById(id);
@@ -441,11 +442,18 @@ function renderLeaderboard(data) {
   area.innerHTML = `${heading}<div class="lb-tabs">
       <button class="lb-tab${D.lbTab === "today" ? " on" : ""}" data-tab="today">Today</button>
       <button class="lb-tab${D.lbTab === "season" ? " on" : ""}" data-tab="season">Season</button>
-    </div>
+      <button class="lb-tab${D.lbTab === "alltime" ? " on" : ""}" data-tab="alltime">All-time</button>
+    </div>${D.lbTab === "alltime" ? allTimeChips(data) : ""}
     <div class="card lb-card" id="lbTable"></div>`;
   area.querySelectorAll(".lb-tab").forEach((b) => {
     b.onclick = () => {
       D.lbTab = b.dataset.tab;
+      renderLeaderboard(data);
+    };
+  });
+  area.querySelectorAll(".lb-chip").forEach((b) => {
+    b.onclick = () => {
+      D.lbGame = b.dataset.game;
       renderLeaderboard(data);
     };
   });
@@ -472,6 +480,29 @@ function renderLeaderboard(data) {
         <th class="lb-rank">#</th><th>Player</th>
         <th class="num">${esc(unitLabel())}</th><th class="num">Time</th><th class="num">Points</th>
       </tr></thead><tbody>${rows}</tbody></table>`;
+  } else if (D.lbTab === "alltime") {
+    const list = ((data && data.alltime) || {})[D.lbGame] || [];
+    if (!list.length) {
+      table.innerHTML = `<p class="muted" style="margin:0">No results yet.</p>`;
+      return;
+    }
+    const rows = list
+      .map((r) => {
+        const mine = me && r.name === me ? " me" : "";
+        return `<tr class="${mine.trim()}">
+          <td class="lb-rank">${num(r.rank)}</td>
+          <td>${esc(r.name)}</td>
+          <td class="num">${num(r.points)} pts</td>
+          <td class="num">${num(r.wins)}</td>
+          <td class="num">${esc(r.avg_rank)}</td>
+          <td class="num">${num(r.days)}</td>
+        </tr>`;
+      })
+      .join("");
+    table.innerHTML = `<table><thead><tr>
+        <th class="lb-rank">#</th><th>Player</th>
+        <th class="num">Points</th><th class="num">Wins</th><th class="num">Avg place</th><th class="num">Days</th>
+      </tr></thead><tbody>${rows}</tbody></table>`;
   } else {
     if (!season.length) {
       table.innerHTML = `<p class="muted" style="margin:0">No season standings yet.</p>`;
@@ -493,6 +524,16 @@ function renderLeaderboard(data) {
         <th class="num">Points</th><th class="num">Days</th>
       </tr></thead><tbody>${rows}</tbody></table>`;
   }
+}
+
+// Game filter for the All-time tab: Overall + one chip per game that has results.
+function allTimeChips(data) {
+  const games = (data && data.games) || {};
+  const chip = (id, label) =>
+    `<button class="lb-chip${D.lbGame === id ? " on" : ""}" data-game="${esc(id)}">${label}</button>`;
+  return `<div class="lb-chips">${chip("overall", "Overall")}${Object.values(games)
+    .map((g) => chip(g.id, `${esc(g.icon)} ${esc(g.name)}`))
+    .join("")}</div>`;
 }
 
 // ── Tutorial card (the how-to shown before the board is revealed) ──
