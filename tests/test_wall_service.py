@@ -730,7 +730,7 @@ def test_resource_guard(tmp_path):
 
 
 # ---- the local LLM steps aside ---------------------------------------------------------------------------------------------
-def test_llm_guard_parks_models_while_a_wall_runs_and_warms_them_after():
+def test_llm_guard_parks_models_while_a_wall_runs_and_never_warms_them_back():
     loaded = ["gemma4:12b"]
     calls, ctl = [], []
     def call(base, path, body=None, timeout=0):
@@ -746,8 +746,9 @@ def test_llm_guard_parks_models_while_a_wall_runs_and_warms_them_after():
     loaded.append("gemma4:12b")   # Sage called mid-wall: it reloads, the next tick evicts it again
     g.tick(True)
     assert loaded == [] and g.parked == ["gemma4:12b"] and ctl == []
+    n = len(calls)
     g.tick(False)
-    assert g.parked == [] and calls[-1] == ("/api/generate", {"model": "gemma4:12b", "keep_alive": "24h", "options": {"num_ctx": 16384}})
+    assert g.parked == [] and calls[n:] == []   # no warm-back: the next real request loads it
     s = LLMGuard(call=lambda *a, **k: {"models": []}, systemctl=ctl.append, mode="stop")
     s.tick(True); s.tick(True); s.tick(False)
     assert ctl == ["stop", "start"]

@@ -50,7 +50,7 @@ async def test_local_success_skips_cloud(ollama, cloud):
     body = ollama["bodies"][0]
     assert body["model"] == "gemma4:12b"
     assert body["stream"] is False and body["think"] is False
-    assert body["keep_alive"] == "24h" and body["format"] == "json"
+    assert "keep_alive" not in body and body["format"] == "json"   # server default, no 24h GPU hold
     assert body["options"] == {"temperature": 0, "num_ctx": 16384, "num_predict": 300}
     assert body["messages"] == [{"role": "user", "content": PROMPT}]
 

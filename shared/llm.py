@@ -63,7 +63,6 @@ async def local_text(prompt: str, *, max_tokens: int, fmt: str | None = None) ->
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
         "think": False,
-        "keep_alive": "24h",
         "options": {"temperature": 0, "num_ctx": num_ctx, "num_predict": max_tokens},
     }
     if fmt:
