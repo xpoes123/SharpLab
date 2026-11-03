@@ -1,5 +1,5 @@
 :root {
-   --panel: var(--bg); --panel2: #1f2230; --line: #2a2e42;
+   --panel: var(--surface-2); --panel2: var(--surface); --line: #2a2e42;
   --fg: var(--text);   --accent2: var(--purple);
   --green: var(--ok); --red: var(--bad); --gold: var(--warn);
   /* facelift tokens (additive — existing vars unchanged) */
@@ -19,7 +19,7 @@
   --shadow-lg: 0 18px 50px rgba(0,0,0,.5);
   --t: .15s ease;
   /* back-compat aliases so figgie/tradingfloor tokens resolve on the Tokyo Night palette */
-  --card: var(--panel); --border: var(--line); --text: var(--fg); --text-muted: var(--muted);
+  --card: var(--panel); --border: var(--line); --text-muted: var(--muted);
   --accent-dim: var(--accent-soft); --radius: var(--r);
 }
 * { box-sizing: border-box; }
