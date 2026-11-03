@@ -1145,7 +1145,9 @@ def session_user(sess: dict | None) -> dict | None:
 def origin_ok(origin: str | None) -> bool:
     """The socket rides the session cookie, which every *.djiang.xyz page would send too (same-site): only our own page
     may open it. No Origin = not a browser."""
-    return origin is None or origin.rstrip("/") == auth.WEB_BASE_URL.rstrip("/")
+    if origin is None or origin.rstrip("/") == auth.WEB_BASE_URL.rstrip("/"):
+        return True
+    return origin.rstrip("/") in {f"https://{h}" for h in ALT_HOSTS}   # live.djiang.xyz: the same app on our other host
 
 
 async def wall_websocket(ws: WebSocket) -> None:
