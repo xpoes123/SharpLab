@@ -476,7 +476,7 @@ NBA" and "Election map + NBA" (`fixed: true`: the preset's URLs stay as fixed ti
 **Listening** — `python -m wall.adwatch`, its own user unit `deploy/sharplab-adwatch.service` (same `.env.wall`). Idle while
 no wall is up. It follows the streams on the walls (+ the originals the policy swapped away + the favorites) and a pool of
 national news channels (`WALL_ADWATCH_POOL`, default NBC News NOW, PBS NewsHour, ABC News, CBS News, LiveNOW from FOX;
-each checked live with `wall.streams.check` every 10 min), at most `WALL_ADWATCH_MAX` (8) at once.
+each checked live with `wall.streams.check` every 10 min), plus the live Spectrum lineup (`wall/spectrum.py`, listed in each election-mode wall state), at most `WALL_ADWATCH_MAX` (16; walls first, then Spectrum, then the pool) at once.
 * Per stream: `yt-dlp -g` HLS URL, refreshed every 20 min or on failure. Text: CEA-608/708 captions when ffprobe sees
   "Closed Captions" on the lowest rendition (lavfi `movie=…[out0+subcc]`) — YouTube's live HLS carried none in a check
   on 2026-11-03 — else 15 s mono 16 kHz audio chunks → faster-whisper `small.en` on the GPU (`int8_float16`, VAD, one

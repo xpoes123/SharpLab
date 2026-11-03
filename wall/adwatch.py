@@ -1,5 +1,5 @@
 """Election night ad-skip, the listening half (docs/wall-service.md "Ad-skip"): a separate process on the homelab that
-follows a pool of national news streams plus whatever streams are on the walls, transcribes them, labels each one
+follows a pool of national news streams, the Spectrum lineup (wall/spectrum.py) and the walls' streams, transcribes them, labels each one
 coverage / ad / break / offtopic every CLASSIFY_S, and posts the labels to the wall service (POST /adwatch), whose
 wall/onair.py moves the sound and swaps tiles.
 
@@ -15,7 +15,7 @@ POST /api/v1/wall/election/classify (TypeSafe Jev, Claude Haiku when Jev is unsu
 keyword ever decides a label (no false "ad" on coverage); no answer or silence = "unknown", which the policy ignores.
 Nothing runs while no wall is up.
 
-Env: WALL_ADWATCH_POOL (comma-separated URLs), WALL_ADWATCH_MAX (streams at once, 8), WALL_ADWATCH_STT (gpu | http),
+Env: WALL_ADWATCH_POOL (comma-separated URLs), WALL_ADWATCH_MAX (streams at once, 16), WALL_ADWATCH_STT (gpu | http),
 WALL_ADWATCH_MODEL (small.en), WALL_ADWATCH_WHISPER_URL, WALL_URL (http://127.0.0.1:7795), WALL_WEB_URL, WALL_WEB_KEY.
 """
 from __future__ import annotations
@@ -41,6 +41,10 @@ log = logging.getLogger("wall.adwatch")
 POOL = ["https://www.youtube.com/@NBCNews/live", "https://www.youtube.com/@PBSNewsHour/live",
         "https://www.youtube.com/@ABCNews/live", "https://www.youtube.com/@CBSNews/live",
         "https://www.youtube.com/@LiveNOWFOX/live"]
+# streams at once: the 14-stream Spectrum lineup (wall/spectrum.py) + a couple of others on the walls. small.en int8 on the
+# GPU transcribes a 15 s chunk in ~0.3 s, so 16 streams keep it busy ~1/3 of the time (~1 GB VRAM); each stream is an
+# ffmpeg + ~130 kb/s of audio and one classify call per 20 s (Jev, Haiku only when Jev is unsure)
+MAX = 16
 RATE = 16000
 CHUNK_S, WINDOW_S, CLASSIFY_S, POST_S, WATCH_S = 15, 45, 20, 5, 15
 HLS_TTL, POOL_RECHECK_S, MAX_LAG_S = 20 * 60, 10 * 60, 40
@@ -292,7 +296,7 @@ class Watcher:
         self.web, self.key = env.get("WALL_WEB_URL", "").rstrip("/"), env.get("WALL_WEB_KEY", "")
         pool = env.get("WALL_ADWATCH_POOL", "")
         self.pool = [u.strip() for u in pool.split(",") if u.strip()] if pool else list(POOL)
-        self.max = int(env.get("WALL_ADWATCH_MAX", "8"))
+        self.max = int(env.get("WALL_ADWATCH_MAX", str(MAX)))
         self.stt = stt
         self.env = env
         self.classify = classify or self._classify_web
@@ -316,7 +320,8 @@ class Watcher:
             return "unknown", 0.0
 
     def wanted(self) -> list[str]:
-        """Streams on the walls first (and the originals the policy swapped away, and the favorites), then the live pool."""
+        """Streams on the walls first (and the originals the policy swapped away, and the favorites), then the live
+        Spectrum streams, then the live pool."""
         try:
             states = self.walls()
         except Exception as e:  # noqa: BLE001
@@ -325,14 +330,20 @@ class Watcher:
         if not any(s.get("running") for s in states.values()):
             return []   # no wall up: listen to nothing
         out: list[str] = []
+        spec: list[str] = []   # the Spectrum lineup (wall/spectrum.py): its labels gate who may go on a tile
         for s in states.values():
             if not s.get("running"):
                 continue
             out += [u for u in s.get("urls") or [] if yt.is_stream(u)]
             out += list(((s.get("adwatch") or {}).get("orig") or {}).values())
             out += s.get("favorites") or []
+            for u, st in (s.get("spectrum") or {}).items():
+                if (st or {}).get("live") is True:   # the wall service checks it every minute
+                    out.append(u)
+                elif (st or {}).get("live") is None:   # not checked there yet: the pool's own check below
+                    spec.append(u)
         now = self.clock()
-        for u in self.pool:
+        for u in spec + self.pool:
             at, ok = self.pool_live.get(u, (-1e9, False))
             if now - at > POOL_RECHECK_S:
                 try:

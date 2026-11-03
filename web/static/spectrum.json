@@ -1,0 +1,29 @@
+{
+  "checked": "2026-11-03 15:30 ET",
+  "groups": [
+    {"label": "Hard left", "streams": [
+      {"name": "Majority Report", "url": "https://www.youtube.com/@TheMajorityReport/live", "note": "starts 6:30 PM ET"},
+      {"name": "Democracy Now!", "url": "https://www.youtube.com/@DemocracyNow/live", "note": "starts 7:45 PM ET"}
+    ]},
+    {"label": "Left", "streams": [
+      {"name": "TYT", "url": "https://www.youtube.com/@TheYoungTurks/live"},
+      {"name": "MeidasTouch", "url": "https://www.youtube.com/@MeidasTouch/live", "note": "starts 4:30 PM ET"},
+      {"name": "MS NOW", "url": "https://www.youtube.com/@msnow/live", "note": "starts 6 PM ET"}
+    ]},
+    {"label": "Center", "streams": [
+      {"name": "ABC News", "url": "https://www.youtube.com/@ABCNews/live"},
+      {"name": "NBC News", "url": "https://www.youtube.com/@NBCNews/live"},
+      {"name": "CBS News", "url": "https://www.youtube.com/@CBSNews/live"},
+      {"name": "C-SPAN", "url": "https://www.youtube.com/@CSPAN/live", "note": "starts 4 PM ET"}
+    ]},
+    {"label": "Right", "streams": [
+      {"name": "Fox News", "url": "https://www.youtube.com/@FoxNews/live", "note": "starts 7 PM ET"},
+      {"name": "Newsmax", "url": "https://www.youtube.com/@NewsmaxTV/live"},
+      {"name": "Daily Wire", "url": "https://www.youtube.com/@DailyWire/live", "note": "starts 5:30 PM ET"}
+    ]},
+    {"label": "Hard right", "streams": [
+      {"name": "Louder with Crowder", "url": "https://www.youtube.com/@StevenCrowder/live", "note": "starts 7 PM ET"},
+      {"name": "RSBN", "url": "https://www.youtube.com/@RSBN/live", "note": "starts 6 PM ET"}
+    ]}
+  ]
+}
