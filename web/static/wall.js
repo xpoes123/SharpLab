@@ -286,6 +286,7 @@
     ws.onmessage = (e) => onMsg(JSON.parse(e.data));
     ws.onclose = (e) => {
       if (e.code === 4401) { showGate(); return; }
+      if (e.code === 4403) { $("msgs").replaceChildren(); showGate("You were removed from the watch party."); return; }
       setTimeout(connect, retry); retry = Math.min(retry * 2, 15000);
     };
   }
@@ -298,6 +299,7 @@
         if (m.pdt_off != null) pdtOff = m.pdt_off;
         $("msgs").replaceChildren(); m.history.forEach(addMsg);
         if (me.public) { showCount(m.count); setWall(m.wall); break; }   // public: the stream, the chat read-only, a head count
+        document.body.classList.toggle("no-control", !!cfg.no_votes && !me.admin);   // no votes: owner/admins drive, others ask DJ Jev
         $("ownerNote").textContent = me.owner ? "Owner — changes apply immediately" : "";
         $("offSub").textContent = "Start it from Change the wall below.";
         renderViewers(m.viewers);
@@ -544,6 +546,11 @@
       const li = el("li", v.away ? "away" : "");
       li.append(avatar(v), el("span", null, v.name));
       if (v.guest) li.append(el("span", "tag", "guest"));
+      if (me && me.admin && v.id && v.id !== me.id) {
+        const k = el("button", "mod", "kick"); k.title = "Remove from the watch party (30 min)";
+        k.onclick = () => { if (confirm(`Remove ${v.name} from the watch party?`)) send({ t: "kick", uid: v.id }); };
+        li.append(k);
+      }
       if (v.away) li.append(el("span", "tag", "away"));
       ul.append(li);
     });

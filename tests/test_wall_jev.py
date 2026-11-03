@@ -198,3 +198,12 @@ async def test_plain_lines_act_only_when_sure_and_never_reply():
     assert await run(h, DAVID, "the 2024 numbers were wild") == [] and not done      # unsure: silent, nothing changes
     h, done = make(Jev("none", 0.99))
     assert await run(h, DAVID, "lol this is great") == [] and not done
+
+
+@pytest.mark.anyio
+async def test_no_votes_mode_jev_applies_and_panel_proposals_refused(monkeypatch):
+    monkeypatch.setenv("WALL_NO_VOTES", "1")
+    h, done = make(Jev("d_swing", 0.96))
+    assert await run(h, MEMBER, "jev show vs 2024") == ["🎧 DJ Jev: putting vs 2024 on tile 2 (96%)"] and done
+    p, err = await h.propose(MEMBER, {"op": "layout", "layout": "full"})
+    assert p is None and "DJ Jev" in err
