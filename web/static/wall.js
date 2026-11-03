@@ -95,7 +95,18 @@
     s.className = "pill " + (a < 0.5 ? "ok" : a < 1.5 ? "meh" : "bad");
   }
 
-  $("unmute").onclick = () => { video.muted = false; video.play().catch(() => {}); $("unmute").hidden = true; };
+  const showMute = () => { $("muteBtn").textContent = video.muted ? "🔇 Sound off" : "🔊 Sound on"; $("unmute").hidden = !video.muted; };
+  const toggleMute = () => { video.muted = !video.muted; if (!video.muted) video.play().catch(() => {}); showMute(); };
+  $("unmute").onclick = toggleMute;
+  $("muteBtn").onclick = toggleMute;
+  video.addEventListener("volumechange", showMute);
+  $("fsBtn").onclick = () => {   // the player box (video + overlays) where the browser allows it; iPhone Safari only does the bare video
+    const box = video.parentElement;
+    if (document.fullscreenElement || document.webkitFullscreenElement) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    else if (box.requestFullscreen) box.requestFullscreen().catch(() => video.webkitEnterFullscreen && video.webkitEnterFullscreen());
+    else if (box.webkitRequestFullscreen) box.webkitRequestFullscreen();
+    else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+  };
 
   // ---- socket ----
   function send(m) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); }
