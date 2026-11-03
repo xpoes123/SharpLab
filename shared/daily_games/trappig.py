@@ -3,7 +3,7 @@
 A pig sits on a pointy-top hex grid (odd-r offset). Each turn the player fences one empty hex;
 then the pig steps to the open neighbour on the shortest path to any border (multi-source BFS
 from open border cells, deterministic direction tie-break). Pig on a border cell = escaped; pig
-with no path out = trapped. Score = fences used (fewer better), server time breaks ties.
+with no path out = trapped. Ranked by server time (faster better); fences used break ties.
 
 Everything here is deterministic from (seed, difficulty) so everyone gets the identical daily
 board, and `validate` replays a submitted solution to confirm the pig was really trapped —
@@ -20,14 +20,14 @@ NAME = "Trap the Pig"
 ICON = "🐷"
 SURFACE = "web"
 DIFFICULTIES = ["easy", "medium", "hard"]
-# Rank by FEWEST FENCES first (primary_score), then time (secondary_score) as the tiebreak —
-# fewest moves wins, speed only separates players tied on move count (community preference).
-RANK_ORDER = ("primary_score", "secondary_score")
+# Rank by TIME first (secondary_score), fences (primary_score) as the tiebreak — unlimited retries
+# let everyone grind down to par fences, so speed is the real differentiator.
+RANK_ORDER = ("secondary_score", "primary_score")
 HOWTO = (
     "A pig sits in the middle of a hex grid. Each turn you click one hex to drop a **fence**; "
     "then the pig bolts one hex along its shortest path to the edge. **Wall it in completely to "
-    "win.** Your rank is your **fence count** — trap it in the fewest fences to place highest; "
-    "time breaks ties. You can reset and retry, but **the clock keeps running across retries** — so "
+    "win.** Your rank is your **time** — trap it fastest to place highest; fewer fences break "
+    "ties. You can reset and retry, but **the clock keeps running across retries** — so "
     "solve it in as few tries as you can. Only a win counts. The clock starts when you hit Start."
 )
 

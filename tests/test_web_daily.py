@@ -102,6 +102,8 @@ def test_leaderboard_ranks_two_players(monkeypatch):
         assert [row["rank"] for row in lb["today"]] == [1, 2]
         assert lb["today"][0]["secondary"] == 8000   # faster first
         assert lb["season"][0]["days"] == 1
+        assert lb["alltime"]["trappig"][0]["wins"] == 1 and lb["alltime"]["overall"][0]["avg_rank"] == 1.0
+        assert lb["games"]["trappig"]["name"] == "Trap the Pig"
 
     _run(go())
 

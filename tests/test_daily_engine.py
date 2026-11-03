@@ -75,9 +75,8 @@ def test_rank_results_orders_and_scores():
     ]
     ranked = daily.rank_results(rows, "trappig")
     order = [r["discord_user"] for r in ranked]
-    # Move-first: fewest fences wins → b(4) first; a & d tie at 5 → faster (d 8000) beats a (9000);
-    # non-solver c last regardless of score.
-    assert order == ["b", "d", "a", "c"]
+    # Time-first: fastest solver wins → d(8000), a(9000), b(12000); non-solver c last regardless.
+    assert order == ["d", "a", "b", "c"]
     assert ranked[0]["points"] == 100 and ranked[-1]["points"] == 3
 
 

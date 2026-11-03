@@ -311,9 +311,15 @@ async def leaderboard(request: Request):
     end = day
     month_rows = await queries.get_daily_results_range(start, end)
     season = _season_standings(month_rows)
+    # All-time, overall + per game — "who's best at what". ponytail: full-history scan per request;
+    # cache or pre-aggregate if daily_results grows past a few thousand rows.
+    all_rows = await queries.get_daily_results_range("0000-01-01", end)
+    alltime = {"overall": _season_standings(all_rows)}
+    for gid in sorted({r["game_id"] for r in all_rows}):
+        alltime[gid] = _season_standings([r for r in all_rows if r["game_id"] == gid])
 
     names = await queries.get_display_names(
-        [r["discord_user"] for r in ranked] + [s["discord_user"] for s in season])
+        [r["discord_user"] for r in ranked] + [s["discord_user"] for st in alltime.values() for s in st])
 
     def nm(uid):
         return ph.is_guest(uid) and uid.split(":", 2)[2] or names.get(uid) or f"user-{uid[-4:]}"
@@ -327,6 +333,10 @@ async def leaderboard(request: Request):
                    "points": r["points"]} for r in ranked[:50]],
         "season": [{"rank": i + 1, "name": nm(s["discord_user"]), "points": s["points"],
                     "days": s["days"]} for i, s in enumerate(season[:50])],
+        "games": {gid: _meta(gid) for gid in alltime if gid in daily.DAILY_GAMES},
+        "alltime": {k: [{"rank": i + 1, "name": nm(s["discord_user"]), "points": s["points"],
+                         "days": s["days"], "wins": s["wins"], "avg_rank": s["avg_rank"]}
+                        for i, s in enumerate(v[:50])] for k, v in alltime.items()},
     }
 
 
@@ -339,7 +349,12 @@ def _season_standings(month_rows: list[dict]) -> list[dict]:
     for (game_id, _day), rows in by_day.items():
         for r in daily.rank_results(rows, game_id):
             t = totals.setdefault(r["discord_user"], {"discord_user": r["discord_user"],
-                                                       "points": 0, "days": 0})
+                                                       "points": 0, "days": 0, "wins": 0,
+                                                       "_ranks": 0})
             t["points"] += r["points"]
             t["days"] += 1
+            t["wins"] += r["rank"] == 1 and bool(r["solved"])
+            t["_ranks"] += r["rank"]
+    for t in totals.values():
+        t["avg_rank"] = round(t.pop("_ranks") / t["days"], 1)
     return sorted(totals.values(), key=lambda t: -t["points"])
