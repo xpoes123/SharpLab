@@ -145,6 +145,9 @@ def cuda12_preload() -> None:
                 except OSError:
                     pass
 
+NO_SPEECH = ("[No speech at all for the last ~45 seconds: only music, a jingle or ambient sound is playing — on a live news "
+             "channel this is usually a break slate such as \"back in 3 minutes\".]")
+
 class GpuSTT:
     """faster-whisper on the GPU: one model for every stream, chunks one at a time."""
 
@@ -358,6 +361,10 @@ class Watcher:
         text, quiet = s.window()
         # every label is the model's (Jev, Haiku when unsure): no keyword call can mislabel coverage as an ad; no answer
         # or no words (silence) = "unknown", which the policy never acts on
+        if not text.strip() and len(s.text) >= 2 and quiet < 0.9:
+            # sound but no words for the whole window (a "back in 3 minutes" slate over music, a jingle): say so and let
+            # the model judge — still never a rule of ours
+            text = NO_SPEECH
         lab, conf = self.classify(s.url, text[-2000:]) if text.strip() else ("unknown", 0.0)
         if lab not in ("coverage", "ad", "break", "offtopic"):
             lab, conf = "unknown", 0.0
