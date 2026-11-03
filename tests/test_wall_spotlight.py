@@ -39,13 +39,13 @@ class Web:
 
     def __call__(self, method, path, body):
         self.calls.append((method, path))
-        st = path.rsplit("/", 1)[1]
+        st = path.rsplit("/", 1)[1].split("?")[0]
         return (200, {**CARD, "state": st}) if st == "GA" else (200, {"state": st, "name": st, "races": [], "more": 0, "error": ""})
 
 
 def test_spotlight_shows_for_30s_then_goes(monkeypatch):
     clock, web = Clock(1000.0), Web()
-    sp = Spotlight(web, clock=clock, spawn=lambda f: f())
+    sp = Spotlight(web, clock=clock, spawn=lambda f: f(), show_s=30)
     v = sp.set("ga", by="Ann")
     assert web.calls == [("GET", "/api/v1/wall/election/spot/GA")]
     v = sp.view()
@@ -69,11 +69,29 @@ def test_a_new_state_never_shows_the_old_card(monkeypatch):
     clock = Clock(1000.0)
     held = []
     sp = Spotlight(lambda m, p, b: held.append(p) or (200, {**CARD, "state": p[-2:]}), clock=clock, spawn=lambda f: None)
-    sp.state, sp.until = "GA", clock() + 30
-    sp.refresh()
+    sp.set("GA")
+    sp.refresh("GA")
     assert sp.view()["card"]["state"] == "GA"
     sp.set("ME")                                      # ME's fetch hasn't come back yet
     assert sp.view()["card"] is None and sp.view()["state"] == "ME"
+
+
+def test_queue_newest_on_top_races_and_eviction():
+    clock, web = Clock(1000.0), Web()
+    sp = Spotlight(web, clock=clock, spawn=lambda f: f())
+    sp.set("ME")
+    sp.set("GA", by="race call", race="G-GA")         # one race: its card is just that race
+    v = sp.view()
+    assert [i["key"] for i in v["items"]] == ["G-GA", "ME"] and v["items"][0]["card"]["races"][0]["id"] == "G-GA"
+    assert v["items"][0]["name"] == "Georgia" and ("GET", "/api/v1/wall/election/spot/GA?race=G-GA") in web.calls
+    sp.set("NC"); sp.set("ME")                        # ME moves back up; the queue keeps 3, the oldest (G-GA) goes
+    assert [i["key"] for i in sp.view()["items"]] == ["ME", "NC", "G-GA"]
+    sp.set("TX")
+    assert [i["key"] for i in sp.view()["items"]] == ["TX", "ME", "NC"]
+    with pytest.raises(ValueError):
+        sp.set("GA", race="S-ME")                     # a race of another state
+    with pytest.raises(ValueError):
+        sp.set("", race="nope")
 
 
 def test_web_down_says_so_on_the_card(monkeypatch):
@@ -119,7 +137,7 @@ def test_service_endpoints_phone_overlay_and_watch_page(tmp_path, monkeypatch):
     r = tv.post("/i/tv/spotlight", json={"state": "GA", "by": "TV remote"}).json()
     assert r["spot"]["state"] == "GA"
     ov = tv.get("/i/tv/api/overlay/spot").json()["spot"]
-    assert ov["card"]["name"] == "Georgia" and ov["by"] == "TV remote" and 0 < ov["left"] <= 30
+    assert ov["card"]["name"] == "Georgia" and ov["by"] == "TV remote" and 0 < ov["left"] <= 600
     assert tv.post("/i/tv/spotlight", json={"state": "ZZ"}).status_code == 422
     assert tv.post("/i/tv/spotlight", json={"state": 5}).status_code == 422
     # the watch page (sharplab-web over the tailnet, with the token): a passed vote / the owner → /i/discord/spotlight
@@ -177,3 +195,13 @@ def test_spot_card_renders_in_the_sidebar(tmp_path):
     assert errs == [] and out.exists() and out.stat().st_size > 20_000
     loading = tmp_path / "loading.png"
     assert render(tmp_path, {**spot, "card": None}, loading) == [] and loading.exists()
+
+
+@pytest.mark.skipif(shutil.which("qml6") is None, reason="qml6 not installed")
+def test_spot_queue_renders(tmp_path):
+    one = {**CARD, "races": [CARD["races"][1]], "more": 0}
+    items = [{"key": "G-GA", "state": "GA", "race": "G-GA", "name": "Georgia · Governor", "by": "race call", "left": 590.0, "show_s": 600.0, "card": one, "error": ""},
+             {"key": "GA", "state": "GA", "race": "", "name": "Georgia", "by": "TV remote", "left": 400.0, "show_s": 600.0, "card": CARD, "error": ""},
+             {"key": "ME", "state": "ME", "race": "", "name": "Maine", "by": "watch party", "left": 300.0, "show_s": 600.0, "card": None, "error": ""}]
+    out = tmp_path / "queue.png"
+    assert render(tmp_path, {**items[0], "items": items, "rev": 5}, out) == [] and out.stat().st_size > 20_000

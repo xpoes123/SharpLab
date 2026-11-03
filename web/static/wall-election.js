@@ -362,6 +362,20 @@
     const st = el("span", "es-status" + (r.called ? " " + partyCls(r.called) : ""), r.status);
     h.append(st);
     card.append(h);
+    if (data.member) {   // this one race on top of the TV's spotlight queue (a vote, or at once for the owner)
+      const sp = el("button", "btn small es-spot", "📺 Spotlight");
+      sp.type = "button";
+      sp.title = "Put this race on top of the TV's spotlight queue (the stream shows it too)";
+      sp.onclick = async () => {
+        sp.disabled = true;
+        const r2 = await fetch(API + "/spotlight", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ state: r.state || sheet.st, race: r.id, label: `${data.states[sheet.st] || sheet.st} ${name}` }) });
+        let j = {}; try { j = await r2.json(); } catch (e) { j = {}; }
+        sp.textContent = r2.ok ? (j.status === "override" || j.status === "passed" ? "📺 On the TV" : "📺 Vote open") : (j.error || "Couldn't");
+        setTimeout(() => { sp.disabled = false; sp.textContent = "📺 Spotlight"; }, 6000);
+      };
+      h.append(sp);
+    }
     const meta = [];
     if (r.closes) meta.push(`polls close ${fmtTime(r.closes)}`);
     if (r.called && r.called_at) meta.push(`called ${fmtTime(r.called_at)}`);

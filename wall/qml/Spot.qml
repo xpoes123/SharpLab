@@ -1,5 +1,6 @@
-// Election night: the state spotlight card at the top of the L-bar sidebar (wall/spotlight.py; ~30 s, or until closed).
-// The state's main races (status, top two candidates), their Kalshi prices + 24 h change, a sparkline of the favourite.
+// Election night: the spotlight queue at the top of the L-bar sidebar (wall/spotlight.py): newest on top with its races
+// (status, top two candidates, Kalshi prices + 24 h change, a sparkline of the favourite); the older ones under it, one
+// race each, no sparkline. A new item pushes the oldest out.
 // Never over the video: Board.qml places it inside the sidebar. Calm: it fades in and out over 0.6 s; the bar under it
 // shrinks with the time left; nothing blinks.
 import QtQuick
@@ -19,6 +20,7 @@ Rectangle {
     property var shown: null
     onSpotChanged: if (spot) shown = spot
     readonly property var d: shown ? shown.card : null
+    readonly property var items: shown && shown.items ? shown.items : (shown ? [shown] : [])
 
     function party(p) { return p === "D" ? b.cDem : p === "R" ? b.cRep : p === "I" ? b.cInd : b.cMuted }
     function pct(v) { return v === null || v === undefined ? "–" : Math.round(v) + "%" }
@@ -59,11 +61,27 @@ Rectangle {
             T { anchors.right: parent.right; anchors.baseline: kick.baseline; mono: true; size: 1.3 * s.rem; weight: 500; color: s.b.cMuted
                 text: s.shown && s.shown.by ? "via " + s.shown.by : ""; width: parent.width - kick.implicitWidth - s.rem; horizontalAlignment: Text.AlignRight }
         }
-        T { width: parent.width; text: s.shown ? s.shown.name : ""; size: s.b.tTitle; weight: 800; wdth: 68 }
-        T { visible: !s.d; width: parent.width; mono: true; size: 1.4 * s.rem; color: s.shown && s.shown.error ? s.b.cDanger : s.b.cMuted
-            text: s.shown && s.shown.error ? s.shown.error : "Loading races and prices…"; wrapMode: Text.Wrap; maximumLineCount: 2 }
         Repeater {
-            model: s.d ? s.d.races : []
+          model: s.items
+          delegate: Column {
+            id: it
+            required property var modelData
+            required property int index
+            readonly property var item: modelData
+            readonly property bool small: index > 0          // older items: one race, no sparkline
+            width: col.width
+            spacing: 0.5 * s.rem
+            Rectangle { visible: it.small; width: parent.width; height: 0.25 * s.rem; color: s.b.cRule }
+            Item {
+                width: parent.width; height: ti.implicitHeight
+                T { id: ti; text: it.item.name; size: it.small ? 2.0 * s.rem : s.b.tTitle; weight: 800; wdth: 68; width: parent.width * (it.small ? 0.7 : 1) }
+                T { visible: it.small; anchors.right: parent.right; anchors.baseline: ti.baseline; mono: true; size: 1.2 * s.rem; weight: 500
+                    color: s.b.cMuted; text: it.item.by ? "via " + it.item.by : ""; width: parent.width * 0.3; horizontalAlignment: Text.AlignRight }
+            }
+            T { visible: !it.item.card; width: parent.width; mono: true; size: 1.4 * s.rem; color: it.item.error ? s.b.cDanger : s.b.cMuted
+                text: it.item.error ? it.item.error : "Loading races and prices…"; wrapMode: Text.Wrap; maximumLineCount: 2 }
+            Repeater {
+            model: it.item.card ? (it.small ? it.item.card.races.slice(0, 1) : it.item.card.races) : []
             delegate: Column {
                 id: rc
                 required property var modelData
@@ -108,6 +126,7 @@ Rectangle {
                     }
                     Canvas {
                         id: sp
+                        visible: !it.small
                         anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
                         width: parent.width * 0.34; height: 2.8 * s.rem
                         readonly property var vals: rc.r.spark || []
@@ -128,8 +147,10 @@ Rectangle {
                 }
                 T { visible: rc.r.markets.length === 0; width: parent.width; mono: true; size: 1.3 * s.rem; weight: 500; color: s.b.cMuted; text: "no Kalshi market" }
             }
+            }
+          }
         }
         T { visible: !!s.d; width: parent.width; mono: true; size: 1.2 * s.rem; weight: 500; color: s.b.cMuted
-            text: "Kalshi implied % (24 h ▲▼) · unofficial" + (s.d && s.d.more ? " · +" + s.d.more + " races" : ""); wrapMode: Text.Wrap; maximumLineCount: 2 }
+            text: "Kalshi implied % (24 h ▲▼) · unofficial"; wrapMode: Text.Wrap; maximumLineCount: 2 }
     }
 }

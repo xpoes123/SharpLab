@@ -284,10 +284,12 @@ def check_action(a: object) -> dict:
             raise ValueError("layout is lbar or full")
         return {"op": "layout", "layout": a["layout"]}
     if op == "spotlight":   # election night: a state's races + Kalshi prices on the TV's sidebar for ~30 s ("" = dismiss)
-        st = a.get("state")
+        st, race = a.get("state"), a.get("race", "")
         if not isinstance(st, str) or not (st == "" or re.fullmatch(r"[A-Z]{2}", st)):
             raise ValueError("state is a two-letter code")
-        return {"op": "spotlight", "state": st}
+        if race and not (isinstance(race, str) and re.fullmatch(rf"[SGH]-{st}(-\d{{1,2}})?(-special)?", race)):
+            raise ValueError("race is one of that state's race ids (S-GA, H-WI-3)")
+        return {"op": "spotlight", "state": st, **({"race": race, **label} if race else {})}
     if op == "board":
         out = {"op": "board"}
         if "board" in a:
@@ -334,7 +336,9 @@ def describe(a: dict) -> str:
     if op == "rotate":
         return f"hold tile {a['i'] + 1} on this screen for 5 min" if a["act"] == "hold" else f"switch tile {a['i'] + 1} to its next screen"
     if op == "spotlight":
-        return f"spotlight {a['state']} on the TV" if a["state"] else "close the TV's state spotlight"
+        if a.get("race"):
+            return f"spotlight {a.get('label') or a['race']} on the TV"
+        return f"spotlight {a['state']} on the TV" if a["state"] else "close the TV's spotlight"
     parts = []
     if "board" in a:
         parts.append(f"show the {a['board'].upper()} board" if a["board"] else "hide the board")
@@ -592,7 +596,7 @@ def _route(a: dict) -> tuple[str, str, dict]:
     if op == "rotate":
         return "POST", "/i/discord/rotate", body
     if op == "spotlight":
-        return "POST", "/i/discord/spotlight", {"state": a["state"]}
+        return "POST", "/i/discord/spotlight", {"state": a["state"], **({"race": a["race"]} if a.get("race") else {})}
     if body.get("board") == "":   # "no board" = hide it
         body = {k: v for k, v in body.items() if k != "board"} | {"visible": False}
     elif "board" in body and "visible" not in body:

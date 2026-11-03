@@ -1,5 +1,6 @@
-"""Election night: the TV's state spotlight. Someone picks a state on the TV's phone remote (or a watch-page vote passes,
-or the owner pushes one) → for SHOW_S the L-bar sidebar shows a card for it: the state's main races (status, top two
+"""Election night: the TV's spotlight queue. Someone picks a state or one race on the TV's phone remote, a watch-page vote
+passes, the owner pushes one, or an event does (a race call, first votes, a big Kalshi move) → it goes on top of the L-bar
+sidebar's queue (QMAX deep, the oldest evicted, each gone after SHOW_S) with a card: the state's main races (status, top two
 candidates), their Kalshi prices + 24 h change and a sparkline of the favourite. Never over the video: the overlay draws it
 in the sidebar (wall/qml/Spot.qml). The discord wall mirrors the TV, so the stream (and Discord) sees it too.
 
@@ -10,6 +11,7 @@ shows. No positions on it, ever.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from typing import Callable
@@ -17,21 +19,21 @@ from typing import Callable
 from wall.election import STATES
 
 log = logging.getLogger("wall.spotlight")
-SHOW_S = 30.0
+SHOW_S = 600.0     # an item stays this long unless newer ones push it out first
 REFRESH_S = 15.0
+QMAX = 3           # the sidebar's queue: newest on top, the oldest evicted
+RACE = re.compile(r"^(?P<o>[SGH])-(?P<st>[A-Z]{2})(-\d{1,2})?(-special)?$")
 
 
 class Spotlight:
+    """A queue of spotlight items (a state, or one race), newest first. set() pushes to the top (an item already in it
+    moves up), the queue keeps QMAX, and each item leaves after show_s by itself."""
+
     def __init__(self, http: Callable[[str, str, dict | None], tuple[int, object]] | None = None, clock=time.time,
                  show_s: float = SHOW_S, spawn: Callable | None = None) -> None:
         self.http, self.clock, self.show_s = http, clock, show_s
         self.spawn = spawn or (lambda f: threading.Thread(target=f, name="spotlight", daemon=True).start())
-        self.state = ""
-        self.by = ""
-        self.until = 0.0
-        self.card: dict | None = None
-        self.fetched = 0.0
-        self.error = ""
+        self.items: list[dict] = []   # {key, state, race, by, at, card, fetched, error}
         self.rev = 0
         self.lock = threading.Lock()
 
@@ -39,55 +41,83 @@ class Spotlight:
     def configured(self) -> bool:
         return self.http is not None
 
-    def set(self, state: str, by: str = "") -> dict:
-        """Show a state (two-letter code) for show_s from now, or "" to dismiss. ValueError on anything else."""
-        st = (state or "").strip().upper()
-        if st and st not in STATES:
+    def set(self, state: str, by: str = "", race: str = "") -> dict | None:
+        """Push a state (two-letter code) or one race of it ("S-GA", "H-WI-3") to the top; state "" closes them all.
+        ValueError on anything else."""
+        st, race = (state or "").strip().upper(), (race or "").strip()
+        m = RACE.match(race) if race else None
+        if race and not m:
+            raise ValueError("race is an id like S-GA or H-WI-3")
+        st = st or (m["st"] if m else "")
+        if st and st not in STATES or m and m["st"] != st:
             raise ValueError("state is a two-letter state code")
         with self.lock:
-            if st and st != self.state:
-                self.card, self.fetched, self.error = None, 0.0, ""
-            self.state, self.by = st, (by or "")[:40] if st else ""
-            self.until = self.clock() + self.show_s if st else 0.0
+            if not st:
+                self.items = []
+            else:
+                key = race or st
+                self.items = [{"key": key, "state": st, "race": race, "by": (by or "")[:40], "at": self.clock(), "card": None,
+                               "fetched": 0.0, "error": ""}] + [i for i in self.items if i["key"] != key]
+                del self.items[QMAX:]
             self.rev += 1
         if st:
-            self.spawn(self.refresh)
+            self.spawn(lambda: self.refresh(key))
         return self.view()
 
+    def _live(self) -> list[dict]:
+        now = self.clock()
+        return [i for i in self.items if now - i["at"] < self.show_s]
+
     def active(self) -> bool:
-        return bool(self.state) and self.clock() < self.until
+        return bool(self._live())
 
     def due(self) -> bool:
-        return self.active() and self.clock() - self.fetched >= REFRESH_S
+        now = self.clock()
+        return any(now - i["fetched"] >= REFRESH_S for i in self._live())
 
-    def refresh(self) -> None:
-        """Fetch the card from the web (blocking: a thread / to_thread)."""
-        st = self.state
-        if not st or not self.http:
+    def refresh(self, key: str | None = None) -> None:
+        """Fetch the cards from the web (blocking: a thread / to_thread): the one item `key`, else every due one."""
+        if not self.http:
             return
-        try:
-            status, data = self.http("GET", f"/api/v1/wall/election/spot/{st}", None)
-        except (OSError, ValueError) as e:
-            status, data = 0, {"error": f"web unreachable: {e}"[:120]}
+        now = self.clock()
         with self.lock:
-            if st != self.state:
-                return
-            self.fetched = self.clock()
-            if status == 200 and isinstance(data, dict) and isinstance(data.get("races"), list):
-                self.card, self.error = data, ""
+            todo = [dict(i) for i in self._live() if i["key"] == key or key is None and now - i["fetched"] >= REFRESH_S]
+        for it in todo:
+            path = f"/api/v1/wall/election/spot/{it['state']}" + (f"?race={it['race']}" if it["race"] else "")
+            try:
+                status, data = self.http("GET", path, None)
+            except (OSError, ValueError) as e:
+                status, data = 0, {"error": f"web unreachable: {e}"[:120]}
+            ok = status == 200 and isinstance(data, dict) and isinstance(data.get("races"), list)
+            if ok and it["race"]:   # one race: just its card (the web puts it first when asked)
+                data = {**data, "races": [r for r in data["races"] if r.get("id") == it["race"]][:1] or data["races"][:1], "more": 0}
+            err = "" if ok else ((data or {}).get("error") if isinstance(data, dict) else "") or f"web answered {status}"
+            with self.lock:
+                for i in self.items:
+                    if i["key"] == it["key"]:
+                        i["fetched"] = self.clock()
+                        if ok:
+                            i["card"], i["error"] = data, ""
+                        else:
+                            i["error"] = err
+                            log.warning("spotlight %s: %s", it["key"], err)
                 self.rev += 1
-            else:
-                self.error = (data or {}).get("error", f"web answered {status}") if isinstance(data, dict) else f"web answered {status}"
-                log.warning("spotlight %s: %s", st, self.error)
 
     def view(self) -> dict | None:
-        """What the overlay draws (None = nothing): {state, name, by, left, card, error, rev}."""
+        """What the overlay draws (None = nothing): {"items": [...newest first]} plus the newest item's fields at the top
+        level (state, name, by, left, card, error) for the phone's picker."""
         with self.lock:
-            if not self.active():
+            live = self._live()
+            if not live:
                 return None
-            return {"state": self.state, "name": STATES.get(self.state, self.state), "by": self.by,
-                    "left": round(self.until - self.clock(), 1), "show_s": self.show_s, "card": self.card,
-                    "error": self.error if self.card is None else "", "rev": self.rev}
+            now = self.clock()
+            items = []
+            for i in live:
+                card = i["card"]   # a race item's office is on its race line: the title stays the state's name
+                items.append({"key": i["key"], "state": i["state"], "race": i["race"], "name": STATES.get(i["state"], i["state"]), "by": i["by"],
+                              "left": round(self.show_s - (now - i["at"]), 1), "show_s": self.show_s, "card": card,
+                              "error": i["error"] if card is None else ""})
+            return {**items[0], "items": items, "rev": self.rev}
 
 
 def state_list(snap: dict) -> list[dict]:
