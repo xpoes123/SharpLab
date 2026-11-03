@@ -90,6 +90,20 @@
     showSync();
   }
 
+  // tap the sync pill: back to the shared point right now (one exact seek; play again if paused / stalled)
+  $("sync").style.cursor = "pointer";
+  $("sync").title = "Tap to sync back up with everyone";
+  $("sync").onclick = () => {
+    if (video.paused) video.play().catch(() => {});
+    const pdt = playingDate();
+    if (pdt == null) return;
+    const err = (pdt - (serverNow() + (pdtOff || 0) - cfg.delay * 1000)) / 1000;
+    if (Math.abs(err) > 0.1) { video.currentTime = Math.max(0, video.currentTime - err); sync.seeks++; }
+    video.playbackRate = 1;
+    $("sync").textContent = "syncing…";
+    setTimeout(syncTick, 800);
+  };
+
   function showSync() {
     const s = $("sync");
     if (sync.err == null) { s.textContent = wall && wall.running === false ? "wall off" : "syncing…"; s.className = "pill"; return; }
