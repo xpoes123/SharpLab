@@ -547,7 +547,7 @@ def _position_pages(acct: dict, who: str) -> dict[str, list[discord.Embed]]:
 
     ov = discord.Embed(title=f"{who}'s Kalshi", color=color(t["total"]), description=(
         f"## {t['total']:+,.2f} today\n"
-        f"-# since 4am ET · closed {t['settled']:+,.2f} ({t['n_settled']}) · open {t['open_move']:+,.2f}\n\n"
+        f"-# since 4am ET · settled {t['settled']:+,.2f} ({t['n_settled']}) · open {t['open_move']:+,.2f}\n\n"
         f"Cash **${acct['balance']:,.2f}** · Open **${sum(r['value'] for r in rows):,.2f}**"
         f" · Unrealized **{unreal:+,.2f}**"))
     if games:  # what people check: tonight's and upcoming games
