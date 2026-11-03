@@ -74,3 +74,65 @@ def test_tv_chat_floats_over_the_tiles_beside_the_badge(tmp_path, n, sound, lbar
     keep = os.environ.get("WALL_CHAT_PNG")   # a dir: keep the renders to look at
     if keep:
         shutil.copy(on, Path(keep) / f"tvchat-{n}-{sound}-{'lbar' if lbar else 'full'}.png")
+
+
+# ---- the TV chat docked in the L-bar's sidebar (election night: it takes the TRADES box's room while active) ------------
+def render_side(tmp_path, tvchat, out, layout="lbar"):
+    import time
+    from tests.test_wall_election import FX
+    from tests.test_wall_speaker import bands
+    from wall.election import Results, board, replay
+    r = Results(replay(f"{FX}:0.6"))
+    r.poll()
+    rows = [{"who": who, "side": side, "label": f"PA Senate · Pick{i}", "entry": 40.0, "mark": 60.0, "pct": 50.0, "dir": "up",
+             "size": "50+ ct", "kind": "election", "election": {"class": {"type": "control", "office": "S"},
+             "pick": {"party": "R", "name": ""}, "label": "Senate control · Rep", "strike": {}}}
+            for i, (who, side) in enumerate((("Hansen", "YES"), ("David", "NO")))]
+    data = board(r.snapshot(), rows)
+    b = {**bands(4, 1, layout == "lbar"), "tvchat": tvchat}
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            p = self.path
+            body = b if p.endswith("/bands") else {"default": 0, "delays": {}, "show": False, "n": 0, "tiles": []} \
+                if p.endswith("/bets") else {} if p.endswith("/spot") else {"view": layout, "rev": 1} \
+                if p.startswith("/api/overlay/view") else {
+                    "board": "election", "shown": "election", "visible": True, "layout": layout, "view": layout, "rev": 1,
+                    "boards": [{"id": "election", "name": "Election"}], "data": data, "updated": time.time(), "error": ""}
+            raw = json.dumps(body).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def log_message(self, *a):
+            pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        p = subprocess.run(["qml6", str(QML / "Preview.qml"), "--", "--layout", layout, "--size", "1920x1080",
+                            "--bets", f"http://127.0.0.1:{srv.server_port}/i/tv", "--api", f"http://127.0.0.1:{srv.server_port}",
+                            "--out", str(out), "--wait", "3000"],
+                           env={"QT_QPA_PLATFORM": "offscreen", "QT_FORCE_STDERR_LOGGING": "1", "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+                           capture_output=True, text=True, timeout=30)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    return [l for l in p.stderr.splitlines() if "Error" in l or "Unable to assign" in l or "is not defined" in l
+            or "TypeError" in l or "ReferenceError" in l]
+
+
+@pytest.mark.skipif(shutil.which("qml6") is None, reason="qml6 not installed")
+def test_tv_chat_docks_in_the_sidebar_in_place_of_trades(tmp_path):
+    import os
+    active, quiet, off = tmp_path / "active.png", tmp_path / "quiet.png", tmp_path / "off.png"
+    stale = [{**l, "fresh": False} for l in TV_LINES]
+    assert render_side(tmp_path, {"on": True, "lines": TV_LINES}, active) == []
+    assert render_side(tmp_path, {"on": True, "lines": stale}, quiet) == []        # nothing in the last 2 min: TRADES
+    assert render_side(tmp_path, {"on": False, "lines": TV_LINES}, off) == []      # the owner's toggle off: TRADES
+    assert active.read_bytes() != quiet.read_bytes() and active.read_bytes() != off.read_bytes()
+    keep = os.environ.get("WALL_CHAT_PNG")
+    if keep:
+        for f in (active, quiet, off):
+            shutil.copy(f, Path(keep) / f"tvchat-side-{f.stem}.png")

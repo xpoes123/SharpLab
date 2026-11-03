@@ -864,7 +864,7 @@ def test_tvchat_toggle_persists_and_reaches_the_overlay(api):
     cfg = Cfg({"WALL_STATE_DIR": str(tmp), "WALL_API_TOKEN": "s3cret", "WALL_IMPORT_FROM": "", "WALL_TV_OUTPUT": ""})
     app2 = build(cfg, app.state.instances, app.state.scores, app.state.store, guard=LLMGuard(mode="off"))
     assert client(app2).get("/i/tv/bands").json()["tvchat"]["on"] is False
-    # the lines: the party's last six, fresh = arrived in the last 20 s
+    # the lines: the party's last eight, fresh = arrived in the last 20 s
     chat = app.state.chat
     chat.configured = True
     now = _time.time()
@@ -872,5 +872,5 @@ def test_tvchat_toggle_persists_and_reaches_the_overlay(api):
                       "guest": False, "text": f"t{k}"} for k in range(1, 10)]
     app.state.instances["discord"].urls = ["https://a.tv/x"]
     lines = c.get("/i/tv/bands").json()["tvchat"]["lines"]
-    assert [m["id"] for m in lines] == [4, 5, 6, 7, 8, 9] and [m["fresh"] for m in lines] == [False] + [True] * 5
-    assert lines[4]["sys"] is True and lines[5] == {"id": 9, "name": "u9", "guest": False, "text": "t9", "sys": False, "fresh": True}
+    assert [m["id"] for m in lines] == [2, 3, 4, 5, 6, 7, 8, 9] and [m["fresh"] for m in lines] == [False] * 3 + [True] * 5
+    assert lines[6]["sys"] is True and lines[7] == {"id": 9, "name": "u9", "guest": False, "text": "t9", "sys": False, "fresh": True}
