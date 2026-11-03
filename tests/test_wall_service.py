@@ -762,3 +762,12 @@ def test_the_guard_runs_before_a_headless_start(tmp_path):
     i.before_start = lambda: order.append("park")
     i.start(urls=["https://a.tv"])
     assert order == ["park", "vram"]
+
+
+def test_switching_between_screen_and_tiles_is_one_session(api, monkeypatch):
+    local, remote, tv, disc, st = _mirror(api, monkeypatch, screen=True)
+    started, origin = st["started"], st["origin"]
+    local.post("/i/tv/tile", json={"i": 0, "url": "http://192.168.1.1/"})
+    disc.tick()
+    st = remote.get("/i/discord").json()
+    assert st["capture"] == "tiles" and st["started"] == started and st["origin"] == origin   # the bot won't re-announce

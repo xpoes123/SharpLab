@@ -65,6 +65,8 @@ class WallService:
             return await self._call("POST", f"/i/{INST}/start", body)
         if op == "stop":
             return await self._call("POST", f"/i/{INST}/stop", {})
+        if op == "follow":
+            return await self._call("POST", f"/i/{INST}/follow", {})
         if op == "tile":
             return await self._call("POST", f"/i/{INST}/tile", body)
         if op == "remove":

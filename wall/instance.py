@@ -385,12 +385,16 @@ class Instance:
 
     def _start_tiles(self, urls, sound, overlay, origin) -> None:
         board, visible, layout = overlay
+        keep = (self.started, self.last_fetch) if self.urls else None   # a switch, not a new start: same session
         self.start(urls=urls, sound=sound, board=board if visible else "", layout=layout, follow=True, origin=origin)
         self.preset_name = "Mirroring the TV"
+        if keep:
+            self.started, self.last_fetch = keep
 
     def _start_screen(self, urls, sound, overlay, origin) -> None:
         """Capture the TV's output instead of running tiles. Falls back to tiles (and retries a minute later)."""
         with self.lock:
+            keep = (self.started, self.last_fetch) if self.urls else None   # a switch, not a new start: same session
             self._stop_locked("")
             self._guard()
             self.before_start()
@@ -400,11 +404,13 @@ class Instance:
                 log.warning("%s: screen capture failed (%s), running tiles instead", self.name, e)
                 self._screen_retry = self.clock() + 60
                 self._start_tiles(urls, sound, overlay, origin)
+                if keep:
+                    self.started, self.last_fetch = keep
                 self.error = f"screen capture: {e}"
                 return
             self.urls, self.live = list(urls), None
             self.preset_name, self.preset = "Mirroring the TV", -1
-            self.started, self.last_fetch, self.error, self.stopped_why = self.clock(), 0.0, "", ""
+            (self.started, self.last_fetch), self.error, self.stopped_why = keep or (self.clock(), 0.0), "", ""
             self.follow, self.origin = True, origin
             self._copy_state(urls, sound, *overlay)
             self._bump()

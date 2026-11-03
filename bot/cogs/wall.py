@@ -4,13 +4,21 @@ One group, four subcommands (start / stop / status / set) plus an interactive pa
 (WALL_OWNER_ID) applies changes at once; anyone else allowed (WALL_PERMISSION=anyone, or =roles with WALL_ROLE_IDS)
 makes a proposal that viewers vote on (sharplab-web runs the vote; see docs/wall-service.md). One embed per guild,
 edited in place on every change and every 30 s while the wall runs.
+
+When the wall starts (a /wall command, the panel, a vote that passed, the web page), the embed with the watch link and
+Get my link is posted in the channel the start came from (a start carries its origin through the vote to the wall
+service); a start from the web page goes to the last channel used, else WALL_CHANNEL_ID. Where the embeds are, the last
+channel and the last start announced persist in WALL_BOT_STATE, so a restart keeps editing them and the panel's
+buttons keep working (a persistent view).
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
 import time
+from pathlib import Path
 
 import discord
 from discord import app_commands, ui
@@ -24,6 +32,8 @@ OWNER_ID = os.environ.get("WALL_OWNER_ID", "")
 PERMISSION = os.environ.get("WALL_PERMISSION", "anyone")   # anyone | roles
 ROLE_IDS = {r.strip() for r in os.environ.get("WALL_ROLE_IDS", "").split(",") if r.strip()}
 CHANNEL_ID = os.environ.get("WALL_CHANNEL_ID", "")
+STATE_PATH = os.environ.get("WALL_BOT_STATE", "data/wall_bot.json")
+TV_CHOICE = "__tv__"   # the panel's "Same as the TV" start
 MAX_TILES = 4
 LAYOUTS = ("lbar", "full")
 BOARDS = ("nfl", "nba")
@@ -101,11 +111,15 @@ def describe(action: dict) -> str:
     """One line for a proposal / confirmation."""
     op = action.get("op")
     if op == "start":
+        if action.get("mirror"):
+            return "start the wall: same as the TV"
         what = action.get("preset") if action.get("preset") is not None else \
             f"live {action['live'].upper()}" if action.get("live") else ", ".join(tile_label(u) for u in action.get("urls", []))
         return f"start the wall: {what}"
     if op == "stop":
         return "stop the wall"
+    if op == "follow":
+        return "follow the TV again"
     if op == "tile":
         return f"tile {action['i'] + 1} → {tile_label(action['url'])}"
     if op == "remove":
@@ -140,6 +154,9 @@ def build_embed(state: dict | None, web: dict | None, watch_url: str, error: str
         ov = st.get("overlay") or {}
         board = ov.get("board") if ov.get("visible") else "off"
         e.add_field(name="Layout", value=f"{ov.get('layout') or 'lbar'} · board {board or 'off'}", inline=True)
+        if st.get("mirror"):
+            e.add_field(name="📺 Mirroring the TV", value="follows the living-room wall live" +
+                        (" (its screen)" if st.get("capture") == "screen" else ""), inline=True)
         if live.get("league"):
             e.add_field(name="Live", value=f"{live['league'].upper()} games auto-swap", inline=True)
     else:
@@ -173,6 +190,47 @@ def split_teams(slugs: list[str], parts: int = 2) -> list[list[str]]:
     return [s[i:i + k] for i in range(0, len(s), k)] if k else []
 
 
+def load_state(path: str) -> dict:
+    """{"embeds": {guild: [channel, message]}, "last": {"guild", "channel"} | None, "announced": started}."""
+    try:
+        d = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        d = {}
+    embeds = {}
+    for g, v in (d.get("embeds") or {}).items():
+        try:
+            embeds[int(g)] = (int(v[0]), int(v[1]))
+        except (TypeError, ValueError, IndexError):
+            pass
+    last = d.get("last") if isinstance(d.get("last"), dict) else None
+    return {"embeds": embeds, "last": last, "announced": d.get("announced") or 0}
+
+
+def save_state(path: str, embeds: dict, last: dict | None, announced: float) -> None:
+    p = Path(path)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"embeds": {str(g): list(v) for g, v in embeds.items()}, "last": last, "announced": announced}))
+        tmp.replace(p)
+    except OSError as e:
+        log.warning("wall state not saved: %s", e)
+
+
+def announce_target(st: dict, last: dict | None, default_channel: str = "") -> int | None:
+    """Where a start's link goes: the channel it came from, else the last channel used, else WALL_CHANNEL_ID."""
+    for o in (st.get("origin"), last):
+        if isinstance(o, dict) and str(o.get("channel") or "").isdigit():
+            return int(o["channel"])
+    return int(default_channel) if default_channel.isdigit() else None
+
+
+def origin_of(interaction) -> dict | None:
+    if getattr(interaction, "channel_id", None) is None:
+        return None
+    return {"guild": str(interaction.guild_id or ""), "channel": str(interaction.channel_id)}
+
+
 # ---- the cog -----------------------------------------------------------------------------------------------------------
 class WallCog(commands.Cog):
     wall = app_commands.Group(name="wall", description="The shared video wall — watch parties at sharplab.djiang.xyz/wall")
@@ -181,16 +239,29 @@ class WallCog(commands.Cog):
         self.bot = bot
         self.svc = service or WallService()
         self.web = web or WallWeb()
-        self.embeds: dict[int, tuple[int, int]] = {}   # guild id → (channel id, message id)
+        self.state_path = STATE_PATH
+        saved = load_state(self.state_path)
+        self.embeds: dict[int, tuple[int, int]] = saved["embeds"]   # guild id → (channel id, message id)
+        self.last: dict | None = saved["last"]                      # the last channel /wall was used in
+        self.announced: float = saved["announced"]                  # the last start ("started") its link was posted for
         self.votes: dict[str, tuple[int, int]] = {}     # proposal id → its vote message (channel, message)
         self.target: dict[str, int] = {}                # user id → the tile the panel acts on (0-based)
         self._presets: list[dict] = []
 
+    def save(self) -> None:
+        save_state(self.state_path, self.embeds, self.last, self.announced)
+
     async def cog_load(self) -> None:
+        try:
+            self.bot.add_view(PanelView(self, [], [], persistent=True))   # the panel's buttons survive a restart
+        except Exception as e:  # noqa: BLE001
+            log.warning("wall panel view: %s", e)
         self.refresh_loop.start()
+        self.watch_loop.start()
 
     async def cog_unload(self) -> None:
         self.refresh_loop.cancel()
+        self.watch_loop.cancel()
 
     # ---- doing things ----
     async def act(self, interaction: discord.Interaction, action: dict) -> str:
@@ -198,10 +269,18 @@ class WallCog(commands.Cog):
         uid = str(interaction.user.id)
         if not may_use(uid, role_ids(interaction.user)):
             return "You're not allowed to change the wall (ask David for a wall role)."
+        origin = origin_of(interaction)
+        if origin:
+            self.last = origin
+            self.save()
+        if action.get("op") == "start" and origin:
+            action = {**action, "origin": origin}   # the link gets posted here when it starts (now, or when the vote passes)
         try:
             if route(uid) == "apply":
-                await self.svc.apply(action)
+                st = await self.svc.apply(action)
                 msg = f"Done: {describe(action)}."
+                if action.get("op") == "start" and isinstance(st, dict) and st.get("running"):
+                    await self.announce(st)
             else:
                 p = await self.web.propose(user_dict(interaction.user), action)
                 if p.get("applied"):
@@ -250,6 +329,7 @@ class WallCog(commands.Cog):
             await ch.get_partial_message(msg_id).edit(embed=build_embed(st, web, self.web.watch_url, err))
         except discord.NotFound:
             self.embeds.pop(guild_id, None)
+            self.save()
         except discord.HTTPException as e:
             log.warning("wall embed edit failed: %s", e)
         await self._sync_votes(ch, web)
@@ -271,12 +351,56 @@ class WallCog(commands.Cog):
                 except discord.HTTPException:
                     pass
 
+    async def announce(self, st: dict) -> bool:
+        """The wall just started: post the embed (watch link + Get my link) where the start came from."""
+        started = st.get("started") or 0
+        if not st.get("running") or started == self.announced:
+            return False
+        self.announced = started
+        self.save()
+        ch_id = announce_target(st, self.last, CHANNEL_ID)
+        ch = self.bot.get_channel(ch_id) if ch_id else None
+        if ch is None:
+            log.info("wall started, but no channel to post the link in (%s)", ch_id)
+            return False
+        _, web, err = await self.snapshot()
+        try:
+            m = await ch.send(embed=build_embed(st, web, self.web.watch_url, err),
+                              view=PanelView(self, await self._preset_list(), await self._games()))
+        except discord.HTTPException as e:
+            log.warning("wall start post failed: %s", e)
+            return False
+        await self._place(getattr(getattr(ch, "guild", None), "id", None), m)
+        return True
+
+    @tasks.loop(seconds=5)
+    async def watch_loop(self) -> None:
+        """Catch starts the bot didn't make itself (a vote that passed, the web page) and post their link."""
+        try:
+            st = await self.svc.state()
+        except WallError:
+            return
+        if st.get("running") and (st.get("started") or 0) != self.announced:
+            await self.announce(st)
+
+    @watch_loop.before_loop
+    async def _before_watch(self) -> None:
+        await self.bot.wait_until_ready()
+
     async def post_embed(self, interaction: discord.Interaction) -> None:
         st, web, err = await self.snapshot()
         m = await interaction.followup.send(embed=build_embed(st, web, self.web.watch_url, err),
                                             view=PanelView(self, await self._preset_list(), await self._games()), wait=True)
-        old = self.embeds.get(interaction.guild_id)
-        self.embeds[interaction.guild_id] = (m.channel.id, m.id)
+        await self._place(interaction.guild_id, m)
+
+    async def _place(self, guild_id: int | None, m) -> None:
+        """m is now the guild's /wall embed: remember it (persisted) and retire the previous one."""
+        if guild_id is None:
+            return
+        old = self.embeds.get(guild_id)
+        self.embeds[guild_id] = (m.channel.id, m.id)
+        self.last = {"guild": str(guild_id), "channel": str(m.channel.id)}
+        self.save()
         if old and old[1] != m.id:   # one embed per guild: retire the previous one
             c = self.bot.get_channel(old[0])
             if c:
@@ -403,8 +527,9 @@ def start_action(preset: str | None, live: str | None, tiles: int | None, urls: 
         a["preset"] = preset
     else:
         clean = parse_urls(urls)
-        if not clean and not live:
-            raise ValueError("Pick a preset, live games, or give at least one URL.")
+        if not clean and not live:   # bare /wall start: the service streams the TV's wall when it's on (else it says what to pick)
+            a["mirror"] = True
+            return a
         a["urls"] = clean
         if live:
             a["live"] = live
@@ -508,21 +633,24 @@ class TeamView(ui.View):
 class PanelView(ui.View):
     """Under the embed: preset, live game → tile, which tile, team / URL / sound, layout + board, start/stop, link."""
 
-    def __init__(self, cog: WallCog, presets: list[dict], games: list[dict]) -> None:
+    def __init__(self, cog: WallCog, presets: list[dict], games: list[dict], persistent: bool = False) -> None:
+        """persistent: the copy registered at startup (bot.add_view) that answers every posted panel by custom_id —
+        values carry what they mean (a preset's name, a game's URL), so it needs no lists of its own."""
         super().__init__(timeout=None)
         self.cog = cog
-        if presets:
-            ps = ui.Select(placeholder="▶ Start a preset…", row=0,
-                           options=[discord.SelectOption(label=p["name"][:100], value=str(i)) for i, p in enumerate(presets[:25])])
-            ps.callback = self._preset_cb(ps, presets)
-            self.add_item(ps)
-        if games:
-            gs = ui.Select(placeholder="🏈 Put a live game on the chosen tile…", row=1,
-                           options=[discord.SelectOption(label=f"{g['league'].upper()} · {g['label']}"[:100], value=str(i))
-                                    for i, g in enumerate(games[:25])])
+        ps = ui.Select(placeholder="▶ Start: same as the TV, or a preset…", row=0, custom_id="wall:preset",
+                       options=[discord.SelectOption(label="📺 Same as the TV", value=TV_CHOICE),
+                                *(discord.SelectOption(label=p["name"][:100], value=p["name"][:100]) for p in presets[:24])])
+        ps.callback = self._preset_cb(ps)
+        self.add_item(ps)
+        if games or persistent:
+            gs = ui.Select(placeholder="🏈 Put a live game on the chosen tile…", row=1, custom_id="wall:game",
+                           options=[discord.SelectOption(label=f"{g['league'].upper()} · {g['label']}"[:100],
+                                                         value=g["url"] if len(g["url"]) <= 100 else str(i))
+                                    for i, g in enumerate(games[:25])] or [discord.SelectOption(label="—", value="-")])
             gs.callback = self._game_cb(gs, games)
             self.add_item(gs)
-        ts = ui.Select(placeholder="Tile for game / team / URL / sound (default: next free)", row=2,
+        ts = ui.Select(placeholder="Tile for game / team / URL / sound (default: next free)", row=2, custom_id="wall:tile",
                        options=[discord.SelectOption(label=f"Tile {k}", value=str(k - 1)) for k in range(1, MAX_TILES + 1)])
         ts.callback = self._tile_cb(ts)
         self.add_item(ts)
@@ -530,16 +658,21 @@ class PanelView(ui.View):
     def _tile_of(self, interaction: discord.Interaction, count: int) -> int:
         return min(self.cog.target.get(str(interaction.user.id), count), count, MAX_TILES - 1)
 
-    def _preset_cb(self, sel: ui.Select, presets: list[dict]):
+    def _preset_cb(self, sel: ui.Select):
         async def cb(interaction: discord.Interaction) -> None:
-            p = presets[int(sel.values[0])]
+            v = sel.values[0]
             await interaction.response.defer(ephemeral=True)
-            await interaction.followup.send(await self.cog.act(interaction, {"op": "start", "preset": p["name"]}), ephemeral=True)
+            action = {"op": "start", "mirror": True} if v == TV_CHOICE else {"op": "start", "preset": v}
+            await interaction.followup.send(await self.cog.act(interaction, action), ephemeral=True)
         return cb
 
     def _game_cb(self, sel: ui.Select, games: list[dict]):
         async def cb(interaction: discord.Interaction) -> None:
-            g = games[int(sel.values[0])]
+            v = sel.values[0]
+            if not v.startswith("http") and not (v.isdigit() and int(v) < len(games)):
+                await interaction.response.send_message("That list is old — press ↻ Refresh or /wall status.", ephemeral=True)
+                return
+            g = {"url": v} if v.startswith("http") else games[int(v)]
             await interaction.response.defer(ephemeral=True)
             st = await self._state(interaction)
             if st is None:
@@ -564,7 +697,7 @@ class PanelView(ui.View):
             await interaction.followup.send(f"Couldn't: {e}", ephemeral=True)
             return None
 
-    @ui.button(label="Team…", style=discord.ButtonStyle.secondary, row=3)
+    @ui.button(label="Team…", style=discord.ButtonStyle.secondary, row=3, custom_id="wall:team")
     async def team(self, interaction: discord.Interaction, _b: ui.Button) -> None:
         try:
             st, teams = await self.cog.svc.state(), await self.cog.svc.teams()
@@ -577,7 +710,7 @@ class PanelView(ui.View):
         i = self._tile_of(interaction, len(st.get("urls") or []))
         await interaction.response.send_message(f"Team for tile {i + 1}:", view=TeamView(self.cog, i, teams), ephemeral=True)
 
-    @ui.button(label="URL…", style=discord.ButtonStyle.secondary, row=3)
+    @ui.button(label="URL…", style=discord.ButtonStyle.secondary, row=3, custom_id="wall:url")
     async def url(self, interaction: discord.Interaction, _b: ui.Button) -> None:
         try:
             st = await self.cog.svc.state()
@@ -589,7 +722,7 @@ class PanelView(ui.View):
             return
         await interaction.response.send_modal(UrlModal(self.cog, self._tile_of(interaction, len(st.get("urls") or []))))
 
-    @ui.button(label="🔊 Sound here", style=discord.ButtonStyle.secondary, row=3)
+    @ui.button(label="🔊 Sound here", style=discord.ButtonStyle.secondary, row=3, custom_id="wall:sound")
     async def sound(self, interaction: discord.Interaction, _b: ui.Button) -> None:
         await interaction.response.defer(ephemeral=True)
         st = await self._state(interaction)
@@ -602,7 +735,7 @@ class PanelView(ui.View):
             return
         await interaction.followup.send(await self.cog.act(interaction, {"op": "sound", "i": i}), ephemeral=True)
 
-    @ui.button(label="Layout", style=discord.ButtonStyle.secondary, row=3)
+    @ui.button(label="Layout", style=discord.ButtonStyle.secondary, row=3, custom_id="wall:layout")
     async def layout(self, interaction: discord.Interaction, _b: ui.Button) -> None:
         await interaction.response.defer(ephemeral=True)
         st = await self._state(interaction)
@@ -612,7 +745,7 @@ class PanelView(ui.View):
         nxt = "full" if cur == "lbar" else "lbar"
         await interaction.followup.send(await self.cog.act(interaction, {"op": "board", "layout": nxt}), ephemeral=True)
 
-    @ui.button(label="Board", style=discord.ButtonStyle.secondary, row=3)
+    @ui.button(label="Board", style=discord.ButtonStyle.secondary, row=3, custom_id="wall:board")
     async def board(self, interaction: discord.Interaction, _b: ui.Button) -> None:
         await interaction.response.defer(ephemeral=True)
         st = await self._state(interaction)
@@ -624,17 +757,22 @@ class PanelView(ui.View):
         nxt = cycle[(cycle.index(cur) + 1) % len(cycle)] if cur in cycle else ""
         await interaction.followup.send(await self.cog.act(interaction, {"op": "board", "board": nxt, "visible": bool(nxt)}), ephemeral=True)
 
-    @ui.button(label="⏹ Stop", style=discord.ButtonStyle.danger, row=4)
+    @ui.button(label="⏹ Stop", style=discord.ButtonStyle.danger, row=4, custom_id="wall:stop")
     async def stop(self, interaction: discord.Interaction, _b: ui.Button) -> None:
         await interaction.response.defer(ephemeral=True)
         await interaction.followup.send(await self.cog.act(interaction, {"op": "stop"}), ephemeral=True)
 
-    @ui.button(label="↻ Refresh", style=discord.ButtonStyle.secondary, row=4)
+    @ui.button(label="↻ Refresh", style=discord.ButtonStyle.secondary, row=4, custom_id="wall:refresh")
     async def refresh(self, interaction: discord.Interaction, _b: ui.Button) -> None:
         await interaction.response.defer()
         await self.cog.refresh(interaction.guild_id)
 
-    @ui.button(label="🔗 Get my link", style=discord.ButtonStyle.primary, row=4)
+    @ui.button(label="📺 Follow the TV", style=discord.ButtonStyle.secondary, row=4, custom_id="wall:follow")
+    async def follow(self, interaction: discord.Interaction, _b: ui.Button) -> None:
+        await interaction.response.defer(ephemeral=True)
+        await interaction.followup.send(await self.cog.act(interaction, {"op": "follow"}), ephemeral=True)
+
+    @ui.button(label="🔗 Get my link", style=discord.ButtonStyle.primary, row=4, custom_id="wall:link")
     async def link(self, interaction: discord.Interaction, _b: ui.Button) -> None:
         await interaction.response.defer(ephemeral=True)
         await interaction.followup.send(await link_message(self.cog.web, interaction.user), ephemeral=True)
