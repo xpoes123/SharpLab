@@ -12,11 +12,12 @@
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html { font-size: calc(100vw / 60); background: var(--bg); }
-body { background: var(--bg); color: var(--ink); font-family: var(--f-display); font-stretch: 84%; overflow: hidden;
+body { background: var(--bg); color: var(--ink); font-family: var(--f-display); font-stretch: 84%; font-variation-settings: "wdth" 84; overflow: hidden;
        width: 100vw; height: 100vh; -webkit-font-smoothing: antialiased; cursor: none; }
-.mono { font-family: var(--f-mono); font-stretch: 100%; }
-.caps { text-transform: uppercase; letter-spacing: 0.06em; font-stretch: 68%; }
-.num { font-variant-numeric: tabular-nums; font-stretch: 68%; font-weight: 800; }
+.mono { font-family: var(--f-mono); font-stretch: 100%; font-variation-settings: normal; }
+.caps { text-transform: uppercase; letter-spacing: 0.06em; font-stretch: 68%; font-variation-settings: "wdth" 68; }
+.num { font-variant-numeric: tabular-nums; font-stretch: 68%; font-variation-settings: "wdth" 68; font-weight: 800; }
+.cond { font-stretch: 68%; font-variation-settings: "wdth" 68; }
 .muted { color: var(--muted); }
 .D { color: var(--dem); } .R { color: var(--rep); } .I { color: var(--ind); }
 

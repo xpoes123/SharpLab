@@ -261,7 +261,7 @@ def test_board_and_overlay(tmp_path):
     assert st["overlay"]["view"] == "full" and d.overlays[-1] == ("full", False)
     assert i.overlay_view()["view"] == "full"
     data = i.overlay_data()
-    assert data["shown"] == "nfl" and data["data"]["kind"] == "scores" and {b["id"] for b in data["boards"]} == {"nfl", "nba"}
+    assert data["shown"] == "nfl" and data["data"]["kind"] == "scores" and {b["id"] for b in data["boards"]} == {"nfl", "nba", "election"}
     assert i.set_board(visible=False)["overlay"]["view"] == ""
     with pytest.raises(WallError):
         i.set_board("fantasy")

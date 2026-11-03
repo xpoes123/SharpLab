@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Key races</title>
+<link rel="stylesheet" href="election.css">
+<style>
+  .rows { position: absolute; left: 1.2rem; right: 1.2rem; top: 4.6rem; bottom: 2.3rem; display: grid; grid-auto-rows: 1fr; gap: 0.55rem; }
+  .row { display: grid; grid-template-columns: 10.5rem 1fr 8.6rem; gap: 1rem; align-items: center; background: var(--surface);
+         border-left: 0.3rem solid var(--rule-strong); padding: 0 0.9rem 0 0.8rem; min-height: 0; }
+  .row.cD { border-left-color: var(--dem); } .row.cR { border-left-color: var(--rep); } .row.cI { border-left-color: var(--ind); }
+  .row.lD { border-left-color: var(--dem-lead); } .row.lR { border-left-color: var(--rep-lead); }
+  .where .st { font-size: 1.45rem; font-stretch: 68%; font-variation-settings: "wdth" 68; font-weight: 800; line-height: 1.05; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .where .of { font-size: 0.8rem; }
+  .cands { display: grid; gap: 0.45rem; min-width: 0; }
+  .c { display: grid; grid-template-columns: 1fr 4.2rem; column-gap: 0.6rem; row-gap: 0.15rem; align-items: center; }
+  .c .nm { font-size: 1.2rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .c .nm small { font-size: 0.8rem; font-weight: 500; color: var(--muted); margin-left: 0.4rem; }
+  .c .pc { font-size: 1.35rem; text-align: right; }
+  .c .tr { grid-column: 1 / -1; height: 0.25rem; background: var(--surface2); }
+  .c .tr i { display: block; height: 100%; transition: width 3s ease-in-out; }
+  .c.lost .nm, .c.lost .pc { color: var(--muted); }
+  .st2 { text-align: right; display: grid; gap: 0.2rem; }
+  .st2 .call { font-size: 1.15rem; font-weight: 800; }
+  .st2 .in { font-size: 0.85rem; }
+  .st2 .by { font-size: 0.72rem; }
+  .empty { position: absolute; inset: 0; display: grid; place-items: center; font-size: 1.6rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="head"><span class="title caps" id="title">Key races</span><span class="sub mono muted" id="sub"></span><span class="clock num" id="clock"></span></div>
+<div id="pages"></div>
+<div class="foot" id="foot"></div>
+<script src="election.js"></script>
+<script>
+"use strict";
+// Key races: CNN's races to watch (Senate + Governors), then the closest House ones once votes are in. PER rows a page,
+// a new page every 12 s (?every=s) with a 2 s crossfade; the data every 30 s (bars ease over 3 s). Uncalled races first,
+// closest margin on top; a called race shows ✓ and whose call it is. ?page=n pins a page (renders, tests).
+const Q = new URLSearchParams(location.search);
+const PER = 5, EVERY = (+Q.get("every") || 12) * 1000, TAG = { S: "Senate", G: "Governor", H: "House" };
+E.tickClock(document.getElementById("clock"));
+let pageNo = +Q.get("page") || 0, groups = [], shown = "";
+
+function pick(races) {
+  const close = (a, b) => (a.called ? 1 : 0) - (b.called ? 1 : 0) || (a.margin ?? 99) - (b.margin ?? 99) || a.label.localeCompare(b.label);
+  const counted = (r) => r.votes > 0;
+  const key = (o) => races.filter((r) => r.office === o && r.watch);
+  const house = races.filter((r) => r.office === "H" && r.watch && counted(r)).sort(close).slice(0, 12);
+  const out = [];
+  for (const [o, rs] of [["S", key("S")], ["G", key("G")], ["H", house]]) {
+    const sorted = rs.slice().sort((a, b) => (counted(b) - counted(a)) || close(a, b));
+    for (let i = 0; i < sorted.length; i += PER) out.push({ o, rows: sorted.slice(i, i + PER), n: Math.ceil(sorted.length / PER), i: i / PER });
+  }
+  return out;
+}
+
+function row(r, now) {
+  const cs = r.cands.slice(0, 2), top = Math.max(1, ...cs.map((c) => c.pct));
+  const status = r.called
+    ? `<span class="call ${r.called}">✓ ${E.PARTY[r.called]}${r.flip ? " flip" : ""}</span><span class="by mono muted">called by ${E.esc(r.caller)}</span>`
+    : r.votes > 0
+      ? `<span class="call ${r.leader}">${E.PARTY[r.leader] || ""} +${(r.margin ?? 0).toFixed(1)}</span><span class="by mono muted">not called</span>`
+      : `<span class="call muted">${r.closes > now ? "Polls open" : "Too early"}</span><span class="by mono muted">${r.closes > now ? "close " + E.clock(r.closes) : "no votes yet"}</span>`;
+  const cls = r.called ? "c" + r.called : r.votes > 0 && r.leader ? "l" + r.leader : "";
+  return `<div class="row ${cls}">
+    <div class="where"><div class="st">${E.esc(r.label.replace(" (special)", ""))}</div><div class="of mono muted caps">${TAG[r.office]}${r.special ? " · special" : ""}${r.uncontested ? " · uncontested" : ""}</div></div>
+    <div class="cands">${cs.map((c) => `<div class="c${r.called && !c.winner ? " lost" : ""}">
+      <span class="nm">${c.winner ? "✓ " : ""}${E.esc(c.name)}<small>${E.PARTY[c.party]}${c.inc ? " · inc." : ""}</small></span>
+      <span class="pc num ${c.party}">${r.votes > 0 ? c.pct.toFixed(1) + "%" : "–"}</span>
+      <span class="tr"><i style="width:${r.votes > 0 ? (100 * c.pct / top).toFixed(1) : 0}%;background:var(--${{ D: "dem", R: "rep" }[c.party] || "ind"})"></i></span>
+    </div>`).join("")}</div>
+    <div class="st2">${status}<span class="in mono">${r.votes > 0 ? Math.round(r.pct) + "% in" : ""}</span></div>
+  </div>`;
+}
+
+function render(data) {
+  groups = pick(data.races || []);
+  document.getElementById("foot").innerHTML = E.footer(data);
+  paint(data);
+}
+
+let last = null;
+function paint(data) {
+  if (data) last = data;
+  const d = last;
+  const box = document.getElementById("pages");
+  if (!d || !groups.length) {
+    box.innerHTML = `<div class="view on"><div class="empty">${d && d.error ? E.esc(d.error) : "Waiting for results…"}</div></div>`;
+    return;
+  }
+  const g = groups[pageNo % groups.length], now = d.now || Date.now() / 1000;
+  document.getElementById("title").textContent = `Key races · ${TAG[g.o] === "Governor" ? "Governors" : TAG[g.o]}`;
+  document.getElementById("sub").textContent = (g.n > 1 ? `${g.i + 1}/${g.n} · ` : "") +
+    (g.rows.some((r) => r.votes > 0) ? "closest first" : E.nextClose(d) || "no votes counted yet");
+  const html = `<div class="rows">${g.rows.map((r) => row(r, now)).join("")}${"<div></div>".repeat(PER - g.rows.length)}</div>`;
+  const key = `${pageNo % groups.length}`;
+  if (key === shown) {   // same page, new numbers: in place (the bars ease), no fade
+    const cur = box.querySelector(".view.on");
+    if (cur) { patch(cur, html); return; }
+  }
+  shown = key;
+  const v = document.createElement("div");
+  v.className = "view";
+  v.innerHTML = html;
+  box.appendChild(v);
+  requestAnimationFrame(() => requestAnimationFrame(() => v.classList.add("on")));
+  for (const old of [...box.children].filter((x) => x !== v)) { old.classList.remove("on"); setTimeout(() => old.remove(), 2200); }
+}
+
+function patch(view, html) {   // keep the elements (so widths transition), copy text / classes / widths over
+  const t = document.createElement("div");
+  t.innerHTML = html;
+  const a = view.querySelectorAll("*"), b = t.firstElementChild.querySelectorAll("*");
+  if (a.length !== b.length || view.firstElementChild.children.length !== t.firstElementChild.children.length) {
+    view.innerHTML = html;
+    return;
+  }
+  a.forEach((el, k) => {
+    const n = b[k];
+    if (el.className !== n.className) el.className = n.className;
+    const mixed = n.children.length && [...n.childNodes].some((x) => x.nodeType === 3 && x.textContent.trim());
+    if (mixed) { if (el.innerHTML !== n.innerHTML) el.innerHTML = n.innerHTML; }
+    else if (!n.children.length && el.textContent !== n.textContent) el.textContent = n.textContent;
+    if (n.getAttribute("style") !== el.getAttribute("style")) el.setAttribute("style", n.getAttribute("style") || "");
+  });
+}
+
+E.poll(render);
+if (!Q.has("page")) setInterval(() => { pageNo++; paint(); }, EVERY);
+</script>
+</body>
+</html>

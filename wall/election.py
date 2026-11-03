@@ -71,7 +71,8 @@ def party(code: str | None) -> str:
 def race(office: str, state: str, district: int | None, special: bool, cands: list[dict], *, pct: float, votes: int,
          called: str, caller: str, flip: bool, watch: bool, rating: str = "", closes: float = 0, uncontested: bool = False) -> dict:
     """The one race shape every source becomes (and the pages + the board read)."""
-    cands = sorted(cands, key=lambda c: (-(c["votes"] or 0), not c["winner"], c["name"]))
+    # most votes first; before any: the winner, the major parties, incumbents, then the feed's own order (sorted is stable)
+    cands = sorted(cands, key=lambda c: (-(c["votes"] or 0), not c["winner"], c["party"] not in ("D", "R"), not c["inc"]))
     if votes > 0:
         tot = sum(c["votes"] for c in cands) or 1
         for c in cands:

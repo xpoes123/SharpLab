@@ -30,7 +30,7 @@ def test_the_engine_leaves_data_tiles_alone(monkeypatch):
     """No video on the page: the CDP round is skipped, so "stuck" can never turn into a reload loop."""
     fake = FakeCdp({"t": 10.0, "paused": False, "ended": False, "ready": 1, "buffered": [], "seekable_end": 0})
     monkeypatch.setattr(engine, "cdp_page", fake)
-    monkeypatch.setattr(engine.subprocess, "Popen", lambda *a, **k: type("P", (), {"pid": 1, "poll": lambda s: None})())
+    monkeypatch.setattr(engine.subprocess, "Popen", lambda *a, **k: type("P", (), {"pid": 1, "poll": lambda s: 0})())
     monkeypatch.setattr(engine.threading, "Thread", lambda **kw: type("T", (), {"start": lambda self: None})())
     monkeypatch.setattr(engine, "kwin", lambda *a, **k: None)
     monkeypatch.setattr(engine, "sink_inputs", lambda env: [])
@@ -52,7 +52,6 @@ def test_the_engine_leaves_data_tiles_alone(monkeypatch):
     assert d.sound == 1                                  # …a data tile never takes the sound
     d.set_tile(0, "https://a.tv/x")
     assert d.pages == set()
-    d.stop = lambda: None
 
 
 def test_discord_may_stream_our_pages_and_tiles_may_read_them(api):
