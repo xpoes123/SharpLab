@@ -227,3 +227,8 @@ def test_neutral_hours_hold_polarizing_streams(monkeypatch):
     monkeypatch.setenv("WALL_NEUTRAL_UNTIL", "9999999999")
     act, _, msg = wall_jev.plan(sid("Fox News"), "put fox on", {"urls": ["a", "b", nbc, "c"], "sound": 2})
     assert act is None and "network coverage" in msg
+
+
+def test_switch_audio_goes_to_the_other_stream():
+    w = {"urls": [wall_jev.OWN + "turnout", wall_jev.OWN + "races", "https://y/a", "https://y/b"], "sound": 3}
+    assert wall_jev.plan("x_sound", "jev switch audio", w)[0] == {"op": "sound", "i": 2, "label": "tile 3"}

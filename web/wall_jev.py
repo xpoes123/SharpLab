@@ -56,6 +56,8 @@ def criteria() -> dict[str, str]:
         # anchors as example phrases ("kornacki"): Jev resolves those, not a hosts list (0.48 → 0.94 live)
         ex = [s["name"].lower()] + [h.split()[-1].lower() for h in s.get("hosts", "").split(", ") if h]
         out[k] = f"the {s['name']} live stream ({s['group']}), e.g. " + ", ".join(f"'{e}'" for e in ex)
+    out["x_sound"] = ("move the sound to the other stream that's already up, without naming a new one, e.g. 'switch audio', "
+                      "'this one is on break, switch the sound', 'other audio', 'swap sound'")
     out["none"] = "not a request to change what the wall shows, or unclear which screen or stream they mean"
     return out
 
@@ -96,6 +98,12 @@ def plan(choice: str, text: str, wall: dict | None) -> tuple[dict | None, str, s
         same = {i for i in (0, 1) if i < len(urls) and _kind(urls[i]) == _kind(url)}
         i = next(iter(sorted(same)), 1)   # a map replaces the map: the dashboards never show two of a kind
         return {"op": "tile", "i": i, "url": url, "label": name}, name, ""
+    if choice == "x_sound":   # the other stream tile (3 ↔ 4)
+        vids = [i for i, u in enumerate(urls) if i >= 2 and not u.startswith(OWN)]
+        k = next((i for i in vids if i != w.get("sound")), None)
+        if k is None:
+            return None, "", "🎧 DJ Jev: no other stream to switch the sound to"
+        return {"op": "sound", "i": k, "label": f"tile {k + 1}"}, f"tile {k + 1}", ""
     s = streams().get(choice)
     if not s:
         return None, "", HELP
