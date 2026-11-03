@@ -1,0 +1,25 @@
+# The wall engine (docs/wall-service.md) on the homelab, as davidj's user unit next to tv.service:
+#   git clone https://github.com/xpoes123/SharpLab.git ~/SharpLab && cd ~/SharpLab && uv sync
+#   cp deploy/sharplab-wall.service ~/.config/systemd/user/ && systemctl --user daemon-reload
+#   systemctl --user enable --now sharplab-wall.service
+# Deploy = git pull + uv sync + systemctl --user restart sharplab-wall (stops both walls; check the TV isn't on the wall).
+# Gets WAYLAND_DISPLAY / DBUS_SESSION_BUS_ADDRESS from the graphical session, like tv.service.
+[Unit]
+Description=SharpLab wall engine (TV wall + headless Discord wall, HLS)
+PartOf=graphical-session.target
+After=graphical-session.target pipewire.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/SharpLab
+# WALL_API_TOKEN=… (same value as WALL_API_TOKEN on the VPS bot + web); optional WALL_* knobs (docs/wall-service.md)
+EnvironmentFile=%h/SharpLab/.env.wall
+ExecStart=%h/SharpLab/.venv/bin/python -m wall.server
+# children (tiles, nested kwin, gst, ffmpeg) are ended by the service itself on stop; the cgroup catches the rest
+KillMode=mixed
+TimeoutStopSec=20
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target

@@ -21,3 +21,4 @@ discord_chat/
 
 # deploy announcer marker (VPS-local)
 .last_announced_sha
+.env.wall
