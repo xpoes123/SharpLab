@@ -901,7 +901,7 @@ def test_public_me_is_data_only_and_the_key_still_offers_the_join(public):
     assert client.get("/api/v1/wall/me").json()["tier"] == "member"
 
 
-def test_public_gets_no_stream_and_no_live_games(public, monkeypatch):
+def test_public_gets_the_stream_but_no_live_games(public, monkeypatch):
     client, *_ = public
     calls = []
 
@@ -911,10 +911,10 @@ def test_public_gets_no_stream_and_no_live_games(public, monkeypatch):
     monkeypatch.setattr(wall, "fetch_upstream", upstream)
     wall._cache.clear()
     client.cookies.clear()
-    assert client.get("/api/v1/wall/hls/index.m3u8").status_code == 401
-    assert client.get("/api/v1/wall/hls/seg000001.ts").status_code == 401
+    assert client.get("/api/v1/wall/hls/index.m3u8").status_code != 401
+    assert client.get("/api/v1/wall/hls/seg000001.ts").status_code != 401
     assert client.get("/api/v1/wall/games").status_code == 401
-    assert calls == []
+    assert calls == ["index.m3u8", "seg000001.ts"]   # public mode: the stream is shared too
     join_as_guest(client, "Kim")
     assert client.get("/api/v1/wall/hls/index.m3u8").status_code == 200   # a friend watches
 
@@ -925,7 +925,7 @@ def test_old_guest_cookies_without_a_tier_are_public(public):
     client.cookies.clear()
     client.cookies.set(wall.GUEST_COOKIE, old)
     assert client.get("/api/v1/wall/me").json()["tier"] == "public"
-    assert client.get("/api/v1/wall/hls/index.m3u8").status_code == 401
+    assert client.get("/api/v1/wall/hls/index.m3u8").status_code == 200
     forged = wall._guest_signer.dumps({"id": "g-0123456789ab", "name": "Kim", "k": "nope", "t": "friend"})
     client.cookies.set(wall.GUEST_COOKIE, forged)
     assert client.get("/api/v1/wall/me").json()["tier"] == "public"   # a friend cookie for another key: public too
@@ -979,7 +979,7 @@ def test_public_socket_is_refused_without_public_mode(demo):
 def test_public_msg_filters_broadcasts():
     assert wall.public_msg({"t": "viewers", "list": [{"id": "1"}]}) is None
     assert wall.public_msg({"t": "proposal", "p": {}}) is None
-    assert wall.public_msg({"t": "wall", "state": {}}) is None
+    assert wall.public_msg({"t": "wall", "state": {"running": True, "origin": {"channel": "1"}}}) == {"t": "wall", "state": {"running": True}}
     assert wall.public_msg({"t": "chat", "msg": {"id": -1, "text": "⏱ x", "private": True}}) is None   # owner alerts
     assert wall.public_msg({"t": "del", "id": 4}) == {"t": "del", "id": 4}
 
@@ -988,7 +988,7 @@ def test_wall_page_nav_is_hidden_until_a_member_and_has_no_discord_invite():
     from pathlib import Path
     static = Path(__file__).resolve().parents[1] / "web" / "static"
     html = (static / "wall.html").read_text()
-    assert '<nav class="nav" id="topNav" hidden>' in html and "Live election data · watch party is invite-only" in html
+    assert '<nav class="nav" id="topNav" hidden>' in html and "Live election wall · chat and votes are for the watch party" in html
     assert 'j.tier === "member"' in (static / "wall.js").read_text()
     assert 'class="nav" id="topNav" hidden' in (static / "pulse.html").read_text()
     for f in static.glob("*.html"):

@@ -361,9 +361,7 @@
 .public-note { margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px;
   color: var(--muted); font-size: 13px; text-align: center; }
 .pub-login { font-size: 13px; color: var(--muted); }
-body.public .player, body.public .controls, body.public .viewers, body.public #props,
-body.public #chatForm, body.public #muteBtn, body.public #vol, body.public #fsBtn, body.public #pipBtn,
-body.public #sync, body.public #wallName, body.public #mirror, body.public #unmute, body.public #chatToggle { display: none !important; }
+body.public .controls, body.public .viewers, body.public #props { display: none !important; }
 @media (max-width: 700px) and (orientation: portrait), (max-width: 700px) and (min-height: 501px) {
   body.public.inroom #wall { flex-direction: column; }
   body.public.inroom #room { flex: 1; display: block; overflow-y: auto; padding: 8px; }
