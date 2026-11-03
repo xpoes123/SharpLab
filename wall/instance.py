@@ -116,7 +116,7 @@ class Instance:
     # ---- start / stop --------------------------------------------------------------------------------------------------
     def start(self, preset: int | str | None = None, urls: list[str] | None = None, live: str = "", tiles: int = 4,
               board: str | None = None, layout: str | None = None, sound: int = 0, follow: bool = False,
-              origin: dict | None = None, fixed: bool = False) -> dict:
+              origin: dict | None = None, fixed: bool = False, app: str | None = None) -> dict:
         p = self.store.find(preset) if preset is not None else None
         if preset is not None and p is None:
             raise WallError(f"no preset {preset!r}")
@@ -150,7 +150,9 @@ class Instance:
                     raise WallError(f"no {LEAGUES[live]} games on now or later today")
         if not urls:
             raise WallError("needs 1–4 URLs, a preset or live games")
-        app = self._ask_app()   # the TV OS on its wall app now = it started this wall (an HTTP call: outside the lock)
+        # the TV OS on its wall app now = it started this wall. The TV OS says so itself (app="wall") when it starts us: it
+        # calls synchronously, so asking its /healthz back would wait out our 2 s timeout — and its own 2 s, failing the start
+        app = app if app is not None else self._ask_app()   # an HTTP call: outside the lock
         with self.lock:
             self._stop_locked("")
             if self.headless:

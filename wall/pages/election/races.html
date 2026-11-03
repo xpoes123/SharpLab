@@ -1,18 +1,21 @@
 <!doctype html>
 <html lang="en">
-<head>
+<head><link rel="stylesheet" href="https://share.djiang.xyz/ui/ui.css">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Key races</title>
 <link rel="stylesheet" href="election.css">
 <style>
   .rows { position: absolute; left: 1.2rem; right: 1.2rem; top: 4.6rem; bottom: 2.3rem; display: grid; grid-auto-rows: 1fr; gap: 0.55rem; }
-  .row { display: grid; grid-template-columns: 10.5rem 1fr 8.6rem; gap: 1rem; align-items: center; background: var(--surface);
+  .row { display: grid; grid-template-columns: 13.5rem 1fr 8.6rem; gap: 1rem; align-items: center; background: var(--surface);
          border-left: 0.3rem solid var(--rule-strong); padding: 0 0.9rem 0 0.8rem; min-height: 0; }
   .row.cD { border-left-color: var(--dem); } .row.cR { border-left-color: var(--rep); } .row.cI { border-left-color: var(--ind); }
   .row.lD { border-left-color: var(--dem-lead); } .row.lR { border-left-color: var(--rep-lead); }
   .where .st { font-size: 1.45rem; font-stretch: 68%; font-variation-settings: "wdth" 68; font-weight: 800; line-height: 1.05; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .where .st.long { font-size: 1.3rem; }
   .where .of { font-size: 0.8rem; }
+  /* a page change: the old page fades out, then the new one fades in — never two pages on screen at once */
+  #pages .view { transition: opacity 0.6s ease-in-out; }
   .cands { display: grid; gap: 0.45rem; min-width: 0; }
   .c { display: grid; grid-template-columns: 1fr 4.2rem; column-gap: 0.6rem; row-gap: 0.15rem; align-items: center; }
   .c .nm { font-size: 1.2rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -42,7 +45,7 @@
 <script>
 "use strict";
 // Key races: CNN's races to watch (Senate + Governors), then the closest House ones once votes are in. PER rows a page,
-// a new page every 12 s (?every=s) with a 2 s crossfade; the data every 30 s (bars ease over 3 s). Uncalled races first,
+// a new page every 12 s (?every=s): the old one fades out, then the new one in (0.6 s each); the data every 30 s (bars ease over 3 s). Uncalled races first,
 // closest margin on top; a called race shows ✓ and whose call it is. ?page=n pins a page (renders, tests).
 // A race an opted-in member holds a Kalshi position in gets a small chip under its name ("Hansen YES D"; data.holders).
 const Q = new URLSearchParams(location.search);
@@ -78,7 +81,7 @@ function row(r, now, holders) {
       : `<span class="call muted">${r.closes > now ? "Polls open" : "Too early"}</span><span class="by mono muted">${r.closes > now ? "close " + E.clock(r.closes) : "no votes yet"}</span>`;
   const cls = r.called ? "c" + r.called : r.votes > 0 && r.leader ? "l" + r.leader : "";
   return `<div class="row ${cls}">
-    <div class="where"><div class="st">${E.esc(r.label.replace(" (special)", ""))}</div><div class="of mono muted caps">${TAG[r.office]}${r.special ? " · special" : ""}${r.uncontested ? " · uncontested" : ""}</div>${chips(r, holders)}</div>
+    <div class="where"><div class="st${r.label.replace(" (special)", "").length > 11 ? " long" : ""}">${E.esc(r.label.replace(" (special)", ""))}</div><div class="of mono muted caps">${TAG[r.office]}${r.special ? " · special" : ""}${r.uncontested ? " · uncontested" : ""}</div>${chips(r, holders)}</div>
     <div class="cands">${cs.map((c) => `<div class="c${r.called && !c.winner ? " lost" : ""}">
       <span class="nm">${c.winner ? "✓ " : ""}${E.esc(c.name)}<small>${E.PARTY[c.party]}${c.inc ? " · inc." : ""}</small></span>
       <span class="pc num ${c.party}">${r.votes > 0 ? c.pct.toFixed(1) + "%" : "–"}</span>
@@ -104,23 +107,36 @@ function paint(data) {
     return;
   }
   const g = groups[pageNo % groups.length], now = d.now || Date.now() / 1000;
-  document.getElementById("title").textContent = `Key races · ${TAG[g.o] === "Governor" ? "Governors" : TAG[g.o]}`;
-  document.getElementById("sub").textContent = (g.n > 1 ? `${g.i + 1}/${g.n} · ` : "") +
-    (g.rows.some((r) => r.votes > 0) ? "closest first" : E.nextClose(d) || "no votes counted yet");
+  const heads = () => {
+    document.getElementById("title").textContent = `Key races · ${TAG[g.o] === "Governor" ? "Governors" : TAG[g.o]}`;
+    document.getElementById("sub").textContent = (g.n > 1 ? `${g.i + 1}/${g.n} · ` : "") +
+      (g.rows.some((r) => r.votes > 0) ? "closest first" : E.nextClose(d) || "no votes counted yet");
+  };
   const html = `<div class="rows">${g.rows.map((r) => row(r, now, d.holders)).join("")}${"<div></div>".repeat(PER - g.rows.length)}</div>`;
   const key = `${pageNo % groups.length}`;
-  if (key === shown) {   // same page, new numbers: in place (the bars ease), no fade
-    const cur = box.querySelector(".view.on");
-    if (cur) { patch(cur, html); return; }
+  if (key === shown) {   // same page, new numbers: in place (the bars ease), no fade; mid-swap: the page about to come
+    if (pending !== null) { pending = html; return; }
+    const cur = box.querySelector(".view");
+    if (cur) { heads(); patch(cur, html); return; }
   }
   shown = key;
-  const v = document.createElement("div");
-  v.className = "view";
-  v.innerHTML = html;
-  box.appendChild(v);
-  requestAnimationFrame(() => requestAnimationFrame(() => v.classList.add("on")));
-  for (const old of [...box.children].filter((x) => x !== v)) { old.classList.remove("on"); setTimeout(() => old.remove(), 2200); }
+  pending = html;
+  const swap = ++swaps;
+  const olds = [...box.children];
+  olds.forEach((o) => o.classList.remove("on"));
+  setTimeout(() => {   // fade out (0.6 s) → then the new page fades in: the two never overlap
+    if (swap !== swaps) return;
+    olds.forEach((o) => o.remove());
+    heads();
+    const v = document.createElement("div");
+    v.className = "view";
+    v.innerHTML = pending;
+    pending = null;
+    box.appendChild(v);
+    requestAnimationFrame(() => requestAnimationFrame(() => v.classList.add("on")));
+  }, olds.length ? 650 : 0);
 }
+let swaps = 0, pending = null;
 
 function patch(view, html) {   // keep the elements (so widths transition), copy text / classes / widths over
   const t = document.createElement("div");

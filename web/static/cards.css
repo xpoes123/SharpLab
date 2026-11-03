@@ -2,11 +2,11 @@
    Builds on hqstyle.css (shared vars/header/nav). Only card-specific styling here. */
 
 :root {
-  --r-common:    #7884b0;  /* gray  */
+  --r-common:    var(--muted);  /* gray  */
   --r-uncommon:  var(--green);  /* green */
   --r-rare:      var(--blue);  /* blue  */
-  --r-epic:      #bb9af7;  /* purple*/
-  --r-legendary: #e0af68;  /* gold  */
+  --r-epic:      var(--purple);  /* purple*/
+  --r-legendary: var(--warn);  /* gold  */
 }
 
 /* ── Tab bar ── */

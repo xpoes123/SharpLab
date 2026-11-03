@@ -17,7 +17,7 @@
   font-variant-numeric: tabular-nums; }
 .stat.par .v { color: var(--accent2); }
 
-.stage { background: var(--panel2, #1f2335); border: 1px solid var(--line); border-radius: 18px; padding: 16px;
+.stage { background: var(--panel2, var(--surface-2)); border: 1px solid var(--line); border-radius: 18px; padding: 16px;
   display: flex; justify-content: center; }
 
 .actions { display: flex; gap: 10px; }

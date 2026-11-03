@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
+<head><link rel="stylesheet" href="https://share.djiang.xyz/ui/ui.css">
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>SharpLab HQ — Prisoner's Dilemma</title>
@@ -47,7 +47,7 @@
   .pd-copyhint { font-size: 12px; color: var(--muted); }
 
   .pd-status { text-align: center; color: var(--muted); font-size: 14px; margin: 10px 0; }
-  .disconn { text-align: center; color: var(--warn, #e0af68); font-size: 13px; margin: 10px 0; }
+  .disconn { text-align: center; color: var(--warn, var(--warn)); font-size: 13px; margin: 10px 0; }
 
   /* Scoreboard */
   .scorebar { display: flex; gap: 12px; margin: 4px 0 18px; }
@@ -59,7 +59,7 @@
   .scorecard .sc-pts { font-size: 34px; font-weight: 800; font-family: var(--font-mono);
     color: var(--accent2); margin-top: 2px; }
   .scorecard.you .sc-pts { color: var(--accent); }
-  .scorecard .sc-off { font-size: 11px; color: var(--warn, #e0af68); }
+  .scorecard .sc-off { font-size: 11px; color: var(--warn, var(--warn)); }
 
   .pd-round-label { font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
     color: var(--muted); margin: 22px 0 10px; text-align: center; }
@@ -74,7 +74,7 @@
   .choice-btn .cb-name { font-size: 17px; font-weight: 800; margin-top: 6px; }
   .choice-btn .cb-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
   .choice-btn.coop.sel { border-color: #3fb950; background: color-mix(in srgb, #3fb950 16%, var(--panel)); }
-  .choice-btn.defect.sel { border-color: #f7768e; background: color-mix(in srgb, #f7768e 16%, var(--panel)); }
+  .choice-btn.defect.sel { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 16%, var(--panel)); }
   .choice-btn:disabled { cursor: not-allowed; opacity: .55; transform: none; }
 
   .waitbox { text-align: center; background: var(--panel); border: 1px solid var(--line);
@@ -90,7 +90,7 @@
   .reveal-card .rc-name { font-size: 12px; color: var(--muted); font-weight: 700; }
   .reveal-card .rc-move { font-size: 22px; font-weight: 800; margin: 6px 0 2px; }
   .reveal-card .rc-move.C { color: #3fb950; }
-  .reveal-card .rc-move.D { color: #f7768e; }
+  .reveal-card .rc-move.D { color: var(--bad); }
   .reveal-card .rc-pts { font-size: 30px; font-weight: 800; font-family: var(--font-mono); color: var(--accent2); }
   .reveal-card .rc-plus { font-size: 12px; color: var(--muted); }
   .reveal-verdict { text-align: center; font-size: 14px; color: var(--muted); margin: 8px 0 4px; }
@@ -101,7 +101,7 @@
   .histbox .hrow { margin: 3px 0; white-space: nowrap; overflow-x: auto; }
   .histbox .hlabel { color: var(--muted); display: inline-block; width: 52px; }
   .histbox .mv.C { color: #3fb950; font-weight: 700; }
-  .histbox .mv.D { color: #f7768e; font-weight: 700; }
+  .histbox .mv.D { color: var(--bad); font-weight: 700; }
   .histbox .empty { color: var(--muted); }
 
   .result-hero { text-align: center; background: linear-gradient(100deg,
