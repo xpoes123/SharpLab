@@ -282,8 +282,12 @@
     if (!a || !a.label) return null;
     const txt = { coverage: "● on air", ad: "ad", break: "⏸ break", offtopic: "off-topic" }[a.label];
     if (!txt) return null;
-    const b = el("span", "small " + (a.label === "coverage" ? "live-on" : "muted"), txt);
-    b.title = (a.tail ? `“…${a.tail}”` : "") + (a.confidence ? ` (${Math.round(a.confidence * 100)}%)` : "");
+    // the break forecast (wall/breaks.py + Jev's "soon"): only while on air
+    const ck = a.clock || {};
+    const hint = a.label !== "coverage" ? "" : (a.soon || 0) >= 0.6 ? " · break soon" : ck.next_likely ? ` · break likely ${ck.next_likely}` : "";
+    const b = el("span", "small " + (a.label === "coverage" ? "live-on" : "muted"), txt + hint);
+    b.title = (a.tail ? `“…${a.tail}”` : "") + (a.confidence ? ` (${Math.round(a.confidence * 100)}%)` : "") +
+      (ck.n_breaks ? ` · ${ck.n_breaks} breaks seen, ${Math.round((ck.p_soon || 0) * 100)}% one starts in ~1 min` : "");
     return b;
   }
   function starBtn(url, label) {

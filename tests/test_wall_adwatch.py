@@ -360,7 +360,7 @@ def test_classify_jev_first_escalates_when_unsure(monkeypatch):
 
     answers = {"anchors": {"label": "coverage", "confidence": 0.97}, "mumble": {"label": "ad", "confidence": 0.4}}
 
-    async def jev(text):
+    async def jev(text, recent=""):
         return answers.get(text)
 
     monkeypatch.setattr(wel, "_classify_llm", llm)
