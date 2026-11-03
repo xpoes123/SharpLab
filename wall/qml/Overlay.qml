@@ -17,8 +17,9 @@
 //            room — the L-bar's corner while the L-bar is up, else the whole screen (lbar.js wallBands): BandLayer.qml.
 //            A header per tile (its game as of now − its delay; the board's own delayed copy wins when it has the game,
 //            so header and sidebar agree), a calm backdrop, and without the L-bar the other games + the chat.
-//   speaker: (polls the same /bands) one transparent surface over the tiles' area: a small badge in the corner of the tile
-//            with the sound (SpeakerBadge.qml), fading when the sound moves; none with < 2 video tiles (bands.speaker).
+//   speaker: (polls the same /bands) one transparent surface over the tiles' area: a chip in the corner of every stream
+//            tile with the outlet's name (bands tiles[].name), and the 🔊 on the tile with the sound (SpeakerBadge.qml),
+//            fading when the sound moves; no 🔊 with < 2 video tiles (bands.speaker), no chip on our /p/ pages.
 //   tvchat:  (the same /bands) one transparent surface over the tiles' area: the watch party's chat floating at its top
 //            right, Twitch-style (ChatFloat.qml), while the owner's toggle (bands.tvchat.on) is on.
 //   qml6 Overlay.qml -- --api http://127.0.0.1:7790 --bets http://127.0.0.1:7795/i/tv
@@ -200,7 +201,8 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
         flags: Qt.FramelessWindowHint | Qt.WindowTransparentForInput | Qt.WindowDoesNotAcceptFocus
         width: app.spkArea ? app.spkArea.w : 1
         height: app.spkArea ? app.spkArea.h : 1
-        visible: app.spkArea !== null && app.hostOk && app.bands.on !== false && !!app.bands.speaker
+        visible: app.spkArea !== null && app.hostOk && app.bands.on !== false
+            && (!!app.bands.speaker || (app.bands.tiles || []).some(function (t) { return !!t.name }))
             && app.layout !== "full" && app.layout !== "matchup"
         LayerShell.Window.scope: "tv-overlay"
         LayerShell.Window.layer: LayerShell.Window.LayerOverlay

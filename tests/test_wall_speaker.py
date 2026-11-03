@@ -104,3 +104,31 @@ def test_badge_renders_on_the_sound_tile(tmp_path, n, sound, lbar):
     keep = os.environ.get("WALL_SPEAKER_PNG")   # a dir: keep the renders to look at
     if keep:
         shutil.copy(on, Path(keep) / f"speaker-{n}-{sound}-{'lbar' if lbar else 'full'}.png")
+
+
+# ---- the outlet's name on every stream tile (bands tiles[].name, the same chip as the 🔊) ----------------------------------
+def test_stream_names_catalog_local_pool_handle():
+    from wall.bands import stream_name
+    yt = lambda h: f"https://www.youtube.com/@{h}/live"   # noqa: E731
+    assert stream_name(yt("TheYoungTurks")) == "TYT"                     # the Spectrum catalog
+    assert stream_name(yt("abc3340")) == "ABC 33/40 Birmingham"          # the local news list
+    assert stream_name(yt("PBSNewsHour")) == "PBS NewsHour"              # the ad-skip pool
+    assert stream_name(yt("SomeChannel")) == "@SomeChannel"              # else the handle
+    assert stream_name(MAP) is None and stream_name("https://example.com/x") is None and stream_name("") is None
+
+
+def test_build_view_names_each_tile():
+    urls = [MAP, "https://www.youtube.com/@abc3340/live"]
+    v = build_view(urls=urls, games=[], sound=1, lbar=False, view="", title="", live_league="",
+                   scores=type("S", (), {"get": lambda self, lg, fresh=False: None})(), tape=ScoreTape(), now=1000)
+    assert [t["name"] for t in v["tiles"]] == [None, "ABC 33/40 Birmingham"]
+
+
+@pytest.mark.skipif(shutil.which("qml6") is None, reason="qml6 not installed")
+def test_name_chips_render_without_a_speaker(tmp_path):
+    named = {**bands(2, 0, False), "speaker": None}
+    named["tiles"] = [{**t, "name": n} for t, n in zip(named["tiles"], ["NBC News", "Fox News"])]
+    on, off = tmp_path / "on.png", tmp_path / "off.png"
+    assert render(tmp_path, named, on) == []
+    assert render(tmp_path, {**named, "tiles": [{**t, "name": None} for t in named["tiles"]]}, off) == []
+    assert on.read_bytes() != off.read_bytes()

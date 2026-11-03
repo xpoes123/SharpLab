@@ -1,5 +1,5 @@
 // The watch party's chat floating over the tiles, Twitch-style: a short stack at the top right of the tiles' area (under
-// the speaker badge's row, right edges lined up with it), newest at the bottom, at most 6 lines. Each line = a bold name +
+// the tile chips' row — the outlet's name + 🔊, SpeakerBadge.qml — right edges lined up with it), newest at the bottom, at most 6 lines. Each line = a bold name +
 // the text, white with a dark outline and a soft shadow, no box; Jev's / the wall's notices (sys) in the accent colour.
 // A line fades in when it arrives and out ~20 s later. Only fresh lines ever show (bands.py chat_lines: < 20 s old), so
 // nothing old comes up on a start or when the owner turns it back on. The data is /bands' tvchat {on, lines}
@@ -17,14 +17,14 @@ Item {
     readonly property int maxLines: 6
     readonly property int lifeMs: 20000
     readonly property bool live: shown && !!b && !!b.tvchat && b.tvchat.on === true && !!area && b.n > 0
-    // the top-right tile and the speaker badge's size on it (SpeakerBadge.qml: d, inset 0.6 d)
+    // the top-right tile and its name chip's height (SpeakerBadge.qml: d, inset 0.6 d)
     readonly property var tr: {
         if (!area || !b || !(b.n > 0)) return null
         var t = G.wallTiles(b.n, area), y0 = Math.min.apply(null, t.map(function (r) { return r.y })), best = null
         for (var i = 0; i < t.length; i++) if (t[i].y === y0 && (!best || t[i].x + t[i].w > best.x + best.w)) best = t[i]
         return best
     }
-    readonly property real d: tr ? Math.round(Math.max(0.025 * tr.w, 1.5 * unit / 120)) : 0
+    readonly property real d: tr ? G.chipH(tr.w, unit) : 0
     readonly property real fontPx: Math.round(unit * 0.0175)
 
     ListModel { id: lines }
@@ -61,7 +61,7 @@ Item {
         width: cf.tr ? Math.min(cf.unit * 0.27, cf.tr.w - 1.2 * cf.d) : 0
         height: col.implicitHeight
         x: cf.tr ? cf.tr.x + cf.tr.w - 0.6 * cf.d - width : 0
-        y: cf.tr ? cf.tr.y + 2.1 * cf.d : 0          // under the badge row (0.6 d inset + d) with a 0.5 d gap
+        y: cf.tr ? cf.tr.y + 2.1 * cf.d : 0          // under the chip row (0.6 d inset + d) with a 0.5 d gap
         Column {
             id: col
             width: parent.width
