@@ -154,7 +154,7 @@
   // Starts once wall.js knows who's watching (window.__wallMe / "wall:me"). Friends (the keyed link's guests) and
   // public viewers get the panel read-only: no Kalshi key here to share.
   async function start(who) {
-    if (!who || me) return;
+    if (!who || me || who.tier !== "member") return;   // members' bets: SharpLab members only
     const r = await api("/me");
     if (!r.ok) return;
     me = { ...r.j, uid: who.id || "-" };

@@ -205,8 +205,9 @@ async def snapshot(wait_s: float = 8.0) -> dict:
 
 # ---- the views ------------------------------------------------------------------------------------------------------------
 def positions_for(user: dict | None, snap: dict) -> list[dict] | None:
-    """Members' election rows (opt-in filtered), with race status from these results. None for a guest."""
-    if not user:
+    """Members' election rows (opt-in filtered), with race status from these results. None for anyone but a SharpLab member
+    (friends' links and the public never see members' positions)."""
+    if not user or user.get("guest") or user.get("public"):
         return None
     b = wall_bets.bets
     b.want()

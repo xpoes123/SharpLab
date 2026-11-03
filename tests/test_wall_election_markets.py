@@ -301,9 +301,9 @@ def test_members_friends_and_public_all_see_markets_and_positions(eenv, monkeypa
     assert sga["markets"]                                                                   # and the public data, of course
     guest(client, monkeypatch)
     g = client.get("/api/v1/wall/election/state/GA")
-    assert g.status_code == 200 and {p["who"] for p in g.json()["positions"]} == {"Hansen"}  # a friend: like a member
+    assert g.status_code == 200 and "positions" not in g.json()                         # a friend: markets, no positions
     assert next(r for r in g.json()["races"] if r["id"] == "S-GA")["markets"]
-    assert "positions" in client.get("/api/v1/wall/election/control/S").json()
+    assert "positions" not in client.get("/api/v1/wall/election/control/S").json()
     m = client.get("/api/v1/wall/election/map").json()
     assert m["member"] is True and m["public"] is False and m["races"] and "cands" not in m["races"][0]
     assert client.get("/api/v1/wall/election/chart/S-GA").status_code == 200
@@ -312,7 +312,7 @@ def test_members_friends_and_public_all_see_markets_and_positions(eenv, monkeypa
         assert client.get("/api/v1/wall/election" + path).status_code == 401
     monkeypatch.setenv("WALL_GUEST_OPEN", "1")                                               # public mode: every read
     p = client.get("/api/v1/wall/election/state/GA").json()
-    assert {x["who"] for x in p["positions"]} == {"Hansen"} and all("uid" not in x for x in p["positions"])
+    assert "positions" not in p
     assert next(r for r in p["races"] if r["id"] == "S-GA")["markets"]
     m = client.get("/api/v1/wall/election/map").json()
     assert m["member"] is False and m["public"] is True and m["owner"] is False
