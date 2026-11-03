@@ -3,7 +3,7 @@
 // --out, saves a PNG after a few seconds and quits.
 //   QT_QPA_PLATFORM=offscreen qml6 Preview.qml -- --layout lbar|full|matchup --board nfl --size 2560x1440 --out /tmp/ov.png
 //   --tiles a.png,b.png,c.png = real frames on the tiles (laid out like the wall); --bets <url> = the bets badges + delays
-//   --n 2 = that many stand-in tiles (lbar.js); --bands <url> (default: --bets) = the band layer around them (Bands.qml);
+//   --n 2 = that many stand-in tiles (lbar.js); --bands <url> (default: --bets) = the band layer around them (BandLayer.qml);
 //   --layout none = no L-bar / board (the tiles over the whole screen)
 import QtQuick
 import QtQuick.Window
@@ -36,7 +36,7 @@ Window {
             x: r.x; y: r.y; width: r.w; height: r.h; source: "file://" + modelData; fillMode: Image.PreserveAspectCrop
         }
     }
-    readonly property var tileRects: G.wallTiles(Number(arg("--n", "4")), G.wallArea(width, height, lbar))
+    readonly property var tileRects: G.wallTiles(w.bands && w.bands.n > 0 ? w.bands.n : Number(arg("--n", "4")), G.wallArea(width, height, w.bands && w.bands.n > 0 ? !!w.bands.lbar : lbar))
     Repeater {   // stand-in tiles (lbar.js): in the L-bar's corner, or over the whole screen
         model: w.frames.length ? [] : w.tileRects
         Rectangle {
@@ -79,16 +79,13 @@ Window {
             x.send()
         }
     }
-    readonly property var bandGeo: w.bands && w.bands.n > 0 ? G.wallBands(w.bands.n, size[0], size[1], w.bands.lbar) : null
-    Repeater {
-        model: w.bandGeo && w.layout !== "full" && w.layout !== "matchup" ? ["top", "bottom"] : []
-        Bands {
-            required property string modelData
-            visible: w.bandGeo[modelData].h >= w.width / 40
-            x: w.bandGeo[modelData].x; y: w.bandGeo[modelData].y; width: w.bandGeo[modelData].w; height: w.bandGeo[modelData].h
-            b: w.bands; edge: modelData; geo: w.bandGeo; unit: w.width
-            boardData: (w.lbar ? side : whole).last ? (w.lbar ? side : whole).last.data : null
-        }
+    readonly property var bandGeo: w.bands && w.bands.n > 0 ? G.wallBands(w.bands.n, size[0], size[1], w.bands.lbar, w.lbar) : null
+    BandLayer {
+        visible: w.bandGeo !== null && w.layout !== "full" && w.layout !== "matchup"
+        x: w.bandGeo ? w.bandGeo.outer.x : 0; y: w.bandGeo ? w.bandGeo.outer.y : 0
+        width: w.bandGeo ? w.bandGeo.outer.w : 0; height: w.bandGeo ? w.bandGeo.outer.h : 0
+        b: w.bands; geo: w.bandGeo; unit: w.width; lbarShown: w.lbar
+        boardData: (w.lbar ? side : whole).last ? (w.lbar ? side : whole).last.data : null
     }
     Board {
         id: side; visible: w.lbar

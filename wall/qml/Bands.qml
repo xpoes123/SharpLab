@@ -1,4 +1,4 @@
-// One band the wall's tiles leave (above or below them; lbar.js wallBands has the geometry): a calm backdrop tinted by
+// One band the wall's tiles leave (above, below or beside them; lbar.js wallBands has the geometry): a calm backdrop tinted by
 // the teams on screen with faint court / field lines, a header strip right against each tile it owns (matchup, delayed
 // score, period + clock, a speaker on the tile with the sound), and in the bottom band without the L-bar a slim strip
 // of the other games (delayed too) + the watch party's chat. The data is GET <--bands>/bands (wall/bands.py).
@@ -12,12 +12,13 @@ Item {
     id: root
     property var b: null                 // the /bands payload
     property var boardData: null         // the overlay's own delayed board (Board.qml last.data): wins for a game it holds
-    property string edge: "top"          // top | bottom
+    property string edge: "top"          // top | bottom | left | right (beside the tiles: the backdrop only)
+    property bool lbarShown: false       // the L-bar is on screen: it has the ticker + chat, the strip stays off
     property var geo: null               // G.wallBands(...)
     property real unit: 1920             // the screen width: 1 rem = unit / 120, like Board.qml
     readonly property real rem: unit / 120
     readonly property var band: geo ? geo[edge] : ({ x: 0, y: 0, w: 0, h: 0 })
-    readonly property bool strip: edge === "bottom" && b !== null && !b.lbar
+    readonly property bool strip: edge === "bottom" && b !== null && !lbarShown
     clip: true
 
     // tokens.css (Board.qml)
@@ -223,7 +224,7 @@ Item {
                     T {
                         anchors.verticalCenter: parent.verticalCenter
                         width: Math.min(implicitWidth, hd.width * 0.36 - (hd.sound ? hd.s * 0.4 : 0))
-                        text: hd.g ? hd.g.status : hd.tile ? hd.tile.host : ""
+                        text: hd.g ? hd.g.status : hd.tile ? (hd.tile.label || hd.tile.host) : ""
                         size: hd.s * 0.27; weight: 700; wdth: 68
                         color: hd.g && hd.g.close && hd.g.state === "in" ? root.cAccent : hd.g && hd.g.status !== "syncing" ? root.cInk : root.cMuted
                         font.capitalization: Font.AllUppercase; font.letterSpacing: size * 0.04

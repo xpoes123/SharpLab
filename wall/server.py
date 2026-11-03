@@ -161,6 +161,8 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         disc.source_board = lambda: tv_board(cfg.tv_overlay_api)
         disc.tv_on_wall = lambda: tv_active(cfg.tv_overlay_api) == "wall"
         disc.capture_output, disc.screen_sink = cfg.tv_output, cfg.tv_sink
+    if tv is not None and tv.host_app is None:   # the TV's overlay only over the TV OS's wall app (never Dreamscape…)
+        tv.host_app = lambda: tv_active(cfg.tv_overlay_api)
     for i in instances.values():
         if i.headless:
             i.before_start = guard.park   # the LLM's VRAM is free before the budget check
@@ -441,7 +443,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
             rows = badge_rows(bets.games.get(f"{g['league']}:{g['id']}", [])) if g and sync.show else []
             tiles.append({"i": k, "delay": d, "src": src, "label": g["label"] if g else "", "rows": rows})
         return {"show": sync.show, "n": len(urls), "view": view, "tiles": tiles, "delays": delays, "default": sync.default,
-                "rev": sync.rev}
+                "rev": sync.rev, "on": i.overlay_on()}
 
     # ---- spoiler sync: the delay of each tile page + "show bets on the overlay" (loopback: the TV's phones; tailnet: the
     # watch page's owner controls through sharplab-web) ----
@@ -497,8 +499,10 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
             lv = i.live
             args = dict(urls=list(i.urls), sound=i.driver.sound, lbar=bool(getattr(i.driver, "lbar", False)), view=i.view,
                         title=i.preset_name, live_league=lv.league if lv else "")
-        return build_view(**args, games=games[:len(args["urls"])], scores=scores, tape=tape, delay=sync.delay,
-                          chat=chat.view(party_on()))
+        out = build_view(**args, games=games[:len(args["urls"])], scores=scores, tape=tape, delay=sync.delay,
+                         chat=chat.view(party_on()))
+        out["on"] = i.overlay_on()   # the TV OS is on its wall app (Overlay.qml draws nothing otherwise)
+        return out
 
     # ---- the watch party's chat, for the TV router (loopback only: not in REMOTE_OK) ----
     def party_on() -> bool:

@@ -16,7 +16,7 @@ import time
 from collections import deque
 from urllib.parse import urlsplit
 
-from wall.live import LEAGUES
+from wall.live import LEAGUES, TEAMS, stream_urls, team_slug
 
 DEFAULT_DELAY_S = 45.0
 KEEP_S = 600.0          # the tape's memory (delays are clamped to 120 s)
@@ -95,6 +95,36 @@ def host(url: str) -> str:
     return h[:40]
 
 
+def page_team(url: str) -> tuple[str, str] | None:
+    """A topstreamer team page → (league, slug): https://topstreamer.site/nba/clippers → ("nba", "clippers")."""
+    parts = [p for p in urlsplit(url).path.split("/") if p]
+    if len(parts) == 2 and parts[0] in TEAMS and parts[1] in TEAMS[parts[0]]:
+        return parts[0], parts[1]
+    return None
+
+
+def ended_game(url: str, boards: dict[str, dict | None]) -> tuple[str, str] | None:
+    """The tile's game when sync.tile_games has none because it's over (it only maps live / upcoming games)."""
+    for lg, b in boards.items():
+        for g in (b or {}).get("games") or []:
+            if g.get("id") and g.get("state") == "post" and url.rstrip("/") in stream_urls(lg, g):
+                return lg, str(g["id"])
+    return None
+
+
+def team_label(url: str, boards: dict[str, dict | None]) -> str:
+    """No game at all: the team the page is for, "CLIPPERS · LAC" (the abbreviation when a scoreboard knows it)."""
+    pt = page_team(url)
+    if not pt:
+        return ""
+    lg, slug = pt
+    for g in (boards.get(lg) or {}).get("games") or []:
+        for side in ("away", "home"):
+            if team_slug(lg, g[side]) == slug:
+                return f"{g[side].get('name') or slug} · {g[side]['abbr']}"
+    return slug
+
+
 def chat_lines(view: dict | None, now: float) -> list[dict]:
     if not view or not view.get("on"):
         return []
@@ -116,7 +146,9 @@ def build_view(*, urls: list[str], games: list[dict | None], sound: int, lbar: b
     tiles, on_tiles, seen_lg = [], set(), []
     for u, pick in zip(urls, picks):
         d, src = delay(u)
-        t = {"url": u, "host": host(u), "delay": round(float(d), 1), "src": src, "game": None, "synced": False}
+        pick = pick or ended_game(u, latest)
+        t = {"url": u, "host": host(u), "label": "" if pick else team_label(u, latest), "delay": round(float(d), 1),
+             "src": src, "game": None, "synced": False}
         if pick:
             lg, gid = pick
             on_tiles.add(pick)
