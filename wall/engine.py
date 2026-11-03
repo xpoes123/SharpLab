@@ -127,6 +127,16 @@ def resolve_live(url: str, fetch=None, ttl: float = 600) -> str:
     return out
 
 
+ARTIFACT = re.compile(r"^https://claude\.ai/(code/)?artifact/[\w-]+")
+ARTIFACT_RELOAD_S = 300.0
+# a claude.ai artifact (a community dashboard): its frame over the whole tile (covers claude.ai's bar), zoomed to 80 % so
+# more of the page fits a quarter of the TV. Idempotent: run every round, since a reload or claude.ai's own script resets it.
+FIT_JS = """(() => { const f = document.querySelector('iframe'); if (!f) return false;
+  f.style.cssText += ';position:fixed!important;inset:0!important;width:calc(100vw / 0.8)!important;height:calc(100vh / 0.8)!important;'
+    + 'zoom:0.8;z-index:2147483647!important;border:0!important;background:#111';
+  return true; })()"""
+
+
 def page_url(path: str) -> str:
     return f"http://127.0.0.1:{PAGE_PORT}/p/{path.lstrip('/')}"
 
@@ -381,6 +391,7 @@ class Driver:
 
         self._stalls: dict[int, Stall] = {}   # slot → stall watchdog
         self.pages: set[int] = set()          # slots showing one of our own pages (no video: left alone by _tend)
+        self.artifacts: dict[int, float] = {}  # slots showing a claude.ai artifact → when it was last (re)loaded
 
     @property
     def procs(self) -> list[subprocess.Popen]:
@@ -391,6 +402,10 @@ class Driver:
             self.pages.add(slot)
         else:
             self.pages.discard(slot)
+        if ARTIFACT.match(url):
+            self.artifacts[slot] = time.monotonic()
+        else:
+            self.artifacts.pop(slot, None)
         try:
             return subprocess.Popen(
                 [*GPU_ENV, "chromium", f"--user-data-dir={Path(self.s.profiles) / f'chromium-wall-{self.s.prefix}{slot}'}",
@@ -511,6 +526,17 @@ class Driver:
         if slot in self.pages:
             return
         port = self.s.cdp_base + slot
+        if slot in self.artifacts:   # a dashboard page: fit it, and reload it now and then (its author republishes by hand)
+            try:
+                with cdp_page(port) as call:
+                    if time.monotonic() - self.artifacts[slot] > ARTIFACT_RELOAD_S:
+                        self.artifacts[slot] = time.monotonic()
+                        call("Page.reload", {"ignoreCache": True})
+                    else:
+                        call("Runtime.evaluate", {"expression": FIT_JS})
+            except Exception as e:  # noqa: BLE001 — still loading: next round
+                log.debug("cdp %d: %s", port, e)
+            return
         try:
             with cdp_page(port) as call:
                 call("Runtime.evaluate", {"expression": FULLSCREEN_JS, "userGesture": True, "awaitPromise": True})

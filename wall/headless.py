@@ -45,13 +45,14 @@ def free_vram_mb() -> int | None:
 QUEUE = ["queue", "max-size-buffers=0", "max-size-bytes=0", "max-size-time=3000000000"]
 
 
-def gst_cmd(node: int, sink: str, kbps: int = 4500, fps: int = 30, width: int = 1920, height: int = 1080) -> list[str]:
+def gst_cmd(node: int, sink: str, kbps: int = 4500, fps: int = 30, width: int = 1920, height: int = 1080, gain: float = 1.0) -> list[str]:
     """One clock for picture and sound: both pipewiresrc's into one mpegtsmux on stdout.
 
     Picture: system-memory frames → videorate (30 fps) → cudaupload → cudaconvertscale (to width×height NV12 on the GPU,
     so a 1440p TV costs no CPU scaling or colour conversion) → nvh264enc.
     Sound: asked from PipeWire as 48 kHz stereo float (no resampling on our side), audiorate keeps the stream gap-free
-    (gaps / overlaps from capture jitter are what clicked), AAC 160 kb/s."""
+    (gaps / overlaps from capture jitter are what clicked), × gain (WALL_AUDIO_GAIN: the stream only, the TV stays as loud as it is),
+    AAC 160 kb/s."""
     return ["gst-launch-1.0", "-q", "-e",
             "pipewiresrc", f"path={node}", "do-timestamp=true", "keepalive-time=100", "!", "video/x-raw", "!",
             "videorate", "!", f"video/x-raw,framerate={fps}/1", "!", "cudaupload", "!", "cudaconvertscale", "!",
@@ -60,7 +61,7 @@ def gst_cmd(node: int, sink: str, kbps: int = 4500, fps: int = 30, width: int = 
             "h264parse", "config-interval=-1", "!", *QUEUE, "!", "mux.",
             "pipewiresrc", *([f"target-object={sink}"] if sink else []), "stream-properties=props,stream.capture.sink=true",
             "do-timestamp=true", "!", "audio/x-raw,format=F32LE,rate=48000,channels=2", "!",
-            "audiorate", "tolerance=40000000", "skip-to-first=true", "!", "audioconvert", "!",
+            "audiorate", "tolerance=40000000", "skip-to-first=true", "!", "volume", f"volume={gain:g}", "!", "audioconvert", "!",
             "avenc_aac", "bitrate=160000", "!", *QUEUE, "!", "mux.",
             "mpegtsmux", "name=mux", "!", "fdsink", "fd=1"]
 
@@ -191,7 +192,8 @@ class Headless:
         if self.hls.exists():
             shutil.rmtree(self.hls)
         self.hls.mkdir(parents=True)
-        self.gst = _spawn(gst_cmd(node, sink, kbps=int(os.environ.get("WALL_KBPS", "8000")), fps=int(os.environ.get("WALL_FPS", "60"))), self.dir / "gst.log", env=self._base_env(), stdout=subprocess.PIPE,
+        self.gst = _spawn(gst_cmd(node, sink, kbps=int(os.environ.get("WALL_KBPS", "8000")), fps=int(os.environ.get("WALL_FPS", "60")),
+                                  gain=float(os.environ.get("WALL_AUDIO_GAIN", "1"))), self.dir / "gst.log", env=self._base_env(), stdout=subprocess.PIPE,
                           preexec_fn=no_core)
         with open(self.dir / "ffmpeg.log", "wb") as f:
             self.ff = subprocess.Popen(ffmpeg_cmd(self.hls), stdin=self.gst.stdout, stdout=subprocess.DEVNULL, stderr=f,
