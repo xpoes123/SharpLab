@@ -26,6 +26,7 @@ MIN_IN = 0.03          # below 3% in, a projection is noise: none
 SPREAD = 0.25          # ponytail: turnout sd = projection × SPREAD × (share still out); tune live if it's over/under-confident
 SHARE_SD = (0.75, 8.0) # vote-share sd in points = a + b × (share still out)
 EDGE = 12              # |model − market mid| in points worth a highlight
+NATIONAL_MIN = 40      # districts projecting before the national House numbers are priced (4 Indiana seats ≠ the country)
 _TURN = re.compile(r"^(?P<st>[A-Z]{2})(?P<k>SEN|GOV|AL|\d{2})$")
 
 
@@ -195,7 +196,7 @@ def national_house(races: list[dict], markets: dict[str, list[dict]]) -> dict:
         d += scale * sum(c["votes"] for c in r["cands"] if c["party"] == "D")
         rr += scale * sum(c["votes"] for c in r["cands"] if c["party"] == "R")
     out = {"counted": counted, "districts": len(hs), "reporting": n_in, "proj": None, "sd": None, "margin": None, "margin_sd": None}
-    if n_in:
+    if n_in >= NATIONAL_MIN:
         rest = len(hs) - n_in
         mean = proj / n_in
         total = proj + rest * mean
@@ -249,4 +250,4 @@ def pulse(snap: dict, markets: dict[str, list[dict]]) -> dict:
     return {"source": snap.get("source", ""), "updated": snap.get("updated", 0), "error": snap.get("error", ""), "now": now,
             "house": national_house(races, markets), "states": states(races), "races": race_rows(races, markets),
             "next": [{"t": t, "states": sorted({r["state"] for r in races if r.get("closes") == t})} for t in closes],
-            "calls": (snap.get("calls") or [])[:10], "model": {"spread": SPREAD, "share_sd": SHARE_SD, "min_in": MIN_IN, "edge": EDGE}}
+            "calls": (snap.get("calls") or [])[:10], "model": {"national_min": NATIONAL_MIN, "spread": SPREAD, "share_sd": SHARE_SD, "min_in": MIN_IN, "edge": EDGE}}

@@ -168,7 +168,7 @@
     const m = h.margin;
     $("house").innerHTML = [
       ["Counted", n(h.counted)],
-      ["Projected total", h.proj ? `${n(h.proj)} <span class="muted small">± ${n(h.sd)}</span>` : "—"],
+      ["Projected total", h.proj ? `${n(h.proj)} <span class="muted small">± ${n(h.sd)}</span>` : `<span class="muted small">waits for ${data.model.national_min} districts</span>`],
       ["Districts projecting", `${h.reporting} / ${h.districts}`],
       ["Proj. margin (D−R)", m == null ? "—" : `<span class="${m >= 0 ? "D" : "R"}">${m >= 0 ? "D" : "R"}+${Math.abs(m).toFixed(1)}</span> <span class="muted small">± ${h.margin_sd}</span>`],
     ].map(([k, v]) => `<div class="stat"><span class="muted small">${k}</span><b>${v}</b></div>`).join("");
