@@ -312,6 +312,15 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
                                        board=board, layout=layout, sound=d.get("sound", 0) if isinstance(d.get("sound", 0), int) else 0,
                                        origin=origin)
 
+    def target(name: str) -> Instance:
+        """Where a change made on `name` lands. The stream is always the TV while it mirrors: a change made on the stream
+        (a passed vote, /wall) goes to the TV's wall, and the stream follows it."""
+        i = inst(name)
+        tv = instances.get("tv")
+        if i.headless and i.follow and tv is not None and tv.urls:
+            return tv
+        return i
+
     @app.post("/i/{name}/follow")
     async def follow(name: str) -> dict:
         """Mirror the TV again after a change on this wall stopped the following."""
@@ -330,35 +339,41 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         if not isinstance(d.get("url"), str):
             raise ValueError("url is a string")
         i = inst(name)
-        if i.headless:
+        if i.headless:   # streamed either way (its own tile or the TV it mirrors)
             await asyncio.to_thread(public_url, d["url"])
-        return await asyncio.to_thread(i.set_tile, num(d, "i"), d["url"])
+        await asyncio.to_thread(target(name).set_tile, num(d, "i"), d["url"])
+        return i.state()
 
     @app.delete("/i/{name}/tile/{i}")
     async def rm_tile(name: str, i: int) -> dict:
-        return await asyncio.to_thread(inst(name).remove_tile, i)
+        await asyncio.to_thread(target(name).remove_tile, i)
+        return inst(name).state()
 
     @app.post("/i/{name}/move")
     async def move(name: str, request: Request) -> dict:
         d = await body(request)
-        return await asyncio.to_thread(inst(name).move, num(d, "i"), num(d, "j"))
+        await asyncio.to_thread(target(name).move, num(d, "i"), num(d, "j"))
+        return inst(name).state()
 
     @app.post("/i/{name}/sound")
     async def sound(name: str, request: Request) -> dict:
         d = await body(request)
-        return await asyncio.to_thread(inst(name).sound, num(d, "i"))
+        await asyncio.to_thread(target(name).sound, num(d, "i"))
+        return inst(name).state()
 
     @app.post("/i/{name}/pin")
     async def pin(name: str, request: Request) -> dict:
         d = await body(request)
-        return await asyncio.to_thread(inst(name).pin, num(d, "i"))
+        await asyncio.to_thread(target(name).pin, num(d, "i"))
+        return inst(name).state()
 
     @app.post("/i/{name}/board")
     async def board(name: str, request: Request) -> dict:
         d = await body(request)
         if d.get("visible") is not None and not isinstance(d.get("visible"), bool):
             raise ValueError("visible is a boolean")
-        return await asyncio.to_thread(inst(name).set_board, d.get("board"), d.get("visible"), d.get("layout"))
+        await asyncio.to_thread(target(name).set_board, d.get("board"), d.get("visible"), d.get("layout"))
+        return inst(name).state()
 
     @app.post("/i/{name}/overlay")
     async def overlay(name: str, request: Request) -> dict:

@@ -335,3 +335,24 @@ async def test_service_follow_path():
 def test_the_posted_link_is_sharplab_webs_keyed_one_in_demo_mode(scog):
     assert scog.watch_url({"watch_url": "https://s/wall.html?k=abc"}) == "https://s/wall.html?k=abc"
     assert scog.watch_url({"watch_url": "javascript:x"}) == "https://x/wall" and scog.watch_url(None) == "https://x/wall"
+
+
+async def test_restarts_update_the_embed_instead_of_posting_again(cog):
+    sent, refreshed = [], []
+
+    class Ch:
+        id = 22
+        async def send(self, **kw):
+            sent.append(kw)
+
+    cog.bot = SimpleNamespace(get_channel=lambda cid: Ch())
+
+    async def refresh(gid):
+        refreshed.append(gid)
+
+    cog.refresh = refresh
+    cog.embeds = {1: (22, 500)}
+    cog.last = {"guild": "1", "channel": "22"}
+    assert not await cog.announce({"running": True, "started": 10})                                       # a redeploy/restore
+    assert not await cog.announce({"running": True, "started": 11, "origin": {"guild": "1", "channel": "22"}})   # same channel
+    assert sent == [] and refreshed == [1, 1]

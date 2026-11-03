@@ -168,13 +168,19 @@ def day_start(now: datetime | None = None) -> datetime:
     return start if now >= start else start - timedelta(days=1)
 
 
-def today_pnl(open_rows: list[dict], settled_today: list[dict], traded_today: set[str]) -> dict:
+def today_pnl(open_rows: list[dict], settled_today: list[dict], traded_today: set[str],
+              realized: dict[str, float] | None = None) -> dict:
     """Settled-today PnL + open positions' ~24h move (Kalshi's previous_* prices are "a day ago").
-    Positions traded today, or with no prior price (new market), count from cost basis instead."""
+    Positions traded today, or with no prior price (new market), count from cost basis instead.
+    `realized` (Kalshi's per-market realized_pnl) adds contracts sold today on markets not settled yet —
+    settlement records already cover a settled market's whole history (a sale shows up as the opposite
+    side bought, paired off at $1), so those are skipped."""
     move = sum(r["unreal"] if r["ticker"] in traded_today or not r.get("prev_mark")
                else r["qty"] * (r["mark"] - r["prev_mark"]) for r in open_rows)
-    settled = sum(settled_pnl(st) for st in settled_today)
-    # ponytail: positions sold (not settled) today aren't counted — add fills-based realized if it matters
+    settled_t = {st["ticker"] for st in settled_today}
+    # ponytail: realized_pnl is lifetime per market — off only if a still-open market was also sold on an earlier day
+    sold = sum(v for t, v in (realized or {}).items() if t in traded_today and t not in settled_t)
+    settled = sum(settled_pnl(st) for st in settled_today) + sold
     return {"settled": settled, "n_settled": len(settled_today), "open_move": move, "total": settled + move}
 
 
@@ -183,8 +189,8 @@ async def fetch_account(key_id: str, pem: str, with_settlements: bool = True) ->
     since = f"?min_ts={int(day_start().timestamp())}"
     async with httpx.AsyncClient(timeout=20) as c:
         bal = await _get(c, key_id, key, "/portfolio/balance")
-        positions = await _all(c, key_id, key, "/portfolio/positions", "market_positions")
-        positions = [p for p in positions if _f(p.get("position_fp") or p.get("position"))]
+        all_positions = await _all(c, key_id, key, "/portfolio/positions", "market_positions")
+        positions = [p for p in all_positions if _f(p.get("position_fp") or p.get("position"))]
         settles = await _all(c, key_id, key, "/portfolio/settlements", "settlements") if with_settlements else []
         settled_today = await _all(c, key_id, key, "/portfolio/settlements" + since, "settlements")
         traded_today = {f["ticker"] for f in await _all(c, key_id, key, "/portfolio/fills" + since, "fills")}
@@ -201,7 +207,8 @@ async def fetch_account(key_id: str, pem: str, with_settlements: bool = True) ->
     for r in open_rows:
         r["game"] = games.get(markets.get(r["ticker"], {}).get("event_ticker"), "")
     return {"balance": _balance(bal), "open": open_rows, "settlements": settles,
-            "today": today_pnl(open_rows, settled_today, traded_today)}
+            "today": today_pnl(open_rows, settled_today, traded_today,
+                               {p["ticker"]: _f(p.get("realized_pnl_dollars")) for p in all_positions})}
 
 
 _MONTHS = {m: i for i, m in enumerate(
@@ -280,9 +287,16 @@ async def market_titles(tickers: list[str]) -> dict[str, str]:
             + (m.get("title") or m["ticker"]) for m in markets}
 
 
-def fill_price(f: dict) -> float:
-    """Price paid per contract on the side traded, in dollars."""
+def fill_side(f: dict) -> str:
+    """Contract actually traded. Kalshi reports a sell by the side it buys into: selling YES @92 comes back
+    as action=sell side=no @8, so flip sells back to what the user sold."""
     side = f.get("side", "yes")
+    return ({"yes": "no", "no": "yes"}[side]) if f.get("action") == "sell" else side
+
+
+def fill_price(f: dict) -> float:
+    """Price per contract on the side traded, in dollars."""
+    side = fill_side(f)
     p = f.get(f"{side}_price_dollars") or f.get(f"{side}_price_fixed")
     return _f(p) if p is not None else _f(f.get(f"{side}_price")) / 100
 
@@ -291,7 +305,7 @@ def group_fills(fills: list[dict]) -> list[dict]:
     """Collapse partial fills into one row per (ticker, action, side) with a size-weighted avg price."""
     out: dict[tuple, dict] = {}
     for f in sorted(fills, key=lambda f: _f(f.get("ts"))):
-        k = (f["ticker"], f.get("action", "buy"), f.get("side", "yes"))
+        k = (f["ticker"], f.get("action", "buy"), fill_side(f))
         g = out.setdefault(k, {"ticker": k[0], "action": k[1], "side": k[2], "qty": 0.0, "cost": 0.0, "fee": 0.0})
         q = _f(f.get("count_fp") or f.get("count"))
         g["qty"] += q
@@ -324,7 +338,7 @@ def resolutions(by_user: dict[str, list[dict]], since: dict[str, int]) -> dict[s
             if _iso_ts(st.get("settled_time")) <= since[uid]:
                 continue
             y, n = _f(st.get("yes_count_fp")), _f(st.get("no_count_fp"))
-            side = "YES" if y > n else "NO" if n > y else "BOTH"
+            side = "YES" if y > n else "NO" if n > y else "SOLD"  # equal = sold out before settling
             m = out.setdefault(st["ticker"], {"result": (st.get("market_result") or "?").upper(), "holders": []})
             m["holders"].append((uid, side, settled_pnl(st)))
     return out

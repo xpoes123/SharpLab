@@ -196,6 +196,38 @@ def _origin(o: object) -> dict:
     return {"origin": out} if "channel" in out else {}
 
 
+def noop(a: dict, wall: dict | None) -> str:
+    """Why this action would change nothing on the wall as it is now ("" = it would change something)."""
+    w = wall or {}
+    on, urls, ov = bool(w.get("running")), w.get("urls") or [], w.get("overlay") or {}
+    op = a["op"]
+    if op == "start":
+        return "It's already mirroring the TV." if on and a.get("mirror") and w.get("mirror") else ""
+    if not on:
+        return "The wall is off."
+    if op == "stop":
+        return ""
+    if op == "follow":
+        return "It's already following the TV." if w.get("mirror") else ""
+    if op == "sound":
+        return "That tile already has the sound." if a["i"] == w.get("sound") else "There's no such tile." if a["i"] >= len(urls) else ""
+    if op == "remove":
+        return "There's no such tile." if a["i"] >= len(urls) else ""
+    if op == "promote":
+        return "That's already the main tile." if a["i"] == 0 else "There's no such tile." if a["i"] >= len(urls) else ""
+    if op == "tile":
+        if a["i"] < len(urls) and urls[a["i"]] == a["url"]:
+            return "That's already on that tile."
+        return "That's already on the wall." if a["url"] in urls else ""
+    if op == "layout":
+        return "That's already the layout." if ov.get("layout") == a["layout"] else ""
+    if op == "board":
+        same_board = a.get("board", ov.get("board")) == ov.get("board")
+        same_vis = a.get("visible", ov.get("visible")) == ov.get("visible")
+        return "That's already showing." if same_board and same_vis else ""
+    return ""
+
+
 def check_action(a: object) -> dict:
     """A proposal's action, validated (ValueError otherwise): {"op": start|stop|tile|remove|board|sound|layout|follow, …the
     wall service's body for that call}. Only what the service's control API can do. {"op": "start", "mirror": true} =
@@ -237,6 +269,8 @@ def check_action(a: object) -> dict:
         return {"op": "sound", "i": _tile(a.get("i")), **label}
     if op == "remove":
         return {"op": "remove", "i": _tile(a.get("i")), **label}
+    if op == "promote":   # the big tile is tile 1: move this one there
+        return {"op": "promote", "i": _tile(a.get("i")), **label}
     if op == "tile":
         return {"op": "tile", "i": _tile(a.get("i"), 4), "url": _url(a.get("url")), **label}
     if op == "layout":
@@ -280,6 +314,8 @@ def describe(a: dict) -> str:
         return f"put {a.get('label') or a['url']} on tile {a['i'] + 1}"
     if op == "remove":
         return f"remove tile {a['i'] + 1}"
+    if op == "promote":
+        return f"make {a.get('label') or 'tile ' + str(a['i'] + 1)} the main tile"
     if op == "sound":
         return f"move the sound to tile {a['i'] + 1}"
     if op == "layout":
@@ -522,6 +558,8 @@ def _route(a: dict) -> tuple[str, str, dict]:
         return "POST", "/i/discord/tile", body
     if op == "remove":
         return "DELETE", f"/i/discord/tile/{a['i']}", {}
+    if op == "promote":
+        return "POST", "/i/discord/move", {"i": a["i"], "j": 0}
     if op == "sound":
         return "POST", "/i/discord/sound", body
     if op == "layout":
@@ -680,10 +718,13 @@ class Hub:
             a = check_action(action)
         except ValueError as e:
             return None, str(e)
+        if self.wall and "running" in self.wall and (why := noop(a, self.wall)):   # no votes on changes that change nothing (state unknown: let it through)
+            return None, why
         now = self.clock()
         if self.chat.is_muted(user["id"], now):
             return None, "You're muted for now."
-        if user.get("guest") and a["op"] in GUEST_OPS:
+        live_tile = a["op"] == "tile" and a["url"] in {g["url"] for g in _live["games"]}
+        if user.get("guest") and a["op"] in GUEST_OPS and not live_tile:
             return None, "Guests can vote, chat and change the sound / layout / board — starting, stopping and new pages need a SharpLab login."
         owner = self.is_owner(user["id"])
         p, err = self.votes.propose(user, a, now, cfg()["vote_s"], owner=owner)
@@ -908,6 +949,35 @@ _locks: dict[str, asyncio.Lock] = {}
 def _need_key(x_api_key: str) -> None:
     if not check_api_key(x_api_key):
         raise HTTPException(401, "Invalid API key")
+
+
+_live: dict = {"at": 0.0, "games": []}
+
+
+async def live_games() -> list[dict]:
+    """Live NBA + NFL games with their stream pages (the wall service's /live/*), cached 20 s."""
+    if time.monotonic() - _live["at"] < 20:
+        return _live["games"]
+    c = cfg()
+    out = []
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            for lg in ("nfl", "nba"):
+                r = await client.get(f"{c['service']}/live/{lg}", headers={"Authorization": f"Bearer {c['token']}"})
+                if r.status_code == 200:
+                    out += [{"league": lg, "label": str(g.get("label", ""))[:60], "url": g["url"], "state": g.get("state", "")}
+                            for g in r.json() if isinstance(g, dict) and isinstance(g.get("url"), str) and g["url"].startswith("https://")]
+    except httpx.HTTPError:
+        return _live["games"]
+    _live.update(at=time.monotonic(), games=out)
+    return out
+
+
+@router.get("/games")
+async def games(request: Request):
+    if not viewer(request):
+        return JSONResponse({"error": "log in"}, status_code=401)
+    return {"games": await live_games()}
 
 
 @router.get("/me")

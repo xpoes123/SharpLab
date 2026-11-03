@@ -26,6 +26,7 @@
   // ---- player + sync ----
   const video = $("video");
   let hls = null;
+  let lastGames = null;   // the Live now list, re-drawn when the wall changes
   const sync = { err: null, pdt: null, target: null, rate: 1, offset: 0, seeks: 0 };
   window.__wallSync = sync;
 
@@ -161,6 +162,7 @@
     const tv = el("option", null, "📺 Same as the TV"); tv.value = "";
     sel.replaceChildren(tv, ...((wall && wall.presets) || []).map((n) => { const o = el("option", null, n); o.value = n; return o; }));
     if (cur) sel.value = cur;
+    if (lastGames) renderLive(lastGames);
     const tiles = $("tiles"); tiles.replaceChildren();
     if (!on) return;
     const labels = (wall.live && wall.live.labels) || [];
@@ -169,6 +171,10 @@
       t.append(el("b", null, String(i + 1)), el("span", "lbl", labels[i] || shortUrl(u)));
       if (wall.sound === i) t.append(el("span", null, "🔊"));
       else { const b = el("button", null, "🔊 here"); b.onclick = () => propose({ op: "sound", i }); t.append(b); }
+      if (i > 0 && (wall.urls || []).length >= 2) {   // tile 1 is the big one
+        const p = el("button", null, "⬆ main"); p.title = "Make this the main (big) tile";
+        p.onclick = () => propose({ op: "promote", i, label: labels[i] || shortUrl(u) }); t.append(p);
+      }
       tiles.append(t);
     });
   }
@@ -199,7 +205,6 @@
     else {
       li.append(avatar({ avatar: m.avatar, initials: (m.name || "?").slice(0, 1).toUpperCase() }));
       const body = el("span"); body.append(el("span", "who", m.name));
-      if (m.guest) body.append(el("span", "tag", "guest"));
       body.append(document.createTextNode(m.text)); li.append(body);
       if (me && me.admin) {
         const d = el("button", "mod", "✕"); d.title = "Delete"; d.onclick = () => send({ t: "del", id: m.id });
@@ -220,6 +225,34 @@
 
   // ---- votes ----
   function propose(action) { send({ t: "propose", action }); }
+
+  // Live now: one tap puts that game on the tile picked in the Tile menu (or the next empty one)
+  async function loadLive() {
+    try {
+      const r = await fetch("/api/v1/wall/games", { credentials: "same-origin" });
+      renderLive(lastGames = r.ok ? (await r.json()).games || [] : []);
+    } catch (e) { /* offline: try again next round */ }
+  }
+  function renderLive(games) {
+    {
+      const box = $("liveGames"); box.replaceChildren();
+      box.className = games.length ? "live-games" : "muted small";
+      if (!games.length) { box.textContent = "no live games right now"; return; }
+      const onWall = new Set((wall && wall.running && wall.urls) || []);
+      for (const g of games) {
+        const b = el("button", "btn", (g.league === "nfl" ? "🏈 " : "🏀 ") + g.label + (onWall.has(g.url) ? " · on the wall" : ""));
+        b.disabled = onWall.has(g.url);
+        b.title = "Put on tile " + (+$("tileI").value + 1);
+        b.onclick = () => {
+          const n = (wall && wall.urls) ? wall.urls.length : 0;
+          const picked = +$("tileI").value;
+          propose({ op: "tile", i: picked < n ? picked : Math.min(n, 3), url: g.url, label: g.label });
+        };
+        box.append(b);
+      }
+    }
+  }
+  loadLive(); setInterval(loadLive, 30000);
   function renderProps() {
     const box = $("props"); box.replaceChildren();
     for (const p of props.values()) {

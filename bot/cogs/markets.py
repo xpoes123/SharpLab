@@ -741,7 +741,7 @@ async def _resolution_embeds(bot: commands.Bot, res: dict[str, dict]) -> list[di
         for uid, side, pnl in m["holders"]:
             u = bot.get_user(int(uid)) or await bot.fetch_user(int(uid))
             names.append(f"{'🟢' if pnl >= 0 else '🔴'} **{discord.utils.escape_markdown(u.display_name)}** "
-                         f"held {side} · **{pnl:+,.2f}**")
+                         + ("sold before close" if side == "SOLD" else f"held {side}") + f" · **{pnl:+,.2f}**")
         out.append(discord.Embed(
             title=f"🏁 Resolved {m['result']} — {titles.get(ticker, ticker)[:200]}", url=ka.market_url(ticker),
             description="\n".join(names), color=0x22C55E if sum(h[2] for h in m["holders"]) >= 0 else 0xEF4444))

@@ -37,7 +37,7 @@ def setup():
         return True, ""
 
     async def fetch_state():
-        return {"running": True, "urls": ["https://a.example"], "presets": ["Live NFL"]}
+        return {"running": True, "urls": ["https://a.example", "https://b.example"], "presets": ["Live NFL"]}
 
     hub = wall.reset_hub(clock=clock, execute=execute, fetch_state=fetch_state)
     app = FastAPI()
@@ -613,6 +613,12 @@ async def test_guest_votes_count():
     assert p.status == "passed" and done == [{"op": "stop"}]
     q, err = await hub.propose(guest, {"op": "sound", "i": 1})   # sound / layout / board: fine for guests
     assert q and not err
+    lu = {"id": "g-def", "name": "Lu", "guest": True}
+    q, err = await hub.propose(lu, {"op": "tile", "i": 0, "url": "https://x.example/any"})   # arbitrary pages: no
+    assert not q and "login" in err
+    wall._live.update(at=0.0, games=[{"league": "nba", "label": "A–B", "url": "https://s.example/nba/lakers", "state": "in"}])
+    q, err = await hub.propose(lu, {"op": "tile", "i": 0, "url": "https://s.example/nba/lakers"})   # a live game: yes
+    assert q and not err, err
 
 
 def test_guest_names_are_unique_and_connects_are_rate_limited(demo):
@@ -693,3 +699,33 @@ def test_chat_api_respects_deletes_and_mutes(setup):
     assert [m["text"] for m in feed["messages"]] == ["keep"] and feed["ids"] == [a["id"]]
     r = client.post("/api/v1/wall/chat", headers=h, json={"discord_id": "3", "text": "still here?"})
     assert r.status_code == 403
+def test_noop_proposals_are_refused():
+    from web.wall import noop
+    w = {"running": True, "mirror": False, "urls": ["https://a.tv", "https://b.tv"], "sound": 1,
+         "overlay": {"board": "nfl", "visible": True, "layout": "lbar"}}
+    assert noop({"op": "sound", "i": 1}, w) and not noop({"op": "sound", "i": 0}, w)
+    assert noop({"op": "sound", "i": 3}, w) and noop({"op": "remove", "i": 2}, w)
+    assert noop({"op": "tile", "i": 0, "url": "https://a.tv"}, w) and not noop({"op": "tile", "i": 0, "url": "https://c.tv"}, w)
+    assert not noop({"op": "tile", "i": 2, "url": "https://c.tv"}, w)   # adding a new game is a change
+    assert noop({"op": "layout", "layout": "lbar"}, w) and not noop({"op": "layout", "layout": "full"}, w)
+    assert noop({"op": "board", "board": "nfl"}, w) and not noop({"op": "board", "visible": False}, w)
+    assert not noop({"op": "follow"}, w) and noop({"op": "follow"}, {**w, "mirror": True})
+    assert noop({"op": "start", "mirror": True}, {**w, "mirror": True}) and not noop({"op": "stop"}, w)
+    assert noop({"op": "stop"}, {"running": False}) and not noop({"op": "start", "preset": "x"}, {"running": False})
+
+
+def test_live_games_need_a_viewer(setup):
+    client, *_ = setup
+    assert client.get("/api/v1/wall/games").status_code == 401
+
+
+def test_a_game_already_on_the_wall_cant_be_added_again():
+    w = {"running": True, "urls": ["https://a.tv", "https://b.tv"]}
+    assert wall.noop({"op": "tile", "i": 0, "url": "https://b.tv"}, w) == "That's already on the wall."
+    assert wall.noop({"op": "tile", "i": 2, "url": "https://a.tv"}, w) and not wall.noop({"op": "tile", "i": 2, "url": "https://c.tv"}, w)
+def test_promote_moves_a_tile_to_the_main_spot():
+    a = wall.check_action({"op": "promote", "i": 2})
+    assert a == {"op": "promote", "i": 2} and wall.describe(a) == "make tile 3 the main tile"
+    assert wall._route(a) == ("POST", "/i/discord/move", {"i": 2, "j": 0})
+    w = {"running": True, "urls": ["https://a.tv", "https://b.tv"]}
+    assert wall.noop({"op": "promote", "i": 0}, w) and wall.noop({"op": "promote", "i": 3}, w) and not wall.noop({"op": "promote", "i": 1}, w)
