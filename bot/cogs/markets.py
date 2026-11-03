@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 _ET = ZoneInfo("America/New_York")
 _RECAP_TIME = dtime(hour=10, minute=0, tzinfo=_ET)  # daily slate recap
-_WEEK_TIME = dtime(hour=10, minute=5, tzinfo=_ET)    # Monday Kalshi week board (in the trade feed)
+_WEEK_TIME = dtime(hour=10, minute=5, tzinfo=_ET)    # Monday Kalshi week board (#sports-betting)
 RECAP_CHANNEL_ID = 1515214409079853116
 FILLS_CHANNEL_ID = 1563303484697350286  # live trade feed
 FILLS_ROLE_NAME = "Kalshi Trades"  # self-assign via the ⚡ panel in #roles
@@ -254,7 +254,7 @@ class MarketsCog(commands.Cog):
     async def _before_recap(self) -> None:
         await self.bot.wait_until_ready()
 
-    # ── Kalshi week board: Monday morning in the trade feed ──
+    # ── Kalshi week board: Monday morning in #sports-betting ──
     @tasks.loop(time=_WEEK_TIME)
     async def week_loop(self) -> None:
         now = datetime.now(_ET)
@@ -268,7 +268,7 @@ class MarketsCog(commands.Cog):
             embed = await _board_embed(self.bot, int((end - timedelta(days=7)).timestamp()), int(end.timestamp()),
                                        f"🏆 Kalshi week — {(end - timedelta(days=7)):%b %-d} – {(end - timedelta(days=1)):%b %-d}")
             if embed:
-                channel = self.bot.get_channel(FILLS_CHANNEL_ID) or await self.bot.fetch_channel(FILLS_CHANNEL_ID)
+                channel = self.bot.get_channel(RECAP_CHANNEL_ID) or await self.bot.fetch_channel(RECAP_CHANNEL_ID)
                 await channel.send(embed=embed)
             await queries.set_bot_setting("kalshi_week_board", label)
         except Exception:
