@@ -6330,3 +6330,53 @@ async def get_pokehoops_rank(discord_user: str) -> int | None:
             "FROM (" + _POKEHOOPS_BEST.format(where="") + ")) WHERE discord_user = ?", (discord_user,))
         row = await cur.fetchone()
         return row[0] if row else None
+
+
+# ── Feature requests (/request) ──────────────────────────────────────────────
+
+async def add_feature_request(discord_user: str, idea: str) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO feature_requests (discord_user, idea, created_at) VALUES (?, ?, ?)",
+            (discord_user, idea, datetime.now(timezone.utc).isoformat()))
+        await db.commit()
+        return cur.lastrowid
+
+
+async def set_feature_request_message(req_id: int, channel_id: str, message_id: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE feature_requests SET channel_id = ?, message_id = ? WHERE id = ?",
+                         (channel_id, message_id, req_id))
+        await db.commit()
+
+
+async def get_feature_request(req_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM feature_requests WHERE id = ?", (req_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def list_feature_requests(status: str = "open") -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM feature_requests WHERE status = ? ORDER BY id", (status,))
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def mark_feature_request_done(req_id: int, note: str | None) -> bool:
+    """Open → done. False if it doesn't exist or was already done."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "UPDATE feature_requests SET status = 'done', done_at = ?, note = ? WHERE id = ? AND status = 'open'",
+            (datetime.now(timezone.utc).isoformat(), note, req_id))
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def count_shipped_requests(discord_user: str) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM feature_requests WHERE discord_user = ? AND status = 'done'", (discord_user,))
+        return (await cur.fetchone())[0]

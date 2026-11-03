@@ -37,6 +37,8 @@ ALL_ACHIEVEMENTS: list[Achievement] = [
     Achievement("duel_10", "Duelist", "Win 10 duels", "Social", "\U0001f5e1️", 100),
     Achievement("tourney_win", "Tournament Victor", "Win a tournament", "Social", "\U0001f3c5", 150),
     Achievement("tourney_5", "Champion", "Win 5 tournaments", "Social", "\U0001f451", 500),
+    Achievement("request_shipped", "Shipped It", "Get a /request idea shipped", "Social", "\U0001f4a1", 50),
+    Achievement("request_shipped_5", "Product Manager", "Get 5 /request ideas shipped", "Social", "\U0001f6e0️", 200),
     # ── Daily ──
     Achievement("daily_1", "Task Master", "Complete a daily challenge", "Daily", "\U0001f4cb", 15),
     Achievement("daily_all", "Dedicated", "Complete all 3 daily challenges in one day", "Daily", "\U0001f4cb", 50),
