@@ -385,6 +385,35 @@ polls every 30 s only while a page / the board asked in the last 3 min. New call
 ticker = race calls as they happen (then close races, then the next poll closings); full = the three offices side by side +
 calls. Not held back by the spoiler delay (`board.js delayed`). The TV router reads it from `GET /p/election/board.json`.
 
+**Kalshi election trades** (`shared/kalshi_election.py`). Opted-in members' midterm positions, by the same rule as sports bets: nobody shows until they run
+`/kalshi wall share:True`, with sizes bucketed unless they also chose `exact`. The bets poller in sharplab-web now also keeps
+positions in midterm markets. These go through the same token bucket and the same single `/markets` batch, and each market
+is mapped to a race in the results feed:
+* Kalshi series, checked live on 2026-11-03:
+  * Senate: `SENATE{ST}[S]-26` (`S` = special: FL, OH), `KXSENATE{ST}-26NOV`, `KX{ST}SENATE-26…` (one market per person).
+  * Governor: `GOVPARTY{ST}`, `KXGOVPARTY{ST}`, `KXGOV{ST}`.
+  * House: `HOUSE{ST}{N|AL}`, `KXHOUSE{ST}{NN}`, `KXHOUSERACE-{ST}{NN|AL}-26` (AL = district 1).
+  * Control: `CONTROLS-2026` / `CONTROLH-2026`.
+  * Seat counts: `KX{R|D}{HOUSE|SENATE}WON-26NOV03` (seats won tonight) and `…SEATS…-27` (seats held in the new Congress).
+* Kalshi's year codes aren't reliable: `GOVPARTYNH-28` and `GOVPARTYKS-27` are 2026 races. A market that names a person
+  therefore counts only if that person is on tonight's ballot in our results. If the market sits under the wrong state
+  (`SENATELA-26` lists Kentucky's candidates), it is found by first and last name. A party-only market needs the year
+  26. Positions in markets we can't place (combos, turnout, 2028) don't show.
+* No spoiler delay. Results aren't a picture, so election rows are built as of now, on the page and on the TV.
+* While an election board or page was looked at in the last 3 min, the service's 5-second feed call adds
+  `"election": {races, offices}`. These are the results for the races the web named in `need` on the previous call, so
+  the watch page shows the same status. The web answers with `election: [rows]`.
+* Where it shows:
+  * The Election board's sidebar: a **Trades** section under the balance of power. The offices shrink to make room, and
+    the calls are left whatever space remains (they're in the ticker anyway).
+  * The ticker: race calls and positions take turns; a call on a race someone holds comes first.
+  * The key-races tile: a chip per holder (`data.json` `holders`).
+  * The watch page's Bets panel: an "Election night" box.
+* Once a held race is called, the row and the ticker say "✓ CALLED · Hansen wins +38%". It turns calm green for a win and
+  muted for a loss, and nothing flashes. Control markets resolve when a party reaches control. "At least N seats won"
+  resolves once N is reached; the others resolve when every race is called.
+* Turning "Show bets on the TV overlay" off hides the trades and the chips too. Nothing is ever drawn over video.
+
 **Presets** (seeded once, `wall-election-seeded` marker): "Election Night" (map, key races, NBC News NOW, PBS News), "Election +
 NBA" and "Election map + NBA" (`fixed: true`: the preset's URLs stay as fixed tiles, live NBA games fill the rest).
 

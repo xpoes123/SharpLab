@@ -568,7 +568,8 @@ Item {
     component ElecBop: Column {
         property var o
         property bool wideBop: false
-        spacing: 0.35 * root.rem
+        property bool compact: false   // the sidebar with a Trades section: smaller numbers, so the trades get room
+        spacing: (compact ? 0.2 : 0.35) * root.rem
         Item {
             width: parent.width; height: bname.implicitHeight
             Caps { id: bname; text: o.name; size: root.tLabel; weight: 800; color: root.cInk }
@@ -576,12 +577,12 @@ Item {
         }
         Item {
             width: parent.width; height: bd.implicitHeight
-            Num { id: bd; text: "D " + o.dem; size: 4 * root.rem; color: root.cDem }
+            Num { id: bd; text: "D " + o.dem; size: (compact ? 2.7 : 4) * root.rem; color: root.cDem }
             Num { anchors.horizontalCenter: parent.horizontalCenter; anchors.baseline: bd.baseline; text: o.ind; size: root.tLabel; color: root.cInd }
-            Num { anchors.right: parent.right; anchors.baseline: bd.baseline; text: "R " + o.rep; size: 4 * root.rem; color: root.cRep }
+            Num { anchors.right: parent.right; anchors.baseline: bd.baseline; text: "R " + o.rep; size: (compact ? 2.7 : 4) * root.rem; color: root.cRep }
         }
         Item {
-            width: parent.width; height: 1.3 * root.rem
+            width: parent.width; height: (compact ? 0.9 : 1.3) * root.rem
             Row {
                 anchors.fill: parent
                 Repeater {
@@ -633,16 +634,88 @@ Item {
                     anchors.top: ehead.bottom; anchors.topMargin: root.gap
                     width: parent.width
                     columns: wide ? 3 : 1
-                    columnSpacing: 3 * root.rem; rowSpacing: 1.6 * root.rem
+                    columnSpacing: 3 * root.rem; rowSpacing: (e && e.trades && e.trades.length && !wide ? 0.9 : 1.6) * root.rem
                     Repeater {
                         model: e ? e.offices : []
-                        delegate: ElecBop { required property var modelData; o: modelData; wideBop: wide; width: wide ? (bops.width - 6 * root.rem) / 3 : bops.width }
+                        delegate: ElecBop { required property var modelData; o: modelData; wideBop: wide; compact: !wide && !!e.trades && e.trades.length > 0; width: wide ? (bops.width - 6 * root.rem) / 3 : bops.width }
+                    }
+                }
+                // members' midterm positions under the balance of power: who, side + race, entry → now, ▲/▼ %, the
+                // race's status; once the race is called the row says so ("✓ CALLED · Hansen wins +38%") in a calm
+                // green (won) or the muted ink (lost). Live (results aren't a picture), nothing blinks.
+                Item {
+                    id: tradesBox
+                    readonly property var rows: e && e.trades ? e.trades : []
+                    readonly property bool on: rows.length > 0
+                    readonly property real rowH: 5.3 * root.rem
+                    // as many rows as fit under the offices (the calls get the rest; they're in the ticker anyway)
+                    readonly property real room: parent.height - bops.y - bops.height - root.gap - 4 * root.rem
+                    readonly property int fits: Math.max(1, Math.min(wide ? 6 : 4, rows.length,
+                                                                     (wide ? 2 : 1) * Math.floor(room / (rowH + 0.5 * root.rem))))
+                    visible: on
+                    anchors.top: bops.bottom; anchors.topMargin: on ? root.gap : 0
+                    width: parent.width
+                    height: on ? thead.y + thead.height + 0.7 * root.rem + (wide ? Math.ceil(fits / 2) : fits) * (rowH + 0.5 * root.rem) : 0
+                    Rectangle { id: trule; width: parent.width; height: root.hair; color: root.cRule }
+                    Item {
+                        id: thead
+                        y: trule.height + 0.7 * root.rem
+                        width: parent.width; height: ttitle.implicitHeight
+                        Mono { id: ttitle; text: "TRADES"; weight: 600; color: root.cAccent }
+                        Mono { anchors.right: parent.right; color: root.cMuted
+                               text: tradesBox.rows.length > tradesBox.fits ? "+" + (tradesBox.rows.length - tradesBox.fits) + " more" : "live" }
+                    }
+                    Grid {
+                        id: tgrid
+                        anchors.top: thead.bottom; anchors.topMargin: 0.7 * root.rem
+                        width: parent.width
+                        columns: wide ? 2 : 1
+                        columnSpacing: 1.5 * root.rem; rowSpacing: 0.5 * root.rem
+                        Repeater {
+                            model: tradesBox.rows.slice(0, tradesBox.fits)
+                            delegate: Rectangle {
+                                id: tr
+                                required property var modelData
+                                readonly property bool done: modelData.won !== ""
+                                readonly property color tone: done ? (modelData.won === "won" ? root.cOk : root.cMuted)
+                                                              : modelData.dir === "up" ? root.cOk : modelData.dir === "down" ? root.cDanger : root.cMuted
+                                width: wide ? (tgrid.width - 1.5 * root.rem) / 2 : tgrid.width; height: tradesBox.rowH
+                                color: done && modelData.won === "won" ? Qt.tint(root.cSurface, "#2A8ED07A")
+                                     : !done && modelData.dir === "up" ? Qt.tint(root.cSurface, "#188ED07A")
+                                     : !done && modelData.dir === "down" ? Qt.tint(root.cSurface, "#18FF9580") : root.cSurface
+                                Behavior on color { ColorAnimation { duration: 1500; easing.type: Easing.InOutQuad } }
+                                Rectangle { width: root.tally; height: parent.height; color: tr.done ? tr.tone : root.cAccent }
+                                T {
+                                    id: twho
+                                    x: root.tally + 0.7 * root.rem; y: 0.35 * root.rem
+                                    width: parent.width - x - (tr.done ? 0 : tpct.implicitWidth) - 1.2 * root.rem; elide: Text.ElideRight
+                                    text: tr.done ? tr.modelData.highlight.replace(/ [+−]\d+%$/, "") : tr.modelData.who + "  " + tr.modelData.side + " " + tr.modelData.what
+                                    size: (tr.done ? 1.45 : 1.6) * root.rem; weight: 700; wdth: 68; color: tr.done ? tr.tone : root.cInk
+                                }
+                                Mono {
+                                    id: tpct
+                                    anchors.right: parent.right; anchors.rightMargin: 0.6 * root.rem; anchors.baseline: twho.baseline
+                                    visible: !tr.done
+                                    text: tr.modelData.pct; size: 1.5 * root.rem; weight: 600; color: tr.tone
+                                    Behavior on color { ColorAnimation { duration: 1500 } }
+                                }
+                                Mono {
+                                    x: twho.x; anchors.bottom: parent.bottom; anchors.bottomMargin: 0.35 * root.rem
+                                    width: parent.width - x - 0.6 * root.rem; elide: Text.ElideRight
+                                    text: tr.done ? (tr.modelData.highlight.match(/[+−]\d+%$/) || [""])[0] + "  " + tr.modelData.side + " " + tr.modelData.what
+                                                  + (tr.modelData.pnl ? "  " + tr.modelData.pnl : "")
+                                          : tr.modelData.status + "  " + tr.modelData.px.replace("@", "") + (tr.modelData.size ? "  " + tr.modelData.size : "")
+                                            + (tr.modelData.pnl ? "  " + tr.modelData.pnl : "")
+                                    size: 1.35 * root.rem; color: tr.done ? root.cInk : root.cMuted
+                                }
+                            }
+                        }
                     }
                 }
                 Item {
                     id: callsBox
-                    visible: !!e
-                    anchors.top: bops.bottom; anchors.topMargin: root.gap
+                    visible: !!e && height > 5 * root.rem   // squeezed out by the trades: the calls are in the ticker
+                    anchors.top: tradesBox.bottom; anchors.topMargin: root.gap
                     anchors.bottom: echat.top; anchors.bottomMargin: echat.on ? root.gap : 0
                     width: parent.width
                     clip: true

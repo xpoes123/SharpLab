@@ -27,6 +27,8 @@ import time
 import urllib.request
 from pathlib import Path
 
+from shared import kalshi_election as ke
+
 log = logging.getLogger("wall.election")
 POLL_S = 30
 IDLE_S = 180
@@ -321,8 +323,33 @@ class Results:
         return out
 
 
-def board(snap: dict) -> dict:
-    """The overlay's "election" board: balance per office + the latest calls + the next poll closings."""
+TRADE_KEYS = ("who", "side", "label", "chip", "entry", "mark", "pct", "dir", "size", "pnl", "race", "status", "called", "won",
+              "highlight")
+
+
+def trades(rows: list[dict] | None, snap: dict) -> list[dict]:
+    """Members' midterm positions (wall/bets.py BetsFeed.election: opt-in filtered on the web, never delayed) with each
+    race's status from *these* results — the same feed the map and the board draw, so a ✓ appears everywhere at once."""
+    if not rows:
+        return []
+    races = {r["id"]: r for r in snap.get("races") or []}
+    return [{k: r.get(k) for k in TRADE_KEYS} for r in ke.enrich(rows, races, snap.get("offices") or {})]
+
+
+def holders(trade_rows: list[dict]) -> dict[str, list[dict]]:
+    """race id → the chips the key-races tile draws ("Hansen YES D")."""
+    out: dict[str, list[dict]] = {}
+    for t in trade_rows:
+        if t.get("race"):
+            chip = {"who": t["who"], "chip": t["chip"], "won": t["won"]}
+            if chip not in out.setdefault(t["race"], []):
+                out[t["race"]].append(chip)
+    return out
+
+
+def board(snap: dict, positions: list[dict] | None = None) -> dict:
+    """The overlay's "election" board: balance per office + the latest calls + the next poll closings + (positions =
+    the members' midterm positions, when bets are shown) the Trades section and the ticker's position / call lines."""
     now = snap.get("now") or time.time()
     closes = sorted({r["closes"] for r in snap.get("races") or [] if r.get("closes", 0) > now})
     nxt = []
@@ -335,6 +362,7 @@ def board(snap: dict) -> dict:
             "calls": snap.get("calls") or [], "next": nxt, "counting": counting,
             "watch": [r for r in sorted(snap.get("races") or [], key=lambda r: (r["called"] != "", r["margin"] if r["margin"] is not None else 99))
                       if r["watch"] and r["office"] in ("S", "G") and r["votes"] > 0][:6],
+            "trades": trades(positions, snap),
             "note": "" if snap.get("races") else (snap.get("error") or "Loading results…")}
 
 

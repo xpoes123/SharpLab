@@ -25,6 +25,12 @@
   .st2 .call { font-size: 1.15rem; font-weight: 800; }
   .st2 .in { font-size: 0.85rem; }
   .st2 .by { font-size: 0.72rem; }
+  .chips { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.3rem; }
+  .chip { font-size: 0.72rem; font-weight: 700; padding: 0.05rem 0.4rem; border: 1px solid var(--rule-strong); background: var(--surface2);
+          color: var(--ink); white-space: nowrap; transition: color 1.5s, border-color 1.5s; }
+  .chip b { font-weight: 800; color: var(--accent); }
+  .chip.won { border-color: var(--ok, #8ED07A); color: var(--ok, #8ED07A); }
+  .chip.lost { color: var(--muted); }
   .empty { position: absolute; inset: 0; display: grid; place-items: center; font-size: 1.6rem; color: var(--muted); }
 </style>
 </head>
@@ -38,6 +44,7 @@
 // Key races: CNN's races to watch (Senate + Governors), then the closest House ones once votes are in. PER rows a page,
 // a new page every 12 s (?every=s) with a 2 s crossfade; the data every 30 s (bars ease over 3 s). Uncalled races first,
 // closest margin on top; a called race shows ✓ and whose call it is. ?page=n pins a page (renders, tests).
+// A race an opted-in member holds a Kalshi position in gets a small chip under its name ("Hansen YES D"; data.holders).
 const Q = new URLSearchParams(location.search);
 const PER = 5, EVERY = (+Q.get("every") || 12) * 1000, TAG = { S: "Senate", G: "Governor", H: "House" };
 E.tickClock(document.getElementById("clock"));
@@ -56,7 +63,13 @@ function pick(races) {
   return out;
 }
 
-function row(r, now) {
+function chips(r, holders) {
+  const hs = (holders || {})[r.id] || [];
+  if (!hs.length) return "";
+  return `<div class="chips">${hs.slice(0, 3).map((h) => `<span class="chip${h.won === true ? " won" : h.won === false ? " lost" : ""}">${h.won === true ? "✓ " : ""}<b>${E.esc(h.who)}</b> ${E.esc(h.chip)}</span>`).join("")}${hs.length > 3 ? `<span class="chip">+${hs.length - 3}</span>` : ""}</div>`;
+}
+
+function row(r, now, holders) {
   const cs = r.cands.slice(0, 2), top = Math.max(1, ...cs.map((c) => c.pct));
   const status = r.called
     ? `<span class="call ${r.called}">✓ ${E.PARTY[r.called]}${r.flip ? " flip" : ""}</span><span class="by mono muted">called by ${E.esc(r.caller)}</span>`
@@ -65,7 +78,7 @@ function row(r, now) {
       : `<span class="call muted">${r.closes > now ? "Polls open" : "Too early"}</span><span class="by mono muted">${r.closes > now ? "close " + E.clock(r.closes) : "no votes yet"}</span>`;
   const cls = r.called ? "c" + r.called : r.votes > 0 && r.leader ? "l" + r.leader : "";
   return `<div class="row ${cls}">
-    <div class="where"><div class="st">${E.esc(r.label.replace(" (special)", ""))}</div><div class="of mono muted caps">${TAG[r.office]}${r.special ? " · special" : ""}${r.uncontested ? " · uncontested" : ""}</div></div>
+    <div class="where"><div class="st">${E.esc(r.label.replace(" (special)", ""))}</div><div class="of mono muted caps">${TAG[r.office]}${r.special ? " · special" : ""}${r.uncontested ? " · uncontested" : ""}</div>${chips(r, holders)}</div>
     <div class="cands">${cs.map((c) => `<div class="c${r.called && !c.winner ? " lost" : ""}">
       <span class="nm">${c.winner ? "✓ " : ""}${E.esc(c.name)}<small>${E.PARTY[c.party]}${c.inc ? " · inc." : ""}</small></span>
       <span class="pc num ${c.party}">${r.votes > 0 ? c.pct.toFixed(1) + "%" : "–"}</span>
@@ -94,7 +107,7 @@ function paint(data) {
   document.getElementById("title").textContent = `Key races · ${TAG[g.o] === "Governor" ? "Governors" : TAG[g.o]}`;
   document.getElementById("sub").textContent = (g.n > 1 ? `${g.i + 1}/${g.n} · ` : "") +
     (g.rows.some((r) => r.votes > 0) ? "closest first" : E.nextClose(d) || "no votes counted yet");
-  const html = `<div class="rows">${g.rows.map((r) => row(r, now)).join("")}${"<div></div>".repeat(PER - g.rows.length)}</div>`;
+  const html = `<div class="rows">${g.rows.map((r) => row(r, now, d.holders)).join("")}${"<div></div>".repeat(PER - g.rows.length)}</div>`;
   const key = `${pageNo % groups.length}`;
   if (key === shown) {   // same page, new numbers: in place (the bars ease), no fade
     const cur = box.querySelector(".view.on");
