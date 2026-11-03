@@ -1,0 +1,261 @@
+{
+ "source": "site.api.espn.com/apis/site/v2/sports/.../nfl/teams, recorded 2026-11-01, trimmed",
+ "teams": [
+  {
+   "id": "22",
+   "abbreviation": "ARI",
+   "displayName": "Arizona Cardinals",
+   "shortDisplayName": "Cardinals",
+   "name": "Cardinals",
+   "location": "Arizona"
+  },
+  {
+   "id": "1",
+   "abbreviation": "ATL",
+   "displayName": "Atlanta Falcons",
+   "shortDisplayName": "Falcons",
+   "name": "Falcons",
+   "location": "Atlanta"
+  },
+  {
+   "id": "33",
+   "abbreviation": "BAL",
+   "displayName": "Baltimore Ravens",
+   "shortDisplayName": "Ravens",
+   "name": "Ravens",
+   "location": "Baltimore"
+  },
+  {
+   "id": "2",
+   "abbreviation": "BUF",
+   "displayName": "Buffalo Bills",
+   "shortDisplayName": "Bills",
+   "name": "Bills",
+   "location": "Buffalo"
+  },
+  {
+   "id": "29",
+   "abbreviation": "CAR",
+   "displayName": "Carolina Panthers",
+   "shortDisplayName": "Panthers",
+   "name": "Panthers",
+   "location": "Carolina"
+  },
+  {
+   "id": "3",
+   "abbreviation": "CHI",
+   "displayName": "Chicago Bears",
+   "shortDisplayName": "Bears",
+   "name": "Bears",
+   "location": "Chicago"
+  },
+  {
+   "id": "4",
+   "abbreviation": "CIN",
+   "displayName": "Cincinnati Bengals",
+   "shortDisplayName": "Bengals",
+   "name": "Bengals",
+   "location": "Cincinnati"
+  },
+  {
+   "id": "5",
+   "abbreviation": "CLE",
+   "displayName": "Cleveland Browns",
+   "shortDisplayName": "Browns",
+   "name": "Browns",
+   "location": "Cleveland"
+  },
+  {
+   "id": "6",
+   "abbreviation": "DAL",
+   "displayName": "Dallas Cowboys",
+   "shortDisplayName": "Cowboys",
+   "name": "Cowboys",
+   "location": "Dallas"
+  },
+  {
+   "id": "7",
+   "abbreviation": "DEN",
+   "displayName": "Denver Broncos",
+   "shortDisplayName": "Broncos",
+   "name": "Broncos",
+   "location": "Denver"
+  },
+  {
+   "id": "8",
+   "abbreviation": "DET",
+   "displayName": "Detroit Lions",
+   "shortDisplayName": "Lions",
+   "name": "Lions",
+   "location": "Detroit"
+  },
+  {
+   "id": "9",
+   "abbreviation": "GB",
+   "displayName": "Green Bay Packers",
+   "shortDisplayName": "Packers",
+   "name": "Packers",
+   "location": "Green Bay"
+  },
+  {
+   "id": "34",
+   "abbreviation": "HOU",
+   "displayName": "Houston Texans",
+   "shortDisplayName": "Texans",
+   "name": "Texans",
+   "location": "Houston"
+  },
+  {
+   "id": "11",
+   "abbreviation": "IND",
+   "displayName": "Indianapolis Colts",
+   "shortDisplayName": "Colts",
+   "name": "Colts",
+   "location": "Indianapolis"
+  },
+  {
+   "id": "30",
+   "abbreviation": "JAX",
+   "displayName": "Jacksonville Jaguars",
+   "shortDisplayName": "Jaguars",
+   "name": "Jaguars",
+   "location": "Jacksonville"
+  },
+  {
+   "id": "12",
+   "abbreviation": "KC",
+   "displayName": "Kansas City Chiefs",
+   "shortDisplayName": "Chiefs",
+   "name": "Chiefs",
+   "location": "Kansas City"
+  },
+  {
+   "id": "13",
+   "abbreviation": "LV",
+   "displayName": "Las Vegas Raiders",
+   "shortDisplayName": "Raiders",
+   "name": "Raiders",
+   "location": "Las Vegas"
+  },
+  {
+   "id": "24",
+   "abbreviation": "LAC",
+   "displayName": "Los Angeles Chargers",
+   "shortDisplayName": "Chargers",
+   "name": "Chargers",
+   "location": "Los Angeles"
+  },
+  {
+   "id": "14",
+   "abbreviation": "LAR",
+   "displayName": "Los Angeles Rams",
+   "shortDisplayName": "Rams",
+   "name": "Rams",
+   "location": "Los Angeles"
+  },
+  {
+   "id": "15",
+   "abbreviation": "MIA",
+   "displayName": "Miami Dolphins",
+   "shortDisplayName": "Dolphins",
+   "name": "Dolphins",
+   "location": "Miami"
+  },
+  {
+   "id": "16",
+   "abbreviation": "MIN",
+   "displayName": "Minnesota Vikings",
+   "shortDisplayName": "Vikings",
+   "name": "Vikings",
+   "location": "Minnesota"
+  },
+  {
+   "id": "17",
+   "abbreviation": "NE",
+   "displayName": "New England Patriots",
+   "shortDisplayName": "Patriots",
+   "name": "Patriots",
+   "location": "New England"
+  },
+  {
+   "id": "18",
+   "abbreviation": "NO",
+   "displayName": "New Orleans Saints",
+   "shortDisplayName": "Saints",
+   "name": "Saints",
+   "location": "New Orleans"
+  },
+  {
+   "id": "19",
+   "abbreviation": "NYG",
+   "displayName": "New York Giants",
+   "shortDisplayName": "Giants",
+   "name": "Giants",
+   "location": "New York"
+  },
+  {
+   "id": "20",
+   "abbreviation": "NYJ",
+   "displayName": "New York Jets",
+   "shortDisplayName": "Jets",
+   "name": "Jets",
+   "location": "New York"
+  },
+  {
+   "id": "21",
+   "abbreviation": "PHI",
+   "displayName": "Philadelphia Eagles",
+   "shortDisplayName": "Eagles",
+   "name": "Eagles",
+   "location": "Philadelphia"
+  },
+  {
+   "id": "23",
+   "abbreviation": "PIT",
+   "displayName": "Pittsburgh Steelers",
+   "shortDisplayName": "Steelers",
+   "name": "Steelers",
+   "location": "Pittsburgh"
+  },
+  {
+   "id": "25",
+   "abbreviation": "SF",
+   "displayName": "San Francisco 49ers",
+   "shortDisplayName": "49ers",
+   "name": "49ers",
+   "location": "San Francisco"
+  },
+  {
+   "id": "26",
+   "abbreviation": "SEA",
+   "displayName": "Seattle Seahawks",
+   "shortDisplayName": "Seahawks",
+   "name": "Seahawks",
+   "location": "Seattle"
+  },
+  {
+   "id": "27",
+   "abbreviation": "TB",
+   "displayName": "Tampa Bay Buccaneers",
+   "shortDisplayName": "Buccaneers",
+   "name": "Buccaneers",
+   "location": "Tampa Bay"
+  },
+  {
+   "id": "10",
+   "abbreviation": "TEN",
+   "displayName": "Tennessee Titans",
+   "shortDisplayName": "Titans",
+   "name": "Titans",
+   "location": "Tennessee"
+  },
+  {
+   "id": "28",
+   "abbreviation": "WSH",
+   "displayName": "Washington Commanders",
+   "shortDisplayName": "Commanders",
+   "name": "Commanders",
+   "location": "Washington"
+  }
+ ]
+}
