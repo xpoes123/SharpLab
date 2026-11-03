@@ -24,19 +24,26 @@
 #sync.meh { color: var(--gold); }
 #sync.bad { color: var(--red); background: var(--red-soft); }
 
-.tiles { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.tiles { display: grid; gap: 6px; }
 .tiles:empty { display: none; }
-.tile { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 6px 10px; font-size: 13px;
-  display: flex; gap: 8px; align-items: center; max-width: 100%; min-width: 0; }
-.tile .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; min-width: 0; }
-.tile.sound { border-color: var(--accent); }
-.tile button { border: 1px solid var(--line); background: var(--panel2); color: var(--fg); border-radius: var(--r-sm);
-  font: inherit; font-size: 12px; padding: 2px 8px; cursor: pointer; white-space: nowrap; }
+.tile { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; min-width: 0; padding: 6px 8px 6px 12px; font-size: 13px;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-sm); }
+.tile .num { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 1ch; }
+.tile .lbl { flex: 1 1 140px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile.sound { box-shadow: inset 3px 0 0 var(--accent); }
+.tile > span.small { order: 1; white-space: nowrap; }
+.tile > button { order: 2; }
+.tile > button.star { order: 3; }
+.tile button { border: 1px solid var(--line); background: transparent; color: var(--fg-2); border-radius: var(--r-sm);
+  font: inherit; font-size: 12px; padding: 3px 10px; cursor: pointer; white-space: nowrap; }
+.tile button:hover { color: var(--fg); border-color: var(--line-strong); }
+button.star { color: var(--muted); }
+button.star[aria-pressed="true"] { color: var(--gold); }
 
 .props { display: grid; gap: 8px; margin-bottom: 10px; }
 .props:empty { display: none; }
-.prop { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; background: var(--panel2); border: 1px solid var(--line-strong);
-  border-radius: var(--r); padding: 10px 12px; }
+.prop { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; background: var(--panel2); border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm); padding: 8px 12px; }
 .prop .what { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
 .prop .tally { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
 .prop button { border: 1px solid var(--line); background: var(--panel); color: var(--fg); border-radius: var(--r-sm);
@@ -45,12 +52,22 @@
 .prop .left { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--gold); min-width: 34px; text-align: right; }
 
 .controls summary { cursor: pointer; font-weight: 600; }
-.controls .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+#ownerNote { margin-left: 8px; font-size: 12px; font-weight: 400; }
+.controls .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+/* "Change the wall": Screens / Streams / Spectrum / Local news / Wall settings */
+.ctl-sec { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+.sheet-head + .ctl-sec { margin-top: 8px; padding-top: 0; border-top: 0; }
+.ctl-sec[hidden] { display: none; }
+.ctl-h { margin: 0 0 8px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.ctl-h label { cursor: pointer; }
+.ctl-h + .row { margin-top: 0; }
+.ctl-lbl { color: var(--muted); font-size: 13px; }
+.ctl-note { margin: 16px 0 0; }
+.jev-line { flex-basis: 100%; }
 .controls select, .controls input, .chat input { background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
   border-radius: var(--r-sm); padding: 6px 8px; font: inherit; }
 .controls input { flex: 1 1 220px; min-width: 0; }
-.controls .btn { padding: 6px 12px; }
-.controls .tiles { margin: 10px 0 0; }
+.controls .tiles { margin: 0; }
 .small { font-size: 12px; }
 .sheet-head, .sum-short, .vstrip, .vcount { display: none; }
 
@@ -95,15 +112,14 @@
 
 .live-row { align-items: flex-start; }
 .live-games { display: flex; flex-wrap: wrap; gap: 6px; }
-.live-games .btn { font-size: 0.9em; }
-.live-games .btn:disabled { opacity: .45; cursor: default; }
+.live-games .btn:disabled { cursor: default; }
+.live-games .pool { display: inline-flex; align-items: center; gap: 4px; }
+.pool button.star { border: 0; background: none; font-size: 15px; cursor: pointer; padding: 4px; }
 /* election night: the Spectrum lineup, one row per leaning */
 .spectrum { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .spectrum .spec-grp { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.spectrum .spec-grp > b { min-width: 6.5em; font-size: 13px; color: var(--muted); font-weight: 600; }
-.spectrum .btn { font-size: 0.9em; }
-.spectrum .btn:disabled { opacity: .5; cursor: default; }
-.spectrum .btn .small { margin-left: 6px; }
+.spectrum .spec-grp > b { min-width: 6.5em; font-size: 13px; color: var(--muted); font-weight: 500; }
+.spectrum .btn:disabled { cursor: default; }
 
 /* the chat toggle + unread badge only show in phone landscape (below) */
 .chat-toggle { display: none; }
@@ -140,6 +156,7 @@
     border-bottom: 1px solid var(--line); }
   .bar .btn { min-width: 44px; min-height: 44px; padding: 0 8px; font-size: 18px; display: inline-grid; place-items: center; flex: none; }
   .bar .lbl, .bar .act, #wallName, #mirror { display: none; }
+  body:not(.public) .bar #count, .bar .vol { display: none !important; }   /* phones: hardware volume; the strip below shows who is here */
   .bar #elecBtn .lbl { display: inline; font-size: 14px; font-weight: 600; }
   .bar #elecBtn { display: inline-flex; gap: 4px; align-items: center; }
   .bar #sync { margin-left: auto; }
@@ -176,14 +193,16 @@
   .controls select, .controls input, .chat input { font-size: 16px; min-height: 44px; }
   .controls select { max-width: 100%; }
   .controls .btn, .live-games .btn, .tile button { min-height: 44px; }
-  .controls .row > span:not(.muted) { flex-basis: 100%; color: var(--muted); font-size: 13px; }
+  .controls .row > span:not(.muted) { flex-basis: 100%; }
   .controls .row label { display: flex; align-items: center; gap: 8px; flex: 1 1 100%; }
   .controls .row label select { flex: 1; min-width: 0; }
   .live-row > span:first-child { flex-basis: 100%; }
   .live-games { width: 100%; }
-  .tiles { flex-direction: column; }
-  .tile { width: 100%; padding: 6px 8px 6px 12px; font-size: 14px; }
-  .tile .lbl { flex: 1; max-width: none; }
+  .tile { padding: 6px 8px 6px 12px; font-size: 14px; }
+  .tile .lbl { flex: 1 1 calc(100% - 4em); }
+  .tile button { min-width: 44px; }
+  .ctl-sec { margin-top: 18px; }
+  .spectrum .spec-grp > b { flex-basis: 100%; }
 
   .props { grid-area: props; margin: 0; padding: 8px 12px; max-height: 34vh; overflow-y: auto; border-bottom: 1px solid var(--line); }
   .prop { gap: 8px; padding: 8px 10px; }
@@ -281,7 +300,7 @@
 .gate-peek #peekText { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .gate-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
 .gate-peek.on { color: var(--text); }
-.gate-peek.on .gate-dot { background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }   /* steady, never pulses */
+.gate-peek.on .gate-dot { background: var(--green); }
 .gate-peek.empty { visibility: hidden; }   /* reserved, so the buttons below never move when it fills in */
 .gate-guest[hidden], .gate-roles[hidden] { display: none; }
 .gate-msg { margin: 14px 0 0; font-size: 14px; color: var(--gold); }
@@ -345,7 +364,10 @@
   .ps-next { font-size: 12px; }
 }
 
-.live-on { color: #E0605A; font-weight: 600; }
+/* status badges stay quiet: muted text, a small red dot for live / on air */
+.live-on { color: var(--fg-2); }
+.live-on::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%;
+  background: var(--bad); vertical-align: 1px; }
 
 /* Desktop (≥ 1400 px): the whole width — a bigger video and map — and a wider right rail that stays in view while the main
    column scrolls: who's watching, the chat (filling what's left of the screen) and the live updates feed under it. */
@@ -368,24 +390,32 @@ body.public .controls, body.public .viewers, body.public #props { display: none 
 @media (max-width: 700px) and (orientation: portrait), (max-width: 700px) and (min-height: 501px) {
   body.public.inroom #wall { flex-direction: column; }
   body.public.inroom #room { flex: 1; display: block; overflow-y: auto; padding: 8px; }
+  body.public .bar { flex-wrap: wrap; }
   body.public.inroom .stage, body.public.inroom .side { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
   body.public.inroom .stage > *, body.public.inroom .side > * { grid-area: auto; margin: 0; }
   body.public .chat #msgs { max-height: 40vh; }
   body.public .public-note { margin: 0; border-radius: 0; border-width: 0 0 1px; padding: 6px 12px; font-size: 12px; }
 }
 
-/* DJ Jev in the viewer list and the chat */
-.jev .who, #viewers li.jev > span:nth-child(2) { color: #BB9AF7; font-weight: 700; }
-.viewers li .tag.jev-tag { background: linear-gradient(90deg, #7AA2F7, #BB9AF7); color: #15161E; font-weight: 700; padding: 1px 7px; border-radius: 999px; }
+/* DJ Jev in the viewer list: a plain small tag */
+.viewers li .tag.jev-tag { padding: 0 6px; border: 1px solid var(--line); border-radius: var(--r-sm); }
 
 /* ---- full screen: the chat floating over the video, Twitch-style (wall.js fchat) ----
    body.fs = the player box is fullscreen (requestFullscreen) or pseudo-fullscreen (body.pfs: iPhone, where only the bare
    <video> can go native-fullscreen and nothing overlays that — the box is pinned over the whole viewport instead). */
 .fchat, .fs-ctl { display: none; }
-body.pfs { overflow: hidden; overscroll-behavior: none; }
+body.pfs { overflow: hidden; overscroll-behavior: none; touch-action: none; }
+body.pfs header, body.pfs .bar, body.pfs .chat-toggle { visibility: hidden; }
 body.pfs .player { position: fixed; inset: 0; z-index: 90; width: 100vw; height: 100vh; height: 100dvh; max-width: none;
   aspect-ratio: auto; border-radius: 0; margin: 0; background: #000; }
 body.pfs .player video { width: 100%; height: 100%; object-fit: contain; }
+/* held upright: the player box (video, floating chat, its buttons) turns 90° so the 16:9 picture fills the long edge */
+@media (orientation: portrait) {
+  body.pfs .player { inset: auto; top: 0; left: 0; width: 100vh; width: 100dvh; height: 100vw; height: 100dvw;
+    transform-origin: top left; transform: translateX(100vw) rotate(90deg); }
+  body.pfs .fchat { right: 14px; bottom: 68px; width: min(40%, 400px); }
+  body.pfs .fs-ctl { right: 12px; bottom: 12px; }
+}
 body.fs .chat-toggle { display: none !important; }
 body.fs .fchat { display: flex; flex-direction: column; justify-content: flex-end; gap: 8px; position: absolute; z-index: 3;
   right: max(14px, env(safe-area-inset-right)); bottom: calc(max(12px, env(safe-area-inset-bottom)) + 56px);
@@ -414,3 +444,18 @@ body.fs .fs-ctl { display: flex; gap: 8px; position: absolute; z-index: 4;
 #fchatBtn[aria-pressed="false"] { opacity: .5; }
 body.fs.fs-idle .fs-ctl button { opacity: 0; }
 body.public .fchat-form, body.public #fsayBtn { display: none !important; }
+
+/* ---- one button style per role on this page: primary (accent fill: Send, Join), secondary (everything else), chip
+   (.el-chip / .el-segbtn in wall-election.css). hqstyle's plain .btn is an accent fill, which made every control shout. ---- */
+#wall .btn:not(.pill):not(.primary) { background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: var(--r-sm);
+  font: inherit; font-size: 13px; font-weight: 500; line-height: 1.3; padding: 6px 12px; }
+#wall .btn:not(.pill):not(.primary):hover { filter: none; border-color: var(--line-strong); }
+#wall .btn.ghost { background: transparent; color: var(--fg-2); }
+#wall .btn[aria-pressed="true"] { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); color: var(--accent); }
+#wall .btn:disabled { opacity: .5; }
+#wall .btn .small { margin-left: 6px; font-weight: 400; }
+#wall .btn.primary { border-radius: var(--r-sm); padding: 8px 16px; }
+
+/* phones: the Bets panel and the Live updates feed are sections of the Election sheet (wall-election.js placePanels) */
+.elec .lv-feed, .elec .bets { margin: 16px 0 0; padding: 12px 0 0; border: 0; border-top: 1px solid var(--line); border-radius: 0;
+  background: none; box-shadow: none; }

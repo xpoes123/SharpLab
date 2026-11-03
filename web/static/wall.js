@@ -93,7 +93,7 @@
 
   // tap the sync pill: back to the shared point right now (one exact seek; play again if paused / stalled)
   $("sync").style.cursor = "pointer";
-  $("sync").title = "Tap to sync back up with everyone";
+  $("sync").title = "Resync";
   $("sync").onclick = () => {
     if (video.paused) video.play().catch(() => {});
     const pdt = playingDate();
@@ -147,19 +147,27 @@
     document.body.classList.toggle("fs", on);
     $("fsBtn").setAttribute("aria-pressed", String(on));
     if (!on) { fchatForm(false); $("fmsgs").replaceChildren(); }   // nothing old when it opens again
+    if (!nativeFs() && locked) { locked = false; try { screen.orientation.unlock(); } catch (e) { /* nothing to undo */ } }
     fsWake();
+  }
+  // phones: real full screen also turns the picture sideways (Android Chrome; iPhone has no orientation lock, so its
+  // pseudo-fullscreen rotates the player box with CSS while the phone is held upright, see body.pfs in wall.css)
+  let locked = false;
+  function lockLandscape() {
+    if (!COARSE.matches || !screen.orientation || !screen.orientation.lock) return;
+    screen.orientation.lock("landscape").then(() => (locked = true), () => {});
   }
   function setPseudo(on) {
     document.body.classList.toggle("pfs", on);
-    if (on) scrollTo(0, 0);
+    if (on) scrollTo(0, 1);   // nudges Safari to collapse its bars where it still can
     showFs();
   }
   $("fsBtn").onclick = () => {
     const box = video.parentElement;
     if (pseudoFs()) setPseudo(false);
     else if (nativeFs()) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-    else if (!IPHONE && box.requestFullscreen) box.requestFullscreen().catch(() => setPseudo(true));
-    else if (!IPHONE && box.webkitRequestFullscreen) box.webkitRequestFullscreen();
+    else if (!IPHONE && box.requestFullscreen) box.requestFullscreen({ navigationUI: "hide" }).then(lockLandscape, () => setPseudo(true));
+    else if (!IPHONE && box.webkitRequestFullscreen) { box.webkitRequestFullscreen(); lockLandscape(); }
     else setPseudo(true);
   };
   ["fullscreenchange", "webkitfullscreenchange"].forEach((ev) => document.addEventListener(ev, showFs));
@@ -179,7 +187,7 @@
   function showFchat() {
     document.body.classList.toggle("fchat-off", !fchatShown);
     $("fchatBtn").setAttribute("aria-pressed", String(fchatShown));
-    $("fchatBtn").title = `Chat over the video: ${fchatShown ? "on" : "off"}`;
+    $("fchatBtn").title = `Chat overlay: ${fchatShown ? "on" : "off"}`;
   }
   showFchat();
   $("fchatBtn").onclick = () => {
@@ -290,8 +298,8 @@
         if (m.pdt_off != null) pdtOff = m.pdt_off;
         $("msgs").replaceChildren(); m.history.forEach(addMsg);
         if (me.public) { showCount(m.count); setWall(m.wall); break; }   // public: the stream, the chat read-only, a head count
-        $("ownerNote").textContent = me.owner ? "· you're the owner: changes apply at once" : "";
-        $("offSub").textContent = "Start it from “Change the wall” below.";
+        $("ownerNote").textContent = me.owner ? "Owner — changes apply immediately" : "";
+        $("offSub").textContent = "Start it from Change the wall below.";
         renderViewers(m.viewers);
         props.clear(); m.proposals.forEach((p) => props.set(p.id, p)); renderProps();
         setWall(m.wall);
@@ -328,7 +336,7 @@
     runId = on ? wall.started : null;
     if (on) startPlayer(); else if (wall) stopPlayer();
     const sel = $("preset"), cur = sel.value;
-    const tv = el("option", null, "📺 Same as the TV"); tv.value = "";
+    const tv = el("option", null, "Same as the TV"); tv.value = "";
     sel.replaceChildren(tv, ...((wall && wall.presets) || []).map((n) => { const o = el("option", null, n); o.value = n; return o; }));
     if (cur) sel.value = cur;
     if (lastGames) renderLive(lastGames);
@@ -345,34 +353,34 @@
     (wall.urls || []).forEach((u, i) => {
       const name = tileName(u, labels[i]);
       const t = el("div", "tile" + (wall.sound === i ? " sound" : ""));
-      t.append(el("b", null, String(i + 1)), el("span", "lbl", name));
-      if (wall.sound === i) t.append(el("span", null, "🔊"));
-      else if (!ownPage(u)) { const b = el("button", null, "🔊 here"); b.onclick = () => propose({ op: "sound", i }); t.append(b); }   // our data pages are silent
+      t.append(el("b", "num", String(i + 1)), el("span", "lbl", name));
+      if (wall.sound === i) { const s = el("span", "snd", "🔊"); s.title = "Sound is from this tile"; t.append(s); }
+      else if (!ownPage(u)) { const b = el("button", null, "🔊"); b.title = "Move the sound here"; b.setAttribute("aria-label", "Move the sound here"); b.onclick = () => propose({ op: "sound", i }); t.append(b); }   // our data pages are silent
       if (i > 0 && (wall.urls || []).length >= 2) {   // tile 1 is the big one
-        const p = el("button", null, "⬆ main"); p.title = "Make this the main (big) tile";
+        const p = el("button", null, "Main"); p.title = "Make this the main tile";
         p.onclick = () => propose({ op: "promote", i, label: name }); t.append(p);
       }
       if (!ownPage(u) && elecMode) {   // "DJ Jev, put something else here"
-        const j = el("button", null, "🎧 swap"); j.title = "Ask DJ Jev for the best other stream on air";
+        const j = el("button", null, "Swap"); j.title = "Ask DJ Jev for another stream";
         j.onclick = () => propose({ op: "jevswap", i }); t.append(j);
       }
       const live = (wall.streams || [])[i];   // a YouTube tile: is it on yet (wall/streams.py)
-      if (live) t.append(el("span", "small " + (live.live ? "live-on" : "muted"), live.live ? "● live" : live.starts
-        ? `starts ${new Date(live.starts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : live.live === false ? "not live" : ""));
+      if (live) t.append(el("span", "small " + (live.live ? "live-on" : "muted"), live.live ? "Live" : live.starts
+        ? `Starts ${new Date(live.starts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : live.live === false ? "Not live" : ""));
       const air = onairBadge((wall.onair || [])[i]);   // ad-skip (wall/onair.py): on air / at a break / an ad
       if (air) t.append(air);
       if (!ownPage(u)) t.append(starBtn(u, name));
       if (elecMode && i < 2 && !ownPage(u)) {   // a stream on a dashboard tile: one tap back to a dashboard
         const free = ELEC_SCREENS.find(([scr]) => !(wall.urls || []).includes(OWN + scr));
-        if (free) { const d = el("button", null, "↩ dashboard"); d.title = `Back to ${free[1]}`;
+        if (free) { const d = el("button", null, "Dashboard"); d.title = `Back to ${free[1]}`;
           d.onclick = () => propose({ op: "tile", i, url: OWN + free[0], label: free[1] }); t.append(d); }
       }
       const rot = (wall.rotate || []).find((r) => r.i === i);   // an election data tile: rotates every minute
       if (rot) {
-        t.append(el("span", "muted small", rot.held ? `held · ${Math.ceil(rot.in / 60)} min` : `next in ${rot.in}s`));
-        const h = el("button", null, "🔒 hold"); h.title = "Keep this screen 5 min, then it rotates again";
+        t.append(el("span", "muted small", rot.held ? `Held ${Math.ceil(rot.in / 60)} min` : `Next in ${rot.in}s`));
+        const h = el("button", null, "Hold"); h.title = "Keep this screen 5 min";
         h.onclick = () => propose({ op: "rotate", i, act: "hold" }); t.append(h);
-        const n = el("button", null, "⏭ next"); n.title = "Switch to the next screen now (it then stays 5 min)";
+        const n = el("button", null, "Next"); n.title = "Next screen now";
         n.onclick = () => propose({ op: "rotate", i, act: "next" }); t.append(n);
       }
       tiles.append(t);
@@ -381,45 +389,45 @@
   // Ad-skip: each stream's label from wall/adwatch.py, and the ★ favorites (two at most: the tiles' home streams)
   function onairBadge(a) {
     if (!a || !a.label) return null;
-    const txt = { coverage: "● on air", ad: "ad", break: "⏸ break", offtopic: "off-topic" }[a.label];
+    const txt = { coverage: "On air", ad: "Ad", break: "Break", offtopic: "Off-topic" }[a.label];
     if (!txt) return null;
     // the break forecast (wall/breaks.py + Jev's "soon"): only while on air
     const ck = a.clock || {};
-    const hint = a.label !== "coverage" ? "" : (a.soon || 0) >= 0.6 ? " · break soon" : ck.next_likely ? ` · break likely ${ck.next_likely}` : "";
+    const hint = a.label !== "coverage" ? "" : (a.soon || 0) >= 0.6 ? ", break soon" : ck.next_likely ? `, break ~${ck.next_likely}` : "";
     const b = el("span", "small " + (a.label === "coverage" ? "live-on" : "muted"), txt + hint);
-    b.title = (a.tail ? `“…${a.tail}”` : "") + (a.confidence ? ` (${Math.round(a.confidence * 100)}%)` : "") +
-      (ck.n_breaks ? ` · ${ck.n_breaks} breaks seen, ${Math.round((ck.p_soon || 0) * 100)}% one starts in ~1 min` : "");
+    b.title = (a.tail ? `“…${a.tail}”` : "") + (a.confidence ? ` (${Math.round(a.confidence * 100)}%)` : "");
     return b;
   }
   function starBtn(url, label) {
     const on = ((wall && wall.favorites) || []).includes(url);
-    const b = el("button", null, on ? "★" : "☆");
-    b.title = on ? "Unstar: no longer a home stream for tiles 3–4" : "Star (two at most): tiles 3–4 come back to it after a break";
+    const b = el("button", "star", on ? "★" : "☆");
+    b.title = on ? "Unfavorite" : "Favorite (max 2): tiles 3–4 return to it after a break";
+    b.setAttribute("aria-label", on ? "Unfavorite" : "Favorite"); b.setAttribute("aria-pressed", String(on));
     b.onclick = () => propose({ op: "favorite", url, on: !on, label });
     return b;
   }
-  function adRow() {   // the election screens row: the ad-skip toggle + the pool of other news streams (with stars)
+  function adRow() {   // [ad-skip + director toggles (Wall settings), the pool of other news streams with stars (Streams)]
     const aw = (wall && wall.adwatch) || {};
-    const tog = el("button", "btn", `Auto ad-skip: ${aw.on ? "on" : "off"}`);
-    tog.title = "Sound leaves a stream at a commercial; a stream tile at a break for a minute swaps to one on air, then comes back";
+    const tog = el("button", "btn", `Ad-skip: ${aw.on ? "on" : "off"}`);
+    tog.title = "Leave streams at commercial breaks"; tog.setAttribute("aria-pressed", String(!!aw.on));
     tog.onclick = () => propose({ op: "adwatch", on: !aw.on });
     const sd = (wall && wall.stream_director) || {};   // Jev runs tiles 3–4 + the sound (wall/streamdir.py)
     const dir = el("button", "btn", `Auto-director: ${sd.on ? "on" : "off"}`);
-    dir.title = "Jev picks the two stream tiles and the sound every minute — sticky, never mid-moment; it pauses 10 min on a tile you change (works with auto ad-skip on)";
+    dir.title = "DJ Jev picks the stream tiles and the sound"; dir.setAttribute("aria-pressed", String(!!sd.on));
     dir.onclick = () => propose({ op: "director", on: !sd.on });
     const picks = ((sd.last || {}).picks || []).map((p) => p.name);
     const line = sd.on && sd.active && picks.length
-      ? el("span", "muted small", `🎬 Jev picks: ${picks.join(" · ")}` + (sd.next_in != null ? ` (next look in ${sd.next_in}s)` : ""))
+      ? el("span", "muted small jev-line", `DJ Jev picked ${picks.join(", ")}` + (sd.next_in != null ? ` (next in ${sd.next_in}s)` : ""))
       : null;
     const pool = (aw.pool || []).map((p) => {
       const name = tileName(p.url), w = el("span", "pool");
-      const put = el("button", "btn", name); put.title = "Put it on a stream tile";
+      const put = el("button", "btn", name); put.title = "Put on a stream tile";
       put.onclick = () => propose({ op: "tile", i: pickTile(true), url: p.url, label: name });
       w.append(put, starBtn(p.url, name));
       const air = onairBadge(p); if (air) w.append(air);
       return w;
     });
-    return [tog, dir, ...(line ? [line] : []), ...pool];
+    return [[tog, dir], [...(line ? [line] : []), ...pool]];
   }
   // Election night: our own /p/election/<screen> pages and local stations get names, not URLs
   const OWN = "http://127.0.0.1:7795/p/election/";
@@ -453,15 +461,19 @@
   function renderElec() {
     const onWall = new Set((wall && wall.running && wall.urls) || []);
     const pick = (url, label) => {
-      const b = el("button", "btn", label + (onWall.has(url) ? " · on the wall" : ""));
+      const b = el("button", "btn", label);
+      if (onWall.has(url)) b.append(el("span", "small muted", "on wall"));
       b.disabled = onWall.has(url);
       b.onclick = () => propose({ op: "tile", i: pickTile(!ownPage(url)), url, label });
       return b;
     };
-    const def = el("button", "btn", "↺ Default");
-    def.title = "Put the default election screens back on every tile (dashboards on 1–2, the default streams on 3–4)";
+    const def = el("button", "btn", "Default layout");
+    def.title = "Dashboards on 1–2, default streams on 3–4";
     def.onclick = () => propose({ op: "default" });
-    $("elecScreens").replaceChildren(def, ...ELEC_SCREENS.map(([scr, label]) => pick(OWN + scr, label)), ...adRow());
+    const [toggles, streams] = adRow();
+    $("elecScreens").replaceChildren(def, ...ELEC_SCREENS.map(([scr, label]) => pick(OWN + scr, label)));
+    $("elecToggles").replaceChildren(...toggles);
+    $("elecStreams").replaceChildren(...(streams.length ? streams : [el("span", "muted small", "No other streams on air.")]));
     const sel = $("newsSt");
     if (localNews && !sel.options.length) {
       sel.replaceChildren(...Object.keys(localNews).sort().map((st) => { const o = el("option", null, st); o.value = st; return o; }));
@@ -479,14 +491,14 @@
   function specBadge(st, s) {
     if (st.label === "coverage") {
       const ck = st.clock || {};
-      return ["● on air" + ((st.soon || 0) >= 0.6 ? " · break soon" : ck.next_likely ? ` · break likely ${ck.next_likely}` : ""), "live-on"];
+      return ["On air" + ((st.soon || 0) >= 0.6 ? ", break soon" : ck.next_likely ? `, break ~${ck.next_likely}` : ""), "live-on"];
     }
-    if (st.label === "break" || st.label === "ad") return ["⏸ break", "muted"];
-    if (st.label === "offtopic") return ["off-topic", "muted"];
+    if (st.label === "break" || st.label === "ad") return ["Break", "muted"];
+    if (st.label === "offtopic") return ["Off-topic", "muted"];
     if (st.live === false && st.starts)
       return [`starts ${new Date(st.starts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`, "muted"];
-    if (st.live === false) return [s.note || "not live yet", "muted"];
-    if (st.live) return ["listening…", "muted"];
+    if (st.live === false) return [s.note || "Not live", "muted"];
+    if (st.live) return ["Checking…", "muted"];
     return [s.note || "", "muted"];
   }
   function renderSpectrum(onWall) {
@@ -499,10 +511,10 @@
       (g.streams || []).forEach((s) => {
         const st = states[s.url] || {}, on = onWall.has(s.url), [txt, cls] = specBadge(st, s);
         const b = el("button", "btn", s.name);
-        if (on) b.append(el("span", "small muted", "on the wall"));
+        if (on) b.append(el("span", "small muted", "on wall"));
         else if (txt) b.append(el("span", "small " + cls, txt));
         b.disabled = on || st.label !== "coverage";
-        b.title = on ? "Already on the wall" : st.label === "coverage" ? `Put ${s.name} on a stream tile (3–4)` : "Pickable while it's on air (not at a break)";
+        b.title = on ? "On the wall" : st.label === "coverage" ? "Put on a stream tile" : "Available while on air";
         b.onclick = () => propose({ op: "tile", i: pickTile(true), url: s.url, label: `${g.label} · ${s.name}` });
         grp.append(b);
       });
@@ -525,7 +537,7 @@
     const ul = $("viewers"); ul.replaceChildren();
     if (wall && wall.running) {
       const j = el("li", "jev");
-      j.append(avatar({ avatar: JEV_AV }), el("span", null, "DJ Jev"), el("span", "tag jev-tag", "on the decks"));
+      j.append(avatar({ avatar: JEV_AV }), el("span", null, "DJ Jev"), el("span", "tag jev-tag", "bot"));
       ul.append(j);
     }
     list.forEach((v) => {
@@ -538,7 +550,7 @@
     if (pubN) ul.append(el("li", "muted small pub-n", `(${pubN} guest${pubN === 1 ? "" : "s"})`));
     const active = list.filter((v) => !v.away).length;
     $("count").replaceChildren(`${list.length} watching`);
-    if (active < list.length) $("count").append(el("span", "act", ` · ${active} active`));
+    if (active < list.length) $("count").append(el("span", "act", `, ${active} active`));
     // phones: a strip of avatars + a few names; tapping it opens the full list as a sheet
     $("vstrip").replaceChildren(...list.slice(0, 5).map(avatar));
     if (list.length > 5) $("vstrip").append(el("span", "av more", `+${list.length - 5}`));
@@ -553,7 +565,7 @@
       if (lastViewers) renderViewers(lastViewers);
       return;
     }
-    $("count").textContent = `${c.watching} at the watch party` + (c.public ? ` · ${c.public} following along` : "");
+    $("count").textContent = `${c.watching} at the party` + (c.public ? `, ${c.public} public` : "");
   }
 
   // ---- chat ----
@@ -563,7 +575,7 @@
       li.className = "jev";
       li.append(avatar({ avatar: JEV_AV }));
       const body = el("span"); body.append(el("span", "who", "DJ Jev"));
-      const icon = (m.text.match(/^(🎬|🔊|📊)/u) || [""])[0];
+      const icon = (m.text.match(/^🔊/u) || [""])[0];   // only the sound icon carries meaning
       body.append(document.createTextNode((icon ? icon + " " : "") + m.text.replace(JEV_LINE, ""))); li.append(body);
     } else if (m.kind === "system") li.append(el("span", null, m.text));
     else {
@@ -571,7 +583,7 @@
       const body = el("span"); body.append(el("span", "who", m.name));
       body.append(document.createTextNode(m.text)); li.append(body);
       if (me && me.admin) {
-        const d = el("button", "mod", "✕"); d.title = "Delete"; d.onclick = () => send({ t: "del", id: m.id });
+        const d = el("button", "mod", "✕"); d.title = "Delete"; d.setAttribute("aria-label", "Delete message"); d.onclick = () => send({ t: "del", id: m.id });
         li.append(d);
         if (m.uid !== me.id) { const mu = el("button", "mod", "mute"); mu.title = "Mute 10 min"; mu.onclick = () => send({ t: "mute", uid: m.uid, minutes: 10 }); li.append(mu); }
       }
@@ -711,7 +723,7 @@
   function showDing() {
     $("dingBtn").textContent = dingOn ? "🔔" : "🔕";
     $("dingBtn").setAttribute("aria-pressed", String(dingOn));
-    $("dingBtn").title = dingOn ? "Ding for new messages: on" : "Ding for new messages: off";
+    $("dingBtn").title = dingOn ? "Message sound: on" : "Message sound: off";
   }
   $("dingBtn").onclick = () => {
     dingOn = !dingOn;
@@ -735,10 +747,11 @@
     {
       const box = $("liveGames"); box.replaceChildren();
       box.className = games.length ? "live-games" : "muted small";
-      if (!games.length) { box.textContent = "no live games right now"; return; }
+      if (!games.length) { box.textContent = "No live games"; return; }
       const onWall = new Set((wall && wall.running && wall.urls) || []);
       for (const g of games) {
-        const b = el("button", "btn", (g.league === "nfl" ? "🏈 " : "🏀 ") + g.label + (onWall.has(g.url) ? " · on the wall" : ""));
+        const b = el("button", "btn", `${(g.league || "").toUpperCase()} ${g.label}`);
+        if (onWall.has(g.url)) b.append(el("span", "small muted", "on wall"));
         b.disabled = onWall.has(g.url);
         b.title = "Put on tile " + (+$("tileI").value + 1);
         b.onclick = () => propose({ op: "tile", i: pickTile(), url: g.url, label: g.label });
@@ -753,8 +766,9 @@
     for (const p of props.values()) {
       const d = el("div", "prop");
       d.append(el("span", "what", `${p.name}: ${p.text}`));
-      d.append(el("span", "tally", `${p.yes.length} ✓ · ${p.no.length} ✗ · needs ${p.need}`));
+      d.append(el("span", "tally", `${p.yes.length} yes, ${p.no.length} no, needs ${p.need}`));
       const y = el("button", me && p.yes.includes(me.id) ? "mine" : "", "✓"), n = el("button", me && p.no.includes(me.id) ? "mine" : "", "✗");
+      y.setAttribute("aria-label", "Vote yes"); n.setAttribute("aria-label", "Vote no");
       y.onclick = () => send({ t: "vote", id: p.id, yes: true });
       n.onclick = () => send({ t: "vote", id: p.id, yes: false });
       const left = el("span", "left", `${Math.ceil(p.left)}s`); left.dataset.end = String(Date.now() + p.left * 1000);
@@ -794,9 +808,9 @@
     // Logged-out peek: the running wall's name and a head count, nothing else (never the stream before joining).
     const n = (p && p.watching) || 0, name = p && p.name;
     const parts = [];
-    if (name) parts.push("Live now: " + name);
+    if (name) parts.push("Live: " + name);
     if (n) parts.push(n + (n === 1 ? " person" : " people") + " watching");
-    $("peekText").textContent = parts.join(" · ");
+    $("peekText").textContent = parts.join(", ");
     $("gatePeek").classList.toggle("on", !!name);
     $("gatePeek").classList.toggle("empty", !parts.length);   // keeps its space either way: nothing below it jumps
   }
@@ -806,7 +820,7 @@
   }
   if (Date.now() < Date.UTC(2026, 10, 5, 12)) {   // US midterms, 3 Nov 2026: say so on the join card
     $("gateTitle").textContent = "Election Night";
-    $("gateLede").textContent = "Live map, the news streams, Kalshi odds, chat. Results from 6 PM ET.";
+    $("gateLede").textContent = "Live map, news streams, Kalshi odds and chat. Results from 6 PM ET.";
   }
   const qs = new URLSearchParams(location.search), err = qs.get("error"), key = qs.get("k") || "";
   try { const n = localStorage.getItem("wall.nick"); if (n) $("nick").value = n; } catch (e) { /* storage blocked: start empty */ }
@@ -816,7 +830,7 @@
         if (j.login) $("loginBtn").href = j.login;
         $("guestForm").hidden = $("gateRoles").hidden = !j.guest_ok;   // demo mode with the keyed link: a nickname is enough
         showPeek(j.peek);
-        showGate(err === "link_expired" ? "That link expired — use Get my link again, or log in." : "");
+        showGate(err === "link_expired" ? "That link expired. Get a new one or log in." : "");
         return;
       }
       if (j.public) {   // the plain page in public mode: live election data only — no stream, no votes, chat read-only
@@ -867,7 +881,7 @@
       if (left <= 0) { clearInterval(holdT); holdT = null; btn.disabled = false; btn.textContent = "Join"; nickError(""); return; }
       const t = left >= 60 ? `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` : `${left} s`;
       btn.disabled = true; btn.textContent = t;
-      nickError(`${msg || "Too many joins from this network just now."} Try again in ${t}.`);
+      nickError(`${msg || "Too many joins from this network."} Try again in ${t}.`);
     };
     tick(); holdT = setInterval(tick, 1000);
   }
