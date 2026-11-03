@@ -387,6 +387,8 @@ def test_capture_commands(tmp_path):
 # ---- the HTTP API ----------------------------------------------------------------------------------------------------------
 @pytest.fixture
 def api(tmp_path, monkeypatch):
+    fake_dns = {"a.tv": "93.184.216.34", "b.tv": "93.184.216.35", "lan.example": "192.168.1.1", "ts.example": "100.81.31.34", "localhost": "127.0.0.1"}
+    monkeypatch.setattr("wall.server.resolve", lambda h: [(2, 1, 6, "", (fake_dns.get(h) or h, 0))])
     cfg = Cfg({"WALL_STATE_DIR": str(tmp_path), "WALL_API_TOKEN": "s3cret", "WALL_IMPORT_FROM": ""})
     store = PresetStore(str(tmp_path))
     data = {"nfl": board("nfl")}
@@ -400,7 +402,8 @@ def api(tmp_path, monkeypatch):
 
 
 def client(app, ip="127.0.0.1", token=None):
-    return TestClient(app, client=(ip, 5555), headers={"Authorization": f"Bearer {token}"} if token else {})
+    return TestClient(app, base_url="http://127.0.0.1:7795", client=(ip, 5555),
+                      headers={"Authorization": f"Bearer {token}"} if token else {})
 
 
 def test_api_gate(api):
@@ -413,6 +416,32 @@ def test_api_gate(api):
     assert remote.get("/i/tv").status_code == 403 and remote.post("/i/tv/stop").status_code == 403   # the TV is loopback-only
     assert remote.put("/presets", json=[]).status_code == 403
     assert client(app).get("/i/tv").status_code == 200
+
+
+def test_loopback_refuses_web_pages(api):
+    """A tile page on this box can POST to 127.0.0.1 without CORS (text/plain) or via DNS rebinding: refuse browsers."""
+    app, _ = api
+    c = client(app)
+    body = {"urls": ["https://a.tv"]}
+    assert c.post("/i/tv/start", json=body, headers={"Origin": "https://evil.example"}).status_code == 403
+    assert c.post("/i/tv/start", content='{"urls": ["https://a.tv"]}', headers={"Content-Type": "text/plain",
+                  "Sec-Fetch-Site": "cross-site"}).status_code == 403
+    assert c.get("/i/tv", headers={"Host": "rebind.evil.example:7795"}).status_code == 403
+    assert c.get("/i/tv", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+    assert c.get("/i/tv", headers={"Host": "localhost:7795"}).status_code == 200
+    assert c.post("/i/tv/start", json=body).json()["running"]
+
+
+def test_discord_tiles_must_be_public(api):
+    app, _ = api
+    c = client(app)
+    for bad in ("http://127.0.0.1:7790/", "http://localhost:9241/json", "http://192.168.1.1/", "http://lan.example/",
+                "http://ts.example/", "http://[::1]/", "http://169.254.169.254/", "file:///etc/passwd"):
+        assert c.post("/i/discord/start", json={"urls": [bad]}).status_code == 422, bad
+    assert c.post("/i/discord/start", json={"urls": ["https://a.tv"]}).json()["running"]
+    assert c.post("/i/discord/tile", json={"i": 1, "url": "http://192.168.1.1/"}).status_code == 422
+    assert c.post("/i/tv/start", json={"urls": ["http://192.168.1.50:8096/"]}).json()["running"]   # the TV may show LAN pages
+    assert c.post("/i/discord/stop").status_code == 200
 
 
 def test_api_flow(api):

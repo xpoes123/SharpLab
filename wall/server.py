@@ -14,7 +14,9 @@ import logging
 import os
 import re
 import secrets
+import socket
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -25,12 +27,45 @@ from wall.engine import Session
 from wall.headless import Headless
 from wall.instance import BOARDS, Instance, WallError
 from wall.live import LEAGUES, STREAM, TEAMS, Scores, live_games
-from wall.presets import PresetStore, errors
+from wall.presets import PresetStore, check_url, errors
 
 log = logging.getLogger("wall.server")
 TAILNET = ipaddress.ip_network("100.64.0.0/10")
 REMOTE_OK = re.compile(r"^/(healthz|teams|live/[a-z]+|presets|i/discord(/.*)?|hls/discord/[A-Za-z0-9_.]+)$")
 HLS_FILE = re.compile(r"^(index\.m3u8|seg\d{6}\.ts)$")
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def resolve(host: str) -> list:
+    return socket.getaddrinfo(host, None)
+
+
+def browserish(request: Request) -> bool:
+    """A request a web page made: the tiles are arbitrary sites in Chromium on this box, so a page's no-CORS POST (or a
+    DNS-rebound one) would arrive from loopback. Real callers (the TV router's urllib, the qml6 overlay's XHR) send no
+    Origin / Sec-Fetch-Site and address us as 127.0.0.1 / localhost."""
+    host = (urlsplit("//" + request.headers.get("host", "")).hostname or "").lower()
+    if host not in LOOPBACK_HOSTS:
+        return True
+    if request.method not in ("GET", "HEAD") and "origin" in request.headers:
+        return True
+    return request.headers.get("sec-fetch-site", "none") != "none"
+
+
+def public_url(u: str) -> str:
+    """The discord wall streams its tiles to every viewer: no loopback / LAN / tailnet pages (the TV's own UI, the router,
+    CDP, Tailscale-only services). Resolves the host; a name that won't resolve is refused too."""
+    host = urlsplit(check_url(u)).hostname or ""
+    try:
+        addrs = {a[4][0] for a in resolve(host)}
+    except (OSError, UnicodeError):
+        raise ValueError(f"can't resolve {host[:60]!r}") from None
+    for a in addrs:
+        ip = ipaddress.ip_address(a.split("%")[0])
+        ip = ip.ipv4_mapped or ip if isinstance(ip, ipaddress.IPv6Address) else ip
+        if not ip.is_global or ip in TAILNET:
+            raise ValueError(f"not a public address: {host[:60]!r}")
+    return u
 
 
 class Cfg:
@@ -94,6 +129,8 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         except ValueError:
             ip = None
         if ip is not None and ip.is_loopback:
+            if browserish(request):
+                return JSONResponse({"error": "forbidden"}, status_code=403)
             return await call_next(request)
         if ip is None or ip not in TAILNET:
             return JSONResponse({"error": "forbidden"}, status_code=403)
@@ -185,6 +222,8 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         tiles = d.get("tiles", 4)
         if not isinstance(tiles, int) or not 1 <= tiles <= 4:
             raise ValueError("tiles is 1–4")
+        if i.headless and urls:
+            await asyncio.to_thread(lambda: [public_url(u) for u in urls])
         return await asyncio.to_thread(i.start, preset=preset, urls=urls, live=d.get("live") or "", tiles=tiles,
                                        board=board, layout=layout, sound=d.get("sound", 0) if isinstance(d.get("sound", 0), int) else 0)
 
@@ -197,7 +236,10 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         d = await body(request)
         if not isinstance(d.get("url"), str):
             raise ValueError("url is a string")
-        return await asyncio.to_thread(inst(name).set_tile, num(d, "i"), d["url"])
+        i = inst(name)
+        if i.headless:
+            await asyncio.to_thread(public_url, d["url"])
+        return await asyncio.to_thread(i.set_tile, num(d, "i"), d["url"])
 
     @app.delete("/i/{name}/tile/{i}")
     async def rm_tile(name: str, i: int) -> dict:
@@ -243,7 +285,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
     @app.get("/hls/{name}/{file}")
     def hls(name: str, file: str) -> Response:
         i = inst(name)
-        if not i.headless or not HLS_FILE.match(file):
+        if not i.headless or not HLS_FILE.match(file) or not i.urls or not i.headless.up:   # a stopped wall's stale playlist isn't live
             return JSONResponse({"error": "not found"}, status_code=404)
         path = i.headless.hls / file
         if not path.exists():
@@ -263,7 +305,8 @@ def main() -> None:
     cfg = Cfg()
     if not cfg.token:
         log.warning("WALL_API_TOKEN is not set: only loopback callers will get in")
-    uvicorn.run(build(cfg), host=cfg.host, port=cfg.port, log_level="info", access_log=False)
+    # proxy_headers off: the gate trusts the socket's peer address only, never X-Forwarded-For
+    uvicorn.run(build(cfg), host=cfg.host, port=cfg.port, log_level="info", access_log=False, proxy_headers=False)
 
 
 if __name__ == "__main__":
