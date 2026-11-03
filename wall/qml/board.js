@@ -88,7 +88,52 @@ function gameItems(games) {   // live plays first (closest games on top, as sort
     return live.concat(post, pre);
 }
 
+// ---- election night (wall/election.py board()) ----
+var PARTY = { D: "Dem", R: "Rep", I: "Ind", O: "Other" };
+var OFFICE_SHORT = { S: "SEN", H: "HOUSE", G: "GOV" };
+
+function bop(o) {   // one office's balance → the sidebar's block: numbers, bar segments (fractions of all seats), lines
+    var s = o.seats, t = o.total || 1, D = s.D.held + s.D.won, R = s.R.held + s.R.won, I = s.I.held + s.I.won;
+    var ctl = o.control && o.control.D ? o.control.D : 0, net = o.net || {};
+    var n = (net.D || 0) > 0 ? { text: "Dem +" + net.D, tone: "dem" } : (net.R || 0) > 0 ? { text: "Rep +" + net.R, tone: "rep" } : { text: "no net change", tone: "" };
+    return {
+        id: o.office, name: o.name, dem: String(D), rep: String(R), ind: I ? I + " Ind" : "",
+        segs: [{ f: D / t, c: "dem" }, { f: s.D.lead / t, c: "demLead" }, { f: I / t, c: "ind" }, { f: s.I.lead / t, c: "indLead" },
+               { f: o.out / t, c: "none" }, { f: s.R.lead / t, c: "repLead" }, { f: R / t, c: "rep" }],
+        tick: ctl ? ctl / t : 0,
+        need: ctl ? ctl + " for control" : o.up + " up",
+        lead: (s.D.lead || s.R.lead) ? "leading " + s.D.lead + "–" + s.R.lead : "",
+        net: o.office === "G" ? "" : n.text, netTone: n.tone,
+        left: o.out ? o.out + " not counted" : o.called + "/" + o.up + " called",
+        winner: o.winner ? PARTY[o.winner] + " control" : "", winTone: o.winner === "D" ? "dem" : o.winner === "R" ? "rep" : ""
+    };
+}
+
+function callItem(c, now) {
+    return { head: (c.id || "").replace(/^([SHG])-([A-Z]{2})(-(\d+))?(-special)?$/, function (m, o, st, x, d, sp) {
+                 return st + (d ? "-" + d : "") + " " + OFFICE_SHORT[o] + (sp ? " (sp.)" : ""); }),
+             text: c.text.replace(/^[^:]*: /, "").replace(/ · flip$/, ""), tail: (c.by || "") + (c.t ? " · " + clock(c.t) : ""),
+             tone: c.party === "D" ? "dem" : c.party === "R" ? "rep" : "ind", flip: !!c.flip, t: c.t || 0 };
+}
+
+function electionItems(d, now) {   // the ticker: the calls as they come (newest first); before any, what's next
+    var calls = (d.calls || []).map(function (c) { return callItem(c, now); });
+    var watch = (d.watch || []).map(function (r) {
+        var a = r.cands[0], b = r.cands[1];
+        return { head: r.state + " " + OFFICE_SHORT[r.office], text: a.name + " " + a.pct.toFixed(1) + (b ? " – " + b.name + " " + b.pct.toFixed(1) : ""),
+                 tail: Math.round(r.pct) + "% in", tone: "ink" };
+    });
+    var next = (d.next || []).map(function (n) { return { head: "Polls close " + clock(n.t), text: n.states.join(" "), tail: "", tone: "accent" }; });
+    return calls.slice(0, 12).concat(watch, next);
+}
+
 var KINDS = {
+    election: function (d, now) {
+        return { cells: [], plays: [], side: false, ticker: electionItems(d, now), kicker: (d.calls || []).length ? "Race calls" : "Election",
+                 elec: { offices: (d.offices || []).map(bop), calls: (d.calls || []).slice(0, 10).map(function (c) { return callItem(c, now); }),
+                         source: "Unofficial · calls: " + (d.source === "NYT (AP)" ? "AP" : d.source || "–"), counting: d.counting || 0,
+                         next: (d.next || []).length ? "Polls close " + clock(d.next[0].t) + " · " + d.next[0].states.join(" ") : "" } };
+    },
     fantasy: function (d) { return { cells: (d.leagues || []).map(league), plays: (d.plays || []).map(play), side: true,
                                      ticker: (d.plays || []).map(playItem), kicker: "My plays" }; },
     scores: function (d) {
@@ -108,14 +153,15 @@ function view(s, now) {
     var live = d && d.kind === "scores" ? (d.games || []).filter(function (g) { return g.state === "in"; }).length : 0;
     var empty = !d ? "Loading…" : d.note || (d.kind === "fantasy" && !(d.leagues || []).length ? "No leagues this week"
         : d.kind === "scores" && !(d.games || []).length ? "No games today" : !k ? "?" : "");
-    var body = k && !empty ? k(d) : { cells: [], plays: [], side: false, ticker: [], kicker: "" };
+    var body = k && !empty ? k(d, now) : { cells: [], plays: [], side: false, ticker: [], kicker: "" };
     if (!body.liveCells) { body.liveCells = []; body.upNext = []; body.nextAt = ""; }
     var parts = ((d && d.title) || "").split("·");
     return {
         name: name, title: (d && d.title) || name, sub: parts.length > 1 ? parts[1].trim() : "", live: live,
         error: (s && s.error) || "", meta: s && s.updated ? "updated " + ago(s.updated, now) : "loading…",
         empty: empty, kind: d ? d.kind : "", cells: body.cells, plays: body.plays, side: body.side,
-        ticker: body.ticker, kicker: body.kicker, liveCells: body.liveCells, upNext: body.upNext, nextAt: body.nextAt
+        ticker: body.ticker, kicker: body.kicker, liveCells: body.liveCells, upNext: body.upNext, nextAt: body.nextAt,
+        elec: body.elec || null
     };
 }
 
@@ -184,6 +230,7 @@ function snapAt(hist, cut) {
 function delayed(hist, now, delays, dflt) {
     if (!hist || !hist.length) return null;
     var latest = hist[hist.length - 1].s;
+    if (latest && latest.data && latest.data.kind === "election") return latest;   // results aren't a picture: nothing to hold back
     if (!(dflt > 0) && !Object.keys(delays || {}).length) return latest;
     var base = snapAt(hist, now - dflt), out = {};
     for (var k in latest) out[k] = latest[k];

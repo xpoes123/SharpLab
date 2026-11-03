@@ -140,3 +140,47 @@ def test_service_endpoints(tmp_path):
         assert c.get(page).status_code == 200, page
     for bad in ("/p/../server.py", "/p/election/nope", "/p/%2e%2e/server.py"):
         assert c.get(bad).status_code == 404, bad
+
+
+def _overlay_render(tmp_path, layout):
+    import shutil
+    import subprocess
+    import threading
+    import time
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    r = Results(replay(f"{FX}:0.6"))
+    r.poll()
+    data = board(r.snapshot())
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = {"view": layout, "rev": 1} if self.path.startswith("/api/overlay/view") else {
+                "board": "election", "shown": "election", "visible": True, "layout": layout, "view": layout, "rev": 1,
+                "boards": [{"id": "election", "name": "Election"}], "data": data, "updated": time.time(), "error": ""}
+            b = json.dumps(body).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b)
+
+        def log_message(self, *a):
+            pass
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    out = tmp_path / f"{layout}.png"
+    try:
+        p = subprocess.run(["qml6", str(Path(__file__).resolve().parent.parent / "wall" / "qml" / "Preview.qml"), "--", "--layout", layout,
+                            "--size", "1920x1080", "--api", f"http://127.0.0.1:{srv.server_port}", "--out", str(out), "--wait", "2500"],
+                           env={"QT_QPA_PLATFORM": "offscreen", "QT_FORCE_STDERR_LOGGING": "1", "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+                           capture_output=True, text=True, timeout=30)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    return out, [l for l in p.stderr.splitlines() if "Error" in l or "Unable to assign" in l or "is not defined" in l or "TypeError" in l]
+
+
+@pytest.mark.skipif(__import__("shutil").which("qml6") is None, reason="qml6 not installed")
+@pytest.mark.parametrize("layout", ["lbar", "full"])
+def test_election_board_renders_in_the_overlay(tmp_path, layout):
+    out, errs = _overlay_render(tmp_path, layout)
+    assert errs == [] and out.exists() and out.stat().st_size > 20_000

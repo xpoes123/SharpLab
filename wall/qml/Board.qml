@@ -80,7 +80,12 @@ Item {
     readonly property string fMono: pick(["IBM Plex Mono", "DejaVu Sans Mono"]) || "monospace"
 
     function res(r) { return r === "win" ? cOk : r === "lose" ? cDanger : cMuted }
-    function tone(t) { return t === "ok" ? cOk : t === "danger" ? cDanger : t === "accent" ? cAccent : cInk }
+    function tone(t) { return t === "ok" ? cOk : t === "danger" ? cDanger : t === "accent" ? cAccent : t === "dem" ? cDem : t === "rep" ? cRep : t === "ind" ? cInd : cInk }
+    // election night: the parties' blue / red, softened (wall/pages/election/election.css); leading = the same hue dimmed
+    readonly property color cDem: "#6C9BE0"
+    readonly property color cRep: "#E07A6E"
+    readonly property color cInd: "#B39AD9"
+    readonly property var segColor: ({ dem: "#6C9BE0", demLead: "#3A5378", ind: "#B39AD9", indLead: "#5E5277", none: "#33342D", repLead: "#7A3F39", rep: "#E07A6E" })
     function hhmm() { var d = new Date(), h = d.getHours(), mi = d.getMinutes(); return ((h + 11) % 12 + 1) + ":" + (mi < 10 ? "0" : "") + mi }
 
     function tick() {
@@ -253,7 +258,8 @@ Item {
     }
     Loader {
         anchors.fill: parent
-        sourceComponent: root.layout === "full" ? fullView : root.layout === "band" ? (root.v.kind === "fantasy" ? leaguesBand : bandView) : root.layout === "matchup" ? matchupView : sideView
+        sourceComponent: root.layout === "matchup" ? matchupView : root.layout === "band" ? (root.v.kind === "fantasy" ? leaguesBand : bandView)
+                         : root.v.kind === "election" ? elecView : root.layout === "full" ? fullView : sideView
     }
 
     // ---- L-bar: the sidebar ----
@@ -553,6 +559,114 @@ Item {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // ---- election night (the sidebar, or the whole screen in full): balance of power per office + the latest calls ----
+    // Calm: the bars ease over 3 s when a seat moves, nothing blinks; a call is just a new line on top.
+    component ElecBop: Column {
+        property var o
+        property bool wideBop: false
+        spacing: 0.35 * root.rem
+        Item {
+            width: parent.width; height: bname.implicitHeight
+            Caps { id: bname; text: o.name; size: root.tLabel; weight: 800; color: root.cInk }
+            Mono { anchors.right: parent.right; anchors.baseline: bname.baseline; size: 1.4 * root.rem; text: o.winner || o.need; color: o.winner ? root.tone(o.winTone) : root.cMuted }
+        }
+        Item {
+            width: parent.width; height: bd.implicitHeight
+            Num { id: bd; text: "D " + o.dem; size: 4 * root.rem; color: root.cDem }
+            Num { anchors.horizontalCenter: parent.horizontalCenter; anchors.baseline: bd.baseline; text: o.ind; size: root.tLabel; color: root.cInd }
+            Num { anchors.right: parent.right; anchors.baseline: bd.baseline; text: "R " + o.rep; size: 4 * root.rem; color: root.cRep }
+        }
+        Item {
+            width: parent.width; height: 1.3 * root.rem
+            Row {
+                anchors.fill: parent
+                Repeater {
+                    model: o.segs
+                    Rectangle {
+                        required property var modelData
+                        width: parent.width * modelData.f; height: parent.height; color: root.segColor[modelData.c]
+                        Behavior on width { NumberAnimation { duration: 3000; easing.type: Easing.InOutQuad } }
+                    }
+                }
+            }
+            Rectangle { visible: o.tick > 0; x: parent.width * o.tick - width / 2; y: -0.35 * root.rem; width: Math.max(2, 0.2 * root.rem); height: parent.height + 0.7 * root.rem; color: root.cInk }
+        }
+        Item {
+            width: parent.width; height: bl.implicitHeight
+            Mono { id: bl; size: 1.4 * root.rem; text: o.left + (o.lead && wideBop ? " · " + o.lead : ""); width: parent.width - bn.implicitWidth - root.rem }
+            Mono { id: bn; size: 1.4 * root.rem; anchors.right: parent.right; text: o.net; color: o.netTone ? root.tone(o.netTone) : root.cMuted }
+        }
+    }
+
+    Component {
+        id: elecView
+        Item {
+            readonly property var e: root.v.elec
+            readonly property bool wide: root.layout === "full"
+            Rectangle { visible: !wide; width: root.hair; height: parent.height; color: root.cAccent }
+            Item {
+                anchors.fill: parent
+                anchors.leftMargin: (wide ? 6 : 1.25) * root.rem + root.hair; anchors.rightMargin: (wide ? 6 : 1.25) * root.rem
+                anchors.topMargin: (wide ? 4 : 1.5) * root.rem; anchors.bottomMargin: 1.25 * root.rem
+                Column {
+                    id: ehead
+                    width: parent.width
+                    spacing: 0.3 * root.rem
+                    Item {
+                        width: parent.width; height: ename.implicitHeight
+                        Caps { id: ename; text: "Election"; size: root.tTitle; weight: 800; color: root.cAccent; width: parent.width - eclock.implicitWidth - root.rem }
+                        Num { id: eclock; anchors.right: parent.right; anchors.baseline: ename.baseline; text: root.now; size: root.tLabel }
+                    }
+                    Mono { width: parent.width; size: 1.4 * root.rem; color: root.v.error ? root.cDanger : root.cAccent; text: root.v.error || (e ? e.source : ""); wrapMode: Text.Wrap; maximumLineCount: 2 }
+                    Mono { width: parent.width; size: 1.4 * root.rem; text: root.v.meta + (e && e.counting ? " · " + e.counting + " races counting" : "") }
+                    Item { width: 1; height: 0.4 * root.rem }
+                    Rectangle { width: parent.width; height: root.hair; color: root.cRule }
+                }
+                Caps { visible: !e; anchors.top: ehead.bottom; anchors.topMargin: root.gap; width: parent.width; text: root.v.empty || "Loading…"; size: root.tLabel; color: root.cMuted }
+                Grid {   // the three offices: stacked in the sidebar, side by side full screen
+                    id: bops
+                    visible: !!e
+                    anchors.top: ehead.bottom; anchors.topMargin: root.gap
+                    width: parent.width
+                    columns: wide ? 3 : 1
+                    columnSpacing: 3 * root.rem; rowSpacing: 1.6 * root.rem
+                    Repeater {
+                        model: e ? e.offices : []
+                        delegate: ElecBop { required property var modelData; o: modelData; wideBop: wide; width: wide ? (bops.width - 6 * root.rem) / 3 : bops.width }
+                    }
+                }
+                Item {
+                    id: callsBox
+                    visible: !!e
+                    anchors.top: bops.bottom; anchors.topMargin: root.gap
+                    anchors.bottom: echat.top; anchors.bottomMargin: echat.on ? root.gap : 0
+                    width: parent.width
+                    clip: true
+                    Column {
+                        width: parent.width
+                        spacing: 0.7 * root.rem
+                        Rectangle { width: parent.width; height: root.hair; color: root.cRule }
+                        Mono { text: e && e.calls.length ? "LATEST CALLS" : "NO CALLS YET"; weight: 600; color: root.cAccent }
+                        Mono { visible: !!e && e.calls.length === 0 && e.next !== ""; width: parent.width; text: e ? e.next : ""; color: root.cInk; wrapMode: Text.Wrap; maximumLineCount: 2 }
+                        Repeater {
+                            model: e ? e.calls : []
+                            delegate: Item {
+                                required property var modelData
+                                width: parent.width
+                                height: ct.implicitHeight + cm.implicitHeight + 0.15 * root.rem
+                                visible: y + height <= callsBox.height   // a call cut off at the bottom isn't drawn half
+                                Rectangle { width: root.tally; height: parent.height; color: root.tone(modelData.tone) }
+                                T { id: ct; x: root.tally + 0.8 * root.rem; width: parent.width - x; text: modelData.head + " · " + modelData.text; size: 1.8 * root.rem; weight: 700; wrapMode: Text.Wrap; maximumLineCount: 2; color: root.cInk }
+                                Mono { id: cm; x: ct.x; y: ct.implicitHeight + 0.15 * root.rem; width: ct.width; size: 1.4 * root.rem; text: (modelData.flip ? "FLIP · " : "") + (modelData.tail || "earlier"); color: modelData.flip ? root.cAccent : root.cMuted }
+                            }
+                        }
+                    }
+                }
+                Item { id: echat; readonly property bool on: false; anchors.bottom: parent.bottom; width: parent.width; height: 0 }
             }
         }
     }
