@@ -142,7 +142,7 @@ def test_service_endpoints(tmp_path):
         assert c.get(bad).status_code == 404, bad
 
 
-def _overlay_render(tmp_path, layout):
+def _overlay_render(tmp_path, layout, positions=None):
     import shutil
     import subprocess
     import threading
@@ -150,7 +150,7 @@ def _overlay_render(tmp_path, layout):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     r = Results(replay(f"{FX}:0.6"))
     r.poll()
-    data = board(r.snapshot())
+    data = board(r.snapshot(), positions)
 
     class H(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -183,4 +183,17 @@ def _overlay_render(tmp_path, layout):
 @pytest.mark.parametrize("layout", ["lbar", "full"])
 def test_election_board_renders_in_the_overlay(tmp_path, layout):
     out, errs = _overlay_render(tmp_path, layout)
+    assert errs == [] and out.exists() and out.stat().st_size > 20_000
+
+
+@pytest.mark.skipif(__import__("shutil").which("qml6") is None, reason="qml6 not installed")
+@pytest.mark.parametrize("layout", ["lbar", "full"])
+def test_election_board_with_trades_renders(tmp_path, layout):
+    """The Trades section + the ticker's calls / positions draw without a QML error (a 2024 race stands in for one held)."""
+    rows = []
+    for i, (who, side, won) in enumerate((("Hansen", "YES", None), ("David", "NO", None), ("Hansen", "YES", True))):
+        rows.append({"who": who, "side": side, "label": f"PA Senate · Pick{i}", "entry": 40.0, "mark": 60.0, "pct": 50.0, "dir": "up",
+                     "size": "50+ ct", "kind": "election", "election": {"class": {"type": "control", "office": "S"},
+                     "pick": {"party": "R", "name": ""}, "label": "Senate control · Rep", "strike": {}}})
+    out, errs = _overlay_render(tmp_path, layout, rows)
     assert errs == [] and out.exists() and out.stat().st_size > 20_000
