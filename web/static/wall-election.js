@@ -254,6 +254,7 @@
     if (!races.length) nodes.push(el("p", "muted", "No races here tonight."));
     for (const r of races) nodes.push(raceCard(r, d.positions));
     sheetEl.replaceChildren(...nodes);
+    sheetEl.dispatchEvent(new CustomEvent("es-render", { detail: { st: s.st, office: s.office } }));   // wall-election-live.js adds each race's detail
     sheetEl.scrollTop = keep;
   }
 

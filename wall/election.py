@@ -28,6 +28,7 @@ import urllib.request
 from pathlib import Path
 
 from shared import kalshi_election as ke
+from wall import election_feed as ef
 
 log = logging.getLogger("wall.election")
 POLL_S = 30
@@ -123,10 +124,10 @@ class Cnn:
                    c.get("voteNum"), c.get("votePercentNum"), c.get("winner"), c.get("isIncumbent")) for c in r.get("candidates") or []]
         called = next((c["party"] for c in cs if c["winner"]), "") if r.get("editorialStatus") == "called" or r.get("status") == "W" else ""
         emb = r.get("raceEmbargo") or {}
-        return race(office, r.get("stateAbbreviation", ""), dist, len(parts) > 1 and parts[1].startswith(("SP", "HP")), cs,
-                    pct=r.get("percentReporting") or 0, votes=r.get("totalVote") or 0, called=called, caller=self.desk,
-                    flip=r.get("isSwitch"), watch=r.get("raceToWatch"), closes=(emb.get("assignedPollsClose") or 0) / 1000,
-                    uncontested=bool(r.get("uncontested")))
+        return {**race(office, r.get("stateAbbreviation", ""), dist, len(parts) > 1 and parts[1].startswith(("SP", "HP")), cs,
+                       pct=r.get("percentReporting") or 0, votes=r.get("totalVote") or 0, called=called, caller=self.desk,
+                       flip=r.get("isSwitch"), watch=r.get("raceToWatch"), closes=(emb.get("assignedPollsClose") or 0) / 1000,
+                       uncontested=bool(r.get("uncontested"))), "key": key}   # key: CNN's per-race + county files
 
     @staticmethod
     def bop(b: dict) -> dict:
@@ -248,6 +249,8 @@ class Results:
         self.source, self.updated, self.error = "", 0.0, ""
         self.tried: list[dict] = []
         self.calls: list[dict] = self._load()
+        self.feed = ef.Feed(state_dir)    # vote updates: each race's timeline + the live feed (wall/election_feed.py)
+        self.price = None                 # (web) race → its Kalshi price now, if cached: saved with each update
         self.seen = 0.0
         self.lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -311,6 +314,18 @@ class Results:
                         os.replace(tmp, self.path)
                     except OSError as e:
                         log.warning("election calls: %s", e)
+        self.feed.observe(got["races"], now, self.price)
+
+    def merge(self, races: list[dict]) -> None:
+        """The fast lane: a few races fresher than the last full poll (someone has them open) — swapped in + diffed."""
+        if not races:
+            return
+        fresh = {r["id"]: r for r in races}
+        with self.lock:
+            have = {r["id"]: r for r in self.races}
+            fresh = {k: r for k, r in fresh.items() if k in have and r["votes"] >= have[k]["votes"]}
+            self.races = [fresh.get(r["id"], r) for r in self.races]
+        self.feed.observe(list(fresh.values()), self.clock(), self.price, full=False)
 
     def snapshot(self) -> dict:
         with self.lock:
@@ -320,6 +335,7 @@ class Results:
         out["offices"] = {o: balance(races, o, net.get(o)) for o in OFFICES}
         out["races"] = races
         out["now"] = self.clock()
+        out["latest"] = self.feed.latest(out["now"])
         return out
 
 
@@ -363,6 +379,8 @@ def board(snap: dict, positions: list[dict] | None = None) -> dict:
             "watch": [r for r in sorted(snap.get("races") or [], key=lambda r: (r["called"] != "", r["margin"] if r["margin"] is not None else 99))
                       if r["watch"] and r["office"] in ("S", "G") and r["votes"] > 0][:6],
             "trades": trades(positions, snap),
+            "latest": [{k: u.get(k) for k in ("race", "head", "kind", "sig", "text", "t", "party", "flip", "pct", "key")}
+                       for u in snap.get("latest") or []],
             "note": "" if snap.get("races") else (snap.get("error") or "Loading results…")}
 
 
@@ -372,6 +390,9 @@ def replay(spec: str) -> list:
     flat cnn-<year>-SG.json, bop too; .json or .json.gz) instead of the network. With a share (0–1), the night is
     replayed as if only that share were in: votes scaled, and only the races with that much counted stay called."""
     d, _, share = spec.partition(":")
+    if share.startswith("sim"):   # "<dir>:sim[=seconds]": a whole night replayed, sped up (wall/election_sim.py)
+        from wall import election_sim
+        return [election_sim.SimCnn(Path(d), float(share.partition("=")[2] or election_sim.DUR_S))]
     root = Path(d)
     year = next((int(p.name.split("-")[1]) for p in sorted(root.glob("cnn-*-SG.json*"))), 2024)
 

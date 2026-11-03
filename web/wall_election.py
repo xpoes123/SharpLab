@@ -158,7 +158,8 @@ _results: dict = {"r": None}
 def results() -> we.Results:
     if _results["r"] is None:
         spec = os.environ.get("WALL_ELECTION_REPLAY", "")
-        _results["r"] = we.Results(we.replay(spec) if spec else None)
+        # calls + the vote-updates history survive restarts ($WALL_STATE_DIR, else data/; a replay keeps none)
+        _results["r"] = we.Results(we.replay(spec) if spec else None, None if spec else os.environ.get("WALL_STATE_DIR") or "data")
     return _results["r"]
 
 
