@@ -186,3 +186,14 @@ def test_market_filed_under_the_wrong_state_finds_its_race_by_full_name():
     # live 2026-11-03: Kalshi's SENATELA-26 lists Kentucky's candidates (Barr, Booker); KXSENATELA-26NOV is Louisiana's
     assert ke.status(info("SENATELA-26-R"), "YES", RACES, OFFICES_NOW)["race"] == "S-KY"
     assert ke.status(info("KXSENATELA-26NOV-R"), "YES", RACES, OFFICES_NOW)["race"] == "S-LA"
+
+
+def test_county_markets_file_under_the_race_but_never_settle_from_it():
+    t = "KXGENERALCOUNTY-GOVPARTYCA-26-RIVE"
+    assert ke.is_election(t) and ke.classify(ke.event_of(t))["type"] == "county"
+    info = ke.market_info({"ticker": t, "event_ticker": "KXGENERALCOUNTY-GOVPARTYCA-26",
+                           "title": "Will Steve Hilton win Riverside County?", "yes_sub_title": "Riverside"})
+    assert info["label"] == "CA Governor · Riverside Co. · Hilton"
+    st = ke.status(info, "NO", {"G-CA": {"id": "G-CA", "called": "D"}}, {})
+    assert st["race"] == "G-CA" and st["won"] is None and st["chip"] == "NO Hilton (county)"
+    assert not ke.is_election("KXGENERALCOUNTY-FOO-26-X")
