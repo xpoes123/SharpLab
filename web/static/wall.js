@@ -26,6 +26,7 @@
   // ---- player + sync ----
   const video = $("video");
   let hls = null;
+  let lastGames = null;   // the Live now list, re-drawn when the wall changes
   const sync = { err: null, pdt: null, target: null, rate: 1, offset: 0, seeks: 0 };
   window.__wallSync = sync;
 
@@ -161,6 +162,7 @@
     const tv = el("option", null, "📺 Same as the TV"); tv.value = "";
     sel.replaceChildren(tv, ...((wall && wall.presets) || []).map((n) => { const o = el("option", null, n); o.value = n; return o; }));
     if (cur) sel.value = cur;
+    if (lastGames) renderLive(lastGames);
     const tiles = $("tiles"); tiles.replaceChildren();
     if (!on) return;
     const labels = (wall.live && wall.live.labels) || [];
@@ -224,12 +226,18 @@
   async function loadLive() {
     try {
       const r = await fetch("/api/v1/wall/games", { credentials: "same-origin" });
-      const games = r.ok ? (await r.json()).games || [] : [];
+      renderLive(lastGames = r.ok ? (await r.json()).games || [] : []);
+    } catch (e) { /* offline: try again next round */ }
+  }
+  function renderLive(games) {
+    {
       const box = $("liveGames"); box.replaceChildren();
       box.className = games.length ? "live-games" : "muted small";
       if (!games.length) { box.textContent = "no live games right now"; return; }
+      const onWall = new Set((wall && wall.running && wall.urls) || []);
       for (const g of games) {
-        const b = el("button", "btn", (g.league === "nfl" ? "🏈 " : "🏀 ") + g.label);
+        const b = el("button", "btn", (g.league === "nfl" ? "🏈 " : "🏀 ") + g.label + (onWall.has(g.url) ? " · on the wall" : ""));
+        b.disabled = onWall.has(g.url);
         b.title = "Put on tile " + (+$("tileI").value + 1);
         b.onclick = () => {
           const n = (wall && wall.urls) ? wall.urls.length : 0;
@@ -238,7 +246,7 @@
         };
         box.append(b);
       }
-    } catch (e) { /* offline: try again next round */ }
+    }
   }
   loadLive(); setInterval(loadLive, 30000);
   function renderProps() {

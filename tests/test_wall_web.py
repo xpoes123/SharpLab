@@ -652,7 +652,7 @@ def test_noop_proposals_are_refused():
     assert noop({"op": "sound", "i": 1}, w) and not noop({"op": "sound", "i": 0}, w)
     assert noop({"op": "sound", "i": 3}, w) and noop({"op": "remove", "i": 2}, w)
     assert noop({"op": "tile", "i": 0, "url": "https://a.tv"}, w) and not noop({"op": "tile", "i": 0, "url": "https://c.tv"}, w)
-    assert not noop({"op": "tile", "i": 2, "url": "https://a.tv"}, w)   # adding a tile is a change
+    assert not noop({"op": "tile", "i": 2, "url": "https://c.tv"}, w)   # adding a new game is a change
     assert noop({"op": "layout", "layout": "lbar"}, w) and not noop({"op": "layout", "layout": "full"}, w)
     assert noop({"op": "board", "board": "nfl"}, w) and not noop({"op": "board", "visible": False}, w)
     assert not noop({"op": "follow"}, w) and noop({"op": "follow"}, {**w, "mirror": True})
@@ -663,3 +663,9 @@ def test_noop_proposals_are_refused():
 def test_live_games_need_a_viewer(setup):
     client, *_ = setup
     assert client.get("/api/v1/wall/games").status_code == 401
+
+
+def test_a_game_already_on_the_wall_cant_be_added_again():
+    w = {"running": True, "urls": ["https://a.tv", "https://b.tv"]}
+    assert wall.noop({"op": "tile", "i": 0, "url": "https://b.tv"}, w) == "That's already on the wall."
+    assert wall.noop({"op": "tile", "i": 2, "url": "https://a.tv"}, w) and not wall.noop({"op": "tile", "i": 2, "url": "https://c.tv"}, w)
