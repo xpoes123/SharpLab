@@ -15,7 +15,7 @@ from wall.engine import Driver, Session, sound_tile
 from wall.headless import Headless, free_vram_mb
 from wall.live import LEAGUES, REFRESH_S, LiveRun, Scores, carries, matchup
 from wall.presets import PresetStore, check_url
-from wall.rotate import EVERY_S, MARK, Rotation, next_url, screen
+from wall.rotate import EVERY_S, MARK, Rotation, kind, next_url, screen
 from wall import streams
 
 log = logging.getLogger("wall.instance")
@@ -345,7 +345,10 @@ class Instance:
             free = [i for i, u in enumerate(self.urls) if screen(u) and self.rot.held.get(i, 0.0) <= now]
             if not free:
                 return False
-            i = free[0]
+            same = [i for i in free if kind(screen(self.urls[i])) == kind(key)]   # a map replaces the map: never two maps
+            i = (same or free)[0]
+            if any(kind(screen(u)) == kind(key) for j, u in enumerate(self.urls) if j != i):
+                return False   # that kind is up on a held tile: leave it
             self.urls[i] = self.urls[i].split(MARK, 1)[0] + MARK + key
             self.driver.set_tile(i, self.urls[i])
             self.rot.at[i] = now + for_s

@@ -442,16 +442,16 @@ class Driver:
         try:
             with cdp_page(self.s.cdp_base + slot) as call:
                 time.sleep(FADE_S)
-                if stream:   # this session's script runs at the start of every document it loads, while it's open
-                    call("Page.addScriptToEvaluateOnNewDocument", {"source": TV_HIDE_JS})
+                # this session's script runs at the start of every document it loads, while it's open: nothing of the new
+                # page (not even a white flash before its CSS) shows until it's ready
+                call("Page.addScriptToEvaluateOnNewDocument", {"source": TV_HIDE_JS})
                 call("Page.navigate", {"url": resolve_live(url)})
-                if not stream:
-                    return
-                end = time.monotonic() + REVEAL_WAIT_S
+                ready = FULLSCREEN_JS if stream else "document.readyState === 'complete'"   # a stream: its video fullscreen
+                end = time.monotonic() + (REVEAL_WAIT_S if stream else 5.0)
                 while time.monotonic() < end:
-                    time.sleep(0.5)
+                    time.sleep(0.3 if not stream else 0.5)
                     try:
-                        r = call("Runtime.evaluate", {"expression": FULLSCREEN_JS, "userGesture": True, "awaitPromise": True,
+                        r = call("Runtime.evaluate", {"expression": ready, "userGesture": True, "awaitPromise": True,
                                                       "returnByValue": True})
                     except Exception:  # noqa: BLE001 — still loading
                         continue

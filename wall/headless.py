@@ -45,6 +45,15 @@ def free_vram_mb() -> int | None:
 QUEUE = ["queue", "max-size-buffers=0", "max-size-bytes=0", "max-size-time=3000000000"]
 
 
+def gain_stages(gain: float) -> list[str]:
+    """GStreamer's `volume` element tops out at 10× (12 was silently taken as 1×): a bigger WALL_AUDIO_GAIN chains stages."""
+    out, g = [], max(0.0, gain)
+    while g > 10:
+        out += ["volume", "volume=10", "!"]
+        g /= 10
+    return out + ["volume", f"volume={g:g}", "!"]
+
+
 def gst_cmd(node: int, sink: str, kbps: int = 4500, fps: int = 30, width: int = 1920, height: int = 1080, gain: float = 1.0) -> list[str]:
     """One clock for picture and sound: both pipewiresrc's into one mpegtsmux on stdout.
 
@@ -61,7 +70,7 @@ def gst_cmd(node: int, sink: str, kbps: int = 4500, fps: int = 30, width: int = 
             "h264parse", "config-interval=-1", "!", *QUEUE, "!", "mux.",
             "pipewiresrc", *([f"target-object={sink}"] if sink else []), "stream-properties=props,stream.capture.sink=true",
             "do-timestamp=true", "!", "audio/x-raw,format=F32LE,rate=48000,channels=2", "!",
-            "audiorate", "tolerance=40000000", "skip-to-first=true", "!", "volume", f"volume={gain:g}", "!", "audioconvert", "!",
+            "audiorate", "tolerance=40000000", "skip-to-first=true", "!", *gain_stages(gain), "audioconvert", "!",
             "avenc_aac", "bitrate=160000", "!", *QUEUE, "!", "mux.",
             "mpegtsmux", "name=mux", "!", "fdsink", "fd=1"]
 
