@@ -1,8 +1,8 @@
 #!/bin/sh
-# One-time (as davidj, in the KDE session): KWin rules for the video wall. Idempotent; re-run after this file changes.
+# One-time (as davidj, in the KDE session): KWin rules for the video wall (the nested headless kwin reads the same kwinrulesrc). Idempotent; re-run after this file changes.
 #  tv-wall          the tile windows (class ends in "-Wall", from chromium --profile-directory=Wall): borderless, and
 #                   fullscreen forced off, so a site's fullscreen request fills only its tile.
-# The overlay is a layer-shell surface now (src/tv/qml/Overlay.qml), not a window: the old tv-wall-overlay rule is removed.
+# The overlay is a layer-shell surface now (SharpLab wall/qml/Overlay.qml), not a window: the old tv-wall-overlay rule is removed.
 set -eu
 k() { kwriteconfig6 --file kwinrulesrc --group "$id" --key "$1" "$2"; }
 add() {   # register rule group $id in General/rules
