@@ -69,3 +69,4 @@
 .live-row { align-items: flex-start; }
 .live-games { display: flex; flex-wrap: wrap; gap: 6px; }
 .live-games .btn { font-size: 0.9em; }
+.live-games .btn:disabled { opacity: .45; cursor: default; }

@@ -216,7 +216,9 @@ def noop(a: dict, wall: dict | None) -> str:
     if op == "promote":
         return "That's already the main tile." if a["i"] == 0 else "There's no such tile." if a["i"] >= len(urls) else ""
     if op == "tile":
-        return "That's already on that tile." if a["i"] < len(urls) and urls[a["i"]] == a["url"] else ""
+        if a["i"] < len(urls) and urls[a["i"]] == a["url"]:
+            return "That's already on that tile."
+        return "That's already on the wall." if a["url"] in urls else ""
     if op == "layout":
         return "That's already the layout." if ov.get("layout") == a["layout"] else ""
     if op == "board":
