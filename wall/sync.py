@@ -47,6 +47,7 @@ class SyncStore:
     def __init__(self, path: Path | str | None = None, default: float = DEFAULT_S) -> None:
         self.path = Path(path) if path else None
         self.show = True
+        self.ticker = False   # a bets line in the L-bar's bottom ticker too (the sidebar's Bets section is always there)
         self.default = default
         self.manual: dict[str, float] = {}
         self.auto: dict[str, list[float]] = {}
@@ -60,6 +61,7 @@ class SyncStore:
         try:
             d = json.loads(self.path.read_text())
             self.show = bool(d.get("show", True))
+            self.ticker = bool(d.get("ticker", False))
             self.default = clamp(d.get("default", self.default))
             self.manual = {str(k): clamp(v) for k, v in (d.get("manual") or {}).items()}
             self.auto = {str(k): [clamp(x) for x in v][-KEEP:] for k, v in (d.get("auto") or {}).items() if isinstance(v, list)}
@@ -73,7 +75,7 @@ class SyncStore:
         tmp = self.path.with_suffix(".tmp")
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp.write_text(json.dumps({"show": self.show, "default": self.default, "manual": self.manual, "auto": self.auto}))
+            tmp.write_text(json.dumps({"show": self.show, "ticker": self.ticker, "default": self.default, "manual": self.manual, "auto": self.auto}))
             os.replace(tmp, self.path)
         except OSError as e:
             log.warning("sync settings not saved: %s", e)
@@ -89,6 +91,11 @@ class SyncStore:
     def set_show(self, show: bool) -> None:
         with self.lock:
             self.show = bool(show)
+            self._save()
+
+    def set_ticker(self, on: bool) -> None:
+        with self.lock:
+            self.ticker = bool(on)
             self._save()
 
     def set_default(self, d: float) -> None:

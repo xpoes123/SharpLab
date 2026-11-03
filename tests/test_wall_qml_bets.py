@@ -1,5 +1,5 @@
-"""The overlay's bets badges, rendered for real (qml6 offscreen, Preview.qml against a throwaway server): they draw
-without QML errors and only when bets are shown. Skipped where qml6 isn't installed."""
+"""The bets in the L layout (the sidebar's Bets section + ticker line), rendered for real (qml6 offscreen, Preview.qml
+against a throwaway server): they draw without QML errors and only when bets are shown. Skipped where qml6 isn't installed."""
 import json
 import shutil
 import subprocess
@@ -38,7 +38,7 @@ def render(tmp_path, show, name):
     try:
         r = subprocess.run(["qml6", str(QML / "Preview.qml"), "--", "--layout", "lbar", "--size", "1920x1080", "--api", api,
                             "--bets", api, "--out", str(out), "--wait", "2500"],
-                           env={"QT_QPA_PLATFORM": "offscreen", "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+                           env={"QT_QPA_PLATFORM": "offscreen", "QT_FORCE_STDERR_LOGGING": "1", "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
                            capture_output=True, text=True, timeout=30)
     finally:
         srv.shutdown()

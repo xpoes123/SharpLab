@@ -39,14 +39,23 @@ function wallTiles(n, area) {
     return out;
 }
 
-// The bands the tiles leave in their area (the overlay's band layer, Bands.qml): {tiles, top, bottom, head} — top / bottom
-// = {x, y, w, h} above / below the arrangement (h 0 = none: 1 and 4 tiles fill a 16:9 area), head[i] = the band tile i's
+// What the tiles leave uncovered (the overlay's band layer, Bands.qml): {outer, tiles, top, bottom, left, right, head}.
+// outer = the region the band layer owns: the L-bar's corner while the L-bar is drawn (useL and lbarShown), else the
+// whole screen — tiles placed for the L-bar with no L-bar on screen leave its sidebar + band to the bands too, so nothing
+// behind the wall (the kiosk, a panel) ever shows. top / bottom = full-width rects above / below the tiles' block, left /
+// right = beside it (rects {x, y, w, h}, h or w 0 = none; 1 and 4 tiles fill a 16:9 area). head[i] = the band tile i's
 // header goes in: "top" when the tile touches the top band, else "bottom" when it touches the bottom one, else "".
-function wallBands(n, sw, sh, useL) {
-    var a = wallArea(sw, sh, useL), T = wallTiles(n, a), y0 = a.y + a.h, y1 = a.y;
-    for (var i = 0; i < T.length; i++) { y0 = Math.min(y0, T[i].y); y1 = Math.max(y1, T[i].y + T[i].h); }
-    var top = { x: a.x, y: a.y, w: a.w, h: y0 - a.y }, bottom = { x: a.x, y: y1, w: a.w, h: a.y + a.h - y1 }, head = [];
+function wallBands(n, sw, sh, useL, lbarShown) {
+    var a = wallArea(sw, sh, useL), T = wallTiles(n, a);
+    var o = useL && lbarShown !== false ? a : { x: 0, y: 0, w: sw, h: sh };
+    var x0 = o.x + o.w, x1 = o.x, y0 = o.y + o.h, y1 = o.y;
+    for (var i = 0; i < T.length; i++) {
+        x0 = Math.min(x0, T[i].x); x1 = Math.max(x1, T[i].x + T[i].w);
+        y0 = Math.min(y0, T[i].y); y1 = Math.max(y1, T[i].y + T[i].h);
+    }
+    var top = { x: o.x, y: o.y, w: o.w, h: y0 - o.y }, bottom = { x: o.x, y: y1, w: o.w, h: o.y + o.h - y1 };
+    var left = { x: o.x, y: y0, w: x0 - o.x, h: y1 - y0 }, right = { x: x1, y: y0, w: o.x + o.w - x1, h: y1 - y0 }, head = [];
     for (var j = 0; j < T.length; j++)
         head.push(top.h > 0 && T[j].y === y0 ? "top" : bottom.h > 0 && T[j].y + T[j].h === y1 ? "bottom" : "");
-    return { tiles: T, top: top, bottom: bottom, head: head };
+    return { outer: o, tiles: T, top: top, bottom: bottom, left: left, right: right, head: head };
 }

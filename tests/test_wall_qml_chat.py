@@ -35,7 +35,7 @@ def render(tmp_path, chat, name):
     try:
         r = subprocess.run(["qml6", str(QML / "Preview.qml"), "--", "--layout", "lbar", "--size", "1920x1080",
                             "--api", f"http://127.0.0.1:{srv.server_port}", "--out", str(out), "--wait", "2500"],
-                           env={"QT_QPA_PLATFORM": "offscreen", "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+                           env={"QT_QPA_PLATFORM": "offscreen", "QT_FORCE_STDERR_LOGGING": "1", "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
                            capture_output=True, text=True, timeout=30)
     finally:
         srv.shutdown()

@@ -226,12 +226,31 @@ function betLine(r) {
              dir: r.dir || "", pct: pct, size: r.size || "", pnl: pnl };
 }
 
-function badges(b, n) {   // → one {i, lines, more, delay} per tile that has rows
+// The bets live in the L layout, never over the video: the sidebar's Bets section, the ticker's bets line, the
+// bands' header chips + detail. Every row is already delayed to its tile's picture (+ opt-in filtered) by the service.
+function betRows(b, n) {   // → [{tile (1-based), game, delay, who, what, px, dir, pct, size, pnl}] in tile order
     var out = [];
     ((b && b.show && b.tiles) || []).forEach(function (t) {
-        if (t.i < n && (t.rows || []).length)
-            out.push({ i: t.i, lines: t.rows.slice(0, 3).map(betLine), more: Math.max(0, t.rows.length - 3),
-                       delay: Math.round(t.delay) + " s" + (t.src === "auto" ? " · synced" : t.src === "manual" ? " · set" : "") });
+        if (t.i < n) (t.rows || []).forEach(function (r) {
+            var l = betLine(r);
+            l.tile = t.i + 1; l.game = t.label || ""; l.delay = Math.round(t.delay) + " s";
+            out.push(l);
+        });
     });
     return out;
+}
+
+function betTicker(b, n) {   // the ticker's bets line, when the owner turned it on: "David  YES GSW −3.5  42¢→51¢ ▲21%"
+    if (!b || !b.ticker) return [];
+    return betRows(b, n).map(function (l) {
+        return { head: l.who, text: l.what, tail: l.px.replace("@", "").replace(" → ", "→") + (l.pct ? " " + l.pct.replace(" ", "") : ""),
+                 tone: l.dir === "up" ? "ok" : l.dir === "down" ? "danger" : "" };
+    });
+}
+
+function tileBets(b, i) {   // a band header's chip: {count, dir} (dir = where most of its positions moved)
+    var t = ((b && b.show && b.tiles) || []).filter(function (x) { return x.i === i; })[0];
+    var rows = (t && t.rows) || [], up = 0, down = 0;
+    rows.forEach(function (r) { if (r.dir === "up") up++; else if (r.dir === "down") down++; });
+    return { count: rows.length, dir: up > down ? "up" : down > up ? "down" : "" };
 }

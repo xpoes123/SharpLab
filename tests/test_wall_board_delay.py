@@ -1,5 +1,5 @@
 """The overlay's spoiler delay (wall/qml/board.js, run under node): the scoreboard and ticker are drawn as of
-(now − the game's tile delay) — a score seen at t never shows before t + D — and the bets badges' formatting."""
+(now − the game's tile delay) — a score seen at t never shows before t + D — and the bets' formatting for the L layout."""
 import json
 import shutil
 import subprocess
@@ -13,7 +13,7 @@ pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node not i
 
 def js(expr: str):
     src = BOARD.read_text().replace(".pragma library", "")
-    prog = f"const B = (function () {{ {src}; return {{ delayed, trim, badges, betLine, view }}; }})();\n" \
+    prog = f"const B = (function () {{ {src}; return {{ delayed, trim, betLine, betRows, betTicker, tileBets, view }}; }})();\n" \
            f"process.stdout.write(JSON.stringify((function () {{ {expr} }})()));"
     r = subprocess.run(["node", "-e", prog], capture_output=True, text=True, timeout=20)
     assert r.returncode == 0, r.stderr
@@ -57,15 +57,19 @@ def test_trim_keeps_what_a_delay_can_reach():
     assert out == [[2, 3, 4], [3, 4], [4]]
 
 
-def test_badges():
+def test_bets_for_the_l_layout():
     out = js("""
-      const b = {show: true, n: 2, tiles: [
-        {i: 0, delay: 40, src: "auto", rows: [{who: "David", side: "YES", label: "GSW −3.5", entry: 42, mark: 51.4, dir: "up", pct: 21, size: "50+ ct"},
+      const b = {show: true, ticker: true, n: 2, tiles: [
+        {i: 0, delay: 40, src: "auto", label: "GS @ LAL", rows: [{who: "David", side: "YES", label: "GSW −3.5", entry: 42, mark: 51.4, dir: "up", pct: 21, size: "50+ ct"},
                                              {who: "Steph", side: "NO", label: "Over 224.5", entry: 56, mark: 49, dir: "down", pct: 13, size: "8 ct", pnl: -0.56}]},
         {i: 1, delay: 45, src: "default", rows: []}, {i: 5, delay: 45, src: "default", rows: [{who: "x"}]}]};
-      return [B.badges(b, 2), B.badges(Object.assign({}, b, {show: false}), 2)];""")
-    shown, hidden = out
-    assert hidden == [] and len(shown) == 1 and shown[0]["delay"] == "40 s · synced"
-    assert shown[0]["lines"][0] == {"who": "David", "what": "YES GSW −3.5", "px": "@42¢ → 51¢", "dir": "up", "pct": "▲ 21%",
-                                    "size": "50+ ct", "pnl": ""}
-    assert shown[0]["lines"][1]["pct"] == "▼ 13%" and shown[0]["lines"][1]["pnl"] == "−$0.56"
+      const off = Object.assign({}, b, {show: false}), noTicker = Object.assign({}, b, {ticker: false});
+      return [B.betRows(b, 2), B.betRows(off, 2), B.betTicker(b, 2), B.betTicker(noTicker, 2), B.tileBets(b, 0), B.tileBets(b, 1), B.tileBets(off, 0)];""")
+    rows, hidden, tick, no_tick, t0, t1, t_off = out
+    assert hidden == [] and len(rows) == 2 and rows[0]["tile"] == 1 and rows[0]["game"] == "GS @ LAL" and rows[0]["delay"] == "40 s"
+    assert {k: rows[0][k] for k in ("who", "what", "px", "dir", "pct", "size", "pnl")} == {
+        "who": "David", "what": "YES GSW −3.5", "px": "@42¢ → 51¢", "dir": "up", "pct": "▲ 21%", "size": "50+ ct", "pnl": ""}
+    assert rows[1]["pct"] == "▼ 13%" and rows[1]["pnl"] == "−$0.56"
+    assert tick[0] == {"head": "David", "text": "YES GSW −3.5", "tail": "42¢→51¢ ▲21%", "tone": "ok"} and tick[1]["tone"] == "danger"
+    assert no_tick == []
+    assert t0 == {"count": 2, "dir": ""} and t1 == {"count": 0, "dir": ""} and t_off["count"] == 0

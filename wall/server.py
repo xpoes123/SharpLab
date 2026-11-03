@@ -15,6 +15,7 @@ import os
 import re
 import secrets
 import socket
+import time
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 from pathlib import Path
@@ -161,6 +162,8 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         disc.source_board = lambda: tv_board(cfg.tv_overlay_api)
         disc.tv_on_wall = lambda: tv_active(cfg.tv_overlay_api) == "wall"
         disc.capture_output, disc.screen_sink = cfg.tv_output, cfg.tv_sink
+    if tv is not None and tv.host_app is None:   # the TV's overlay only over the TV OS's wall app (never Dreamscape…)
+        tv.host_app = lambda: tv_active(cfg.tv_overlay_api)
     for i in instances.values():
         if i.headless:
             i.before_start = guard.park   # the LLM's VRAM is free before the budget check
@@ -193,6 +196,8 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
                 for inst in instances.values():
                     try:
                         await asyncio.to_thread(inst.tick)
+                        if inst.urls:   # 1 / 4 tiles with bets and no L-bar: bring the L-bar up for them
+                            await asyncio.to_thread(bets_lbar_tick, inst)
                     except Exception as e:  # noqa: BLE001
                         log.warning("tick %s: %s", inst.name, e)
         async def chat_ticker():   # only while the discord wall runs: the TV shows its watch party's chat
@@ -425,11 +430,11 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
     async def ov_data(name: str, board: str = "") -> dict:
         return await asyncio.to_thread(inst(name).overlay_data, board)
 
-    @app.get("/i/{name}/api/overlay/bets")
-    def ov_bets(name: str) -> dict:
-        """The overlay's badges + the spoiler delays it holds the board back by. Rows come from the web already delayed
-        by each tile's D and filtered to members who opted in."""
-        i = inst(name)
+    def bets_lbar_tick(i: Instance) -> None:
+        v = bets_view(i)
+        i.bets_lbar(v["show"] and any(t["rows"] for t in v["tiles"]), time.time())
+
+    def bets_view(i: Instance) -> dict:
         with i.lock:
             urls, view = list(i.urls), i.view
         games = tile_games(i, scores)
@@ -441,25 +446,36 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
             rows = badge_rows(bets.games.get(f"{g['league']}:{g['id']}", [])) if g and sync.show else []
             tiles.append({"i": k, "delay": d, "src": src, "label": g["label"] if g else "", "rows": rows})
         return {"show": sync.show, "n": len(urls), "view": view, "tiles": tiles, "delays": delays, "default": sync.default,
-                "rev": sync.rev}
+                "rev": sync.rev, "on": i.overlay_on(), "ticker": sync.ticker, "auto_lbar": i.auto_lbar}
+
+    @app.get("/i/{name}/api/overlay/bets")
+    def ov_bets(name: str) -> dict:
+        """The bets for the L layout (the sidebar's Bets section, the ticker line, the bands' chips + detail — never
+        over the video) + the spoiler delays the boards are held back by. Rows come from the web already delayed by
+        each tile's D and filtered to members who opted in. auto_lbar: the overlay draws the L-bar for them."""
+        return bets_view(inst(name))
 
     # ---- spoiler sync: the delay of each tile page + "show bets on the overlay" (loopback: the TV's phones; tailnet: the
     # watch page's owner controls through sharplab-web) ----
     @app.get("/sync")
     def get_sync() -> dict:
-        return {"show": sync.show, "default": sync.default, "auto": runner.enabled,
+        return {"show": sync.show, "ticker": sync.ticker, "default": sync.default, "auto": runner.enabled,
                 "walls": {k: [{**t, "status": runner.status.get(t["url"], "")} for t in v.sync_view()["tiles"]]
                           for k, v in instances.items() if v.urls}}
 
     @app.post("/sync")
     async def post_sync(request: Request) -> dict:
-        """{"show": bool} | {"default": s} | {"url", "nudge": ±1} (steps of 5 s) | {"url", "auto": true} (back to auto)
+        """{"show": bool} | {"ticker": bool} (a bets line in the L-bar's ticker) | {"default": s} | {"url", "nudge": ±1} (steps of 5 s) | {"url", "auto": true} (back to auto)
         | {"url", "tap": ms | true} ("the score on screen just changed", at that time — true = now)."""
         d = await body(request)
         if "show" in d:
             if not isinstance(d["show"], bool):
                 raise ValueError("show is a boolean")
             sync.set_show(d["show"])
+        if "ticker" in d:
+            if not isinstance(d["ticker"], bool):
+                raise ValueError("ticker is a boolean")
+            sync.set_ticker(d["ticker"])
         if "default" in d:
             if not isinstance(d["default"], (int, float)) or isinstance(d["default"], bool):
                 raise ValueError("default is seconds")
@@ -497,8 +513,10 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
             lv = i.live
             args = dict(urls=list(i.urls), sound=i.driver.sound, lbar=bool(getattr(i.driver, "lbar", False)), view=i.view,
                         title=i.preset_name, live_league=lv.league if lv else "")
-        return build_view(**args, games=games[:len(args["urls"])], scores=scores, tape=tape, delay=sync.delay,
-                          chat=chat.view(party_on()))
+        out = build_view(**args, games=games[:len(args["urls"])], scores=scores, tape=tape, delay=sync.delay,
+                         chat=chat.view(party_on()))
+        out["on"] = i.overlay_on()   # the TV OS is on its wall app (Overlay.qml draws nothing otherwise)
+        return out
 
     # ---- the watch party's chat, for the TV router (loopback only: not in REMOTE_OK) ----
     def party_on() -> bool:
