@@ -11,11 +11,10 @@
 //   matchup: the whole screen, opaque: the league the phone opened.
 //   bets:    (with --bets <service>/i/<wall>) a transparent surface over the tiles' corner with members' Kalshi badges, and
 //            the spoiler delays the boards are held back by (each game as of now − its tile's delay; Board.qml)
-//   bands:   (any view but full / matchup; the same service as --bets) up to two more surfaces, exactly the bands the
-//            tiles leave above and below them (lbar.js wallBands; 2 and 3 tiles leave some, 1 and 4 fill their 16:9
-//            area): Bands.qml, from GET <bets>/bands every 2 s — a header per tile (its game as of now − its delay; the
-//            board's own delayed copy wins when it has the game, so header and sidebar agree), a calm backdrop, and
-//            without the L-bar the other games + the chat. Exclusive zone 0: the bottom one sits on the L-bar's band.
+//   bands:   (any view but full / matchup; polls GET <bets>/bands every 2 s) one surface, opaque wherever the tiles leave
+//            room — the L-bar's corner while the L-bar is up, else the whole screen (lbar.js wallBands): BandLayer.qml.
+//            A header per tile (its game as of now − its delay; the board's own delayed copy wins when it has the game,
+//            so header and sidebar agree), a calm backdrop, and without the L-bar the other games + the chat.
 //   qml6 Overlay.qml -- --api http://127.0.0.1:7790 --bets http://127.0.0.1:7795/i/tv
 import QtQuick
 import QtQuick.Window
@@ -29,7 +28,11 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
         var a = Qt.application.arguments, i = a.lastIndexOf(name)
         return i >= 0 && i + 1 < a.length ? a[i + 1] : dflt
     }
-    property string layout: ""            // the view: "" (nothing shown), lbar, full or matchup
+    property string view: ""              // the router's view: "" (nothing shown), lbar, full or matchup
+    // what is drawn: the view, but nothing at all unless the service says the TV OS is on its wall app (bets "on"):
+    // a wall left running under Dreamscape / YouTube / News never draws over them. No service (no --bets) = the view.
+    readonly property bool hostOk: app.betsApi === "" || (app.bets !== null && app.bets.on !== false)
+    readonly property string layout: app.hostOk ? app.view : ""
     property int rev: -1
     readonly property string api: arg("--api", "http://127.0.0.1:7790")
     readonly property var geo: G.lbar(Screen.width, Screen.height)
@@ -48,7 +51,7 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
             var s = null
             try { s = JSON.parse(x.responseText) } catch (e) { return }
             if (s.rev !== app.rev) { app.rev = s.rev; main.tick() }   // new board / matchup: its data now, not in ≤ 5 s
-            if (["", "lbar", "full", "matchup"].indexOf(s.view) >= 0) app.layout = s.view
+            if (["", "lbar", "full", "matchup"].indexOf(s.view) >= 0) app.view = s.view
             var c = s.chat || null   // only on a change: the sidebar keeps its lines (and their fades) across polls
             if (JSON.stringify(c) !== JSON.stringify(app.chat)) app.chat = c
         }
@@ -88,9 +91,12 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
         x.send()
     }
     Timer { interval: 2000; running: app.bandsApi !== ""; repeat: true; triggeredOnStart: true; onTriggered: app.pollBands() }
-    readonly property var bandGeo: app.bands && app.bands.n > 0 ? G.wallBands(app.bands.n, Screen.width, Screen.height, app.bands.lbar) : null
-    readonly property bool bandsOn: app.bandGeo !== null && app.layout !== "full" && app.layout !== "matchup"
-    readonly property real bandMin: Screen.width / 120 * 3   // thinner than 3 rem: not worth a surface
+    readonly property var bandGeo: app.bands && app.bands.n > 0
+        ? G.wallBands(app.bands.n, Screen.width, Screen.height, app.bands.lbar, app.layout === "lbar") : null
+    // only 2 and 3 tiles have bands (1 and 4 fill their 16:9 area); only while the TV OS is on its wall app
+    readonly property bool bandsOn: app.bandGeo !== null && app.hostOk && app.bands.on !== false
+        && (app.bands.n === 2 || app.bands.n === 3) && app.layout !== "full" && app.layout !== "matchup"
+        && ["top", "bottom", "left", "right"].some(function (k) { return app.bandGeo[k].w > 0 && app.bandGeo[k].h > 0 })
 
     // every picture the matchup panel can show, kept decoded (same source size / fill as Board.qml's Pic) so a matchup
     // opens with its headshots already there; the list only changes when the lineups do
@@ -174,7 +180,7 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
         readonly property bool lb: app.layout === "lbar"
         width: lb ? app.geo.gridW : Screen.width
         height: lb ? app.geo.gridH : Screen.height
-        visible: !!app.bets && app.bets.show && B.badges(app.bets, app.bets.n).length > 0 && (app.layout === "" || app.layout === "lbar")
+        visible: app.hostOk && !!app.bets && app.bets.show && B.badges(app.bets, app.bets.n).length > 0 && (app.layout === "" || app.layout === "lbar")
         LayerShell.Window.scope: "tv-overlay"
         LayerShell.Window.layer: LayerShell.Window.LayerOverlay
         LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
@@ -184,28 +190,31 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
         Bets { anchors.fill: parent; unit: Screen.width; lbar: false; bets: app.bets }
     }
 
-    component BandWindow: Window {   // one band (top / bottom): exactly its rect, over nothing but the kiosk's black
-        id: bw
-        property string edge: "top"
-        readonly property var r: app.bandGeo ? app.bandGeo[edge] : null
+    Window {   // bands: one surface over the region the band layer owns (the L-bar's corner, or the whole screen without
+        // the L-bar), opaque outside the tiles, transparent over them. Top-left anchored with exclusive zone −1, like the
+        // bets surface: placed at 0,0 whatever else reserves an edge (an exclusive-zone-0 bottom-anchored surface landed
+        // at the screen's bottom on the real KWin when the L-bar wasn't up). OVERLAY is above the panel layer too.
+        id: bandWin
         transientParent: null
-        title: "TV overlay bands " + edge
+        title: "TV overlay bands"
         color: "transparent"
         flags: Qt.FramelessWindowHint | Qt.WindowTransparentForInput | Qt.WindowDoesNotAcceptFocus
-        width: r ? r.w : 1
-        height: r ? Math.max(1, r.h) : 1
-        visible: app.bandsOn && r !== null && r.h >= app.bandMin
+        width: app.bandGeo ? app.bandGeo.outer.w : 1
+        height: app.bandGeo ? app.bandGeo.outer.h : 1
+        visible: app.bandsOn
         LayerShell.Window.scope: "tv-overlay"
         LayerShell.Window.layer: LayerShell.Window.LayerOverlay
         LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
         LayerShell.Window.activateOnShow: false
-        LayerShell.Window.exclusionZone: 0
-        Loader {   // a fresh Bands each time it maps, so it fades in again
+        LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorLeft
+        LayerShell.Window.exclusionZone: -1
+        Loader {   // a fresh layer each time it maps, so it fades in again
             anchors.fill: parent
-            active: bw.visible
-            sourceComponent: Bands { b: app.bands; edge: bw.edge; geo: app.bandGeo; unit: Screen.width; boardData: main.last ? main.last.data : null }
+            active: bandWin.visible
+            sourceComponent: BandLayer {
+                b: app.bands; geo: app.bandGeo; unit: Screen.width; lbarShown: app.layout === "lbar"
+                boardData: main.last ? main.last.data : null
+            }
         }
     }
-    BandWindow { edge: "top"; LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorLeft }
-    BandWindow { edge: "bottom"; LayerShell.Window.anchors: LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft }
 }
