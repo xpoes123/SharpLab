@@ -127,6 +127,11 @@ def resolve_live(url: str, fetch=None, ttl: float = 600) -> str:
     return out
 
 
+FADE_S = 0.45
+# a tile about to change page: everything fades to black (the next page fades in by itself: election.css / a stream's
+# own black first frame), so a swap reads as a cut through black instead of a page tearing
+FADE_OUT_JS = """(() => { const r = document.documentElement; r.style.background = '#000';
+  r.style.transition = 'opacity 0.4s ease-in'; r.style.opacity = '0'; })()"""
 ARTIFACT = re.compile(r"^https://claude\.ai/(code/)?artifact/[\w-]+")
 ARTIFACT_RELOAD_S = 300.0
 # a claude.ai artifact (a community dashboard): its frame over the whole tile (covers claude.ai's bar), zoomed to 80 % so
@@ -397,7 +402,8 @@ class Driver:
     def procs(self) -> list[subprocess.Popen]:
         return [p for p, _ in self.tiles if p]
 
-    def _launch(self, url: str, slot: int) -> subprocess.Popen | None:
+    def _mark(self, url: str, slot: int) -> None:
+        """What kind of page the slot shows now (our data page / a claude.ai artifact / a stream)."""
         if own_page(url):
             self.pages.add(slot)
         else:
@@ -406,6 +412,24 @@ class Driver:
             self.artifacts[slot] = time.monotonic()
         else:
             self.artifacts.pop(slot, None)
+
+    def _navigate(self, p: subprocess.Popen | None, slot: int, url: str) -> bool:
+        """Swap a running tile's page in place: fade it to black, then load the new URL in the same window — no window
+        closing and opening (KWin re-tiling it is what showed as a shrink / grow). False = relaunch instead."""
+        if p is None or p.poll() is not None:
+            return False
+        try:
+            with cdp_page(self.s.cdp_base + slot) as call:
+                call("Runtime.evaluate", {"expression": FADE_OUT_JS})
+                time.sleep(FADE_S)
+                call("Page.navigate", {"url": resolve_live(url)})
+            return True
+        except Exception as e:  # noqa: BLE001 — a stuck page: relaunch it
+            log.info("%s tile slot %d: in-place swap failed (%s), relaunching", self.s.name, slot, e)
+            return False
+
+    def _launch(self, url: str, slot: int) -> subprocess.Popen | None:
+        self._mark(url, slot)
         try:
             return subprocess.Popen(
                 [*GPU_ENV, "chromium", f"--user-data-dir={Path(self.s.profiles) / f'chromium-wall-{self.s.prefix}{slot}'}",
@@ -433,6 +457,10 @@ class Driver:
     def set_tile(self, i: int, url: str) -> None:
         if 0 <= i < len(self.tiles):
             p, slot = self.tiles[i]
+            if self._navigate(p, slot, url):
+                self._mark(url, slot)
+                self._stalls.pop(slot, None)
+                return
             close_tiles([(p, slot)], self.s.cdp_base)
             self._stalls.pop(slot, None)
             tiles = list(self.tiles)

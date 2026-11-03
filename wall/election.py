@@ -349,7 +349,11 @@ def trades(rows: list[dict] | None, snap: dict) -> list[dict]:
     if not rows:
         return []
     races = {r["id"]: r for r in snap.get("races") or []}
-    return [{k: r.get(k) for k in TRADE_KEYS} for r in ke.enrich(rows, races, snap.get("offices") or {})]
+    try:
+        return [{k: r.get(k) for k in TRADE_KEYS} for r in ke.enrich(rows, races, snap.get("offices") or {})]
+    except (KeyError, TypeError, ValueError) as e:   # a market shape this side doesn't know: no chips, never a dead data.json
+        log.warning("election trades: %s", e)
+        return []
 
 
 def holders(trade_rows: list[dict]) -> dict[str, list[dict]]:

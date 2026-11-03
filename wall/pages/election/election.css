@@ -14,6 +14,9 @@
 html { font-size: calc(100vw / 60); background: var(--bg); }
 body { background: var(--bg); color: var(--ink); font-family: var(--f-display); font-stretch: 84%; font-variation-settings: "wdth" 84; overflow: hidden;
        width: 100vw; height: 100vh; -webkit-font-smoothing: antialiased; cursor: none; }
+/* a tile swapped to this page fades in from black (the old page faded out: wall/engine.py FADE_OUT_JS) */
+body { animation: fade-in 0.6s ease-out; }
+@keyframes fade-in { from { opacity: 0; } }
 .mono { font-family: var(--f-mono); font-stretch: 100%; font-variation-settings: normal; }
 .caps { text-transform: uppercase; letter-spacing: 0.06em; font-stretch: 68%; font-variation-settings: "wdth" 68; }
 .num { font-variant-numeric: tabular-nums; font-stretch: 68%; font-variation-settings: "wdth" 68; font-weight: 800; }
