@@ -613,6 +613,12 @@ async def test_guest_votes_count():
     assert p.status == "passed" and done == [{"op": "stop"}]
     q, err = await hub.propose(guest, {"op": "sound", "i": 1})   # sound / layout / board: fine for guests
     assert q and not err
+    lu = {"id": "g-def", "name": "Lu", "guest": True}
+    q, err = await hub.propose(lu, {"op": "tile", "i": 0, "url": "https://x.example/any"})   # arbitrary pages: no
+    assert not q and "login" in err
+    wall._live.update(at=0.0, games=[{"league": "nba", "label": "A–B", "url": "https://s.example/nba/lakers", "state": "in"}])
+    q, err = await hub.propose(lu, {"op": "tile", "i": 0, "url": "https://s.example/nba/lakers"})   # a live game: yes
+    assert q and not err, err
 
 
 def test_guest_names_are_unique_and_connects_are_rate_limited(demo):
@@ -652,3 +658,8 @@ def test_noop_proposals_are_refused():
     assert not noop({"op": "follow"}, w) and noop({"op": "follow"}, {**w, "mirror": True})
     assert noop({"op": "start", "mirror": True}, {**w, "mirror": True}) and not noop({"op": "stop"}, w)
     assert noop({"op": "stop"}, {"running": False}) and not noop({"op": "start", "preset": "x"}, {"running": False})
+
+
+def test_live_games_need_a_viewer(setup):
+    client, *_ = setup
+    assert client.get("/api/v1/wall/games").status_code == 401

@@ -219,6 +219,28 @@
 
   // ---- votes ----
   function propose(action) { send({ t: "propose", action }); }
+
+  // Live now: one tap puts that game on the tile picked in the Tile menu (or the next empty one)
+  async function loadLive() {
+    try {
+      const r = await fetch("/api/v1/wall/games", { credentials: "same-origin" });
+      const games = r.ok ? (await r.json()).games || [] : [];
+      const box = $("liveGames"); box.replaceChildren();
+      box.className = games.length ? "live-games" : "muted small";
+      if (!games.length) { box.textContent = "no live games right now"; return; }
+      for (const g of games) {
+        const b = el("button", "btn", (g.league === "nfl" ? "🏈 " : "🏀 ") + g.label);
+        b.title = "Put on tile " + (+$("tileI").value + 1);
+        b.onclick = () => {
+          const n = (wall && wall.urls) ? wall.urls.length : 0;
+          const picked = +$("tileI").value;
+          propose({ op: "tile", i: picked < n ? picked : Math.min(n, 3), url: g.url, label: g.label });
+        };
+        box.append(b);
+      }
+    } catch (e) { /* offline: try again next round */ }
+  }
+  loadLive(); setInterval(loadLive, 30000);
   function renderProps() {
     const box = $("props"); box.replaceChildren();
     for (const p of props.values()) {
