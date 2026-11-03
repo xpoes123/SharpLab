@@ -139,11 +139,13 @@ REVEAL_WAIT_S = 15.0
 # YouTube's controls or the player swapping in
 PLAYING_JS = """(() => { const v = [...document.querySelectorAll('video')].sort((a, b) => b.offsetWidth * b.offsetHeight
   - a.offsetWidth * a.offsetHeight)[0]; return !!v && v.readyState >= 3 && !v.paused && v.currentTime > 0.5; })()"""
-TV_HIDE_JS = """(() => { const s = document.createElement('style'); s.id = 'tv-hide';
-  s.textContent = 'html{background:#000!important} html *{visibility:hidden!important}';
-  (document.head || document.documentElement).appendChild(s); })()"""
-TV_REVEAL_JS = """(() => { const s = document.getElementById('tv-hide'); if (!s) return; const r = document.documentElement;
-  r.style.opacity = '0'; s.remove(); requestAnimationFrame(() => { r.style.transition = 'opacity 0.5s ease-out'; r.style.opacity = '1'; }); })()"""
+# a constructed stylesheet on the document, not a <style> element: YouTube rewrites the page's DOM while it boots (an element
+# or attribute we add at document start is gone a second later), but it leaves document.adoptedStyleSheets alone
+TV_HIDE_JS = """(() => { const sh = new CSSStyleSheet(); sh.replaceSync('html{background:#000!important} html *{visibility:hidden!important}');
+  window.__tvHide = sh; document.adoptedStyleSheets = [...document.adoptedStyleSheets, sh]; })()"""
+TV_REVEAL_JS = """(() => { const sh = window.__tvHide; if (!sh) return; const r = document.documentElement; r.style.opacity = '0';
+  document.adoptedStyleSheets = document.adoptedStyleSheets.filter((x) => x !== sh); window.__tvHide = null;
+  requestAnimationFrame(() => { r.style.transition = 'opacity 0.5s ease-out'; r.style.opacity = '1'; }); })()"""
 ARTIFACT = re.compile(r"^https://claude\.ai/(code/)?artifact/[\w-]+")
 ARTIFACT_RELOAD_S = 300.0
 # a claude.ai artifact (a community dashboard): its frame over the whole tile (covers claude.ai's bar), zoomed to 80 % so
@@ -452,6 +454,7 @@ class Driver:
                 time.sleep(FADE_S)
                 # this session's script runs at the start of every document it loads, while it's open: nothing of the new
                 # page (not even a white flash before its CSS) shows until it's ready
+                call("Page.enable")
                 call("Page.addScriptToEvaluateOnNewDocument", {"source": TV_HIDE_JS})
                 call("Page.navigate", {"url": resolve_live(url)})
                 ready = FULLSCREEN_JS if stream else "document.readyState === 'complete'"   # a stream: its video fullscreen
