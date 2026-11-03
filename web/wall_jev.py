@@ -97,9 +97,12 @@ def plan(choice: str, text: str, wall: dict | None) -> tuple[dict | None, str, s
     if not s:
         return None, "", HELP
     name = s["name"]
-    if s["url"] in urls:
-        return None, name, f"🎧 DJ Jev: {name} is already on tile {urls.index(s['url']) + 1}"
     sound, want = w.get("sound"), bool(SOUND.search(text))
+    if s["url"] in urls:   # already up: "turn on kornacki's audio" = the sound to that tile
+        k = urls.index(s["url"])
+        if want and k != sound:
+            return {"op": "sound", "i": k, "label": name}, name, ""
+        return None, name, f"🎧 DJ Jev: {name} is already on tile {k + 1}" + (" with the sound" if k == sound else "")
     ok = [i for i in (3, 2) if i <= max(len(urls), 2)]
     i = next((i for i in ok if (i == sound) == want), ok[0])
     return {"op": "tile", "i": i, "url": s["url"], "label": f"{s['group']} · {name}"}, name, ""
@@ -110,6 +113,8 @@ def reply(p, err: str, action: dict, name: str, conf: float) -> str:
     if err or not p:
         return f"🎧 DJ Jev: {err or 'that didn’t work'}"
     where, pct = f"{name} on tile {action['i'] + 1}", f"({round(conf * 100)}%)"
+    if p.status in ("override", "passed") and action.get("op") == "sound":
+        return f"🎧 DJ Jev: sound to {name} (tile {action['i'] + 1}) {pct}"
     if p.status in ("override", "passed"):
         return f"🎧 DJ Jev: putting {where} {pct}"
     if p.status == "open":

@@ -122,7 +122,7 @@ async def test_stream_on_a_break_is_refused():
 @pytest.mark.anyio
 async def test_stream_already_on_the_wall():
     h, done = make(Jev(sid("ABC News"), 0.9))
-    assert await run(h, DAVID, "jev put abc on") == ["🎧 DJ Jev: ABC News is already on tile 3"]
+    assert await run(h, DAVID, "jev put abc on") == ["🎧 DJ Jev: ABC News is already on tile 3 with the sound"]
 
 
 @pytest.mark.anyio
@@ -207,3 +207,10 @@ async def test_no_votes_mode_jev_applies_and_panel_proposals_refused(monkeypatch
     assert await run(h, MEMBER, "jev show vs 2024") == ["🎧 DJ Jev: putting vs 2024 on tile 2 (96%)"] and done
     p, err = await h.propose(MEMBER, {"op": "layout", "layout": "full"})
     assert p is None and "DJ Jev" in err
+
+
+@pytest.mark.anyio
+async def test_audio_request_for_a_stream_already_up_moves_the_sound():
+    h, done = make(Jev(sid("NBC News"), 0.9))          # NBC is on tile 4, the sound is on tile 3 (ABC)
+    out = await run(h, DAVID, "turn on kornacki's audio, i don't care about this guy")
+    assert done and done[-1]["op"] == "sound" and done[-1]["i"] == 3 and out == ["🎧 DJ Jev: sound to NBC News (tile 4) (90%)"]
