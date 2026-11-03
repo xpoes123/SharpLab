@@ -457,6 +457,12 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         await asyncio.to_thread(target(name).pin, num(d, "i"))
         return inst(name).state()
 
+    @app.post("/i/{name}/rotate")
+    async def rotate(name: str, request: Request) -> dict:
+        d = await body(request)
+        await asyncio.to_thread(target(name).rotate, num(d, "i"), str(d.get("act", "")))
+        return inst(name).state()
+
     @app.post("/i/{name}/board")
     async def board(name: str, request: Request) -> dict:
         d = await body(request)

@@ -219,6 +219,8 @@ def noop(a: dict, wall: dict | None) -> str:
         if a["i"] < len(urls) and urls[a["i"]] == a["url"]:
             return "That's already on that tile."
         return "That's already on the wall." if a["url"] in urls else ""
+    if op == "rotate":
+        return "" if any(r.get("i") == a["i"] for r in w.get("rotate") or []) else "That tile doesn't rotate."
     if op == "layout":
         return "That's already the layout." if ov.get("layout") == a["layout"] else ""
     if op == "board":
@@ -273,6 +275,10 @@ def check_action(a: object) -> dict:
         return {"op": "promote", "i": _tile(a.get("i")), **label}
     if op == "tile":
         return {"op": "tile", "i": _tile(a.get("i"), 4), "url": _url(a.get("url")), **label}
+    if op == "rotate":   # election data tiles: hold this screen / the next one now (either holds 5 min, then rotates again)
+        if a.get("act") not in ("hold", "next"):
+            raise ValueError("act is hold or next")
+        return {"op": "rotate", "i": _tile(a.get("i")), "act": a["act"]}
     if op == "layout":
         if a.get("layout") not in LAYOUTS:
             raise ValueError("layout is lbar or full")
@@ -325,6 +331,8 @@ def describe(a: dict) -> str:
         return f"move the sound to tile {a['i'] + 1}"
     if op == "layout":
         return f"switch the overlay to {'L-bar' if a['layout'] == 'lbar' else 'full'}"
+    if op == "rotate":
+        return f"hold tile {a['i'] + 1} on this screen for 5 min" if a["act"] == "hold" else f"switch tile {a['i'] + 1} to its next screen"
     if op == "spotlight":
         return f"spotlight {a['state']} on the TV" if a["state"] else "close the TV's state spotlight"
     parts = []
@@ -581,6 +589,8 @@ def _route(a: dict) -> tuple[str, str, dict]:
         return "POST", "/i/discord/sound", body
     if op == "layout":
         return "POST", "/i/discord/board", {"layout": a["layout"], "visible": True}
+    if op == "rotate":
+        return "POST", "/i/discord/rotate", body
     if op == "spotlight":
         return "POST", "/i/discord/spotlight", {"state": a["state"]}
     if body.get("board") == "":   # "no board" = hide it

@@ -223,6 +223,14 @@
         const p = el("button", null, "⬆ main"); p.title = "Make this the main (big) tile";
         p.onclick = () => propose({ op: "promote", i, label: labels[i] || shortUrl(u) }); t.append(p);
       }
+      const rot = (wall.rotate || []).find((r) => r.i === i);   // an election data tile: rotates every minute
+      if (rot) {
+        t.append(el("span", "muted small", rot.held ? `held · ${Math.ceil(rot.in / 60)} min` : `next in ${rot.in}s`));
+        const h = el("button", null, "🔒 hold"); h.title = "Keep this screen 5 min, then it rotates again";
+        h.onclick = () => propose({ op: "rotate", i, act: "hold" }); t.append(h);
+        const n = el("button", null, "⏭ next"); n.title = "Switch to the next screen now (it then stays 5 min)";
+        n.onclick = () => propose({ op: "rotate", i, act: "next" }); t.append(n);
+      }
       tiles.append(t);
     });
   }
