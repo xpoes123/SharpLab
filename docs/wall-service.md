@@ -212,6 +212,14 @@ hidden while the full / matchup board is up. Every 2 s it reads `GET /i/<name>/b
   every 2 s over a 4-minute period. Nothing flashes or pulses; the strip changes page every 14 s with a slow fade.
 * Bottom band without the L-bar: the other games (delayed) + the watch party's chat (the L-bar's sidebar has the chat
   when the L-bar is up).
+* One OVERLAY surface, top-left anchored, exclusive zone −1 (an exclusive-zone-0 bottom-anchored surface landed at
+  the screen's bottom on the real KWin when the L-bar wasn't up). It owns the L-bar's corner while the L-bar is drawn,
+  else the whole screen: tiles placed for the L-bar with no L-bar on screen leave nothing of the kiosk / panel showing.
+  Only 2 and 3 tiles.
+* A tile with no live game shows its ended game ("Final") or the page's team ("Clippers · LAC").
+* TV OS gate: the tv instance asks the TV OS `/healthz` `active` every 2 s. Every overlay surface (boards, bets, bands)
+  draws only while it is `"wall"` (`on` in `/bands` and `/api/overlay/bets`); a wall the TV OS didn't start (the
+  service API) stops after 8 s in another app (Dreamscape, YouTube, News…).
 * Preview: `QT_QPA_PLATFORM=offscreen qml6 wall/qml/Preview.qml -- --layout none --n 2 --bets http://127.0.0.1:7795/i/tv --out /tmp/b.png`.
 
 ## Watch page, sync, chat, viewers, votes (sharplab-web, `web/wall.py`)
