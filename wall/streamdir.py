@@ -149,7 +149,8 @@ class StreamDirector:
     # ---- the pick -------------------------------------------------------------------------------------------------------
     def candidates(self, inst, board: onair.Board, favs: list[str], now: float) -> list[str]:
         """Fresh coverage streams: tiles 3–4's first (so their score is known), then favorites, then the surest."""
-        ok = [u for u in board.fresh() if not own_page(u) and board.is_(u, "coverage", FRESH_S, now)]
+        ok = [u for u in board.fresh() if not own_page(u) and board.is_(u, "coverage", FRESH_S, now)
+              and not spectrum.held(u, now)]
         tiles = [inst.urls[i] for i in onair.stream_tiles(list(inst.urls), True)]
         ok.sort(key=lambda u: (u not in tiles, u not in favs, -board.get(u)["confidence"]))
         return ok[:MAX_CANDS]

@@ -152,6 +152,8 @@
     if (!on) { fchatForm(false); $("fmsgs").replaceChildren(); }   // nothing old when it opens again
     if (!nativeFs() && locked) { locked = false; try { screen.orientation.unlock(); } catch (e) { /* nothing to undo */ } }
     fsWake();
+    // the chat was display:none-ish / resized while fullscreen: back to its newest line, after the layout settles
+    requestAnimationFrame(() => requestAnimationFrame(() => { const m = $("msgs"); if (m) m.scrollTop = m.scrollHeight; }));
   }
   // phones: real full screen also turns the picture sideways (Android Chrome; iPhone has no orientation lock, so its
   // pseudo-fullscreen rotates the player box with CSS while the phone is held upright, see body.pfs in wall.css)
