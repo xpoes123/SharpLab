@@ -137,6 +137,17 @@ Everything is already installed; no new binaries.
    ffmpeg has no PipeWire input and gst-plugins-good (mp4mux, pulsesrc) is not installed, which is why the split.
 6. Audio focus = which tile is unmuted inside the private sink (same pactl logic, filtered to that instance's pids).
 
+**Verified end to end on the box (2026-11-02, from a throwaway checkout, TV untouched — it stayed on Dreamscape):**
+`POST /i/discord/start {"live":"nba","tiles":4,"board":"nba"}` planned OKC–CLE, ATL–IND, CHI–PHI, BKN–NY from ESPN,
+opened their topstreamer pages in the nested session, tiled them into the L-bar corner with the NBA board + ticker drawn
+by the layer-shell overlay, and the HLS segments came out as h264 1920×1080 + AAC 48 kHz stereo (max −8 dB: the tile with
+the sound is audible), ~4.5 Mb/s, 1.000 s each. GPU cost of the whole headless wall with 4 live 1080p tiles: ~+550 MB
+VRAM, ~13 % GPU. Stop left no process behind and unloaded the null sink. Over Tailscale: no token → 401, `/i/tv` → 403.
+
+**PDT offset:** ffmpeg's `EXT-X-PROGRAM-DATE-TIME` runs a constant ~4 s ahead of the box clock (no drift — an offset
+fixed at encoder start). So viewers are synced to the *live edge* the web server sees in the playlist, not to wall-clock
+time minus a delay (see Sync below); that cancels the offset.
+
 Found missing (not needed, so nothing to install): gst `pulsesrc`/`mp4mux` (gst-plugins-good), `wf-recorder`,
 `grim`, `Xvfb`, `pywayland`.
 
@@ -145,9 +156,11 @@ Found missing (not needed, so nothing to install): gst `pulsesrc`/`mp4mux` (gst-
 * `GET /wall` — the player page (hls.js vendored at `web/static/vendor/hls.min.js`, no CDN). Login required.
 * `GET /wall/hls/{file}` — session-gated proxy to the service; a playlist is cached ~0.5 s and segments ~60 s in
   memory, so N viewers cost one upstream fetch.
-* **Sync:** every viewer is pinned to the same wall-clock instant: target = server_now − `WALL_SYNC_DELAY_S` (default
-  6 s), measured with `EXT-X-PROGRAM-DATE-TIME` (`hls.playingDate`). The server clock comes from the socket
-  (`hello`/`pong` with server time; client keeps the median offset). Error > 3 s → seek; otherwise playbackRate
+* **Sync:** every viewer is pinned to the same instant of the stream: the web server reads the live edge from the
+  playlist it proxies (last segment's PDT + its duration, observed at server time T) and target = edge + (server_now − T)
+  − `WALL_SYNC_DELAY_S` (default 6 s), compared with the player's `EXT-X-PROGRAM-DATE-TIME` position
+  (`hls.playingDate`). The server clock comes from the socket (`hello`/`pong` with server time; the client keeps the
+  median offset). Error > 3 s → seek; otherwise playbackRate
   0.95–1.05 proportional to the error. hls.js `liveSyncDuration` is set to the same delay so the first load lands
   near the target. The page shows "in sync ±0.3 s".
 * **Socket `/ws/wall`** (session cookie checked at the handshake, closed with 4401 otherwise): chat (≤ 300 chars,
