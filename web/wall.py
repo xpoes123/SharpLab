@@ -16,6 +16,7 @@ import json
 import logging
 import math
 import os
+from pathlib import Path
 import re
 import secrets
 import time
@@ -133,9 +134,13 @@ class Presence:
 
 # ---- chat ------------------------------------------------------------------------------------------------------------
 class Chat:
-    def __init__(self, guard: Guard | None = None) -> None:
+    """The watch-party chat. With a `path` (WALL_CHAT_LOG) every message and delete is appended there as JSON lines — the
+    whole night's log on disk — and a restart reloads the last SCROLLBACK, so the chat never starts over."""
+
+    def __init__(self, guard: Guard | None = None, path: str | None = None) -> None:
         self.log: deque[dict] = deque(maxlen=SCROLLBACK)
-        self.ids = itertools.count(1)
+        self.path = Path(path) if path else None
+        self.ids = itertools.count(self._load() + 1)
         self.guard = guard or Guard()   # the per-sender token bucket + duplicate drop (web/wall_guard.py)
         self.muted: dict[str, float] = {}   # uid → until
 
@@ -154,9 +159,47 @@ class Chat:
         return self.add({"kind": "chat", "uid": user["id"], "name": user.get("name") or "Player",
                          "avatar": user.get("avatar"), "guest": bool(user.get("guest")), "text": t}, now), ""
 
+    def _load(self) -> int:
+        """Last SCROLLBACK messages (deletes applied) from the log; the highest id seen (ids keep counting up)."""
+        if not self.path or not self.path.exists():
+            return 0
+        msgs: dict[int, dict] = {}
+        top = 0
+        try:
+            with self.path.open() as f:
+                for line in f:
+                    try:
+                        r = json.loads(line)
+                    except ValueError:
+                        continue
+                    if "del" in r:
+                        msgs.pop(r["del"], None)
+                    elif isinstance(r.get("id"), int):
+                        msgs[r["id"]] = r
+                        top = max(top, r["id"])
+                        if len(msgs) > 4 * SCROLLBACK:   # bounded memory on a long log
+                            for k in sorted(msgs)[:-2 * SCROLLBACK]:
+                                del msgs[k]
+        except OSError as e:
+            log.warning("chat log: %s", e)
+        self.log.extend(msgs[k] for k in sorted(msgs)[-SCROLLBACK:])
+        return top
+
+    def _write(self, rec: dict) -> None:
+        if not self.path:
+            return
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a") as f:
+                f.write(json.dumps(rec, separators=(",", ":")) + "\n")
+        except OSError as e:
+            log.warning("chat log: %s", e)
+
     def add(self, msg: dict, now: float) -> dict:
         m = {"id": next(self.ids), "ts": now, **msg}
         self.log.append(m)
+        if not m.get("private"):
+            self._write(m)
         return m
 
     def system(self, text: str, now: float) -> dict:
@@ -166,6 +209,7 @@ class Chat:
         for m in self.log:
             if m["id"] == mid:
                 self.log.remove(m)
+                self._write({"del": mid})
                 return True
         return False
 
@@ -775,7 +819,7 @@ class Hub:
         self.fetch_state = fetch_state or service_state
         self.presence = Presence()
         self.guard = Guard()
-        self.chat = Chat(self.guard)
+        self.chat = Chat(self.guard, os.environ.get("WALL_CHAT_LOG") or None)   # the full log on disk; reloaded on restart
         self._alert_ids = itertools.count(-1, -1)
         self.votes = Votes()
         self.socks: dict[int, tuple[WebSocket, dict]] = {}
