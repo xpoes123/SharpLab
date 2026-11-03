@@ -28,7 +28,7 @@
 
   const cents = (v) => (v == null ? "–" : Math.round(v) + "¢");
   const book = (r) => (r.bid != null || r.ask != null ? `${cents(r.bid)} / ${cents(r.ask)}` : r.last != null ? `last ${cents(r.last)}` : "");
-  const srcText = (g) => `Bets delayed ${Math.round(g.delay)} s` + (g.src === "auto" ? " · synced to the picture" : g.src === "manual" ? " · set by hand" : "");
+  const srcText = (g) => `Delayed ${Math.round(g.delay)} s` + (g.src === "auto" ? " (auto)" : g.src === "manual" ? " (manual)" : "");
 
   function spark(vals) {
     const W = 72, H = 22, svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -57,9 +57,9 @@
     const what = el("span", "b-what");
     what.append(el("b", "b-side " + r.side.toLowerCase(), r.side), document.createTextNode(" " + r.label));
     const px = el("span", "b-px", `${cents(r.entry)} → ${cents(r.mark)}`);
-    px.title = "entry (avg) → what it sells for now";
+    px.title = "Entry → now";
     const bk = el("span", "b-book muted", book(r));
-    bk.title = "yes bid / yes ask";
+    bk.title = "Yes bid / ask";
     const pct = el("span", "b-pct", r.pct == null ? "" : `${r.dir === "down" ? "▼" : r.dir === "up" ? "▲" : "·"} ${Math.abs(r.pct)}%`);
     const size = el("span", "b-size muted", r.size + (r.pnl != null ? ` · ${r.pnl >= 0 ? "+" : "−"}$${Math.abs(r.pnl).toFixed(2)}` : ""));
     tr.append(who, what, px, spark(r.spark), pct, bk, size);
@@ -77,8 +77,8 @@
     };
     const b = (label, title, body) => { const x = el("button", "btn small", label); x.type = "button"; x.title = title; x.onclick = () => send(typeof body === "function" ? body() : body, x); return x; };
     box.append(b("− 5 s", "Show bets 5 s sooner on this tile", { nudge: -1 }), b("+ 5 s", "Show bets 5 s later on this tile", { nudge: 1 }),
-      b("Auto", "Let the scorebug reader set it", { auto: true }),
-      b("Score just changed", "Tap the moment the score on this tile changes: the delay is set from ESPN's play time",
+      b("Auto", "Set from the scorebug", { auto: true }),
+      b("Score just changed", "Tap when the score changes on this tile",
         () => ({ tap: pictureMs() || Date.now() })));
     return box;
   }
@@ -93,15 +93,15 @@
     const opt = el("label", "opt");
     const cb = el("input"); cb.type = "checkbox"; cb.checked = !!(me && me.share);
     cb.onchange = async () => { const r = await api("/me", { share: cb.checked, exact: cb.checked && ex.checked }); if (r.ok) { me = { ...me, ...r.j }; refresh(); } };
-    opt.append(cb, document.createTextNode(" Share my positions on the wall"));
+    opt.append(cb, document.createTextNode(" Share my positions"));
     const exl = el("label", "opt");
     const ex = el("input"); ex.type = "checkbox"; ex.checked = !!(me && me.exact); ex.disabled = !(me && me.share);
     ex.onchange = async () => { const r = await api("/me", { share: true, exact: ex.checked }); if (r.ok) { me = { ...me, ...r.j }; refresh(); } };
-    exl.append(ex, document.createTextNode(" exact sizes & $"));
+    exl.append(ex, document.createTextNode(" Exact sizes and $"));
     if (!(me && me.guest)) head.append(opt, exl);
     root.append(head);
-    const sub = el("p", "muted small", "Members who share show here and on the TV (which is on the stream). Sizes are bucketed and P&L is % unless they chose exact numbers.");
-    if (me && me.share && !me.linked) sub.textContent = "You share, but haven't linked Kalshi — run /kalshi link in Discord.";
+    const sub = el("p", "muted small", "Shared positions show here and on the TV. Sizes are bucketed and P&L is in % unless exact is on.");
+    if (me && me.share && !me.linked) sub.textContent = "Kalshi isn't linked. Run /kalshi link in Discord.";
     root.append(sub, el("p", "bet-note small"));
     if (d && d.owner) {
       const ctl = el("div", "bet-owner");
@@ -109,7 +109,7 @@
       sh.type = "checkbox"; sh.checked = !!d.show;
       sh.onchange = async () => { await api("/sync", { show: sh.checked }); refresh(); };
       t.append(sh, document.createTextNode(" Show bets on the TV overlay"));
-      ctl.append(t, el("span", "muted small", `default delay ${Math.round(d.default)} s`));
+      ctl.append(t, el("span", "muted small", `Default delay ${Math.round(d.default)} s`));
       root.append(ctl);
     }
     if (!d) { root.append(el("p", "muted", "Loading…")); return; }
@@ -118,7 +118,7 @@
     if (elec.length) {   // midterm positions: live (results aren't a picture, so no delay), with the race's status
       const box = el("div", "bet-game on-wall");
       const gh = el("div", "bet-game-head");
-      gh.append(el("b", null, "Election night"), el("span", "muted small", "Kalshi · live, not delayed"));
+      gh.append(el("b", null, "Election night"), el("span", "muted small", "Kalshi, live (no delay)"));
       box.append(gh);
       elec.forEach((r) => {
         const tr = row(r);
@@ -128,11 +128,11 @@
       });
       root.append(box);
     }
-    if (!games.length && !elec.length) root.append(el("p", "muted", "No live games on the wall right now."));
+    if (!games.length && !elec.length) root.append(el("p", "muted small", "No live games on the wall."));
     games.forEach((g) => {
       const box = el("div", "bet-game" + (g.tile != null ? " on-wall" : ""));
       const gh = el("div", "bet-game-head");
-      gh.append(el("b", null, g.label), el("span", "muted small", (g.tile != null ? `tile ${g.tile + 1} · ` : "") + srcText(g)));
+      gh.append(el("b", null, g.label), el("span", "muted small", (g.tile != null ? `Tile ${g.tile + 1}. ` : "") + srcText(g)));
       box.append(gh);
       if (!g.rows.length) box.append(el("p", "muted small", "No shared positions."));
       g.rows.forEach((r) => box.append(row(r)));

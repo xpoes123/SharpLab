@@ -988,7 +988,7 @@ def test_wall_page_nav_is_hidden_until_a_member_and_has_no_discord_invite():
     from pathlib import Path
     static = Path(__file__).resolve().parents[1] / "web" / "static"
     html = (static / "wall.html").read_text()
-    assert '<nav class="nav" id="topNav" hidden>' in html and "Live election wall · chat and votes are for the watch party" in html
+    assert '<nav class="nav" id="topNav" hidden>' in html and "Live election results. Chat and votes are for the watch party." in html
     assert 'j.tier === "member"' in (static / "wall.js").read_text()
     assert 'class="nav" id="topNav" hidden' in (static / "pulse.html").read_text()
     for f in static.glob("*.html"):

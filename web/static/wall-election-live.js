@@ -33,10 +33,8 @@
   const live = el("section", "card lv-feed");
   live.id = "elecLive"; live.hidden = true; live.setAttribute("aria-label", "Live election updates");
   panel.after(live);
-  // desktop: the feed sits in the right rail under the chat (the main column keeps the map); phones keep it under the map
-  const wide = matchMedia("(min-width: 1400px)");
-  const placeFeed = () => { const side = document.querySelector(".side"); if (wide.matches && side) side.append(live); else panel.after(live); };
-  placeFeed(); wide.addEventListener("change", placeFeed);
+  // where it sits (right rail on wide desktops, under the map, inside the Election sheet on phones): wall-election.js
+  if (window.__wallElection && window.__wallElection.placePanels) window.__wallElection.placePanels();
   let scope = store("elecLiveScope") || "key", feed = null;
 
   function buildFeed() {
@@ -58,7 +56,7 @@
     b.append(el("i", "lv-tally " + (u.kind === "polls" ? "acc" : pcls(u.party))));
     const body = el("span", "lv-body");
     const top = el("span", "lv-top");
-    const tag = u.kind === "lead" ? "Lead change" : u.kind === "call" ? (u.flip ? "Call · flip" : "Call") : u.kind === "big" ? "Big drop" : u.kind === "polls" ? "Polls" : "";
+    const tag = u.kind === "lead" ? "Lead change" : u.kind === "call" ? (u.flip ? "Call, flip" : "Call") : u.kind === "big" ? "Big drop" : u.kind === "polls" ? "Polls" : "";
     top.append(el("b", "lv-h", u.kind === "polls" ? "Polls closed" : u.head));
     if (tag && u.kind !== "polls") top.append(el("span", "lv-tag t-" + u.kind, tag));
     top.append(el("time", "lv-t muted", fmtTime(u.t)));
@@ -74,13 +72,13 @@
     if (!feed) return;
     live.querySelectorAll(".el-segbtn").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.s === scope)));
     const nx = live.querySelector(".lv-next");
-    nx.textContent = (feed.next || []).length ? "Next: " + feed.next.slice(0, 2).map((n) => `polls close ${fmtTime(n.t)} · ${n.states.join(" ")}`).join(" — ") : "";
+    nx.textContent = (feed.next || []).length ? "Next polls close: " + feed.next.slice(0, 2).map((n) => `${fmtTime(n.t)} ${n.states.join(" ")}`).join("; ") : "";
     nx.hidden = !nx.textContent;
     const ol = live.querySelector(".lv-items");
     const items = (feed.items || []).slice(0, 40);
     ol.replaceChildren(...(items.length ? items.map(feedItem) : [el("li", "lv-empty muted small",
-      (feed.next || []).length ? "No votes yet — updates appear here as counts come in." : "Nothing yet.")]));
-    live.querySelector(".lv-foot").textContent = (feed.source ? feed.source + " · " : "") + "updates every 30 s · unofficial" + (feed.error ? " · " + feed.error : "");
+      (feed.next || []).length ? "No votes yet." : "Nothing yet.")]));
+    live.querySelector(".lv-foot").textContent = (feed.source ? feed.source + ". " : "") + "Unofficial, updates every 30 s." + (feed.error ? " " + feed.error : "");
   }
 
   async function loadFeed() {
@@ -143,8 +141,8 @@
     const sec = el("details", "lv-sec");
     sec.open = u.counties !== false;
     sec.ontoggle = () => { u.counties = sec.open; };
-    const sw = c.swing_all == null ? "" : ` · counting counties ${c.swing_all >= 0 ? "D" : "R"}+${Math.abs(c.swing_all).toFixed(1)} vs ${c.swing_label}`;
-    sec.append(el("summary", null, `Counties · ${c.reporting} of ${c.n} counting${sw}`));
+    const sw = c.swing_all == null ? "" : `, swing ${c.swing_all >= 0 ? "D" : "R"}+${Math.abs(c.swing_all).toFixed(1)} vs ${c.swing_label}`;
+    sec.append(el("summary", null, `Counties: ${c.reporting} of ${c.n} counting${sw}`));
     const tabs = el("div", "el-seg lv-tabs");
     const TABS = [["closest", "Closest"], ["outstanding", "Most vote out"], ["swing", "Swing"], ["biggest", "Biggest"]];
     u.tab = u.tab || "closest";
@@ -156,7 +154,7 @@
     }
     body.append(countyTable(c, u.tab));
     sec.append(tabs, body);
-    if (c.swing_label) sec.append(el("p", "muted small lv-note", `Swing = this race's D−R margin minus the ${c.swing_label} margin, same county.`));
+    if (c.swing_label) sec.append(el("p", "muted small lv-note", `Swing: D−R margin change vs ${c.swing_label}, same county.`));
     return sec;
   }
 
@@ -165,8 +163,8 @@
     const sec = el("details", "lv-sec");
     sec.open = u.updates !== false;
     sec.ontoggle = () => { u.updates = sec.open; };
-    sec.append(el("summary", null, `Vote updates${tl.length ? ` · ${tl.length}` : ""}`));
-    if (!tl.length) { sec.append(el("p", "muted small", "No updates yet — each new count shows here with its time.")); return sec; }
+    sec.append(el("summary", null, `Vote updates${tl.length ? ` (${tl.length})` : ""}`));
+    if (!tl.length) { sec.append(el("p", "muted small", "No updates yet.")); return sec; }
     const ol = el("ol", "lv-tl");
     tl.slice(0, 30).forEach((x, i) => {
       const li = el("li", "k-" + x.kind);
@@ -197,9 +195,9 @@
     if (d.totals.history && d.totals.history.label && d.totals.history.margin != null)
       box.append(el("p", "muted small lv-note", `${d.totals.history.label}: ${d.totals.history.margin >= 0 ? "D" : "R"}+${Math.abs(d.totals.history.margin).toFixed(1)}`));
     if (d.counties && d.counties.reporting) box.append(countiesBox(id, d.counties));
-    else if (d.counties) box.append(el("p", "muted small lv-note", `County results (${d.counties.n} counties) appear as counting starts.`));
+    else if (d.counties) box.append(el("p", "muted small lv-note", `County results (${d.counties.n}) appear once counting starts.`));
     box.append(timelineBox(id, d.timeline || []));
-    box.append(el("p", "muted small lv-note", `${d.source || ""} · this race refreshes every ${d.fast_s || 10} s while open`));
+    box.append(el("p", "muted small lv-note", `${d.source ? d.source + ". " : ""}Refreshes every ${d.fast_s || 10} s.`));
     return box;
   }
 

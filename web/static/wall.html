@@ -6,10 +6,10 @@
 <meta name="theme-color" content="var(--bg)" />
 <title>SharpLab Wall</title>
 <link rel="stylesheet" href="/hqstyle.css" />
-<link rel="stylesheet" href="/wall.css?v=20261103mob" />
-<link rel="stylesheet" href="/wall-bets.css?v=20261103c" />
-<link rel="stylesheet" href="/wall-election.css?v=20261103w" />
-<link rel="stylesheet" href="/wall-election-live.css?v=20261103a" />
+<link rel="stylesheet" href="/wall.css?v=20261103clean" />
+<link rel="stylesheet" href="/wall-bets.css?v=20261103clean" />
+<link rel="stylesheet" href="/wall-election.css?v=20261103clean" />
+<link rel="stylesheet" href="/wall-election-live.css?v=20261103clean" />
 </head>
 <body>
 <header>
@@ -18,7 +18,7 @@
   <div id="navRight"></div>
 </header>
 <main id="wall">
-  <p id="publicNote" class="public-note" hidden>Live election wall · chat and votes are for the watch party</p>
+  <p id="publicNote" class="public-note" hidden>Live election results. Chat and votes are for the watch party.</p>
   <section id="gate" class="gate" hidden aria-labelledby="gateTitle">
     <div class="gate-card">
       <p class="gate-kicker">SharpLab Wall</p>
@@ -44,7 +44,7 @@
         <p id="nickErr" class="gate-err" role="alert"></p>
       </form>
 
-      <p id="gateRoles" class="gate-roles" hidden>With this link you can watch, chat, vote and change what's on the TV — the same as a Discord member.</p>
+      <p id="gateRoles" class="gate-roles" hidden>This link gives you full access: watch, chat, vote and change the TV.</p>
     </div>
   </section>
 
@@ -69,54 +69,70 @@
           </form>
         </div>
         <div class="fs-ctl">
-          <button id="fsayBtn" type="button" aria-label="Write in the chat" title="Write in the chat">✏️</button>
-          <button id="fchatBtn" type="button" aria-label="Chat over the video" aria-pressed="true" title="Chat over the video: on">💬</button>
-          <button id="fsExit" type="button" aria-label="Exit full screen" title="Exit full screen (Esc)">✕</button>
+          <button id="fsayBtn" type="button" aria-label="Write in the chat" title="Write">✎</button>
+          <button id="fchatBtn" type="button" aria-label="Chat over the video" aria-pressed="true" title="Chat overlay: on">💬</button>
+          <button id="fsExit" type="button" aria-label="Exit full screen" title="Exit full screen">✕</button>
         </div>
       </div>
       <div class="bar">
-        <button id="elecBtn" class="pill btn elec-btn" type="button" aria-label="Election map" hidden><span class="ico">🗺</span><span class="lbl"> Election</span></button>
+        <button id="elecBtn" class="pill btn elec-btn" type="button" aria-label="Election map" hidden><span class="lbl">Election</span></button>
         <button id="muteBtn" class="pill btn" type="button" aria-label="Sound off" hidden><span class="ico">🔇</span><span class="lbl"> Sound off</span></button>
-        <input id="vol" class="vol" type="range" min="0" max="100" step="1" aria-label="Volume" title="Volume (just for you) · keys: m mute, f fullscreen, space pause, ↑ ↓ volume" hidden />
+        <input id="vol" class="vol" type="range" min="0" max="100" step="1" aria-label="Volume" title="Volume" hidden />
         <button id="fsBtn" class="pill btn" type="button" aria-label="Full screen"><span class="ico">⛶</span><span class="lbl"> Full screen</span></button>
-        <button id="pipBtn" class="pill btn" type="button" aria-label="Picture in picture" title="Keep watching in a small window while you use other apps" hidden><span class="ico">⧉</span><span class="lbl"> Pop out</span></button>
+        <button id="pipBtn" class="pill btn" type="button" aria-label="Picture in picture" title="Picture in picture" hidden><span class="ico">⧉</span><span class="lbl"> Pop out</span></button>
         <span id="sync" class="pill">syncing…</span>
         <span id="count" class="pill">0 watching</span>
         <span id="wallName" class="muted"></span>
-        <span id="mirror" class="pill" hidden title="The stream follows the living-room TV's wall">📺 mirroring the TV</span>
+        <span id="mirror" class="pill" hidden>Mirroring the TV</span>
       </div>
       <div id="props" class="props"></div>
       <section id="elecPanel" class="card elec" hidden aria-label="Election map"></section>
       <section id="betsPanel" class="card bets" hidden></section>
       <details class="card controls sheet-host">
-        <summary><span class="sum-full">Change the wall</span><span class="sum-short">⚙ Change</span> <span id="ownerNote" class="muted"></span></summary>
+        <summary><span class="sum-full">Change the wall</span><span class="sum-short">Change</span> <span id="ownerNote" class="muted"></span></summary>
         <div class="sheet">
         <div class="sheet-head"><b>Change the wall</b><button id="ctlDone" class="btn ghost sheet-done" type="button">Done</button></div>
-        <div id="tiles" class="tiles"></div>
-        <div class="row" data-member>
-          <label>Preset <select id="preset"></select></label>
-          <button data-act="start" class="btn">Start</button>
-          <button data-act="stop" class="btn">Stop</button>
-          <button data-act="follow" id="followBtn" class="btn" hidden>📺 Follow the TV</button>
+        <div class="ctl-sec">
+          <h4 class="ctl-h">Screens</h4>
+          <div id="tiles" class="tiles"></div>
+          <div class="row" data-elec hidden><span id="elecScreens" class="live-games"></span></div>
+          <div class="row live-row" data-sports><span class="ctl-lbl">Live now</span><span id="liveGames" class="muted small">loading…</span></div>
+          <div class="row">
+            <label>Tile <select id="tileI"><option value="0">1</option><option value="1">2</option><option value="2">3</option><option value="3">4</option></select></label>
+            <input id="tileUrl" type="url" placeholder="Stream page URL" aria-label="Stream page URL" maxlength="500" data-member />
+            <button data-act="tile" class="btn" data-member>Put on tile</button>
+          </div>
         </div>
-        <div class="row">
-          <span>Screen</span>
-          <button data-act="board" data-v="" class="btn" title="Games fill the whole screen, no scoreboard band">Full screen</button>
-          <span data-sports>Scoreboard L-bar</span>
-          <button data-act="board" data-v="nfl" class="btn" data-sports>NFL</button>
-          <button data-act="board" data-v="nba" class="btn" data-sports>NBA</button>
-          <button id="tvchatBtn" class="btn" type="button" title="The watch party's chat floating over the TV's tiles (the stream shows it too)" hidden>TV chat</button>
+        <div class="ctl-sec" data-elec hidden>
+          <h4 class="ctl-h">Streams</h4>
+          <div class="row"><span id="elecStreams" class="live-games"></span></div>
         </div>
-        <div class="row live-row" data-sports><span>Live now</span><span id="liveGames" class="muted small">loading…</span></div>
-        <div class="row live-row" data-elec hidden><span>Election screens</span><span id="elecScreens" class="live-games"></span></div>
-        <div class="row live-row" data-elec data-spectrum hidden><span>Spectrum</span><span id="spectrum" class="spectrum"></span></div>
-        <div class="row live-row" data-elec hidden><label>Local news <select id="newsSt"></select></label><span id="newsBtns" class="live-games"></span></div>
-        <div class="row">
-          <label>Tile <select id="tileI"><option value="0">1</option><option value="1">2</option><option value="2">3</option><option value="3">4</option></select></label>
-          <input id="tileUrl" type="url" placeholder="https://… (a stream page)" maxlength="500" data-member />
-          <button data-act="tile" class="btn" data-member>Put on tile</button>
+        <div class="ctl-sec" data-elec data-spectrum hidden>
+          <h4 class="ctl-h">Spectrum</h4>
+          <div class="row"><span id="spectrum" class="spectrum"></span></div>
         </div>
-        <p class="muted small">Screen changes pass on a majority of active viewers within 60 s; moving the sound needs 2 approvals (1 if you're alone).</p>
+        <div class="ctl-sec" data-elec hidden>
+          <h4 class="ctl-h"><label for="newsSt">Local news</label></h4>
+          <div class="row"><select id="newsSt"></select><span id="newsBtns" class="live-games"></span></div>
+        </div>
+        <div class="ctl-sec">
+          <h4 class="ctl-h">Wall settings</h4>
+          <div class="row" data-member>
+            <label>Preset <select id="preset"></select></label>
+            <button data-act="start" class="btn">Start</button>
+            <button data-act="stop" class="btn">Stop</button>
+            <button data-act="follow" id="followBtn" class="btn" hidden>Follow the TV</button>
+          </div>
+          <div class="row">
+            <span class="ctl-lbl">Layout</span>
+            <button data-act="board" data-v="" class="btn">No scoreboard</button>
+            <button data-act="board" data-v="nfl" class="btn" data-sports>NFL scoreboard</button>
+            <button data-act="board" data-v="nba" class="btn" data-sports>NBA scoreboard</button>
+            <button id="tvchatBtn" class="btn" type="button" title="Chat overlay on the TV" hidden>TV chat</button>
+          </div>
+          <div class="row" data-elec hidden><span id="elecToggles" class="live-games"></span></div>
+        </div>
+        <p class="ctl-note muted small">Changes pass with a majority of active viewers within 60 s. Moving the sound needs 2 approvals.</p>
         </div>
       </details>
     </section>
@@ -130,7 +146,7 @@
         </div>
       </details>
       <div class="card chat">
-        <div class="chat-head"><h3>Chat</h3><button id="dingBtn" class="ding" type="button" aria-pressed="true" title="Ding for new messages">🔔</button></div>
+        <div class="chat-head"><h3>Chat</h3><button id="dingBtn" class="ding" type="button" aria-pressed="true" aria-label="Message sound" title="Message sound">🔔</button></div>
         <ol id="msgs"></ol>
         <form id="chatForm">
           <input id="chatIn" maxlength="300" autocomplete="off" enterkeyhint="send" placeholder="Say something…" />
@@ -145,9 +161,9 @@
   <aside id="elecSheet" class="es-sheet" hidden aria-hidden="true" aria-label="State results and markets"></aside>
 </main>
 <script src="/vendor/hls.min.js"></script>
-<script src="/wall.js?v=20261103pubn"></script>
-<script src="/wall-bets.js?v=20261103tier"></script>
-<script src="/wall-election.js?v=20261103w"></script>
-<script src="/wall-election-live.js?v=20261103q"></script>
+<script src="/wall.js?v=20261103clean"></script>
+<script src="/wall-bets.js?v=20261103clean"></script>
+<script src="/wall-election.js?v=20261103clean"></script>
+<script src="/wall-election-live.js?v=20261103clean"></script>
 </body>
 </html>

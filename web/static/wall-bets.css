@@ -8,7 +8,7 @@
 .bets .bet-note { color: var(--gold); }
 .bet-owner { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
 .bet-game { border-top: 1px solid var(--line); padding: 10px 0 6px; }
-.bet-game.on-wall .bet-game-head b { color: var(--accent); }
+.bet-game.on-wall .bet-game-head b { color: var(--fg); }
 .bet-game-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; margin-bottom: 6px; }
 .bet-row { display: grid; grid-template-columns: 110px minmax(0, 1fr) 92px 72px 64px 84px 118px; gap: 4px 10px;
   align-items: center; font-size: 13px; padding: 4px 6px; border-radius: var(--r-sm); transition: background-color 1.5s ease; }
