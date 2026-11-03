@@ -37,7 +37,7 @@ def setup():
         return True, ""
 
     async def fetch_state():
-        return {"running": True, "urls": ["https://a.example"], "presets": ["Live NFL"]}
+        return {"running": True, "urls": ["https://a.example", "https://b.example"], "presets": ["Live NFL"]}
 
     hub = wall.reset_hub(clock=clock, execute=execute, fetch_state=fetch_state)
     app = FastAPI()
@@ -637,3 +637,18 @@ def test_rotating_the_key_ends_guest_sessions_and_the_link_is_keyed(demo, monkey
     assert client.get("/api/v1/wall/me").status_code == 401
     monkeypatch.setenv("WALL_DEMO", "0")
     assert hub.state()["watch_url"].endswith("/wall.html")
+
+
+def test_noop_proposals_are_refused():
+    from web.wall import noop
+    w = {"running": True, "mirror": False, "urls": ["https://a.tv", "https://b.tv"], "sound": 1,
+         "overlay": {"board": "nfl", "visible": True, "layout": "lbar"}}
+    assert noop({"op": "sound", "i": 1}, w) and not noop({"op": "sound", "i": 0}, w)
+    assert noop({"op": "sound", "i": 3}, w) and noop({"op": "remove", "i": 2}, w)
+    assert noop({"op": "tile", "i": 0, "url": "https://a.tv"}, w) and not noop({"op": "tile", "i": 0, "url": "https://c.tv"}, w)
+    assert not noop({"op": "tile", "i": 2, "url": "https://a.tv"}, w)   # adding a tile is a change
+    assert noop({"op": "layout", "layout": "lbar"}, w) and not noop({"op": "layout", "layout": "full"}, w)
+    assert noop({"op": "board", "board": "nfl"}, w) and not noop({"op": "board", "visible": False}, w)
+    assert not noop({"op": "follow"}, w) and noop({"op": "follow"}, {**w, "mirror": True})
+    assert noop({"op": "start", "mirror": True}, {**w, "mirror": True}) and not noop({"op": "stop"}, w)
+    assert noop({"op": "stop"}, {"running": False}) and not noop({"op": "start", "preset": "x"}, {"running": False})

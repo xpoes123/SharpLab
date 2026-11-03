@@ -196,6 +196,34 @@ def _origin(o: object) -> dict:
     return {"origin": out} if "channel" in out else {}
 
 
+def noop(a: dict, wall: dict | None) -> str:
+    """Why this action would change nothing on the wall as it is now ("" = it would change something)."""
+    w = wall or {}
+    on, urls, ov = bool(w.get("running")), w.get("urls") or [], w.get("overlay") or {}
+    op = a["op"]
+    if op == "start":
+        return "It's already mirroring the TV." if on and a.get("mirror") and w.get("mirror") else ""
+    if not on:
+        return "The wall is off."
+    if op == "stop":
+        return ""
+    if op == "follow":
+        return "It's already following the TV." if w.get("mirror") else ""
+    if op == "sound":
+        return "That tile already has the sound." if a["i"] == w.get("sound") else "There's no such tile." if a["i"] >= len(urls) else ""
+    if op == "remove":
+        return "There's no such tile." if a["i"] >= len(urls) else ""
+    if op == "tile":
+        return "That's already on that tile." if a["i"] < len(urls) and urls[a["i"]] == a["url"] else ""
+    if op == "layout":
+        return "That's already the layout." if ov.get("layout") == a["layout"] else ""
+    if op == "board":
+        same_board = a.get("board", ov.get("board")) == ov.get("board")
+        same_vis = a.get("visible", ov.get("visible")) == ov.get("visible")
+        return "That's already showing." if same_board and same_vis else ""
+    return ""
+
+
 def check_action(a: object) -> dict:
     """A proposal's action, validated (ValueError otherwise): {"op": start|stop|tile|remove|board|sound|layout|follow, …the
     wall service's body for that call}. Only what the service's control API can do. {"op": "start", "mirror": true} =
@@ -680,6 +708,8 @@ class Hub:
             a = check_action(action)
         except ValueError as e:
             return None, str(e)
+        if self.wall and "running" in self.wall and (why := noop(a, self.wall)):   # no votes on changes that change nothing (state unknown: let it through)
+            return None, why
         now = self.clock()
         if self.chat.is_muted(user["id"], now):
             return None, "You're muted for now."
