@@ -532,7 +532,8 @@ def demo(monkeypatch, setup):
     monkeypatch.setenv("WALL_DEMO", "1")
     monkeypatch.setenv("WALL_DEMO_KEY", KEY)
     wall.guest_joins.hits.clear()
-    wall.guest_names.hits.clear()
+    for rl in (wall.guest_joins_ip, wall.guest_names, wall.guest_names_ip):
+        rl.hits.clear()
     return setup
 
 
@@ -636,13 +637,35 @@ def test_guest_names_are_unique_and_connects_are_rate_limited(demo):
     client, hub, *_ = demo
     hub.presence.join(99, {"id": "300", "name": "Kim"}, hub.clock())   # a member called Kim is watching
     assert join_as_guest(client, "kim").json()["name"] == "kim (guest)"
-    for _ in range(10):
+    for _ in range(20):
         with client.websocket_connect("/ws/wall") as ws:
             ws.receive_json()
     with pytest.raises(WebSocketDisconnect) as e:
         with client.websocket_connect("/ws/wall") as ws:
             ws.receive_json()
     assert e.value.code == 4429
+
+
+def test_guest_nicknames_limit_per_browser_not_per_ip_with_retry_after(demo):
+    client, *_ = demo
+    r = join_as_guest(client, "Kim")
+    assert r.status_code == 200
+    gb = r.headers.get_list("set-cookie")[1].split(";")[0].split("=", 1)[1]
+    for _ in range(12):   # rejoining with the nickname this browser holds never counts (and keeps the same guest)
+        again = client.post("/api/v1/wall/guest", json={"k": KEY, "name": "kim"})
+        assert again.status_code == 200 and again.json()["id"] == r.json()["id"] and "set-cookie" not in again.headers
+    for i in range(7):   # one browser: 8 new nicknames per 5 min
+        client.cookies.clear(); client.cookies.set(wall.GUEST_BROWSER, gb)
+        assert client.post("/api/v1/wall/guest", json={"k": KEY, "name": f"Nick{i}"}).status_code == 200
+    client.cookies.clear(); client.cookies.set(wall.GUEST_BROWSER, gb)
+    r = client.post("/api/v1/wall/guest", json={"k": KEY, "name": "Again"})
+    assert r.status_code == 429 and 0 < int(r.headers["retry-after"]) <= 300 and r.json()["retry_after"]
+    assert "Discord" in r.json()["error"]
+    for i in range(40):   # many friends behind one IP, each their own browser: fine
+        assert join_as_guest(client, f"Friend{i}").status_code == 200
+    for i in range(12):   # … up to the per-IP flood cap
+        join_as_guest(client, f"Flood{i}")
+    assert join_as_guest(client, "Late").status_code == 429
 
 
 def test_rotating_the_key_ends_guest_sessions_and_the_link_is_keyed(demo, monkeypatch):

@@ -6,9 +6,9 @@
 <meta name="theme-color" content="var(--bg)" />
 <title>SharpLab Wall</title>
 <link rel="stylesheet" href="/hqstyle.css" />
-<link rel="stylesheet" href="/wall.css?v=20261103g" />
+<link rel="stylesheet" href="/wall.css?v=20261103h" />
 <link rel="stylesheet" href="/wall-bets.css?v=20261103c" />
-<link rel="stylesheet" href="/wall-election.css?v=20261103c" />
+<link rel="stylesheet" href="/wall-election.css?v=20261103d" />
 </head>
 <body>
 <header>
@@ -21,8 +21,8 @@
     <div class="gate-card">
       <p class="gate-kicker">SharpLab Wall</p>
       <h1 id="gateTitle">Watch party</h1>
-      <p class="gate-lede">Live games, chat and votes, everyone in sync.</p>
-      <p id="gatePeek" class="gate-peek" hidden><span class="gate-dot" aria-hidden="true"></span><span id="peekText"></span></p>
+      <p id="gateLede" class="gate-lede">Live games, chat and votes, everyone in sync.</p>
+      <p id="gatePeek" class="gate-peek" aria-hidden="true"><span class="gate-dot" aria-hidden="true"></span><span id="peekText"></span></p>
       <p id="gateErr" class="gate-msg" role="status"></p>
 
       <a id="loginBtn" class="gate-discord" href="/api/v1/auth/discord/login?next=/wall.html">
@@ -42,10 +42,7 @@
         <p id="nickErr" class="gate-err" role="alert"></p>
       </form>
 
-      <dl id="gateRoles" class="gate-roles" hidden>
-        <div><dt>Guests</dt><dd>Watch, chat and vote.</dd></div>
-        <div><dt>Members</dt><dd>Also start the wall and put up pages.</dd></div>
-      </dl>
+      <p id="gateRoles" class="gate-roles" hidden>Guests can watch, chat and vote. Discord members can also change what's on the TV.</p>
     </div>
   </section>
 
@@ -53,18 +50,23 @@
     <section class="stage">
       <div class="player">
         <video id="video" playsinline muted autoplay autopictureinpicture></video>
-        <div id="offline" class="offline" hidden><div><b>The wall is off.</b><br><span class="muted">Propose a preset below to start it.</span></div></div>
-        <button id="unmute" class="unmute">🔇 Tap for sound</button>
+        <div id="offline" class="offline" hidden>
+          <div class="off-in">
+            <div id="offGeneric"><b>The wall is off.</b><br><span id="offSub" class="muted"></span></div>
+            <div id="preshow" class="preshow" hidden></div>
+          </div>
+        </div>
+        <button id="unmute" class="unmute" hidden>🔇 Tap for sound</button>
         <button id="chatToggle" class="chat-toggle" type="button" aria-label="Chat" aria-pressed="false">💬<span id="unread" class="badge" hidden></span></button>
       </div>
       <div class="bar">
-        <button id="muteBtn" class="pill btn" type="button" aria-label="Sound off"><span class="ico">🔇</span><span class="lbl"> Sound off</span></button>
+        <button id="elecBtn" class="pill btn elec-btn" type="button" aria-label="Election map" hidden><span class="ico">🗺</span><span class="lbl"> Election</span></button>
+        <button id="muteBtn" class="pill btn" type="button" aria-label="Sound off" hidden><span class="ico">🔇</span><span class="lbl"> Sound off</span></button>
         <button id="fsBtn" class="pill btn" type="button" aria-label="Full screen"><span class="ico">⛶</span><span class="lbl"> Full screen</span></button>
         <button id="pipBtn" class="pill btn" type="button" aria-label="Picture in picture" title="Keep watching in a small window while you use other apps" hidden><span class="ico">⧉</span><span class="lbl"> Pop out</span></button>
         <span id="sync" class="pill">syncing…</span>
         <span id="count" class="pill">0 watching</span>
         <span id="wallName" class="muted"></span>
-        <button id="elecBtn" class="pill btn" type="button" aria-label="Election map" hidden><span class="ico">🗺</span><span class="lbl"> Election</span></button>
         <span id="mirror" class="pill" hidden title="The stream follows the living-room TV's wall">📺 mirroring the TV</span>
       </div>
       <div id="props" class="props"></div>
@@ -75,10 +77,10 @@
         <div class="sheet">
         <div class="sheet-head"><b>Change the wall</b><button id="ctlDone" class="btn ghost sheet-done" type="button">Done</button></div>
         <div id="tiles" class="tiles"></div>
-        <div class="row">
+        <div class="row" data-member>
           <label>Preset <select id="preset"></select></label>
-          <button data-act="start" class="btn" data-member>Start</button>
-          <button data-act="stop" class="btn" data-member>Stop</button>
+          <button data-act="start" class="btn">Start</button>
+          <button data-act="stop" class="btn">Stop</button>
           <button data-act="follow" id="followBtn" class="btn" hidden>📺 Follow the TV</button>
         </div>
         <div class="row">
@@ -91,7 +93,7 @@
         <div class="row live-row"><span>Live now</span><span id="liveGames" class="muted small">loading…</span></div>
         <div class="row">
           <label>Tile <select id="tileI"><option value="0">1</option><option value="1">2</option><option value="2">3</option><option value="3">4</option></select></label>
-          <input id="tileUrl" type="url" placeholder="https://… (a stream page)" maxlength="500" />
+          <input id="tileUrl" type="url" placeholder="https://… (a stream page)" maxlength="500" data-member />
           <button data-act="tile" class="btn" data-member>Put on tile</button>
         </div>
         <p class="muted small">Screen changes pass on a majority of active viewers within 60 s; moving the sound needs 2 approvals (1 if you're alone).</p>
@@ -123,8 +125,8 @@
   <aside id="elecSheet" class="es-sheet" hidden aria-hidden="true" aria-label="State results and markets"></aside>
 </main>
 <script src="/vendor/hls.min.js"></script>
-<script src="/wall.js?v=20261103g"></script>
-<script src="/wall-bets.js?v=20261103c"></script>
-<script src="/wall-election.js?v=20261103b"></script>
+<script src="/wall.js?v=20261103h"></script>
+<script src="/wall-bets.js?v=20261103d"></script>
+<script src="/wall-election.js?v=20261103c"></script>
 </body>
 </html>

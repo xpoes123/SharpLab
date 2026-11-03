@@ -20,7 +20,11 @@
   const partyCls = (p) => ({ D: "D", R: "R", I: "I" })[p] || "O";
 
   let data = null, shapes = null, office = "S", sheet = null, timers = [];
-  const phone = () => matchMedia("(max-width: 700px)").matches;
+  // phones, portrait or landscape (keep in step with wall-election.css): the panel opens as a sheet from the bar's button
+  const phone = () => matchMedia("(max-width: 700px), (orientation: landscape) and (max-height: 500px)").matches;
+  const COVERAGE = Date.UTC(2026, 10, 3, 23);            // 6 PM ET, 3 Nov 2026: the first polls close
+  const ELECTION_UNTIL = Date.UTC(2026, 10, 5, 12);      // the pre-show / join-card copy stops after this
+  const etTime = (ms) => new Date(ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }) + " ET";
 
   async function get(path) {
     const r = await fetch(API + path, { credentials: "same-origin" });
@@ -118,20 +122,8 @@
     const f = fills(office, data.races || []);
     box.querySelectorAll("path").forEach((p) => { p.setAttribute("class", "f-" + (f[p.dataset.st] || "off")); });
     // the balance strip for this office
-    const b = (data.offices || {})[office];
-    const bal = root.querySelector(".el-bal");
-    bal.replaceChildren();
-    if (b) {
-      const s = b.seats, D = s.D.held + s.D.won, R = s.R.held + s.R.won;
-      const nums = el("div", "el-nums");
-      nums.append(el("b", "D", `Dem ${D}`), el("span", "muted small", office === "G" ? `${b.up} governors up` :
-        `${b.control.D} for control · ${b.called} of ${b.up} called${b.winner ? ` · ${PARTY[b.winner]} control` : ""}`), el("b", "R", `${R} Rep`));
-      const bar = el("div", "el-bar");
-      const seg = (w, c) => { const i = el("i", c); i.style.width = `${(100 * w / b.total).toFixed(3)}%`; return i; };
-      bar.append(seg(D, "f-dem"), seg(s.D.lead, "f-dem-lead"), seg(s.I.held + s.I.won + s.I.lead, "f-ind"), seg(b.out, "f-none"), seg(s.R.lead, "f-rep-lead"), seg(R, "f-rep"));
-      if (office !== "G") { const t = el("span", "el-tick"); t.style.left = `${100 * b.control.D / b.total}%`; bar.append(t); }
-      bal.append(nums, bar);
-    }
+    root.querySelector(".el-bal").replaceChildren(...balance(office));
+    renderPreshow();
     // the state picker (small states are hard to tap)
     const sel = root.querySelector(".el-select");
     const with_ = [...new Set((data.races || []).filter((r) => r.office === office).map((r) => r.state))].sort((a, b) => (data.states[a] || a).localeCompare(data.states[b] || b));
@@ -139,6 +131,72 @@
     root.querySelector(".el-foot").textContent = (data.source ? `${data.source} · ` : "") +
       (data.updated ? `updated ${fmtTime(data.updated)} · ` : "") + "unofficial until certified · prices: Kalshi" + (data.error ? ` · ${data.error}` : "");
   }
+
+  // "D 34 not up · 51 for control · 0 of 35 called · R 31 not up": seats not up this year are not a lead
+  const seatText = (p, s) => { const h = s[p].held, w = s[p].won;
+    return !w ? `${p} ${h} not up` : !h ? `${p} ${w} won` : `${p} ${h + w} (${h} not up + ${w} won)`; };
+  function balance(o) {
+    const b = data && (data.offices || {})[o];
+    if (!b) return [];
+    const s = b.seats, D = s.D.held + s.D.won, R = s.R.held + s.R.won;
+    const nums = el("div", "el-nums");
+    nums.append(el("b", "D", seatText("D", s)), el("span", "muted small", o === "G" ? `${b.called} of ${b.up} governors called` :
+      `${b.control.D} for control · ${b.called} of ${b.up} called${b.winner ? ` · ${PARTY[b.winner]} control` : ""}`), el("b", "R", seatText("R", s)));
+    const bar = el("div", "el-bar");
+    const seg = (w, c) => { const i = el("i", c); i.style.width = `${(100 * w / b.total).toFixed(3)}%`; return i; };
+    bar.append(seg(D, "f-dem"), seg(s.D.lead, "f-dem-lead"), seg(s.I.held + s.I.won + s.I.lead, "f-ind"), seg(b.out, "f-none"), seg(s.R.lead, "f-rep-lead"), seg(R, "f-rep"));
+    if (o !== "G") { const t = el("span", "el-tick"); t.style.left = `${100 * b.control.D / b.total}%`; bar.append(t); }
+    const out = [nums, bar];
+    if (o === "S") out.push(el("p", "el-note muted small", "D includes 2 independents who caucus with Democrats" + (s.I.won || s.I.lead ? "; purple = independents this year" : "")));
+    return out;
+  }
+
+  // ---- the pre-show: while the wall is off on election night, the player says when, what's next, and opens the map ----
+  const preshow = document.getElementById("preshow");
+  function nextCloses(now) {   // the next two poll-closing times and their states, from the races' close times
+    const by = new Map(), seen = new Set();
+    const rs = ((data && data.races) || []).filter((r) => r.closes && r.closes * 1000 > now).sort((a, b) => a.closes - b.closes);
+    for (const r of rs) {   // a state split across two closing times is listed at its first
+      if (seen.has(r.state)) continue;
+      seen.add(r.state);
+      const k = r.closes * 1000;
+      if (!by.has(k)) by.set(k, new Set());
+      by.get(k).add(r.state);
+    }
+    return [...by.entries()].slice(0, 2);
+  }
+  function countdown() {
+    const left = Math.max(0, COVERAGE - Date.now()), h = Math.floor(left / 3600000), m = Math.floor(left / 60000) % 60, sec = Math.floor(left / 1000) % 60;
+    return h ? `in ${h} h ${String(m).padStart(2, "0")} m` : `in ${m}:${String(sec).padStart(2, "0")}`;
+  }
+  function renderPreshow() {
+    if (!preshow) return;
+    const now = Date.now();
+    if (!data || now > ELECTION_UNTIL) { preshow.hidden = true; return; }
+    const before = now < COVERAGE;
+    const nodes = [el("p", "ps-kicker", "Election night"),
+      el("h2", "ps-title", before ? `Coverage starts ${etTime(COVERAGE)}` : "Results are coming in. The TV feed is back shortly.")];
+    if (before) nodes.push(el("p", "ps-count", countdown()));
+    const nx = nextCloses(now);
+    if (nx.length) {
+      const p = el("p", "ps-next");
+      p.append("Next polls close: ");
+      nx.forEach(([t, sts], i) => { if (i) p.append(" · "); p.append(el("b", null, etTime(t)), ` ${[...sts].sort().join(", ")}`); });
+      nodes.push(p);
+    }
+    const bal = el("div", "ps-bal"); bal.append(...balance("S")); nodes.push(bal);
+    const go = el("button", "ps-open", "🗺 Open the election map"); go.type = "button";
+    go.onclick = openPanel;
+    nodes.push(go);
+    preshow.replaceChildren(...nodes);
+    preshow.hidden = false;
+  }
+  setInterval(() => {   // only the countdown ticks (the rest redraws with the map), so a tap on the button never lands on a replaced node
+    const c = preshow && !preshow.closest("[hidden]") && preshow.querySelector(".ps-count");
+    if (!c) return;
+    if (Date.now() >= COVERAGE) { renderPreshow(); return; }
+    c.textContent = countdown();
+  }, 1000);
 
   function tipAt(st, e) {
     if (!data || e.pointerType === "touch") return;
@@ -155,7 +213,7 @@
     data = r.j;
     root.hidden = false;
     document.getElementById("elecBtn")?.removeAttribute("hidden");
-    if (!root.firstChild) buildPanel();
+    if (!root.querySelector(".el-head")) buildPanel();
     drawMap();
     return 200;
   }
@@ -283,6 +341,7 @@
       cands.append(row);
     }
     if (!r.cands.length) cands.append(el("p", "muted small", "No candidates listed yet."));
+    else if (!r.votes && !r.called) { cands.classList.add("no-votes"); cands.append(el("p", "es-novotes muted small", "No votes yet" + (r.closes ? ` · polls close ${fmtTime(r.closes)}` : ""))); }
     card.append(cands);
     if (r.votes) card.append(el("p", "muted small", `${Math.round(r.pct)}% of the expected vote in · ${(r.votes || 0).toLocaleString()} votes · ${r.caller ? "call: " + r.caller : "not called"}`));
     // markets
@@ -313,8 +372,17 @@
     for (const [txt, cls] of [["Kalshi", ""], ["bid / ask", "n"], ["last", "n"], ["implied", "n"], ["24 h", "n"]]) hd.append(el("th", cls, txt));
     t.append(el("thead")); t.tHead.append(hd);
     const tb = el("tbody");
+    const evs = [...new Set(rows.map((m) => m.event))];
     let ev = null;
     for (const m of rows) {
+      if (evs.length > 1 && m.event !== ev) {   // two markets on one race (e.g. by party and by person): say which is which
+        const group = rows.filter((x) => x.event === m.event);
+        const vol = group.reduce((a, x) => a + (x.vol24 || 0), 0);
+        const hr = el("tr", "evh"), td = el("td", null);
+        td.colSpan = 5;
+        td.append(el("b", null, m.event), el("span", "muted", ` · ${fmtVol(vol)} traded 24 h${m.event === evs[0] ? " · charted below" : ""}`));
+        hr.append(td); tb.append(hr);
+      }
       const tr = el("tr", ev && m.event !== ev ? "ev" : "");
       ev = m.event;
       const who = el("td", "who"); who.append(el("i", "dot " + partyCls(m.party)), document.createTextNode(m.who || m.label));
@@ -328,6 +396,8 @@
     const wrap = el("div", "es-mkwrap"); wrap.append(t);
     return wrap;
   }
+
+  const fmtVol = (v) => (v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${Math.round(v / 1e3)}k` : String(Math.round(v))) + " contracts";
 
   function posList(rows) {
     const box = el("div", "es-pos");
@@ -416,13 +486,24 @@
     for (const e of ends) { const t = svgEl("text", { x: W - Rm + 4, y: e.y + 3, class: "end", style: `fill:${e.col}` }); t.textContent = e.text; svg.append(t); }
     box.append(svg);
     const key = el("div", "es-key small");
+    const ev = c.lines[0] && c.lines[0].ticker ? c.lines[0].ticker.replace(/-[^-]+$/, "") : "";
+    if (ev) key.append(el("b", "es-key-ev", ev));
     c.lines.forEach((l, i) => {
       const col = COLORS[l.party] && !c.lines.slice(0, i).some((o) => o.party === l.party) ? COLORS[l.party] : ALT[i % ALT.length];
       const k = el("span"); const sw = el("i"); sw.style.background = col;
-      k.append(sw, document.createTextNode(`${l.who} ${l.now == null ? "" : Math.round(l.now) + "%"}${l.chg24 == null ? "" : ` (${l.chg24 >= 0 ? "+" : "−"}${Math.abs(l.chg24).toFixed(0)} 24 h)`}`));
+      const row = tableRow(l.ticker);   // the 24 h figure the table shows for this very market
+      const chg = row ? row.chg24 : l.chg24;
+      k.append(sw, document.createTextNode(`${l.who} ${l.now == null ? "" : Math.round(l.now) + "%"}${chg == null ? "" : ` (${chg >= 0 ? "▲" : "▼"}${Math.abs(chg).toFixed(0)} 24 h)`}`));
       key.append(k);
     });
     box.append(key);
+  }
+
+  function tableRow(ticker) {
+    const d = sheet && sheet.d;
+    if (!d || !ticker) return null;
+    const all = d.races ? d.races.flatMap((r) => r.markets || []) : d.markets || [];
+    return all.find((m) => m.ticker === ticker) || null;
   }
 
   // ---- chamber control ------------------------------------------------------------------------------------------------
@@ -461,18 +542,35 @@
 
   // ---- phones: the panel itself opens as a sheet from the bar's 🗺 button --------------------------------------------
   const btn = document.getElementById("elecBtn");
-  if (btn) btn.onclick = () => {
-    if (phone()) { root.classList.toggle("as-sheet"); document.body.classList.toggle("elec-on", root.classList.contains("as-sheet")); }
-    else root.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
+  function openPanel(toggle) {
+    root.hidden = false;
+    if (phone()) {
+      const on = toggle === true ? !root.classList.contains("as-sheet") : true;
+      root.classList.toggle("as-sheet", on); document.body.classList.toggle("elec-on", on);
+      if (on) root.scrollTop = 0;
+    } else root.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  if (btn) btn.onclick = () => openPanel(true);
   root.addEventListener("click", (e) => { if (e.target === root && root.classList.contains("as-sheet")) { root.classList.remove("as-sheet"); document.body.classList.remove("elec-on"); } });
 
   // ---- start: when the page has a viewer (member or guest) -------------------------------------------------------------
-  (async function start() {
-    let st = await loadMap();
-    while (st === 401 || st === 403) { await new Promise((r) => setTimeout(r, 8000)); st = await loadMap(); }
-    fetch(API + "/shapes", { credentials: "same-origin" }).then((r) => r.json()).then((s) => { shapes = s; drawMap(); }).catch(() => {});
+  // ---- start: once wall.js says someone (member or guest) is in — never before, so nothing here 401s ------------------
+  let started = false;
+  async function start() {
+    if (started) return;
+    started = true;
+    if (Date.now() < ELECTION_UNTIL) {   // election night: the button and a placeholder at once, no late layout jump
+      btn?.removeAttribute("hidden");
+      root.hidden = false;
+      if (!root.firstChild) root.append(el("p", "el-loading muted", "Loading the election map…"));
+    }
+    const st = await loadMap();
+    if (st === 401 || st === 403) return;   // the session ended: wall.js shows the join screen; no retry loop
+    if (st !== 200 && !data) root.querySelector(".el-loading")?.replaceChildren("Election results aren't loading right now — trying again shortly.");
+    fetch(API + "/shapes", { credentials: "same-origin" }).then((r) => (r.ok ? r.json() : null)).then((s) => { if (s) { shapes = s; drawMap(); } }).catch(() => {});
     setInterval(() => { if (!document.hidden) loadMap(); }, MAP_MS);
-  })();
+  }
+  if (window.__wallMe) start();
+  else window.addEventListener("wall:me", start, { once: true });
   window.__wallElection = { openState, openControl };   // renders / tests
 })();
