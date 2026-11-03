@@ -663,3 +663,11 @@ def test_noop_proposals_are_refused():
 def test_live_games_need_a_viewer(setup):
     client, *_ = setup
     assert client.get("/api/v1/wall/games").status_code == 401
+
+
+def test_promote_moves_a_tile_to_the_main_spot():
+    a = wall.check_action({"op": "promote", "i": 2})
+    assert a == {"op": "promote", "i": 2} and wall.describe(a) == "make tile 3 the main tile"
+    assert wall._route(a) == ("POST", "/i/discord/move", {"i": 2, "j": 0})
+    w = {"running": True, "urls": ["https://a.tv", "https://b.tv"]}
+    assert wall.noop({"op": "promote", "i": 0}, w) and wall.noop({"op": "promote", "i": 3}, w) and not wall.noop({"op": "promote", "i": 1}, w)
