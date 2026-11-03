@@ -65,6 +65,12 @@
 .es-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; padding: 10px 0 2px; }
 .es-spot { padding: 5px 12px; font-size: 13px; }
 .es-turnout { display: grid; gap: 3px; padding: 8px 10px; margin-top: 8px; background: var(--surface2, rgba(255,255,255,0.04)); font-size: 13px; }
+.es-pulse { width: 100%; border-collapse: collapse; font-size: 13px; margin: 4px 0; }
+.es-pulse th { text-align: left; font-weight: 500; opacity: 0.6; font-size: 11px; padding: 2px 6px 2px 0; }
+.es-pulse td { padding: 3px 6px 3px 0; border-top: 1px solid rgba(255,255,255,0.06); }
+.es-pulse td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.es-pulse tr.hot td { color: var(--accent, #FFB000); }
+.es-turnout details summary { cursor: pointer; padding: 4px 0; opacity: 0.8; }
 .es-local { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 0 2px; }
 .es-local .btn { padding: 4px 10px; font-size: 13px; }
 .es-race { border-bottom: 1px solid var(--line); padding: 14px 0; }
