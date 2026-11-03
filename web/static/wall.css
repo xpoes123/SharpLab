@@ -6,9 +6,9 @@
 .player { position: relative; background: #000; border-radius: var(--r-lg); overflow: hidden; aspect-ratio: 16 / 9; }
 .player video { width: 100%; height: 100%; display: block; background: #000; }
 .offline { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; background: var(--panel); }
-.unmute { position: absolute; left: 12px; bottom: 12px; border: 0; border-radius: var(--r-pill); padding: 8px 14px;
+.unmute { position: absolute; left: 12px; bottom: 12px; border: 0; border-radius: var(--r-pill); padding: 8px 14px; min-height: 44px;
   background: rgba(17,18,26,.8); color: var(--fg); font: inherit; cursor: pointer; }
-.unmute[hidden], .offline[hidden], #room[hidden], #gate[hidden] { display: none; }
+.unmute[hidden], .offline[hidden], #room[hidden], #gate[hidden], .scrim[hidden], .badge[hidden] { display: none; }
 
 .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
 .bar .pill { font-size: 12px; padding: 3px 10px; }
@@ -17,17 +17,19 @@
 #sync.bad { color: var(--red); background: var(--red-soft); }
 
 .tiles { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.tiles:empty { display: none; }
 .tile { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 6px 10px; font-size: 13px;
-  display: flex; gap: 8px; align-items: center; max-width: 100%; }
-.tile .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+  display: flex; gap: 8px; align-items: center; max-width: 100%; min-width: 0; }
+.tile .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; min-width: 0; }
 .tile.sound { border-color: var(--accent); }
 .tile button { border: 1px solid var(--line); background: var(--panel2); color: var(--fg); border-radius: var(--r-sm);
-  font: inherit; font-size: 12px; padding: 2px 8px; cursor: pointer; }
+  font: inherit; font-size: 12px; padding: 2px 8px; cursor: pointer; white-space: nowrap; }
 
 .props { display: grid; gap: 8px; margin-bottom: 10px; }
+.props:empty { display: none; }
 .prop { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; background: var(--panel2); border: 1px solid var(--line-strong);
   border-radius: var(--r); padding: 10px 12px; }
-.prop .what { flex: 1 1 220px; }
+.prop .what { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
 .prop .tally { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
 .prop button { border: 1px solid var(--line); background: var(--panel); color: var(--fg); border-radius: var(--r-sm);
   font: inherit; padding: 4px 12px; cursor: pointer; }
@@ -40,12 +42,17 @@
   border-radius: var(--r-sm); padding: 6px 8px; font: inherit; }
 .controls input { flex: 1 1 220px; min-width: 0; }
 .controls .btn { padding: 6px 12px; }
+.controls .tiles { margin: 10px 0 0; }
 .small { font-size: 12px; }
+.sheet-head, .sum-short, .vstrip, .vcount { display: none; }
 
 .side { display: grid; gap: 16px; }
 .side h3 { margin: 0 0 10px; font-size: 14px; }
+.viewers summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+.viewers > summary::before { content: none !important; }
 .viewers ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.viewers li { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+.viewers li { display: flex; gap: 8px; align-items: center; font-size: 14px; min-width: 0; }
+.viewers li > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .viewers li.away { opacity: .45; }
 .viewers li .tag { font-size: 11px; color: var(--muted); }
 .av { width: 26px; height: 26px; border-radius: 50%; flex: none; display: grid; place-items: center; font-size: 11px; font-weight: 700;
@@ -53,16 +60,27 @@
 
 .chat { display: flex; flex-direction: column; height: min(70vh, 640px); }
 @media (max-width: 900px) { .chat { height: 60vh; } }
-#msgs { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 6px; }
-#msgs li { display: flex; gap: 8px; font-size: 14px; line-height: 1.35; word-break: break-word; }
+.chat-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.chat-head h3 { margin: 0; }
+.ding { border: 0; background: none; color: var(--fg); font: inherit; font-size: 15px; line-height: 1; cursor: pointer;
+  border-radius: var(--r-pill); width: 32px; height: 32px; display: grid; place-items: center; }
+.ding:hover { background: var(--panel2); }
+.ding[aria-pressed="false"] { opacity: .6; }
+#msgs { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px;
+  overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+#msgs li { display: flex; gap: 8px; font-size: 14px; line-height: 1.35; word-break: break-word; overflow-wrap: anywhere; }
 #msgs li .who { font-weight: 600; color: var(--accent2); margin-right: 4px; }
 #msgs li.sys { color: var(--muted); font-style: italic; font-size: 13px; }
 #msgs li .mod { margin-left: auto; opacity: 0; border: 0; background: none; color: var(--muted); cursor: pointer; font: inherit; font-size: 12px; }
-#msgs li:hover .mod { opacity: 1; }
+#msgs li .mod + .mod { margin-left: 0; }
+#msgs li:hover .mod, #msgs li .mod:focus-visible { opacity: 1; }
+@media (hover: none) { #msgs li .mod { opacity: .6; min-width: 44px; min-height: 44px; margin: -12px 0; } }
 #chatForm { display: flex; gap: 8px; margin-top: 10px; }
 #chatForm input { flex: 1; min-width: 0; }
 
 .bar .btn { cursor: pointer; border: 0; font: inherit; }
+.bar [hidden] { display: none !important; }
+#pipBtn[aria-pressed="true"] { color: var(--accent); }
 .player:fullscreen, .player:-webkit-full-screen { background: #000; display: flex; align-items: center; justify-content: center; }
 .player:fullscreen video, .player:-webkit-full-screen video { width: 100%; height: 100%; object-fit: contain; }
 
@@ -70,3 +88,152 @@
 .live-games { display: flex; flex-wrap: wrap; gap: 6px; }
 .live-games .btn { font-size: 0.9em; }
 .live-games .btn:disabled { opacity: .45; cursor: default; }
+
+/* the chat toggle + unread badge only show in phone landscape (below) */
+.chat-toggle { display: none; }
+.badge { position: absolute; top: -3px; right: -3px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: var(--accent2); color: var(--accent-ink); font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
+.scrim { position: fixed; inset: 0; z-index: 59; background: rgba(8,9,14,.55); }
+
+/* ── phones, portrait: the video stuck on top, chat fills the rest, the input sits above the keyboard ──
+   body.inroom is pinned to the visual viewport (--vvh / --vvtop from wall.js), so the iOS keyboard shrinks the chat
+   instead of covering the input or scrolling the video away. Keep this query in step with PORTRAIT in wall.js. */
+@media (max-width: 700px) and (orientation: portrait), (max-width: 700px) and (min-height: 501px) {
+  body.inroom { position: fixed; left: 0; right: 0; top: var(--vvtop, 0px); height: var(--vvh, 100dvh);
+    display: flex; flex-direction: column; overflow: hidden; }
+  body.inroom header { position: static; flex: none; flex-wrap: nowrap; gap: 12px;
+    padding: max(2px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 2px max(12px, env(safe-area-inset-left)); }
+  body.inroom .brand { font-size: 16px; white-space: nowrap; }
+  body.inroom .nav { width: auto; order: 0; gap: 4px; overflow: visible; }
+  body.inroom .nav a { font-size: 13px; padding: 12px 6px; }
+  body.inroom #navRight { display: none; }
+  body.inroom #wall { flex: 1; min-height: 0; display: flex; max-width: none; margin: 0; padding: 0; }
+
+  #room { flex: 1; min-height: 0; gap: 0; align-items: stretch;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto auto auto minmax(0, 1fr);
+    grid-template-areas: "player player" "bar bar" "viewers ctl" "props props" "chat chat"; }
+  .stage, .side { display: contents; }
+  .player { grid-area: player; border-radius: 0; }
+  .unmute { left: 8px; bottom: 8px; }
+
+  .bar { grid-area: bar; margin: 0; padding: 4px max(8px, env(safe-area-inset-left)); gap: 4px; flex-wrap: nowrap; min-width: 0;
+    border-bottom: 1px solid var(--line); }
+  .bar .btn { min-width: 44px; min-height: 44px; padding: 0 8px; font-size: 18px; display: inline-grid; place-items: center; flex: none; }
+  .bar .lbl, .bar .act, #wallName, #mirror { display: none; }
+  .bar #sync { margin-left: auto; }
+  .bar .pill:not(.btn) { white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+  /* one slim row under the bar: the avatar strip (→ who's watching) and the "change the wall" sheet */
+  .viewers, .controls { border: 0; border-radius: 0; box-shadow: none; background: none; padding: 0; min-width: 0; }
+  .viewers { grid-area: viewers; }
+  .controls { grid-area: ctl; }
+  .viewers > summary, .controls > summary { min-height: 48px; display: flex; align-items: center; gap: 8px; padding: 0 12px;
+    list-style: none; border-bottom: 1px solid var(--line); }
+  .controls > summary::before { content: none !important; }   /* hqstyle's ▸/▾: these open as sheets */
+  .viewers > summary h3 { display: none; }
+  .vstrip { display: flex; flex: none; padding-right: 8px; }
+  .vstrip .av { width: 28px; height: 28px; border: 2px solid var(--bg); margin-right: -8px; }
+  .vstrip .more { background: var(--panel2); color: var(--muted); }
+  .vcount { display: block; flex: 1; min-width: 0; font-size: 14px; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .controls > summary { color: var(--accent); font-weight: 600; font-size: 14px; white-space: nowrap; }
+  .controls > summary .sum-full, .controls > summary #ownerNote { display: none; }
+  .controls > summary .sum-short { display: inline; padding: 6px 12px; border: 1px solid var(--line); border-radius: var(--r-pill); }
+
+  /* the sheets: bottom sheets over the chat */
+  .sheet-host[open] > .sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 60;
+    max-height: calc(var(--vvh, 100dvh) - 72px); overflow-y: auto; overscroll-behavior: contain;
+    background: var(--panel); border-top: 1px solid var(--line-strong); border-radius: 16px 16px 0 0; box-shadow: var(--shadow-lg);
+    padding: 4px max(16px, env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+  .sheet-head { display: flex; align-items: center; justify-content: space-between; position: sticky; top: -4px; z-index: 1;
+    background: var(--panel); padding: 6px 0; border-bottom: 1px solid var(--line); }
+  .sheet-done { min-height: 44px; padding: 0 16px; }
+  .viewers ul { gap: 2px; padding-top: 6px; }
+  .viewers li { min-height: 44px; font-size: 15px; }
+  .viewers li .av { width: 32px; height: 32px; font-size: 12px; }
+  .controls .row { margin-top: 14px; }
+  .controls select, .controls input, .chat input { font-size: 16px; min-height: 44px; }
+  .controls select { max-width: 100%; }
+  .controls .btn, .live-games .btn, .tile button { min-height: 44px; }
+  .controls .row > span:not(.muted) { flex-basis: 100%; color: var(--muted); font-size: 13px; }
+  .controls .row label { display: flex; align-items: center; gap: 8px; flex: 1 1 100%; }
+  .controls .row label select { flex: 1; min-width: 0; }
+  .live-row > span:first-child { flex-basis: 100%; }
+  .live-games { width: 100%; }
+  .tiles { flex-direction: column; }
+  .tile { width: 100%; padding: 6px 8px 6px 12px; font-size: 14px; }
+  .tile .lbl { flex: 1; max-width: none; }
+
+  .props { grid-area: props; margin: 0; padding: 8px 12px; max-height: 34vh; overflow-y: auto; border-bottom: 1px solid var(--line); }
+  .prop { gap: 8px; padding: 8px 10px; }
+  .prop .what { flex-basis: 100%; font-size: 14px; }
+  .prop .tally { flex: 1; }
+  .prop button { min-width: 52px; min-height: 44px; font-size: 16px; }
+
+  .chat { grid-area: chat; height: auto; min-height: 0; border: 0; border-radius: 0; box-shadow: none;
+    padding: 6px max(12px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); }
+  .chat-head { margin-bottom: 6px; }
+  .chat-head h3 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .ding { width: 44px; height: 44px; margin: -6px -10px -6px 0; font-size: 18px; }
+  #msgs li { font-size: 15px; }
+  #chatForm { margin-top: 8px; }
+  #chatForm .btn { min-height: 44px; padding: 0 16px; }
+  #chatErr:empty { display: none; }
+
+  /* keyboard open: only the video and the chat stay */
+  body.kb header, body.kb .bar, body.kb .viewers, body.kb .controls, body.kb .props { display: none; }
+  body.kb .chat { padding-bottom: 6px; }
+  body.kb .chat-head { display: none; }
+}
+
+/* ── phones, landscape: the video is the whole screen; chat is a see-through overlay on the right ──
+   Keep this query in step with LANDSCAPE in wall.js. */
+@media (orientation: landscape) and (max-height: 500px) {
+  body.inroom { position: fixed; inset: 0; overflow: hidden; background: #000; }
+  body.inroom header { display: none; }
+  body.inroom #wall { max-width: none; margin: 0; padding: 0; }
+  #room { display: block; }
+  .stage, .side { display: contents; }
+  .player { position: fixed; inset: 0; z-index: 1; border-radius: 0; aspect-ratio: auto; }
+  .player video { object-fit: contain; }
+  .unmute { left: max(12px, env(safe-area-inset-left)); bottom: max(12px, env(safe-area-inset-bottom)); z-index: 4; }
+  .viewers, .controls, #wallName, #mirror, .bar .lbl, .bar .act { display: none; }
+
+  .bar { position: fixed; z-index: 5; margin: 0; flex-wrap: nowrap; gap: 6px;
+    top: max(8px, env(safe-area-inset-top)); left: max(8px, env(safe-area-inset-left)); transition: opacity .4s ease; }
+  .bar .pill { background: rgba(17,18,26,.66); }
+  .bar .btn { min-width: 44px; min-height: 44px; font-size: 18px; display: inline-grid; place-items: center; padding: 0 10px; }
+  body.idle .bar { opacity: 0; pointer-events: none; }
+
+  .props { position: fixed; z-index: 5; margin: 0; left: max(8px, env(safe-area-inset-left)); top: 64px;
+    max-width: min(46vw, 360px); max-height: calc(100% - 140px); overflow-y: auto; }
+  .prop { background: rgba(31,34,48,.86); padding: 6px 8px; gap: 6px; }
+  .prop .what { flex-basis: 100%; font-size: 13px; }
+  .prop button { min-width: 44px; min-height: 44px; }
+
+  .chat { position: fixed; z-index: 6; right: 0; top: var(--vvtop, 0px); height: var(--vvh, 100%);
+    width: min(42vw, 340px); border: 0; border-radius: 0; box-shadow: none;
+    background: linear-gradient(90deg, rgba(17,18,26,.35), rgba(17,18,26,.72) 30%);
+    backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+    padding: max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) 14px;
+    opacity: 0; visibility: hidden; transform: translateX(12px);
+    transition: opacity .4s ease, transform .4s ease, visibility 0s linear .4s; }
+  body.chat-on .chat { opacity: 1; visibility: visible; transform: none; transition: opacity .4s ease, transform .4s ease; }
+  .chat-head { margin-bottom: 4px; }
+  .chat-head h3 { font-size: 12px; color: var(--fg-2); }
+  .ding { width: 44px; height: 44px; margin: -8px -6px -8px 0; }
+  #msgs li { font-size: 14px; text-shadow: 0 1px 2px rgba(0,0,0,.9); }
+  #msgs li .mod { display: none; }   /* moderate from portrait or desktop; keep the overlay clean */
+  #msgs li .av { width: 22px; height: 22px; font-size: 10px; }
+  #chatForm { margin-top: 6px; }
+  .chat input { font-size: 16px; min-height: 44px; background: rgba(31,34,48,.9); }
+  #chatForm .btn { min-height: 44px; }
+  #chatErr:empty { display: none; }
+
+  .chat-toggle { display: grid; place-items: center; position: fixed; z-index: 7; width: 44px; height: 44px;
+    right: max(12px, env(safe-area-inset-right)); bottom: max(12px, env(safe-area-inset-bottom));
+    border: 1px solid rgba(255,255,255,.12); border-radius: 50%; background: rgba(17,18,26,.66); color: var(--fg);
+    font-size: 18px; cursor: pointer; transition: opacity .4s ease; }
+  body.chat-on .chat-toggle { right: calc(min(42vw, 340px) + 10px); }
+  body.idle:not(.chat-on) .chat-toggle { opacity: .55; }
+}

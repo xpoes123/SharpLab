@@ -169,3 +169,37 @@ def test_mm_history_is_capped(monkeypatch):
         assert len(await q.get_daily_mm_state("capuser", day)) == q.MM_MAX_GUESSES
 
     _run(go())
+
+
+def test_guest_plays_shows_unranked_and_never_counts(monkeypatch):
+    _fresh()
+
+    class _Guest(_Req):
+        cookies = {"ph_guest": "abcdefghijklmnop:Zed"}
+
+    async def go():
+        await sch.init_db()
+        monkeypatch.setattr(web_daily.daily, "schedule", lambda day: ("trappig", "medium"))
+        # member p1 solves first
+        monkeypatch.setattr(web_daily.auth, "read_session", lambda r: None if r.cookies else {"id": "p1"})
+        await q.get_or_create_casino_wallet("p1")
+        s = await web_daily.start(_Req())
+        _, witness = trappig.is_solvable(s["board"])
+        await web_daily.submit(_Req(), web_daily.SubmitBody(start_token=s["start_token"],
+                                                            solution={"moves": witness}))
+        # guest plays the same board
+        assert (await web_daily.today(_Guest()))["guest"] == "Zed"
+        gs = await web_daily.start(_Guest())
+        res = await web_daily.submit(_Guest(), web_daily.SubmitBody(start_token=gs["start_token"],
+                                                                   solution={"moves": witness}))
+        assert res["guest"] and res["rank"] in (1, 2) and res["field"] == 2 and "coins" not in res
+        lb = await web_daily.leaderboard(_Req())
+        guest = next(r for r in lb["today"] if r["guest"])
+        assert guest["name"] == "Zed" and guest["rank"] is None and guest["points"] == 0
+        assert [r["rank"] for r in lb["today"] if not r["guest"]] == [1]
+        assert [s["name"] for s in lb["season"]] != [] and all(s["name"] != "Zed" for s in lb["season"])
+        day = web_daily.daily.puzzle_day()
+        assert all(not r["discord_user"].startswith("guest:")
+                   for r in await q.get_daily_results("trappig", day))  # payouts/bot never see guests
+
+    _run(go())

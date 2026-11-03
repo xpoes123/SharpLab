@@ -198,6 +198,20 @@ Found missing (not needed, so nothing to install): gst `pulsesrc`/`mp4mux` (gst-
 ## Watch page, sync, chat, viewers, votes (sharplab-web, `web/wall.py`)
 
 * `GET /wall.html` — the player page (static; `/wall` needs the optional Caddy snippet) (hls.js vendored at `web/static/vendor/hls.min.js`, no CDN). Login required.
+* **Phones** (most viewers): portrait pins the page to the visual viewport (`--vvh`/`--vvtop` from `visualViewport`) —
+  video stuck on top, a slim bar (🔇 ⛶ ⧉, sync, watching), then chat filling the rest with the input above the keyboard;
+  "Change the wall" and who's watching are collapsed into bottom sheets (an avatar strip opens the list). Landscape is
+  the video full screen with chat as a see-through overlay on the right that peeks in on a message and hides after 5 s,
+  plus a 💬 toggle with an unread badge. Nothing flashes (fades only). The media queries live in `wall.css` and
+  `wall.js` (`PORTRAIT`/`LANDSCAPE`) and must stay in step.
+* **Chat ding:** a ~150 ms two-note Web Audio chime (no file, gain 0.05) for other people's messages only, when the chat
+  isn't in view (tab hidden, scrolled up, landscape overlay hidden, full screen, a sheet open): first message of a burst
+  (10 s quiet ends one), at most once per 20 s. The AudioContext is made on the first tap; 🔔/🔕 in the chat header,
+  kept in `localStorage["wall.ding"]`. `window.__wallDing.count` counts chimes for tests.
+* **Picture-in-picture:** ⧉ in the bar (`requestPictureInPicture`, or iPhone Safari's `webkitSetPresentationMode`; hidden
+  where neither exists), `autopictureinpicture` + a media-session `enterpictureinpicture` handler for Chrome's automatic
+  pop-out on an app switch, and media-session metadata (wall name, `/wall-art.png`) with play/pause. Nothing pauses
+  on `visibilitychange`, so hls.js and the sync loop keep running in PiP.
 * `GET /api/v1/wall/hls/{file}` — session-gated proxy (under /api because the live Caddy only forwards /api/* and /ws/* to the app) to the service; a playlist is cached ~0.5 s and segments ~60 s in
   memory, so N viewers cost one upstream fetch.
 * **Sync:** every viewer is pinned to the same instant of the stream: the web server reads the live edge from the

@@ -164,6 +164,7 @@ Commands are organized into nested subcommand groups to stay under Discord's 100
 | `/signals channel|scan` | Arbitrage / middle / steam-move market alerts |
 | `/pickem today|leaderboard|favorites` | Daily pick'em (played on the website; no Discord posts) |
 | `/reactionrole create|bind|unbind|list` | Reaction-role (auto-role) panels |
+| `/request new|list|done` | Member feature requests (👍 votes); `done` (Manage Server) credits the requester — check open ones before picking what to build |
 | Sports news (auto) | `sportsnews.py` posts NBA/NFL/MLB breaking news + pings the league role |
 | CLV (auto) | When a game closes, bot posts CLV for anyone who logged a bet on it |
 

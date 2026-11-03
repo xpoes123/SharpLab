@@ -1163,3 +1163,12 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        try:  # /request: member feature requests; status open|done, credited by name when shipped
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS feature_requests ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, discord_user TEXT NOT NULL, idea TEXT NOT NULL, "
+                "created_at TEXT NOT NULL, channel_id TEXT, message_id TEXT, "
+                "status TEXT NOT NULL DEFAULT 'open', done_at TEXT, note TEXT)")
+            await db.commit()
+        except Exception:
+            pass
