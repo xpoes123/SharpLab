@@ -761,6 +761,26 @@ class Hub:
             except Exception as e:  # noqa: BLE001 — never let the ticker die
                 log.warning("wall tick: %s", e)
 
+    # -- chat for the TV wall (bot API): the TV overlay + the TV's phones, through the homelab wall service
+    def chat_feed(self, after: int = 0, limit: int = 30) -> dict:
+        """The recent chat as a poller sees it: messages newer than `after`, and `ids` = every message still in the window
+        (a moderator's delete drops out of it, so the poller drops it too). A muted user's messages are left out while the
+        mute lasts. Plus who's watching."""
+        now = self.clock()
+        window = [m for m in list(self.chat.log)[-max(1, min(limit, 100)):] if not self.chat.is_muted(m.get("uid") or "", now)]
+        out = lambda m: {k: m.get(k) for k in ("id", "ts", "kind", "name", "guest", "text")} | {"guest": bool(m.get("guest"))}
+        return {"messages": [out(m) for m in window if m["id"] > after], "ids": [m["id"] for m in window],
+                "last": self.chat.log[-1]["id"] if self.chat.log else 0, "now": now,
+                "viewers": [{"name": v["name"], "guest": bool(v.get("guest")), "away": v["away"]} for v in self.viewers()],
+                "watching": len(self.presence.watching()), "active": len(self.presence.active(now))}
+
+    async def post_chat(self, user: dict, text: object) -> tuple[dict | None, str]:
+        """A message from outside the page (the TV's phones post as the owner), same limits and mute as the socket."""
+        m, err = self.chat.post(user, text, self.clock())
+        if m:
+            await self.broadcast({"t": "chat", "msg": m})
+        return m, err
+
     def state(self) -> dict:
         now = self.clock()
         active = self.presence.active(now)
@@ -1029,3 +1049,30 @@ async def bot_link(request: Request, x_api_key: str = Header("")):
     avatar = body.get("avatar")   # the Discord avatar hash, as the OAuth session stores it
     return {"url": mint_link(uid, clean_text(name, 40) or "Player", avatar if isinstance(avatar, str) and len(avatar) < 80 else None),
             "ttl": LINK_TTL}
+
+
+@router.get("/chat")
+async def bot_chat(after: int = 0, limit: int = 30, x_api_key: str = Header("")):
+    """The TV wall's chat poll (the homelab wall service, every ~1.5 s while the discord wall runs)."""
+    _need_key(x_api_key)
+    return hub.chat_feed(after, limit)
+
+
+@router.post("/chat")
+async def bot_chat_post(request: Request, x_api_key: str = Header("")):
+    """Chat from the TV's phone remote: {discord_id (the owner's), name, text}."""
+    _need_key(x_api_key)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=422)
+    user = _bot_user(body)
+    known = hub.presence.users.get(user["id"])
+    if known and not body.get("name"):
+        user = {**user, "name": known["name"], "avatar": known.get("avatar")}
+    m, err = await hub.post_chat(user, body.get("text"))
+    if not m:
+        return JSONResponse({"error": err}, status_code=403 if "muted" in err else 429 if "Slow" in err else 422)
+    return {"msg": {k: m.get(k) for k in ("id", "ts", "kind", "name", "guest", "text")}}
