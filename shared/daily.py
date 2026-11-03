@@ -78,6 +78,10 @@ def schedule(day: str) -> tuple[str, str]:
     era the game rotates through that era's pool, anchored at the era's start (so retiring/adding a
     game never disturbs earlier days). Difficulty cycles easy→medium→hard, except the first
     RAMP_EASY_DAYS from launch are all easy."""
+    # Super-hard Sundays: an 8×8 expert Rush Hour (plus a one-off sneak peek on 2026-11-03).
+    # Forward-only: earlier days keep their scheduled game so cached puzzles/leaderboards resolve.
+    if day >= "2026-11-03" and (date.fromisoformat(day).weekday() == 6 or day == "2026-11-03"):
+        return rushhour.ID, "expert"
     i = day_index(day)
     era = None
     for start, pool in _ERAS:
