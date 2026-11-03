@@ -17,3 +17,13 @@ def test_baseline_then_calls_and_first_votes():
     assert ev.check(snap) == [{"race": "H-WI-3", "by": "race call", "state": "WI", "office": "H"},
                               {"race": "S-GA", "by": "first votes", "state": "GA", "office": "S"}]
     assert ev.check(snap) == []                                   # nothing new
+
+
+def test_kalshi_move_once_then_quiet():
+    ev, races = Events(), {"S-GA": race("S-GA", "GA", "S")}
+    assert ev.check_odds({"S-GA": {"who": "Ossoff", "prob": 60}}, races, 0) == []
+    assert ev.check_odds({"S-GA": {"who": "Ossoff", "prob": 66}}, races, 300) == []
+    got = ev.check_odds({"S-GA": {"who": "Ossoff", "prob": 72}}, races, 600)
+    assert got == [{"race": "S-GA", "by": "Kalshi move 12 pts", "state": "GA", "office": "S"}]
+    assert ev.check_odds({"S-GA": {"who": "Ossoff", "prob": 90}}, races, 700) == []          # quiet for 20 min
+    assert ev.check_odds({"S-GA": {"who": "Collins", "prob": 51}}, races, 2000) == []        # a new favourite starts over
