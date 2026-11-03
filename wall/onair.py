@@ -310,9 +310,13 @@ class Policy:
         acts = []
         for i in stream_tiles(list(inst.urls), election_mode(inst)):
             urls = list(inst.urls)
-            if self.paused.get(i, 0.0) > now or now - self.last_swap.get(i, -1e9) < SWAP_GAP_S:
+            if self.paused.get(i, 0.0) > now:
                 continue
             u, on_wall = urls[i], set(urls)
+            # the 2-min gap only stops flip-flopping between on-air streams: getting off a break is never held back by it
+            gap = now - self.last_swap.get(i, -1e9) < SWAP_GAP_S and not board.is_(u, SWAP_AWAY, 0, now)
+            if gap:
+                continue
             if i in self.orig:
                 home = self._home(i, favs, on_wall)
                 if home and home != u and home not in on_wall and \
@@ -324,7 +328,8 @@ class Policy:
             stuck = i == inst.driver.sound and not any(board.is_(urls[k], "coverage", 0, now) for k in range(len(urls))
                                                          if k != i and not own_page(urls[k]))
             if board.is_(u, SWAP_AWAY, SWAP_SOUND_S if stuck else SWAP_AFTER_S, now):
-                cands = [c for c in board.fresh() if c not in on_wall and board.is_(c, "coverage", FRESH_S, now)]
+                cands = [c for c in board.fresh() if c not in on_wall and board.is_(c, "coverage", FRESH_S, now)
+                         and (board.get(c).get("soon") or 0) < 0.6]   # not one that's about to break itself
                 if not cands:
                     continue
                 best = max(cands, key=lambda c: (c in favs, board.get(c)["confidence"], -board.get(c)["since"]))

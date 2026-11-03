@@ -46,7 +46,7 @@ POOL = ["https://www.youtube.com/@NBCNews/live", "https://www.youtube.com/@PBSNe
 # ffmpeg + ~130 kb/s of audio and one classify call per 20 s (Jev, Haiku only when Jev is unsure)
 MAX = 16
 RATE = 16000
-CHUNK_S, WINDOW_S, CLASSIFY_S, POST_S, WATCH_S = 15, 45, 20, 5, 15
+CHUNK_S, WINDOW_S, CLASSIFY_S, POST_S, WATCH_S = 8, 25, 10, 3, 15   # a break shows within ~10–20 s
 HLS_TTL, POOL_RECHECK_S, MAX_LAG_S = 20 * 60, 10 * 60, 40
 RECENT_S = 20   # "the last ~20 s": what the web asks Jev "is a break coming?" about (wall/onair.py preempts on it)
 QUIET_RMS = 120   # s16 RMS under this = silence (a bumper's dead air, a cut to black)
