@@ -528,11 +528,11 @@ async def wall_websocket(ws: WebSocket) -> None:
     await ws.accept()
     cid = next(h.cids)
     now = h.clock()
+    if h.wall is None:
+        await h.refresh_wall()   # before this socket joins the broadcast list: hello carries it
     new = h.presence.join(cid, user, now)
     h.socks[cid] = (ws, user)
     c = cfg()
-    if h.wall is None:
-        await h.refresh_wall()
     await h.send(ws, {"t": "hello", "me": {**user, "initials": initials(user["name"]), "admin": h.is_admin(user["id"]),
                                             "owner": h.is_owner(user["id"])},
                       "now": now * 1000, "history": list(h.chat.log), "viewers": h.viewers(),
