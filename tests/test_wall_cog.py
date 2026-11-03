@@ -42,7 +42,8 @@ def _interaction(uid, roles=()):
 
 
 @pytest.fixture
-def cog(monkeypatch):
+def cog(monkeypatch, tmp_path):
+    monkeypatch.setattr(w, "STATE_PATH", str(tmp_path / "wall_bot.json"))
     monkeypatch.setattr(w, "OWNER_ID", "1")
     monkeypatch.setattr(w, "PERMISSION", "roles")
     monkeypatch.setattr(w, "ROLE_IDS", {"7"})
@@ -126,8 +127,8 @@ def test_tile_index():
 def test_start_action():
     assert w.start_action("Live NFL", None, None, [], None, None) == {"op": "start", "preset": "Live NFL"}
     assert w.start_action(None, "nba", 2, [], "full", "nba") == {"op": "start", "urls": [], "live": "nba", "tiles": 2, "layout": "full", "board": "nba"}
-    with pytest.raises(ValueError):
-        w.start_action(None, None, None, [None], None, None)
+    assert w.start_action(None, None, None, [None], None, None) == {"op": "start", "mirror": True}
+    assert w.describe({"op": "start", "mirror": True}) == "start the wall: same as the TV"
 
 
 def test_set_actions():
@@ -226,3 +227,111 @@ async def test_link_message_suppresses_the_preview():
     msg = await w.link_message(WallWeb("https://s", "x", transport=httpx.MockTransport(ok)),
                                SimpleNamespace(id=5, display_name="K", name="k", avatar=None))
     assert "<https://s/api/v1/wall/login?t=abc>" in msg
+
+
+# ---- where a start's link goes (persisted) ----
+class Chan:
+    def __init__(self, cid, gid=1):
+        self.id, self.guild, self.sent = cid, SimpleNamespace(id=gid), []
+
+    async def send(self, content=None, embed=None, view=None):
+        m = SimpleNamespace(id=1000 + len(self.sent), channel=self, embed=embed, view=view)
+        self.sent.append(m)
+        return m
+
+    def get_partial_message(self, mid):
+        async def edit(**kw): pass
+        return SimpleNamespace(edit=edit)
+
+
+class StartSvc(FakeSvc):
+    def __init__(self):
+        super().__init__()
+        self.st = {"running": False}
+
+    async def apply(self, a):
+        self.applied.append(a)
+        if a["op"] == "start":
+            self.st = {"running": True, "started": 100.0 + len(self.applied), "name": "Mirroring the TV", "mirror": True,
+                       "capture": "screen", "urls": ["https://a.tv"], "origin": a.get("origin")}
+        return self.st
+
+    async def state(self): return self.st
+    async def presets(self): return [{"name": "Live NFL"}]
+    async def live(self, lg, n): return []
+
+
+@pytest.fixture
+def chans():
+    return {77: Chan(77), 88: Chan(88), 99: Chan(99, gid=2)}
+
+
+@pytest.fixture
+def scog(monkeypatch, tmp_path, chans):
+    monkeypatch.setattr(w, "OWNER_ID", "1")
+    monkeypatch.setattr(w, "PERMISSION", "anyone")
+    monkeypatch.setattr(w, "STATE_PATH", str(tmp_path / "wall_bot.json"))
+    monkeypatch.setattr(w, "CHANNEL_ID", "99")
+    return w.WallCog(bot=SimpleNamespace(get_channel=chans.get), service=StartSvc(), web=FakeWeb())
+
+
+def _in(uid, channel, guild=1):
+    user = SimpleNamespace(id=int(uid), display_name="U", name="u", avatar=None, roles=[])
+    return SimpleNamespace(user=user, guild_id=guild, channel_id=channel, channel=None)
+
+
+def test_announce_target():
+    assert w.announce_target({"origin": {"guild": "1", "channel": "5"}}, {"channel": "6"}, "7") == 5
+    assert w.announce_target({"origin": None}, {"guild": "1", "channel": "6"}, "7") == 6
+    assert w.announce_target({}, None, "7") == 7 and w.announce_target({}, None, "") is None
+
+
+async def test_owner_bare_start_posts_the_link_where_it_was_started(scog, chans, tmp_path):
+    msg = await scog.act(_in("1", 77), w.start_action(None, None, None, [None], None, None))
+    assert msg.startswith("Done") and scog.svc.applied == [{"op": "start", "mirror": True, "origin": {"guild": "1", "channel": "77"}}]
+    (m,) = chans[77].sent
+    text = json.dumps(m.embed.to_dict(), ensure_ascii=False)
+    assert "Mirroring the TV" in text and "https://x/wall" in text
+    assert any(getattr(c, "custom_id", "") == "wall:link" for c in m.view.children)   # Get my link
+    await scog.watch_loop()   # the same start: not posted twice
+    assert len(chans[77].sent) == 1
+    again = w.WallCog(bot=SimpleNamespace(get_channel=chans.get), service=scog.svc, web=FakeWeb())   # a bot restart
+    assert again.embeds == {1: (77, m.id)} and again.announced == scog.announced and again.last["channel"] == "77"
+
+
+async def test_a_vote_that_passed_posts_in_the_proposers_channel(scog, chans):
+    msg = await scog.act(_in("5", 88), {"op": "start", "mirror": True})
+    assert msg.startswith("Proposed") and scog.web.proposed[0][1]["origin"] == {"guild": "1", "channel": "88"}
+    # the vote passes on the page; sharplab-web starts the wall with that origin
+    await scog.svc.apply(scog.web.proposed[0][1])
+    await scog.watch_loop()
+    assert len(chans[88].sent) == 1 and not chans[77].sent
+
+
+async def test_a_start_from_the_web_page_goes_to_the_last_channel_else_the_default(scog, chans):
+    await scog.svc.apply({"op": "start", "preset": "Live NFL"})   # no origin, no channel used yet: WALL_CHANNEL_ID
+    await scog.watch_loop()
+    assert len(chans[99].sent) == 1
+    await scog.act(_in("1", 77), {"op": "stop"})                 # /wall used in 77 since
+    await scog.svc.apply({"op": "start", "preset": "Live NFL"})
+    await scog.watch_loop()
+    assert len(chans[77].sent) == 1
+
+
+async def test_panel_view_is_persistent_and_offers_same_as_the_tv(scog):
+    v = w.PanelView(scog, [], [], persistent=True)
+    assert v.is_persistent()
+    preset = next(c for c in v.children if getattr(c, "custom_id", "") == "wall:preset")
+    assert preset.options[0].value == w.TV_CHOICE and {c.custom_id for c in v.children} >= {"wall:follow", "wall:link", "wall:game"}
+    assert w.describe({"op": "follow"}) == "follow the TV again"
+
+
+async def test_service_follow_path():
+    seen, t = _recorder()
+    await WallService("http://h", "t", transport=t).apply({"op": "follow"})
+    assert seen[0][:2] == ("POST", "http://h/i/discord/follow")
+
+
+def test_the_posted_link_is_sharplab_webs_keyed_one_in_demo_mode(scog):
+    assert scog.watch_url({"watch_url": "https://s/wall.html?k=abc"}) == "https://s/wall.html?k=abc"
+    assert scog.watch_url({"watch_url": "javascript:x"}) == "https://x/wall" and scog.watch_url(None) == "https://x/wall"

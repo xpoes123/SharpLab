@@ -1,6 +1,10 @@
 """One wall instance ("tv" on the real display, "discord" headless): which tiles are up, which has the sound, the live
 run (if a live preset is playing), the service-owned overlay state, and for headless instances the capture + idle
-auto-stop. Every change bumps `rev`, so clients poll GET /i/<name> cheaply."""
+auto-stop. Every change bumps `rev`, so clients poll GET /i/<name> cheaply.
+
+Mirroring: a headless instance started from the TV's wall follows it (`follow`): every TV change (tiles, sound, layout,
+board) is copied on the next tick. Any other edit stops the following; follow_source() brings it back. A TV tile the
+discord wall may not stream (`vet` refuses it) is left out, with a notice."""
 from __future__ import annotations
 
 import logging
@@ -23,7 +27,8 @@ class WallError(Exception):
 class Instance:
     def __init__(self, name: str, session: Session, store: PresetStore, scores: Scores, *, headless: Headless | None = None,
                  driver: Driver | None = None, check=carries, run=None, clock=time.time, idle_s: float = 600,
-                 first_viewer_s: float = 900, max_hours: float = 6, min_free_mb: int = 0, vram=free_vram_mb) -> None:
+                 first_viewer_s: float = 900, max_hours: float = 6, min_free_mb: int = 0, vram=free_vram_mb,
+                 max_load: float = 16, min_avail_mb: int = 3072, sysload=None) -> None:
         self.name, self.session, self.store, self.scores = name, session, store, scores
         self.headless = headless
         self.driver = driver or Driver(session)
@@ -32,6 +37,9 @@ class Instance:
         self.clock = clock
         self.idle_s, self.first_viewer_s, self.max_s = idle_s, first_viewer_s, max_hours * 3600
         self.min_free_mb, self.vram = min_free_mb, vram
+        self.max_load, self.min_avail_mb, self.sysload = max_load, min_avail_mb, sysload or system_load
+        self._over_since = 0.0
+        self.before_start = lambda: None   # e.g. the LLM guard parking Ollama's models
         self.lock = threading.RLock()
         self.urls: list[str] = []
         self.live: LiveRun | None = None
@@ -43,6 +51,21 @@ class Instance:
         self.last_fetch = 0.0
         self.error = ""
         self.stopped_why = ""
+        # mirroring (headless): the instance followed, its last copied rev, a page vetter, the TV router's board
+        self.source: Instance | None = None
+        self.vet = None                         # url → url, ValueError when it may not be streamed
+        self.source_board = lambda: ""          # the source's board id when its overlay lives outside this service
+        self.follow = False
+        self.src_rev = -1
+        self._src_ov: tuple[int, str] = (-1, "")
+        self._vetted: dict[str, str] = {}       # url → "" (ok) or why not
+        self._refused: tuple[str, ...] = ()
+        self.notice: dict | None = None         # {"id", "text", "at"}: something viewers should be told
+        self.origin: dict | None = None         # where the start came from ({"guild", "channel"}), for the bot
+        self.capture_output = ""                # the TV's output to stream in mirror mode ("" = copy with tiles)
+        self.screen_sink = ""                   # whose sound goes with it ("" = the TV's default sink)
+        self.tv_on_wall = lambda: True          # is the TV showing its wall right now?
+        self._tv_wall, self._wall_at, self._screen_retry = False, 0.0, 0.0
 
     # ---- state -------------------------------------------------------------------------------------------------------
     def _bump(self) -> None:
@@ -64,14 +87,18 @@ class Instance:
             out = {"inst": self.name, "running": bool(self.urls), "name": self.preset_name, "preset": self.preset,
                    "urls": list(self.urls), "sound": self.driver.sound, "rev": self.rev, "live": live,
                    "overlay": {"board": self.board, "visible": self.visible, "layout": self.layout, "view": self.view},
-                   "started": self.started, "error": self.error, "stopped": self.stopped_why}
+                   "started": self.started, "error": self.error, "stopped": self.stopped_why,
+                   "mirror": self.follow, "notice": self.notice, "origin": self.origin}
+            if self.headless:
+                out["capture"] = "screen" if self.screen else "tiles" if self.urls else ""
             if self.headless:
                 out["stream"] = {"hls": f"/hls/{self.name}/index.m3u8", "up": self.headless.up, "last_fetch": self.last_fetch}
             return out
 
     # ---- start / stop --------------------------------------------------------------------------------------------------
     def start(self, preset: int | str | None = None, urls: list[str] | None = None, live: str = "", tiles: int = 4,
-              board: str | None = None, layout: str | None = None, sound: int = 0) -> dict:
+              board: str | None = None, layout: str | None = None, sound: int = 0, follow: bool = False,
+              origin: dict | None = None) -> dict:
         p = self.store.find(preset) if preset is not None else None
         if preset is not None and p is None:
             raise WallError(f"no preset {preset!r}")
@@ -98,6 +125,8 @@ class Instance:
         with self.lock:
             self._stop_locked("")
             if self.headless:
+                self._guard()
+                self.before_start()
                 free = self.vram()
                 if free is not None and free < self.min_free_mb:
                     raise WallError(f"GPU busy: {free} MB free, the headless wall wants {self.min_free_mb}")
@@ -111,6 +140,7 @@ class Instance:
             self.preset_name = p["name"] if p else ("Live " + LEAGUES[live] if live else "Custom")
             self.preset = self.store.presets.index(p) if p else -1
             self.started, self.last_fetch, self.error, self.stopped_why = self.clock(), 0.0, "", ""
+            self.follow, self.origin = follow, origin
             self.driver.start(urls)
             self.driver.sound = max(0, min(sound, len(urls) - 1))
             if self.headless:
@@ -138,6 +168,7 @@ class Instance:
         self.urls, self.live = [], None
         self.preset_name, self.preset = "", -1
         self.board, self.visible, self.matchup, self.view = "", False, "", ""
+        self.follow, self.src_rev, self._refused = False, -1, ()
         self.ov_rev += 1
         if was:
             self.stopped_why = why
@@ -148,10 +179,21 @@ class Instance:
         if not self.urls:
             raise WallError("the wall isn't running")
 
+    def _unfollow(self) -> None:
+        """A change made on this wall itself: it stops copying the TV (until follow_source)."""
+        if self.follow:
+            self.follow = False
+            self._say("No longer mirroring the TV (this wall was changed) — “Follow the TV” brings it back.")
+
+    def _say(self, text: str) -> None:
+        n = (self.notice or {}).get("id", 0) + 1
+        self.notice = {"id": n, "text": text, "at": self.clock()}
+
     def set_tile(self, i: int, url: str) -> dict:
         url = check_url(url)
         with self.lock:
             self._need()
+            self._own()
             if 0 <= i < len(self.urls):
                 self.urls[i] = url
                 self.driver.set_tile(i, url)
@@ -168,6 +210,7 @@ class Instance:
     def remove_tile(self, i: int) -> dict:
         with self.lock:
             self._need()
+            self._own()
             if not 0 <= i < len(self.urls) or len(self.urls) < 2:
                 raise WallError("can't remove that tile")
             del self.urls[i]
@@ -180,6 +223,7 @@ class Instance:
     def move(self, i: int, j: int) -> dict:
         with self.lock:
             self._need()
+            self._own()
             if not (0 <= i < len(self.urls) and 0 <= j < len(self.urls)):
                 raise WallError("tile index out of range")
             if i != j:
@@ -195,6 +239,7 @@ class Instance:
     def sound(self, i: int) -> dict:
         with self.lock:
             self._need()
+            self._own()
             if not 0 <= i < len(self.urls):
                 raise WallError("tile index out of range")
             self.driver.focus(i)
@@ -204,6 +249,7 @@ class Instance:
     def pin(self, i: int) -> dict:
         with self.lock:
             self._need()
+            self._own()
             if not (self.live and i < len(self.live.games) and self.live.games[i] is not None):
                 raise WallError("only a live game's tile can be pinned")
             self.live.pinned ^= {i}
@@ -215,12 +261,15 @@ class Instance:
         """Low level (tv): the overlay's state lives in the client; just run the process and tile for the L-bar."""
         with self.lock:
             self.view = view if view in ("lbar", "full", "matchup") else ""
+            self.ov_rev += 1   # a mirror re-reads the board on this
             self.driver.overlay(self.view, lbar=lbar)
             self._bump()
             return self.state()
 
     def set_board(self, board: str | None = None, visible: bool | None = None, layout: str | None = None) -> dict:
         with self.lock:
+            if self.urls:
+                self._own()
             self._set_board(board, visible, layout)
             self._bump()
             return self.state()
@@ -255,12 +304,270 @@ class Instance:
                 "rev": self.ov_rev, "boards": [{"id": k, "name": v} for k, v in BOARDS.items()], "shown": b,
                 "data": data, "updated": self.clock() if data else 0, "error": "" if data else "no scoreboard yet"}
 
+    # ---- mirroring the TV (headless) -------------------------------------------------------------------------------------------
+    def _snapshot(self, src: "Instance") -> dict:
+        """What the source shows now: tiles, sound and its overlay as (board, visible, layout)."""
+        with src.lock:
+            snap = {"rev": src.rev, "urls": list(src.urls), "sound": src.driver.sound, "ov_rev": src.ov_rev, "view": src.view,
+                    "board": src.board, "visible": src.visible, "layout": src.layout}
+        if snap["board"]:   # a service-owned overlay (started with a board here)
+            snap["overlay"] = (snap["board"], snap["visible"], snap["layout"])
+        elif snap["view"] in ("lbar", "full"):   # the TV router owns it: ask it which board, once per overlay change
+            if self._src_ov[0] != snap["ov_rev"]:
+                try:
+                    b = self.source_board() or ""
+                except Exception as e:  # noqa: BLE001 — no board beats no mirror
+                    log.warning("%s: the TV's board: %s", self.name, e)
+                    b = ""
+                self._src_ov = (snap["ov_rev"], b)
+            b = self._src_ov[1]
+            snap["overlay"] = (b, True, snap["view"]) if b in BOARDS else ("", False, snap["view"])
+        else:
+            snap["overlay"] = ("", False, snap["layout"] or "lbar")
+        return snap
+
+    def _screen(self, urls: list[str], sound: int) -> tuple[list[str], int, list[str]]:
+        """The source's tiles this wall may stream, the sound's index among them, and the refused ones (with why)."""
+        keep, refused = [], []
+        for u in urls:
+            if self.vet is not None and u not in self._vetted:
+                try:
+                    self.vet(u)
+                    self._vetted[u] = ""
+                except ValueError as e:
+                    self._vetted[u] = str(e) or "refused"
+            why = self._vetted.get(u, "")
+            (refused.append(f"{u[:80]} ({why})") if why else keep.append(u))
+        idx = [k for k, u in enumerate(urls) if not self._vetted.get(u)]
+        return keep, idx.index(sound) if sound in idx else 0, refused
+
+    @property
+    def screen(self) -> bool:
+        """Streaming the TV's real output (no tiles of our own)."""
+        return bool(self.headless and getattr(self.headless, "mode", "") == "screen")
+
+    def _on_wall(self) -> bool:
+        """Is the TV showing its wall (checked at most every 3 s; the TV router's /healthz)? Never stream another TV app."""
+        now = self.clock()
+        if now >= self._wall_at:
+            self._wall_at = now + 3
+            try:
+                self._tv_wall = bool(self.tv_on_wall())
+            except Exception:  # noqa: BLE001
+                self._tv_wall = False
+        return self._tv_wall
+
+    def mirror_plan(self) -> dict:
+        """What copying the source now means: its tiles this wall may stream (refused ones left out), sound, overlay."""
+        src = self.source
+        if src is None or not src.urls:
+            raise WallError("the TV's wall isn't on")
+        snap = self._snapshot(src)
+        keep, sound, refused = self._screen(snap["urls"], snap["sound"])
+        return {"rev": snap["rev"], "urls": keep, "sound": sound, "overlay": snap["overlay"], "refused": refused}
+
+    def start_mirror(self, origin: dict | None = None) -> dict:
+        """Stream the TV's wall and follow it: its real screen when every tile may be streamed (and a capture output is
+        set), else tiles of our own copying it, minus the refused pages (with a notice)."""
+        plan = self.mirror_plan()
+        self._wall_at = 0.0
+        on_wall = self._on_wall() if self.capture_output else False
+        with self.lock:
+            if not plan["urls"]:
+                raise WallError("none of the TV's tiles can be streamed: " + "; ".join(plan["refused"])[:200])
+            if on_wall and not plan["refused"]:
+                self._start_screen(plan["urls"], plan["sound"], plan["overlay"], origin)
+            else:
+                self._start_tiles(plan["urls"], plan["sound"], plan["overlay"], origin)
+            self.src_rev = plan["rev"]
+            self._note_refused(plan["refused"])
+            return self.state()
+
+    def _start_tiles(self, urls, sound, overlay, origin) -> None:
+        board, visible, layout = overlay
+        keep = (self.started, self.last_fetch) if self.urls else None   # a switch, not a new start: same session
+        self.start(urls=urls, sound=sound, board=board if visible else "", layout=layout, follow=True, origin=origin)
+        self.preset_name = "Mirroring the TV"
+        if keep:
+            self.started, self.last_fetch = keep
+
+    def _start_screen(self, urls, sound, overlay, origin) -> None:
+        """Capture the TV's output instead of running tiles. Falls back to tiles (and retries a minute later)."""
+        with self.lock:
+            keep = (self.started, self.last_fetch) if self.urls else None   # a switch, not a new start: same session
+            self._stop_locked("")
+            self._guard()
+            self.before_start()
+            try:
+                self.headless.capture_screen(self.capture_output, self.screen_sink)
+            except Exception as e:  # noqa: BLE001
+                log.warning("%s: screen capture failed (%s), running tiles instead", self.name, e)
+                self._screen_retry = self.clock() + 60
+                self._start_tiles(urls, sound, overlay, origin)
+                if keep:
+                    self.started, self.last_fetch = keep
+                self.error = f"screen capture: {e}"
+                return
+            self.urls, self.live = list(urls), None
+            self.preset_name, self.preset = "Mirroring the TV", -1
+            (self.started, self.last_fetch), self.error, self.stopped_why = keep or (self.clock(), 0.0), "", ""
+            self.follow, self.origin = True, origin
+            self._copy_state(urls, sound, *overlay)
+            self._bump()
+
+    def _leave_screen(self, why: str) -> None:
+        """The TV left its wall: keep the last tiles up as our own while someone watches, else stop."""
+        with self.lock:
+            if not self.screen:
+                return
+            if self.last_fetch and self.clock() - self.last_fetch < 90:
+                board = self.board if self.visible else ""
+                self._start_tiles(list(self.urls), self.driver.sound, (board, self.visible, self.layout), self.origin)
+                self._say(f"{why} — the stream keeps its last tiles.")
+            else:
+                self._stop_locked(why)
+
+    def _own(self) -> None:
+        """Before a change made on this wall itself: stop following, and if it was the TV's screen, run our own tiles."""
+        self._unfollow()
+        if self.screen:
+            board = self.board if self.visible else ""
+            started, fetch = self.started, self.last_fetch
+            self.start(urls=list(self.urls), sound=self.driver.sound, board=board, layout=self.layout, origin=self.origin)
+            self.started, self.last_fetch = started, fetch
+
+    def follow_source(self) -> dict:
+        """Mirror the TV again (after a change here stopped it): copies it now and keeps following."""
+        with self.lock:
+            self._need()
+            if self.source is None:
+                raise WallError("there's no TV wall to follow")
+            self.follow, self.src_rev, self._wall_at, self._screen_retry = True, -1, 0.0, 0.0
+            self._say("Mirroring the TV again.")
+        self.mirror_tick()
+        with self.lock:
+            self._bump()
+            return self.state()
+
+    def _note_refused(self, refused: list[str]) -> None:
+        if tuple(refused) != self._refused:
+            self._refused = tuple(refused)
+            if refused:
+                self._say("Skipped on the stream (can't be shown to viewers): " + "; ".join(refused))
+
+    def mirror_tick(self) -> None:
+        """Follow the source: copy its latest change; switch between its real screen and our own tiles as needed (the TV
+        leaving its wall or stopping leaves the last tiles up)."""
+        src = self.source
+        if not (self.follow and src and self.urls):
+            return
+        on_wall = self._on_wall() if self.capture_output else False
+        if self.screen and (not on_wall or not src.urls):
+            self._leave_screen("The TV left the wall" if not on_wall else "The TV's wall stopped")
+            return
+        want_screen = bool(self.capture_output and on_wall and src.urls and not self.screen and not self._refused
+                           and self.clock() >= self._screen_retry)
+        if src.rev == self.src_rev and not want_screen:
+            return
+        snap = self._snapshot(src)
+        if not snap["urls"]:
+            self.src_rev = snap["rev"]
+            return
+        keep, sound, refused = self._screen(snap["urls"], snap["sound"])
+        with self.lock:
+            if not (self.follow and self.urls):
+                return
+            self.src_rev = snap["rev"]
+            self._note_refused(refused)
+            can_screen = bool(self.capture_output and on_wall and not refused)
+            if self.screen and not can_screen:   # a page we may not stream came up on the TV: our own tiles, without it
+                if keep:
+                    self._start_tiles(keep, sound, snap["overlay"], self.origin)
+                else:
+                    self._stop_locked("nothing on the TV can be streamed")
+                return
+            if can_screen and not self.screen and self.clock() >= self._screen_retry:
+                self._start_screen(keep, sound, snap["overlay"], self.origin)
+                return
+            if not keep:
+                return
+            changed = self._copy_state(keep, sound, *snap["overlay"]) if self.screen else self._copy(keep, sound, *snap["overlay"])
+            if changed or refused:
+                self._bump()
+
+    def _copy_state(self, urls: list[str], sound: int, board: str, visible: bool, layout: str) -> bool:
+        """Screen mode: the picture is the TV's own; only keep the state (what's on, sound, overlay) in step."""
+        before = (list(self.urls), self.driver.sound, self.board, self.visible, self.layout)
+        self.urls, self.driver.sound = list(urls), max(0, min(sound, len(urls) - 1))
+        self.board, self.visible, self.layout = (board if visible else ""), visible, layout
+        self.view = layout if visible else ""
+        return before != (list(self.urls), self.driver.sound, self.board, self.visible, self.layout)
+
+    # ---- resource guard (headless) ------------------------------------------------------------------------------------------
+    def _guard(self) -> None:
+        if not self.headless:
+            return
+        load, avail = self.sysload()
+        if load is not None and load > self.max_load:
+            log.warning("%s refused: load %.1f > %.1f", self.name, load, self.max_load)
+            raise WallError(f"the box is busy (load {load:.1f}) — try again in a minute")
+        if avail is not None and avail < self.min_avail_mb:
+            log.warning("%s refused: %d MB available < %d", self.name, avail, self.min_avail_mb)
+            raise WallError(f"the box is low on memory ({avail} MB free) — try again later")
+
+    def _overloaded(self, now: float) -> str:
+        """Why to auto-stop: load or memory past the limits for 30 s straight ("" = fine)."""
+        load, avail = self.sysload()
+        bad = (f"load {load:.1f}" if load is not None and load > self.max_load else
+               f"{avail} MB memory available" if avail is not None and avail < self.min_avail_mb else "")
+        if not bad:
+            self._over_since = 0.0
+            return ""
+        self._over_since = self._over_since or now
+        return bad if now - self._over_since >= 30 else ""
+
+    def _copy(self, urls: list[str], sound: int, board: str, visible: bool, layout: str) -> bool:
+        """Make this wall's tiles / sound / overlay equal the given ones with the fewest relaunches."""
+        changed = False
+        if urls != self.urls and len(urls) == len(self.urls) and sorted(urls) == sorted(self.urls):   # a reorder: move, don't reload
+            for j, u in enumerate(urls):
+                i = self.urls.index(u, j)
+                if i != j:
+                    self.urls.insert(j, self.urls.pop(i))
+                    self.driver.move_tile(i, j)
+            changed = True
+        for k, u in enumerate(urls):
+            if k < len(self.urls):
+                if self.urls[k] != u:
+                    self.urls[k] = u
+                    self.driver.set_tile(k, u)
+                    changed = True
+            else:
+                self.urls.append(u)
+                self.driver.add_tile(u)
+                changed = True
+        while len(self.urls) > len(urls):
+            self.driver.remove_tile(len(self.urls) - 1)
+            self.urls.pop()
+            changed = True
+        if self.driver.sound != sound or changed:
+            changed = changed or self.driver.sound != sound
+            self.driver.focus(max(0, min(sound, len(self.urls) - 1)))
+        if (self.board if self.visible else "", self.visible, self.layout) != (board if visible else "", visible, layout):
+            self._set_board(board if visible else "", visible, layout)
+            changed = True
+        return changed
+
     # ---- the background tick (1 Hz from the server) -------------------------------------------------------------------------
     def seen(self) -> None:
         """A playlist fetch = someone is watching."""
         self.last_fetch = self.clock()
 
     def tick(self) -> None:
+        try:
+            self.mirror_tick()
+        except Exception as e:  # noqa: BLE001 — a bad copy leaves the wall as it is
+            log.warning("%s mirror: %s", self.name, e)
         with self.lock:
             if not self.urls:
                 return
@@ -269,6 +576,8 @@ class Instance:
                 idle_since = self.last_fetch or self.started
                 limit = self.idle_s if self.last_fetch else self.first_viewer_s
                 why = "nobody watching" if now - idle_since > limit else f"ran {self.max_s / 3600:g} h" if now - self.started > self.max_s else ""
+                over = self._overloaded(now)
+                why = why or (f"the box is overloaded ({over})" if over else "")
                 if why:
                     log.info("%s auto-stop: %s", self.name, why)
                     self._stop_locked(f"auto-stopped: {why}")
@@ -319,6 +628,21 @@ class Instance:
                 lv.remove(i)
                 changed = True
         return changed
+
+
+def system_load() -> tuple[float | None, int | None]:
+    """(1-min load average, MemAvailable in MB); None where unknown."""
+    import os
+    try:
+        load = os.getloadavg()[0]
+    except OSError:
+        load = None
+    try:
+        with open("/proc/meminfo") as f:
+            avail = next(int(line.split()[1]) // 1024 for line in f if line.startswith("MemAvailable:"))
+    except (OSError, StopIteration, ValueError):
+        avail = None
+    return load, avail
 
 
 def summary(st: dict) -> str:

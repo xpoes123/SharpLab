@@ -56,6 +56,8 @@ def cfg() -> dict:
         "sound_approvals": max(1, int(e("WALL_SOUND_APPROVALS", "2"))),
         "vote_s": float(e("WALL_VOTE_S", "60")),
         "notices": e("WALL_JOIN_NOTICES", "0") == "1",
+        # demo mode: anyone with the keyed link (/wall.html?k=WALL_DEMO_KEY) may watch under a nickname
+        "demo_key": e("WALL_DEMO_KEY", "") if e("WALL_DEMO", "0") == "1" and len(e("WALL_DEMO_KEY", "")) >= 16 else "",
     }
 
 
@@ -91,7 +93,8 @@ class Presence:
     def join(self, cid: int, user: dict, now: float) -> bool:
         """True when this user wasn't watching before."""
         new = not any(c.uid == user["id"] for c in self.conns.values())
-        self.users[user["id"]] = {"id": user["id"], "name": user.get("name") or "Player", "avatar": user.get("avatar")}
+        self.users[user["id"]] = {"id": user["id"], "name": user.get("name") or "Player", "avatar": user.get("avatar"),
+                                  "guest": bool(user.get("guest"))}
         self.conns[cid] = Conn(user["id"], False, now)
         return new
 
@@ -147,7 +150,7 @@ class Chat:
             return None, "Slow down a little."
         q.append(now)
         return self.add({"kind": "chat", "uid": user["id"], "name": user.get("name") or "Player",
-                         "avatar": user.get("avatar"), "text": t}, now), ""
+                         "avatar": user.get("avatar"), "guest": bool(user.get("guest")), "text": t}, now), ""
 
     def add(self, msg: dict, now: float) -> dict:
         m = {"id": next(self.ids), "ts": now, **msg}
@@ -184,25 +187,40 @@ def _tile(i: object, top: int = 3) -> int:
     return i
 
 
+def _origin(o: object) -> dict:
+    """{"origin": {"guild", "channel"}} when a start came from a Discord channel (the bot posts the link there)."""
+    if not isinstance(o, dict):
+        return {}
+    out = {k: str(o[k]) for k in ("guild", "channel") if isinstance(o.get(k), (str, int)) and not isinstance(o.get(k), bool)
+           and str(o[k]).isdigit() and len(str(o[k])) <= 20}
+    return {"origin": out} if "channel" in out else {}
+
+
 def check_action(a: object) -> dict:
-    """A proposal's action, validated (ValueError otherwise): {"op": start|stop|tile|remove|board|sound|layout, …the wall
-    service's body for that call}. Only what the service's control API can do."""
+    """A proposal's action, validated (ValueError otherwise): {"op": start|stop|tile|remove|board|sound|layout|follow, …the
+    wall service's body for that call}. Only what the service's control API can do. {"op": "start", "mirror": true} =
+    stream the TV's wall and follow it; "follow" = follow the TV again."""
     if not isinstance(a, dict):
         raise ValueError("bad action")
     op = a.get("op")
     label = {"label": clean_text(a["label"], 80)} if isinstance(a.get("label"), str) and a["label"].strip() else {}
     if op == "stop":
         return {"op": "stop"}
+    if op == "follow":
+        return {"op": "follow"}
     if op == "start":
+        origin = _origin(a.get("origin"))
+        if a.get("mirror") is True:
+            return {"op": "start", "mirror": True, **origin}
         p = a.get("preset")
         if p is not None:
             if isinstance(p, bool) or not (isinstance(p, int) and 0 <= p < 100 or isinstance(p, str) and 0 < len(p) <= 40):
                 raise ValueError("start needs a preset")
-            return {"op": "start", "preset": p, **label}
+            return {"op": "start", "preset": p, **label, **origin}
         urls = a.get("urls") or []
         live = a.get("live") or ""
         if not isinstance(urls, list) or len(urls) > 4 or live not in ("", "nfl", "nba") or not (urls or live):
-            raise ValueError("start needs a preset, 1–4 URLs or live games")
+            raise ValueError("start needs a preset, 1–4 URLs, live games, or mirror (same as the TV)")
         out = {"op": "start", "urls": [_url(u) for u in urls]}
         if live:
             out["live"] = live
@@ -214,7 +232,7 @@ def check_action(a: object) -> dict:
             out["layout"] = a["layout"]
         if isinstance(a.get("sound"), int) and not isinstance(a["sound"], bool):
             out["sound"] = _tile(a["sound"])
-        return {**out, **label}
+        return {**out, **label, **origin}
     if op == "sound":
         return {"op": "sound", "i": _tile(a.get("i")), **label}
     if op == "remove":
@@ -248,12 +266,16 @@ def check_action(a: object) -> dict:
 def describe(a: dict) -> str:
     op = a["op"]
     if op == "start":
+        if a.get("mirror"):
+            return "start the wall: same as the TV"
         if "preset" in a:
             return f"start {a.get('label') or (a['preset'] if isinstance(a['preset'], str) else 'preset #' + str(a['preset'] + 1))}"
         what = f"live {a['live'].upper()} games" if a.get("live") else f"{len(a['urls'])} tiles"
         return f"start {a.get('label') or what}"
     if op == "stop":
         return "stop the wall"
+    if op == "follow":
+        return "follow the TV again"
     if op == "tile":
         return f"put {a.get('label') or a['url']} on tile {a['i'] + 1}"
     if op == "remove":
@@ -387,6 +409,103 @@ def redeem_link(token: str, now: float | None = None) -> dict | None:
     return data
 
 
+# ---- demo mode: guests with the keyed link pick a nickname ------------------------------------------------------------
+GUEST_COOKIE = "sharplab_wall_guest"
+GUEST_TTL = 24 * 3600
+GUEST_OPS = {"start", "stop", "tile"}   # what a guest may not propose: no starting/stopping, no arbitrary pages on stream
+_guest_signer = URLSafeTimedSerializer(auth.SESSION_SECRET, salt="sharplab-wall-guest")
+_NICK = re.compile(r"^[\w .'-]{2,24}$")
+
+
+def key_ok(k: object) -> bool:
+    dk = cfg()["demo_key"]
+    return bool(dk) and isinstance(k, str) and secrets.compare_digest(k.encode(), dk.encode())
+
+
+def _key_tag() -> str:
+    """Guest cookies are bound to the current key: rotating WALL_DEMO_KEY (or demo off) ends every guest session."""
+    import hashlib
+    return hashlib.sha256(cfg()["demo_key"].encode()).hexdigest()[:16]
+
+
+def clean_nick(name: object) -> str:
+    n = clean_text(name, 40)
+    if not _NICK.match(n) or not n.strip(" .'-"):
+        raise ValueError("A nickname is 2–24 letters, digits, spaces, . ' - or _.")
+    return n
+
+
+def unique_name(name: str, taken: set[str]) -> str:
+    """name, or name (guest), or name (guest 2)… — whatever nobody watching is called (case-insensitive)."""
+    low = {t.lower() for t in taken}
+    if name.lower() not in low:
+        return name
+    for k in range(1, 100):
+        cand = f"{name} (guest{'' if k == 1 else f' {k}'})"
+        if cand.lower() not in low:
+            return cand
+    return f"{name} ({secrets.token_hex(2)})"
+
+
+def make_guest_cookie(name: str) -> tuple[str, dict]:
+    g = {"id": "g-" + secrets.token_hex(6), "name": name, "k": _key_tag()}
+    return _guest_signer.dumps(g), g
+
+
+def read_guest(conn) -> dict | None:
+    if not cfg()["demo_key"]:
+        return None
+    raw = conn.cookies.get(GUEST_COOKIE)
+    if not raw:
+        return None
+    try:
+        g = _guest_signer.loads(raw, max_age=GUEST_TTL)
+    except (BadSignature, SignatureExpired):
+        return None
+    if not isinstance(g, dict) or g.get("k") != _key_tag() or not str(g.get("id", "")).startswith("g-"):
+        return None
+    return {"id": g["id"], "name": g.get("name") or "Guest", "avatar": None, "guest": True}
+
+
+def viewer(conn) -> dict | None:
+    """A logged-in member (SharpLab session), else in demo mode a guest with a nickname cookie."""
+    return session_user(auth.read_session(conn)) or read_guest(conn)
+
+
+def client_ip(conn) -> str:
+    """Behind Caddy (it sets X-Forwarded-For), like the other endpoints."""
+    fwd = conn.headers.get("x-forwarded-for", "")
+    return fwd.split(",")[0].strip() if fwd else (conn.client.host if conn.client else "")
+
+
+class RateLimit:
+    """At most n events per window seconds per key."""
+
+    def __init__(self, n: int, window: float) -> None:
+        self.n, self.window, self.hits = n, window, {}
+
+    def allow(self, key: str, now: float) -> bool:
+        q = [t for t in self.hits.get(key, []) if now - t < self.window]
+        if len(q) >= self.n:
+            self.hits[key] = q
+            return False
+        q.append(now)
+        self.hits[key] = q
+        if len(self.hits) > 5000:   # bounded: drop the stalest keys
+            for k in sorted(self.hits, key=lambda k: self.hits[k][-1] if self.hits[k] else 0)[:1000]:
+                self.hits.pop(k, None)
+        return True
+
+
+guest_joins = RateLimit(10, 60)    # guest socket connects per IP
+guest_names = RateLimit(5, 300)    # nicknames picked per IP
+
+
+def watch_url() -> str:
+    k = cfg()["demo_key"]
+    return f"{auth.WEB_BASE_URL}{PAGE}" + (f"?k={k}" if k else "")
+
+
 # ---- the wall service (homelab, over Tailscale) ----------------------------------------------------------------------
 def _route(a: dict) -> tuple[str, str, dict]:
     """(method, path, body) on the wall service."""
@@ -396,6 +515,8 @@ def _route(a: dict) -> tuple[str, str, dict]:
         return "POST", "/i/discord/start", body
     if op == "stop":
         return "POST", "/i/discord/stop", {}
+    if op == "follow":
+        return "POST", "/i/discord/follow", {}
     if op == "tile":
         return "POST", "/i/discord/tile", body
     if op == "remove":
@@ -507,6 +628,7 @@ class Hub:
         self.cids = itertools.count(1)
         self.wall: dict | None = None
         self._viewers_sig: tuple = ()
+        self._seen_notice = False
         self.edge = EdgeClock()
         self._ticker: asyncio.Task | None = None
 
@@ -560,6 +682,8 @@ class Hub:
         now = self.clock()
         if self.chat.is_muted(user["id"], now):
             return None, "You're muted for now."
+        if user.get("guest") and a["op"] in GUEST_OPS:
+            return None, "Guests can vote, chat and change the sound / layout / board — starting, stopping and new pages need a SharpLab login."
         owner = self.is_owner(user["id"])
         p, err = self.votes.propose(user, a, now, cfg()["vote_s"], owner=owner)
         if not p:
@@ -606,8 +730,13 @@ class Hub:
     async def refresh_wall(self) -> None:
         st = await self.fetch_state()
         if st is not None and st != self.wall:
+            old = (self.wall or {}).get("notice") or {}
+            note = st.get("notice") or {}
             self.wall = st
             await self.broadcast({"t": "wall", "state": st})
+            if self._seen_notice and note.get("text") and (note.get("id"), note.get("at")) != (old.get("id"), old.get("at")):
+                await self.say(note["text"])   # "No longer mirroring the TV", "Skipped on the stream: …"
+            self._seen_notice = True   # the first state we see: its old notice isn't news
 
     # -- periodic: expiry, away, wall state
     async def tick(self) -> None:
@@ -636,7 +765,7 @@ class Hub:
         active = self.presence.active(now)
         return {"viewers": self.viewers(), "active": len(active), "watching": len(self.presence.watching()),
                 "proposals": [self.bot_pub(p) for p in self.votes.open()], "wall": self.wall,
-                "watch_url": f"{auth.WEB_BASE_URL}{PAGE}"}
+                "watch_url": watch_url()}
 
 
 hub = Hub()
@@ -666,11 +795,17 @@ async def wall_websocket(ws: WebSocket) -> None:
     if not origin_ok(ws.headers.get("origin")):
         await ws.close(code=4403, reason="bad origin")
         return
-    user = session_user(auth.read_session(ws))
+    user = viewer(ws)
     if not user:
         await ws.close(code=4401, reason="Log in to SharpLab first")
         return
     h = hub
+    if user.get("guest"):
+        if not guest_joins.allow(client_ip(ws), h.clock()):
+            await ws.close(code=4429, reason="Too many connects — wait a minute")
+            return
+        others = {u["name"] for uid, u in h.presence.users.items() if uid != user["id"] and uid in h.presence.watching()}
+        user = {**user, "name": unique_name(user["name"], others)}
     await ws.accept()
     cid = next(h.cids)
     now = h.clock()
@@ -680,6 +815,7 @@ async def wall_websocket(ws: WebSocket) -> None:
     h.socks[cid] = (ws, user)
     c = cfg()
     await h.send(ws, {"t": "hello", "me": {**user, "initials": initials(user["name"]), "admin": h.is_admin(user["id"]),
+                                            "guest": bool(user.get("guest")),
                                             "owner": h.is_owner(user["id"])},
                       "now": now * 1000, "pdt_off": h.edge.off, "history": list(h.chat.log), "viewers": h.viewers(),
                       "proposals": [h.pub(p) for p in h.votes.open()], "wall": h.wall,
@@ -754,11 +890,35 @@ def _need_key(x_api_key: str) -> None:
 
 
 @router.get("/me")
-async def me(request: Request):
-    user = session_user(auth.read_session(request))
+async def me(request: Request, k: str = ""):
+    user = viewer(request)
     if not user:
-        return JSONResponse({"authenticated": False, "login": f"/api/v1/auth/discord/login?next={PAGE}"}, status_code=401)
+        return JSONResponse({"authenticated": False, "login": f"/api/v1/auth/discord/login?next={PAGE}",
+                             "guest_ok": key_ok(k)}, status_code=401)
     return {"authenticated": True, **user}
+
+
+@router.post("/guest")
+async def guest(request: Request):
+    """Demo mode: someone with the keyed link picks a nickname → a signed guest cookie (24 h)."""
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict) or not key_ok(body.get("k")):
+        return JSONResponse({"error": "This link isn't valid — log in with Discord instead."}, status_code=403)
+    if not guest_names.allow(client_ip(request), time.time()):
+        return JSONResponse({"error": "Too many nicknames from here — wait a few minutes."}, status_code=429)
+    try:
+        name = clean_nick(body.get("name"))
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    taken = {hub.presence.users[u]["name"] for u in hub.presence.watching() if u in hub.presence.users}
+    name = unique_name(name, taken)
+    raw, g = make_guest_cookie(name)
+    resp = JSONResponse({"id": g["id"], "name": name, "guest": True})
+    resp.set_cookie(GUEST_COOKIE, raw, max_age=GUEST_TTL, httponly=True, secure=True, samesite="lax")
+    return resp
 
 
 @router.get("/login")
@@ -782,7 +942,7 @@ async def fetch_upstream(name: str) -> tuple[int, bytes, str]:
 
 @router.get("/hls/{name}")
 async def hls(name: str, request: Request):
-    if not session_user(auth.read_session(request)):
+    if not viewer(request):
         return JSONResponse({"error": "log in"}, status_code=401)
     if not _HLS_NAME.match(name):
         return JSONResponse({"error": "no such file"}, status_code=404)
