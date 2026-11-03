@@ -45,6 +45,7 @@ def url(lg, slug):
 class FakeDriver:
     def __init__(self):
         self.started, self.live, self.stopped, self.sound, self.overlays, self.focused = [], [], 0, 0, [], []
+        self.volume = 45
 
     def start(self, urls): self.started.append(list(urls))
     def stop(self): self.stopped += 1
@@ -54,6 +55,7 @@ class FakeDriver:
     def remove_tile(self, i): self.live.append(("rm", i)); self.sound = min(self.sound - (self.sound > i), 3)
     def move_tile(self, i, j): self.live.append(("mv", i, j))
     def overlay(self, view, lbar=False): self.overlays.append((view, lbar))
+    def set_volume(self, v): self.volume = max(0, min(100, v)); return self.volume
 
 
 class FakeScores:
@@ -770,3 +772,49 @@ def test_switching_between_screen_and_tiles_is_one_session(api, monkeypatch):
     disc.tick()
     st = remote.get("/i/discord").json()
     assert st["capture"] == "tiles" and st["started"] == started and st["origin"] == origin   # the bot won't re-announce
+
+
+# ---- the sound tile's volume + the YouTube CSS pin -------------------------------------------------------------------------
+def _sink(idx, pid, pct, mute):
+    return {"index": idx, "mute": mute, "properties": {"application.process.id": str(pid)},
+            "volume": {"front-left": {"value_percent": f"{pct}%"}, "front-right": {"value_percent": f"{pct}%"}}}
+
+
+def test_sound_tile_plays_at_the_wall_volume(monkeypatch):
+    assert engine.tile_volume({}) == 45 and engine.tile_volume({"WALL_TILE_VOLUME": "30%"}) == 30
+    assert engine.tile_volume({"WALL_TILE_VOLUME": "loud"}) == 45 and engine.tile_volume({"WALL_TILE_VOLUME": "250"}) == 100
+    sinks = [_sink(7, 101, 100, True), _sink(8, 102, 100, False)]
+    ran = []
+    monkeypatch.setattr(engine, "sink_inputs", lambda env: sinks)
+    monkeypatch.setattr(engine.subprocess, "run", lambda cmd, **kw: ran.append(cmd[1:]))
+    d = Driver(Session("tv"))
+    d.tiles = [(type("P", (), {"pid": 101})(), 0), (type("P", (), {"pid": 102})(), 1)]
+    d.sound = 0
+    d._mute(d.pids())     # tile 0 (pid 101) gets the sound at 45 %, tile 1 is muted and keeps its level
+    assert ran == [["set-sink-input-volume", "7", "45%"], ["set-sink-input-mute", "7", "0"], ["set-sink-input-mute", "8", "1"]]
+    ran.clear()
+    sinks[:] = [_sink(7, 101, 45, False), _sink(8, 102, 100, True)]
+    d._mute(d.pids())
+    assert ran == []      # already right: no pactl churn every round
+    assert d.set_volume(60) == 60 and ran == [["set-sink-input-volume", "7", "60%"]]
+
+
+def test_volume_over_the_api(api):
+    app, _ = api
+    c = client(app)
+    assert c.get("/i/tv").json()["volume"] == 45
+    assert c.post("/i/tv/volume", json={"delta": 5}).json()["volume"] == 50
+    assert c.post("/i/tv/volume", json={"delta": -100}).json()["volume"] == 0
+    assert c.post("/i/tv/volume", json={"volume": 35}).json()["volume"] == 35
+    assert c.post("/i/tv/volume", json={}).status_code == 422 and c.post("/i/tv/volume", json={"delta": "up"}).status_code == 422
+
+
+def test_css_pin_flattens_every_stacking_context_above_the_video():
+    """YouTube's #player-container has view-transition-name and .html5-video-container z-index 10: a pinned video under
+    them stayed beneath the masthead / sidebar / comments (NBC News NOW, election night). Every ancestor gets flattened."""
+    js = engine.FULLSCREEN_JS
+    assert "setAttribute('data-tvfs-a'" in js and "return flat();" in js and "return flat();        // already pinned" in js
+    rule = js.split("[data-tvfs-a]{")[1].split("}")[0]
+    for prop in ("z-index:auto", "view-transition-name:none", "transform:none", "contain:none", "isolation:auto", "filter:none",
+                 "will-change:auto", "opacity:1"):
+        assert prop + "!important" in rule, prop
