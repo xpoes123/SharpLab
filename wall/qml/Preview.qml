@@ -3,6 +3,8 @@
 // --out, saves a PNG after a few seconds and quits.
 //   QT_QPA_PLATFORM=offscreen qml6 Preview.qml -- --layout lbar|full|matchup --board nfl --size 2560x1440 --out /tmp/ov.png
 //   --tiles a.png,b.png,c.png = real frames on the tiles (laid out like the wall); --bets <url> = the bets badges + delays
+//   --n 2 = that many stand-in tiles (lbar.js); --bands <url> (default: --bets) = the band layer around them (Bands.qml);
+//   --layout none = no L-bar / board (the tiles over the whole screen)
 import QtQuick
 import QtQuick.Window
 import "lbar.js" as G
@@ -19,7 +21,7 @@ Window {
     readonly property bool lbar: layout === "lbar"
     width: size[0]
     height: size[1]
-    color: "#2a2f45"   // stands in for the video under a full overlay
+    color: w.layout === "full" || w.layout === "matchup" ? "#2a2f45" : "#000000"   // video under a full overlay; else the kiosk's black
     visible: true
     title: "TV overlay preview"
 
@@ -34,12 +36,13 @@ Window {
             x: r.x; y: r.y; width: r.w; height: r.h; source: "file://" + modelData; fillMode: Image.PreserveAspectCrop
         }
     }
-    Repeater {   // the wall's tiles: L-bar corner, or quarters
-        model: w.frames.length ? 0 : 4
+    readonly property var tileRects: G.wallTiles(Number(arg("--n", "4")), G.wallArea(width, height, lbar))
+    Repeater {   // stand-in tiles (lbar.js): in the L-bar's corner, or over the whole screen
+        model: w.frames.length ? [] : w.tileRects
         Rectangle {
-            readonly property real tw: w.lbar ? w.geo.tileW : w.width / 2
-            readonly property real th: w.lbar ? w.geo.tileH : w.height / 2
-            x: (index % 2) * tw; y: Math.floor(index / 2) * th; width: tw; height: th
+            required property var modelData
+            required property int index
+            x: modelData.x; y: modelData.y; width: modelData.w; height: modelData.h
             color: ["#2a2f45", "#30364f", "#343a55", "#2c3248"][index]
             border.color: "#4a5070"; border.width: 2
             Text {
@@ -60,6 +63,31 @@ Window {
             }
             x.open("GET", w.arg("--bets", "") + "/api/overlay/bets")
             x.send()
+        }
+    }
+    readonly property string bandsApi: arg("--bands", arg("--bets", ""))
+    property var bands: null
+    Timer {   // the band layer's data, like Overlay.qml
+        interval: 500; running: w.bandsApi !== ""; repeat: true; triggeredOnStart: true
+        onTriggered: {
+            var x = new XMLHttpRequest()
+            x.onreadystatechange = function () {
+                if (x.readyState !== XMLHttpRequest.DONE || x.status !== 200) return
+                try { w.bands = JSON.parse(x.responseText) } catch (e) {}
+            }
+            x.open("GET", w.bandsApi + "/bands")
+            x.send()
+        }
+    }
+    readonly property var bandGeo: w.bands && w.bands.n > 0 ? G.wallBands(w.bands.n, size[0], size[1], w.bands.lbar) : null
+    Repeater {
+        model: w.bandGeo && w.layout !== "full" && w.layout !== "matchup" ? ["top", "bottom"] : []
+        Bands {
+            required property string modelData
+            visible: w.bandGeo[modelData].h >= w.width / 40
+            x: w.bandGeo[modelData].x; y: w.bandGeo[modelData].y; width: w.bandGeo[modelData].w; height: w.bandGeo[modelData].h
+            b: w.bands; edge: modelData; geo: w.bandGeo; unit: w.width
+            boardData: (w.lbar ? side : whole).last ? (w.lbar ? side : whole).last.data : null
         }
     }
     Board {
@@ -87,8 +115,9 @@ Window {
         layout: "band"; polling: false; v: side.v
     }
     Board {
-        visible: !w.lbar; anchors.fill: parent
-        layout: w.layout; board: w.arg("--board", ""); api: w.arg("--api", "http://127.0.0.1:7790"); polling: !w.lbar
+        id: whole; visible: w.layout === "full" || w.layout === "matchup"; anchors.fill: parent
+        layout: w.layout === "none" ? "full" : w.layout; board: w.arg("--board", ""); api: w.arg("--api", "http://127.0.0.1:7790"); polling: !w.lbar
+        dflt: w.arg("--bets", "") === "" ? 0 : w.bets ? w.bets["default"] : 45; delays: (w.bets && w.bets.delays) || ({})
     }
     Bets {
         visible: !!w.bets && (w.layout === "lbar" || w.layout === "")

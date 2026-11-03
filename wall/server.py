@@ -23,6 +23,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import ValidationError
 
+from wall.bands import ScoreTape, build_view
 from wall.bets import POLL_S as BETS_POLL_S, BetsFeed, badge_rows
 from wall.chat import POLL_S, ChatFeed
 from wall.engine import Session
@@ -137,6 +138,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
     cfg = cfg or Cfg()
     sync = sync or SyncStore(cfg.state / "sync.json", cfg.sync_default)
     bets = bets or BetsFeed(cfg.web_url, cfg.web_key)
+    tape = ScoreTape()   # every scoreboard as first seen: the band headers' delayed scores
     chat = chat or ChatFeed(cfg.web_url, cfg.web_key, cfg.owner_id, cfg.owner_name)
     guard = guard or LLMGuard(cfg.ollama, cfg.llm_guard)
     scores = scores or Scores()
@@ -225,6 +227,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
     app = FastAPI(title="sharplab-wall", lifespan=lifespan)
     app.state.instances, app.state.store, app.state.scores, app.state.guard, app.state.chat = instances, store, scores, guard, chat
     app.state.sync, app.state.bets, app.state.runner = sync, bets, runner
+    app.state.tape = tape
 
     @app.middleware("http")
     async def gate(request: Request, call_next):
@@ -483,6 +486,19 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         for i in instances.values():
             i._bump()
         return get_sync()
+
+    # ---- the bands around the tiles (the overlay's band layer, qml/Bands.qml; same tile → game mapping and delays as
+    # the bets and the boards above) ----
+    @app.get("/i/{name}/bands")
+    def get_bands(name: str) -> dict:
+        i = inst(name)
+        games = tile_games(i, scores)
+        with i.lock:
+            lv = i.live
+            args = dict(urls=list(i.urls), sound=i.driver.sound, lbar=bool(getattr(i.driver, "lbar", False)), view=i.view,
+                        title=i.preset_name, live_league=lv.league if lv else "")
+        return build_view(**args, games=games[:len(args["urls"])], scores=scores, tape=tape, delay=sync.delay,
+                          chat=chat.view(party_on()))
 
     # ---- the watch party's chat, for the TV router (loopback only: not in REMOTE_OK) ----
     def party_on() -> bool:

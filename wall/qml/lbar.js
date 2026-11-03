@@ -38,3 +38,15 @@ function wallTiles(n, area) {
     for (var j = 0; j < t.length; j++) out.push({ x: x0 + t[j][0] * cw, y: y0 + t[j][1] * ch, w: t[j][2] * cw, h: t[j][2] * ch });
     return out;
 }
+
+// The bands the tiles leave in their area (the overlay's band layer, Bands.qml): {tiles, top, bottom, head} — top / bottom
+// = {x, y, w, h} above / below the arrangement (h 0 = none: 1 and 4 tiles fill a 16:9 area), head[i] = the band tile i's
+// header goes in: "top" when the tile touches the top band, else "bottom" when it touches the bottom one, else "".
+function wallBands(n, sw, sh, useL) {
+    var a = wallArea(sw, sh, useL), T = wallTiles(n, a), y0 = a.y + a.h, y1 = a.y;
+    for (var i = 0; i < T.length; i++) { y0 = Math.min(y0, T[i].y); y1 = Math.max(y1, T[i].y + T[i].h); }
+    var top = { x: a.x, y: a.y, w: a.w, h: y0 - a.y }, bottom = { x: a.x, y: y1, w: a.w, h: a.y + a.h - y1 }, head = [];
+    for (var j = 0; j < T.length; j++)
+        head.push(top.h > 0 && T[j].y === y0 ? "top" : bottom.h > 0 && T[j].y + T[j].h === y1 ? "bottom" : "");
+    return { tiles: T, top: top, bottom: bottom, head: head };
+}
