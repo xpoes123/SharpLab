@@ -102,8 +102,8 @@ Window {
         b: w.bands; geo: w.bandGeo; unit: w.width; lbarShown: w.lbar; bets: w.bets
         boardData: (w.lbar ? side : whole).last ? (w.lbar ? side : whole).last.data : null
     }
-    ChatFloat {   // the chat floating over the tiles, like Overlay.qml's chat surface
-        width: w.width; height: w.height; b: w.bands; unit: w.width; shown: w.layout !== "full" && w.layout !== "matchup"
+    ChatFloat {   // the chat floating over the tiles without the L-bar, like Overlay.qml's chat surface
+        width: w.width; height: w.height; b: w.bands; unit: w.width; shown: !w.lbar && w.layout !== "full" && w.layout !== "matchup"
         area: w.bands && w.bands.n > 0 ? G.wallArea(w.width, w.height, !!w.bands.lbar) : null
     }
     SpeakerBadge {   // the badge on the sound tile, like Overlay.qml's speaker surface
@@ -116,6 +116,7 @@ Window {
         layout: "side"; board: w.arg("--board", ""); api: w.arg("--api", "http://127.0.0.1:7790"); polling: w.lbar
         dflt: w.arg("--bets", "") === "" ? 0 : w.bets ? w.bets["default"] : 45; delays: (w.bets && w.bets.delays) || ({})
         bets: w.bets; spot: w.spot
+        tvchat: w.lbar && w.bands && w.bands.n > 0 && w.bands.on !== false ? w.bands : null   // the chat docked in the sidebar
     }
     Timer {   // the watch party's chat, from the view poll like Overlay.qml
         interval: 500; running: w.lbar; repeat: true; triggeredOnStart: true

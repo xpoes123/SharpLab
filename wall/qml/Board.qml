@@ -39,6 +39,9 @@ Item {
     property var bets: null
     // election night: the state spotlight (the service's /api/overlay/spot; null = none) — a card at the top of the sidebar
     property var spot: null
+    // the TV chat docked in the sidebar (the service's /bands payload, its tvchat {on, lines}; null = not here: no L-bar,
+    // or the host's view hides it). ChatFloat.qml dock; while it's active the election view hides TRADES.
+    property var tvchat: null
     readonly property var betRows: B.betRows(bets, bets ? bets.n : 0)
     onChatChanged: {
         var ls = (chat && chat.lines) || [], want = {}
@@ -130,6 +133,31 @@ Item {
         font.variableAxes: mono ? ({}) : ({ "wdth": wdth, "wght": weight })
     }
     component Mono: T { mono: true; size: root.tMeta; weight: 500; color: root.cMuted }
+    // the TV chat in the sidebar's lower part: a rule + CHAT, then the lines bottom-up (ChatFloat.qml dock). Takes room
+    // (height > 0) only while `on`: a line in the last 2 minutes; quiet for 2 minutes, it gives the room back.
+    component TvDock: Item {
+        property bool allowed: true
+        property real cap: 1e9
+        readonly property bool on: allowed && tdcf.active
+        readonly property real room: 8 * 2.4 * tdcf.fontPx + tdhead.y + tdhead.height + 0.6 * root.rem
+        visible: on
+        height: on ? Math.min(room, cap) : 0
+        clip: true
+        Rectangle { id: tdrule; width: parent.width; height: root.hair; color: root.cRule }
+        Item {
+            id: tdhead
+            y: tdrule.height + 0.7 * root.rem
+            width: parent.width; height: tdtitle.implicitHeight
+            Mono { id: tdtitle; text: "CHAT"; weight: 600; color: root.cAccent }
+        }
+        ChatFloat {
+            id: tdcf
+            dock: true
+            anchors.top: tdhead.bottom; anchors.topMargin: 0.6 * root.rem; anchors.bottom: parent.bottom
+            width: parent.width
+            b: root.tvchat; unit: root.unit; shown: !!root.tvchat; family: root.fDisplay
+        }
+    }
     component Caps: T { wdth: 68; font.capitalization: Font.AllUppercase; font.letterSpacing: size * 0.06 }
     component Num: T { weight: 800; wdth: 68; font.features: { "tnum": 1 } }
 
@@ -488,13 +516,16 @@ Item {
                     }
                 }
 
+                // the TV chat at the bottom (the discord wall's chat section below takes its place when that's up)
+                TvDock { id: sdock; allowed: !root.chat; anchors.bottom: parent.bottom; width: parent.width; cap: parent.height * 0.45 }
+
                 // the watch party's chat: the lower half while the discord wall runs, newest at the bottom; what doesn't
                 // fit scrolls off the top. Lines older than ~20 s dim (a slow 2 s fade) so the new ones stand out.
                 Item {
                     id: chatBox
                     readonly property bool on: !!root.chat
                     visible: on
-                    anchors.bottom: parent.bottom
+                    anchors.bottom: sdock.top
                     width: parent.width
                     height: on ? Math.round(parent.height * 0.5) : 0
                     Rectangle { id: crule; width: parent.width; height: root.hair; color: root.cRule }
@@ -641,10 +672,10 @@ Item {
                     anchors.top: ehead.bottom; anchors.topMargin: root.gap
                     width: parent.width
                     columns: wide ? 3 : 1
-                    columnSpacing: 3 * root.rem; rowSpacing: (e && e.trades && e.trades.length && !wide ? 0.9 : 1.6) * root.rem
+                    columnSpacing: 3 * root.rem; rowSpacing: (e && ((e.trades && e.trades.length) || echat.on) && !wide ? 0.9 : 1.6) * root.rem
                     Repeater {
                         model: e ? e.offices : []
-                        delegate: ElecBop { required property var modelData; o: modelData; wideBop: wide; compact: !wide && !!e.trades && e.trades.length > 0; width: wide ? (bops.width - 6 * root.rem) / 3 : bops.width }
+                        delegate: ElecBop { required property var modelData; o: modelData; wideBop: wide; compact: !wide && ((!!e.trades && e.trades.length > 0) || echat.on); width: wide ? (bops.width - 6 * root.rem) / 3 : bops.width }
                     }
                 }
                 // members' midterm positions under the balance of power: who, side + race, entry → now, ▲/▼ %, the
@@ -653,7 +684,7 @@ Item {
                 Item {
                     id: tradesBox
                     readonly property var rows: e && e.trades ? e.trades : []
-                    readonly property bool on: rows.length > 0
+                    readonly property bool on: rows.length > 0 && !echat.on   // the chat has its room while it's active
                     readonly property real rowH: 5.3 * root.rem
                     // as many rows as fit under the offices (the calls get the rest; they're in the ticker anyway)
                     readonly property real room: parent.height - bops.y - bops.height - root.gap - 4 * root.rem
@@ -746,7 +777,12 @@ Item {
                         }
                     }
                 }
-                Item { id: echat; readonly property bool on: false; anchors.bottom: parent.bottom; width: parent.width; height: 0 }
+                // the TV chat, anchored to the bottom, under the offices (and the calls, when they still fit)
+                TvDock {
+                    id: echat
+                    anchors.bottom: parent.bottom; width: parent.width
+                    cap: parent.height - bops.y - bops.height - root.gap
+                }
             }
         }
     }

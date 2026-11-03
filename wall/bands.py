@@ -29,7 +29,7 @@ KEEP_S = 600.0          # the tape's memory (delays are clamped to 120 s)
 TICKER_MAX = 12
 CHAT_LINES = 4
 CHAT_FRESH_S = 20.0
-TVCHAT_LINES = 6   # the chat floating over the tiles (qml/ChatFloat.qml)
+TVCHAT_LINES = 8   # the TV chat (qml/ChatFloat.qml): 8 in the L-bar sidebar, 6 floating over the tiles
 
 
 LOCAL_NEWS = Path(__file__).resolve().parent.parent / "web" / "static" / "local-news.json"

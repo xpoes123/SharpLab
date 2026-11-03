@@ -20,8 +20,9 @@
 //   speaker: (polls the same /bands) one transparent surface over the tiles' area: a chip in the corner of every stream
 //            tile with the outlet's name (bands tiles[].name), and the 🔊 on the tile with the sound (SpeakerBadge.qml),
 //            fading when the sound moves; no 🔊 with < 2 video tiles (bands.speaker), no chip on our /p/ pages.
-//   tvchat:  (the same /bands) one transparent surface over the tiles' area: the watch party's chat floating at its top
-//            right, Twitch-style (ChatFloat.qml), while the owner's toggle (bands.tvchat.on) is on.
+//   tvchat:  (the same /bands) the watch party's chat, Twitch-style (ChatFloat.qml), while the owner's toggle
+//            (bands.tvchat.on) is on: with the L-bar docked in the sidebar's lower part (the side Board; TRADES hides
+//            while it's active), else one transparent surface over the tiles' area, the chat floating at its top right.
 //   qml6 Overlay.qml -- --api http://127.0.0.1:7790 --bets http://127.0.0.1:7795/i/tv
 import QtQuick
 import QtQuick.Window
@@ -170,7 +171,8 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
         // exclusiveEdge in QML). Shown first, so KWin gives it the full height and the band the width left of it.
         LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorRight
         LayerShell.Window.exclusionZone: app.geo.side
-        Board { anchors.fill: parent; unit: Screen.width; layout: "side"; polling: false; v: main.v; chat: app.chat; bets: app.bets; spot: app.spot }
+        Board { anchors.fill: parent; unit: Screen.width; layout: "side"; polling: false; v: main.v; chat: app.chat; bets: app.bets; spot: app.spot
+                tvchat: app.chatOk && app.layout === "lbar" ? app.bands : null }
     }
 
     Window {   // lbar: the band (bottom edge, under the tiles only)
@@ -213,11 +215,13 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
         SpeakerBadge { anchors.fill: parent; b: app.bands; area: app.spkArea; unit: Screen.width }
     }
 
-    // tvchat: the watch party's chat floating over the tiles (ChatFloat.qml), the owner's toggle in /bands' tvchat.on.
-    // Its own transparent surface over the tiles' area, like the speaker's; up whenever the toggle is on (the lines fade
-    // on their own, and an empty transparent surface costs nothing), cleared when it goes down.
-    readonly property bool chatUp: app.spkArea !== null && app.hostOk && app.bands.on !== false && !!app.bands.tvchat
-        && app.bands.tvchat.on === true && app.layout !== "full" && app.layout !== "matchup"
+    // tvchat: the watch party's chat (ChatFloat.qml), the owner's toggle in /bands' tvchat.on. With the L-bar it's in the
+    // sidebar (the side Board above, one surface: nothing over the tiles); without it, its own transparent surface over
+    // the tiles' area, like the speaker's; up whenever the toggle is on (the lines fade on their own, and an empty
+    // transparent surface costs nothing), cleared when it goes down.
+    readonly property bool chatOk: app.spkArea !== null && app.hostOk && app.bands.on !== false && !!app.bands.tvchat
+        && app.bands.tvchat.on === true
+    readonly property bool chatUp: app.chatOk && app.layout !== "lbar" && app.layout !== "full" && app.layout !== "matchup"
     Window {
         transientParent: null
         title: "TV overlay chat"
