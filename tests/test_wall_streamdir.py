@@ -294,3 +294,10 @@ def test_jump_respects_hand_pause_and_per_stream_gap(tmp_path):
     assert d.jump(i, p, b, clock.t) == ([], "")   # Newsmax was jumped to < 10 min ago
     put(b, FOX, important=0.9)
     assert d.jump(i, p, b, clock.t)[0] == ["director: jump tile 4 PBSNewsHour→LiveNOWFOX (important 0.90)"]   # the lower-rated tile
+
+
+def test_change_says_why_with_the_numbers_in_chat():
+    from wall import streamdir
+    d = streamdir.StreamDirector.__new__(streamdir.StreamDirector)
+    d.reason, d.note = "call", ""
+    assert streamdir.WHY[d.reason] == "a race call is being announced" and set(streamdir.WHY) == set(streamdir.REASONS)

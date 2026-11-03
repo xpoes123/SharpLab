@@ -10,7 +10,8 @@ EVERY_S, HOLD_S = 60.0, 300.0
 MARK = "/p/election/"
 STALE_S = 180.0
 STAY_BY = 0.15   # with Jev's ranking fresh, a tile keeps its screen unless an allowed one beats it by this much
-RANK: dict = {"order": [], "probs": {}, "at": 0.0}   # wall/director.py: Jev's preferred screens, best first (empty / stale = plain order)
+RANK: dict = {"order": [], "probs": {}, "at": 0.0, "why": ""}
+SAID: list[str] = []   # chat lines for Jev-ranked dashboard switches (the server posts and clears them)   # wall/director.py: Jev's preferred screens, best first (empty / stale = plain order)
 
 
 def set_rank(order: list[str], at: float, probs: dict | None = None) -> None:
@@ -70,10 +71,15 @@ class Rotation:
             if now < self.at.setdefault(i, now + EVERY_S * (1 + i / 2)):
                 continue
             self.at[i] = now + EVERY_S
-            nxt = next_url(urls, i)
+            nxt = next_url(urls, i, now)
             if nxt:
                 urls[i] = nxt
                 out.append((i, nxt))
+                s, p = screen(nxt), RANK["probs"]
+                if RANK["order"] and now - RANK["at"] < STALE_S and s in p:
+                    from wall.director import NAMES
+                    SAID.append(f"📊 Jev: {NAMES.get(s, s)} on the dashboard ({round(100 * float(p[s]))}%)"
+                                + (f" — {RANK['why']}" if RANK.get("why") else ""))
         return out
 
     def view(self, urls: list[str], now: float) -> list[dict]:

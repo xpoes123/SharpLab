@@ -347,6 +347,10 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
                                                          list(chat.messages))
                     for a in acts:
                         log.info("%s", a)
+                    from wall import rotate as _rot
+                    if not note and _rot.SAID:   # a Jev-ranked dashboard switch: one line too
+                        note = _rot.SAID.pop(0)
+                        _rot.SAID.clear()
                     if note:   # into the watch-page chat: the web says each new notice of the wall it reads
                         for i in instances.values():
                             if i.urls:

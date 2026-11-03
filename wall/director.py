@@ -23,6 +23,13 @@ OPTIONS = {
     "exitpoll": "Exit polls: early in the evening once exit poll results are out and few votes are counted",
 }
 OFF = {"S": "Senate", "H": "House", "G": "Governor"}
+REASONS = {"close": "polls just closed or are about to close somewhere that matters", "calls": "races are being called",
+           "counting": "close races are counting", "markets": "prediction markets are moving",
+           "exit": "exit poll results are out", "turnout": "official turnout numbers updated", "quiet": "a quiet stretch: the big picture"}
+WHY = {"close": "polls just closed", "calls": "races are being called", "counting": "close races are counting",
+       "markets": "the markets are moving", "exit": "exit polls are out", "turnout": "new turnout numbers", "quiet": "the big picture"}
+NAMES = {"map?view=S": "Senate map", "map?view=H": "House map", "map?view=G": "Governors map", "races": "Key races",
+         "turnout": "Turnout", "exitpoll": "Exit polls", "swing": "vs 2024"}
 
 
 def clock(t: float) -> str:
@@ -78,11 +85,12 @@ class Director:
     def refresh(self, state: str) -> None:
         self.asked = self.clock()
         try:
-            status, data = self.http("POST", "/api/v1/wall/election/direct", {"state": state, "options": OPTIONS})
+            status, data = self.http("POST", "/api/v1/wall/election/direct", {"state": state, "options": OPTIONS, "reasons": REASONS})
         except (OSError, ValueError) as e:
             log.info("director: %s", e)
             return
         probs = data.get("probabilities") if status == 200 and isinstance(data, dict) else None
         if isinstance(probs, dict) and probs:
             rotate.set_rank(sorted((s for s in OPTIONS if s in probs), key=lambda s: -float(probs[s] or 0)), self.clock(), probs)
+            rotate.RANK["why"] = WHY.get(data.get("reason") or "", "")
             log.info("director: %s", ", ".join(f"{s} {probs[s]:.2f}" for s in rotate.RANK["order"][:3]))

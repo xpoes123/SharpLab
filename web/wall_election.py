@@ -802,6 +802,9 @@ async def post_direct(request: Request, x_api_key: str = Header("")):
         body = None
     state, options = (body.get("state"), body.get("options")) if isinstance(body, dict) else (None, None)
     question = body.get("question") if isinstance(body, dict) else None   # the stream director's (wall/streamdir.py)
+    reasons = body.get("reasons") if isinstance(body, dict) else None     # {label: when} → Jev also picks why (chat lines)
+    if not (isinstance(reasons, dict) and 2 <= len(reasons) <= 12 and all(isinstance(k, str) and isinstance(v, str) for k, v in reasons.items())):
+        reasons = None
     if not isinstance(state, str) or not isinstance(options, dict) or not 2 <= len(options) <= 12 or \
             not all(isinstance(k, str) and isinstance(v, str) for k, v in options.items()) or \
             not (question is None or isinstance(question, str) and question.strip()):
@@ -814,14 +817,21 @@ async def post_direct(request: Request, x_api_key: str = Header("")):
            "questions": {"screen": {"type": "choice",
                                     "question": (question or "Which dashboard is the most useful to show right now?")[:300],
                                     "criteria": {k[:60]: v[:300] for k, v in options.items()}}}}
+    if reasons:
+        req["questions"]["reason"] = {"type": "choice", "question": "What is the main reason the best choice above is worth "
+                                      "showing right now?", "criteria": {k[:40]: v[:200] for k, v in reasons.items()}}
     try:
         async with httpx.AsyncClient(timeout=4) as c:
             r = await c.post(JEV_URL, json=req, headers={"Authorization": f"Bearer {key}"})
-        a = r.json()["answers"]["screen"] if r.status_code == 200 else None
-    except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
+        answers = r.json()["answers"] if r.status_code == 200 else {}
+        a = answers["screen"] if answers else None
+        why = (answers.get("reason") or {}).get("choice") if reasons else None
+    except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError) as e:
         log.warning("direct: %s", type(e).__name__)
         return {}
-    return {"choice": a.get("choice"), "probabilities": a.get("probabilities") or {}} if isinstance(a, dict) else {}
+    if not isinstance(a, dict):
+        return {}
+    return {"choice": a.get("choice"), "probabilities": a.get("probabilities") or {}, **({"reason": why} if why else {})}
 
 
 @router.post("/classify")

@@ -44,6 +44,18 @@ JUMP_GAP_S, JUMP_STREAM_GAP_S = 180.0, 600.0
 VARIETY = 0.1
 FAV_BOOST = 0.08
 CHAT_S, CHAT_N, CHAT_CHARS = 300.0, 15, 150
+REASONS = {   # Jev picks one; the chat line says it (Jev doesn't write text, only choose)
+    "call": "a race call or projection is being announced",
+    "candidate": "a candidate is speaking (victory or concession speech, remarks)",
+    "results": "new results / vote counts are coming in",
+    "analysis": "sharper analysis of the races that matter right now",
+    "break": "the other stream went to a break or off-topic",
+    "chat": "viewers asked for it in chat",
+    "variety": "a different outlet or point of view",
+}
+WHY = {"call": "a race call is being announced", "candidate": "a candidate is speaking", "results": "new results coming in",
+       "analysis": "sharper analysis right now", "break": "the other stream went to break", "chat": "you asked for it in chat",
+       "variety": "a different point of view"}
 QUESTION = ("Which live news stream is the most worth watching right now on an election-night TV wall? Prefer the one "
             "with the most important live coverage, and weigh what viewers ask for in chat.")
 
@@ -98,6 +110,7 @@ def quote(e: dict, n: int = 90) -> str:
 class StreamDirector:
     def __init__(self, http: Callable[[str, str, dict | None], tuple[int, object]] | None = None, on: bool = True,
                  clock=time.time) -> None:
+        self.reason, self.note = "", ""   # Jev's last reason pick; the chat line of this round's change
         self.http, self.on, self.clock = http, on, clock
         self.asked = -1e9
         self.last: dict | None = None        # {t, picks: [{url, name, p}]}
@@ -152,13 +165,14 @@ class StreamDirector:
     def ask(self, state: str, options: dict[str, str]) -> dict[str, float] | None:
         try:
             status, data = self.http("POST", "/api/v1/wall/election/direct",
-                                     {"state": state, "options": options, "question": QUESTION})
+                                     {"state": state, "options": options, "question": QUESTION, "reasons": REASONS})
         except (OSError, ValueError) as e:
             log.info("stream director: %s", e)
             return None
         probs = data.get("probabilities") if status == 200 and isinstance(data, dict) else None
         if not isinstance(probs, dict):
             return None
+        self.reason = data.get("reason") if data.get("reason") in REASONS else ""
         return {k: float(v) for k, v in probs.items() if k in options and isinstance(v, (int, float)) and not isinstance(v, bool)}
 
     @staticmethod
@@ -232,6 +246,10 @@ class StreamDirector:
             self._swap(inst, policy, i, u, now)
             urls = list(inst.urls)
             acts.append(f"director: tile {i + 1} {name_of(cur)}→{name_of(u)} ({sn:.2f} vs {sc:.2f})")
+            if not self.note:
+                q = quote(board.get(u))
+                self.note = f"🎬 Jev: {name_of(u)} on tile {i + 1} ({round(100 * sn)}% vs {name_of(cur)} {round(100 * sc)}%)" + \
+                    (f" — {WHY[self.reason]}" if self.reason in WHY else "") + (f" · “{q}”" if q else "")
         s = inst.driver.sound
         if s in tiles and len(tiles) == 2:
             best = max(tiles, key=lambda i: scores.get(urls[i], 0.0))
@@ -243,6 +261,9 @@ class StreamDirector:
                     imp.get(cur) is not None and imp[cur] < HOLD_IMPORTANT:
                 self._sound(inst, policy, best, now)
                 acts.append(f"director: sound {name_of(cur)}→{name_of(urls[best])} ({sb:.2f} vs {sc:.2f})")
+                if not self.note:
+                    self.note = f"🔊 Jev: sound to {name_of(urls[best])} ({round(100 * sb)}% vs {name_of(cur)} {round(100 * sc)}%)" + \
+                        (f" — {WHY[self.reason]}" if self.reason in WHY else "")
         return acts
 
     def jump(self, inst, policy, board: onair.Board, now: float) -> tuple[list[str], str]:
@@ -308,5 +329,6 @@ class StreamDirector:
         imp = {inst.urls[i]: self._imp(inst.urls[i], board, policy) for i in tiles if i < len(inst.urls)}
         with inst.lock:
             self._observe(inst, self.clock())
+            self.note = ""
             acts += self.apply(inst, policy, board, scores, imp, self.clock())
-        return acts, note
+        return acts, note or self.note
