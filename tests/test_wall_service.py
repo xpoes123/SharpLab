@@ -818,3 +818,9 @@ def test_css_pin_flattens_every_stacking_context_above_the_video():
     for prop in ("z-index:auto", "view-transition-name:none", "transform:none", "contain:none", "isolation:auto", "filter:none",
                  "will-change:auto", "opacity:1"):
         assert prop + "!important" in rule, prop
+
+
+def test_stream_gain_and_artifact_tiles():
+    from wall.engine import ARTIFACT
+    assert "volume=2" in gst_cmd(104, "wall_discord", gain=2.0) and "volume=1" in gst_cmd(104, "wall_discord")
+    assert ARTIFACT.match("https://claude.ai/artifact/5wcVpgfhN4J5hggdCeJy4S") and not ARTIFACT.match("https://www.youtube.com/@x/live")
