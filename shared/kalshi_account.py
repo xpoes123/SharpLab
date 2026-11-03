@@ -168,14 +168,56 @@ def day_start(now: datetime | None = None) -> datetime:
     return start if now >= start else start - timedelta(days=1)
 
 
-def today_pnl(open_rows: list[dict], settled_today: list[dict], traded_today: set[str]) -> dict:
-    """Settled-today PnL + open positions' ~24h move (Kalshi's previous_* prices are "a day ago").
-    Positions traded today, or with no prior price (new market), count from cost basis instead."""
-    move = sum(r["unreal"] if r["ticker"] in traded_today or not r.get("prev_mark")
-               else r["qty"] * (r["mark"] - r["prev_mark"]) for r in open_rows)
-    settled = sum(settled_pnl(st) for st in settled_today)
-    # ponytail: positions sold (not settled) today aren't counted — add fills-based realized if it matters
-    return {"settled": settled, "n_settled": len(settled_today), "open_move": move, "total": settled + move}
+def _yes_units(f: dict) -> float:
+    """Signed change in YES position from one fill (NO contracts count negative)."""
+    q = _f(f.get("count_fp") or f.get("count"))
+    return q if (fill_side(f) == "yes") == (f.get("action", "buy") == "buy") else -q
+
+
+def _prev_value(q: float, market: dict) -> float | None:
+    """Value of a signed position at Kalshi's previous_* prices (~a day ago); None if there's no prior price."""
+    if q > 0:
+        p = _f(market.get("previous_yes_bid_dollars"))
+        return q * p if p else None
+    ask = _f(market.get("previous_yes_ask_dollars"))
+    return -q * (1 - ask) if ask else None
+
+
+def today_pnl(open_rows: list[dict], settled_today: list[dict], fills_today: list[dict],
+              markets: dict[str, dict]) -> dict:
+    """Since 4am, per market: cash from today's fills + settlement payouts + value now - value at 4am.
+    The 4am position is today's end position minus today's fills, valued at Kalshi's previous_* prices
+    (~24h ago). Counts losses on contracts sold before settlement, which settlement records alone miss."""
+    pnl: dict[str, float] = defaultdict(float)
+    net: dict[str, float] = defaultdict(float)
+    end_q: dict[str, float] = {}
+    end_v: dict[str, float] = {}
+    for f in fills_today:
+        q = _f(f.get("count_fp") or f.get("count"))
+        cash = q * fill_price(f)
+        pnl[f["ticker"]] += (cash if f.get("action") == "sell" else -cash) - _f(f.get("fee_cost"))
+        net[f["ticker"]] += _yes_units(f)
+    for st in settled_today:
+        y, n = _f(st.get("yes_count_fp")), _f(st.get("no_count_fp"))
+        payout = _f(st.get("revenue")) / 100 + min(y, n)
+        pnl[st["ticker"]] += payout - _f(st.get("fee_cost"))
+        end_q[st["ticker"]], end_v[st["ticker"]] = y - n, payout
+    for r in open_rows:
+        end_q[r["ticker"]] = r["qty"] if r["side"] == "YES" else -r["qty"]
+        end_v[r["ticker"]] = r["value"]
+        pnl[r["ticker"]] += r["value"]
+    for t in set(pnl) | set(end_q):
+        q4 = end_q.get(t, 0.0) - net[t]
+        if abs(q4) < 1e-9:
+            continue
+        v4 = _prev_value(q4, markets.get(t, {}))
+        if v4 is None:  # ponytail: no prior price (new market) → assume flat; sold-out ones count 0 at 4am
+            v4 = end_v.get(t, 0.0) * abs(q4) / abs(end_q[t]) if end_q.get(t) else 0.0
+        pnl[t] -= v4
+    open_t = {r["ticker"] for r in open_rows}
+    closed = [v for t, v in pnl.items() if t not in open_t]
+    move = sum(v for t, v in pnl.items() if t in open_t)
+    return {"settled": sum(closed), "n_settled": len(closed), "open_move": move, "total": sum(closed) + move}
 
 
 async def fetch_account(key_id: str, pem: str, with_settlements: bool = True) -> dict:
@@ -187,9 +229,10 @@ async def fetch_account(key_id: str, pem: str, with_settlements: bool = True) ->
         positions = [p for p in positions if _f(p.get("position_fp") or p.get("position"))]
         settles = await _all(c, key_id, key, "/portfolio/settlements", "settlements") if with_settlements else []
         settled_today = await _all(c, key_id, key, "/portfolio/settlements" + since, "settlements")
-        traded_today = {f["ticker"] for f in await _all(c, key_id, key, "/portfolio/fills" + since, "fills")}
+        fills_today = await _all(c, key_id, key, "/portfolio/fills" + since, "fills")
         markets = {}
-        tickers = [p["ticker"] for p in positions]
+        tickers = sorted({p["ticker"] for p in positions} | {st["ticker"] for st in settled_today}
+                         | {f["ticker"] for f in fills_today})
         for i in range(0, len(tickers), 100):
             r = await c.get(f"{KALSHI_BASE}/markets", params={"tickers": ",".join(tickers[i:i + 100]),
                                                               "limit": 200})
@@ -201,7 +244,7 @@ async def fetch_account(key_id: str, pem: str, with_settlements: bool = True) ->
     for r in open_rows:
         r["game"] = games.get(markets.get(r["ticker"], {}).get("event_ticker"), "")
     return {"balance": _balance(bal), "open": open_rows, "settlements": settles,
-            "today": today_pnl(open_rows, settled_today, traded_today)}
+            "today": today_pnl(open_rows, settled_today, fills_today, markets)}
 
 
 _MONTHS = {m: i for i, m in enumerate(

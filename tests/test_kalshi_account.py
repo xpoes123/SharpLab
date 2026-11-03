@@ -128,15 +128,25 @@ async def test_event_titles_strips_suffix_and_skips_failures():
 
 
 def test_today_pnl():
-    held = {"ticker": "A", "qty": 10, "mark": 0.6, "prev_mark": 0.5, "unreal": 3.0}   # held overnight: 24h move
-    new = {"ticker": "B", "qty": 10, "mark": 0.6, "prev_mark": 0.0, "unreal": -1.0}   # new market: cost basis
-    traded = {"ticker": "C", "qty": 5, "mark": 0.4, "prev_mark": 0.3, "unreal": 0.25}  # bought today: cost basis
-    st = {"revenue": 1000, "yes_count_fp": "10", "no_count_fp": "0", "yes_total_cost_dollars": "6",
-          "no_total_cost_dollars": "0", "fee_cost": "0"}
-    t = ka.today_pnl([held, new, traded], [st], {"C"})
-    assert t["open_move"] == pytest.approx(1.0 - 1.0 + 0.25)
-    assert t["settled"] == pytest.approx(4.0) and t["n_settled"] == 1
-    assert t["total"] == pytest.approx(4.25)
+    mk = lambda yb, ya: {"previous_yes_bid_dollars": str(yb), "previous_yes_ask_dollars": str(ya)}
+    markets = {"A": mk(0.5, 0.52), "S": mk(0.6, 0.62), "X": mk(0.9, 0.92), "D": mk(0.5, 0.52)}
+    held = {"ticker": "A", "side": "YES", "qty": 10, "mark": 0.6, "value": 6.0}   # held overnight: 0.5 -> 0.6
+    new = {"ticker": "B", "side": "NO", "qty": 10, "mark": 0.6, "value": 6.0}     # new market, no prior price
+    fills = [
+        # bought 50 YES @ 40¢ today, then sold them @ 5¢ (Kalshi reports the sell as sell/no @ 95¢): -17.50 - fees
+        {"ticker": "S", "action": "buy", "side": "yes", "count": 50, "yes_price": 40, "fee_cost": "0.5", "ts": 1},
+        {"ticker": "S", "action": "sell", "side": "no", "count": 50, "no_price": 95, "yes_price": 5,
+         "fee_cost": "0.1", "ts": 2},
+        # sold 10 YES @ 92¢ that were held overnight at 90¢: +0.20
+        {"ticker": "X", "action": "sell", "side": "no", "count": 10, "no_price": 8, "yes_price": 92, "ts": 3},
+    ]
+    # held 10 YES overnight at 50¢, settled YES today: +5
+    st = {"ticker": "D", "revenue": 1000, "yes_count_fp": "10", "no_count_fp": "0", "fee_cost": "0"}
+    t = ka.today_pnl([held, new], [st], fills, markets)
+    assert t["open_move"] == pytest.approx(1.0)
+    assert t["n_settled"] == 3
+    assert t["settled"] == pytest.approx(-17.5 - 0.6 + 0.2 + 5.0)
+    assert t["total"] == pytest.approx(t["settled"] + 1.0)
 
 
 def test_day_start_rolls_at_4am_et():
