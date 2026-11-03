@@ -9,11 +9,14 @@
 //            grid (wall.py's KWin script tiles with the same function). One poll: the band reads the sidebar's data.
 //   full:    the whole screen, per-pixel 90 % background.
 //   matchup: the whole screen, opaque: the league the phone opened.
-//   qml6 Overlay.qml -- --api http://127.0.0.1:7790
+//   bets:    (with --bets <service>/i/<wall>) a transparent surface over the tiles' corner with members' Kalshi badges, and
+//            the spoiler delays the boards are held back by (each game as of now − its tile's delay; Board.qml)
+//   qml6 Overlay.qml -- --api http://127.0.0.1:7790 --bets http://127.0.0.1:7795/i/tv
 import QtQuick
 import QtQuick.Window
 import org.kde.layershell 1.0 as LayerShell
 import "lbar.js" as G
+import "board.js" as B
 
 Window {   // the root is the full / matchup surface (the qml tool needs a window or an item as its root)
     id: app
@@ -27,6 +30,8 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
     readonly property var geo: G.lbar(Screen.width, Screen.height)
     property bool bandReady: false
     property var chat: null               // the watch party's chat, from the same view poll (the sidebar's lower part)
+    readonly property string betsApi: arg("--bets", "")
+    property var bets: null               // GET <bets>/api/overlay/bets: badges + delays
     // the band maps 400 ms after the sidebar, every time the L-bar comes back (see the sidebar's anchors)
     onLayoutChanged: { bandReady = false; if (layout === "lbar") bandTimer.restart() }
     Timer { id: bandTimer; interval: 400; onTriggered: app.bandReady = app.layout === "lbar" }
@@ -46,6 +51,21 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
         x.send()
     }
     Timer { interval: 500; running: true; repeat: true; triggeredOnStart: true; onTriggered: app.pollView() }
+
+    function pollBets() {
+        var x = new XMLHttpRequest()
+        x.onreadystatechange = function () {
+            if (x.readyState !== XMLHttpRequest.DONE) return
+            var b = null
+            if (x.status === 200) { try { b = JSON.parse(x.responseText) } catch (e) { b = null } }
+            if (JSON.stringify(b) !== JSON.stringify(app.bets)) app.bets = b
+        }
+        x.open("GET", app.betsApi + "/api/overlay/bets")
+        x.send()
+    }
+    Timer { interval: 2000; running: app.betsApi !== ""; repeat: true; triggeredOnStart: true; onTriggered: app.pollBets() }
+    // no answer from the service = the default delay still holds (never live by accident)
+    readonly property real dflt: app.betsApi === "" ? 0 : app.bets ? app.bets["default"] : 45
 
     // every picture the matchup panel can show, kept decoded (same source size / fill as Board.qml's Pic) so a matchup
     // opens with its headshots already there; the list only changes when the lineups do
@@ -79,7 +99,8 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
     LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
     LayerShell.Window.exclusionZone: -1
     // the one poll (it runs while its window is hidden too); the L-bar's two boards draw from it
-    Board { id: main; anchors.fill: parent; layout: app.layout === "matchup" ? "matchup" : "full"; api: app.api; polling: true }
+    Board { id: main; anchors.fill: parent; layout: app.layout === "matchup" ? "matchup" : "full"; api: app.api; polling: true
+            dflt: app.dflt; delays: (app.bets && app.bets.delays) || ({}) }
 
     Window {   // lbar: the sidebar (full height, right edge)
         id: side
@@ -118,5 +139,23 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
         LayerShell.Window.anchors: LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
         LayerShell.Window.exclusionZone: app.geo.band
         Board { anchors.fill: parent; unit: Screen.width; layout: "band"; polling: false; v: main.v }
+    }
+
+    Window {   // bets: badges on the tiles (over the L-bar's corner, or the whole screen without one); not over a full board
+        transientParent: null
+        title: "TV overlay bets"
+        color: "transparent"
+        flags: Qt.FramelessWindowHint | Qt.WindowTransparentForInput | Qt.WindowDoesNotAcceptFocus
+        readonly property bool lb: app.layout === "lbar"
+        width: lb ? app.geo.gridW : Screen.width
+        height: lb ? app.geo.gridH : Screen.height
+        visible: !!app.bets && app.bets.show && B.badges(app.bets, app.bets.n).length > 0 && (app.layout === "" || app.layout === "lbar")
+        LayerShell.Window.scope: "tv-overlay"
+        LayerShell.Window.layer: LayerShell.Window.LayerOverlay
+        LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
+        LayerShell.Window.activateOnShow: false
+        LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorLeft
+        LayerShell.Window.exclusionZone: -1   // ignore the sidebar's / band's zones: the tiles start at 0,0
+        Bets { anchors.fill: parent; unit: Screen.width; lbar: false; bets: app.bets }
     }
 }

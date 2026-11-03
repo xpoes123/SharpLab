@@ -170,3 +170,68 @@ function matchup(m) {
         source: m.projections ? "Sleeper projections" : "no projections · actual points only"
     };
 }
+
+// ---- spoiler delay: the board as the picture shows it ----
+// hist = [{t, s}] (s = a GET /api/overlay body, t = when it came, epoch s), oldest first. Every game is taken from the
+// newest body at least its tile's delay old (delays[ESPN id], else dflt); the rest of the board (fantasy plays, titles)
+// from the newest at least dflt old. Nothing newer ever shows; until the history is that long: a "matching" note.
+function snapAt(hist, cut) {
+    var pick = null;
+    for (var i = 0; i < hist.length && hist[i].t <= cut; i++) pick = hist[i].s;
+    return pick;
+}
+
+function delayed(hist, now, delays, dflt) {
+    if (!hist || !hist.length) return null;
+    var latest = hist[hist.length - 1].s;
+    if (!(dflt > 0) && !Object.keys(delays || {}).length) return latest;
+    var base = snapAt(hist, now - dflt), out = {};
+    for (var k in latest) out[k] = latest[k];
+    if (!latest.data) return out;
+    if (!base || !base.data) {
+        out.data = { kind: latest.data.kind, title: latest.data.title, games: [], leagues: [], plays: [],
+                     note: "Syncing · " + Math.round(dflt) + " s" };
+        out.updated = 0;
+        return out;
+    }
+    var d = {};
+    for (var j in base.data) d[j] = base.data[j];
+    if (base.data.kind === "scores") {
+        d.games = [];
+        (base.data.games || []).forEach(function (g) {
+            var gd = delays && delays[g.id] !== undefined ? delays[g.id] : dflt;
+            var s = gd === dflt ? base : snapAt(hist, now - gd);
+            var v = s && s.data && (s.data.games || []).filter(function (x) { return x.id === g.id; })[0];
+            if (v) d.games.push(v);
+        });
+    }
+    out.data = d;
+    out.updated = base.updated;
+    return out;
+}
+
+function trim(hist, now, keep) {   // drop what no delay can reach any more (always keep the newest)
+    var i = 0;
+    while (i < hist.length - 1 && hist[i + 1].t <= now - keep) i++;
+    return hist.slice(i);
+}
+
+// ---- members' Kalshi positions on a tile (GET <bets>/api/overlay/bets) ----
+function cents(v) { return v === null || v === undefined ? "–" : Math.round(v) + "¢"; }
+
+function betLine(r) {
+    var pct = r.pct === null || r.pct === undefined ? "" : (r.dir === "down" ? "▼ " : r.dir === "up" ? "▲ " : "") + Math.abs(r.pct) + "%";
+    var pnl = r.pnl === null || r.pnl === undefined ? "" : (r.pnl >= 0 ? "+$" : "−$") + Math.abs(r.pnl).toFixed(2);
+    return { who: r.who || "", what: (r.side || "") + " " + (r.label || ""), px: "@" + cents(r.entry) + " → " + cents(r.mark),
+             dir: r.dir || "", pct: pct, size: r.size || "", pnl: pnl };
+}
+
+function badges(b, n) {   // → one {i, lines, more, delay} per tile that has rows
+    var out = [];
+    ((b && b.show && b.tiles) || []).forEach(function (t) {
+        if (t.i < n && (t.rows || []).length)
+            out.push({ i: t.i, lines: t.rows.slice(0, 3).map(betLine), more: Math.max(0, t.rows.length - 3),
+                       delay: Math.round(t.delay) + " s" + (t.src === "auto" ? " · synced" : t.src === "manual" ? " · set" : "") });
+    });
+    return out;
+}
