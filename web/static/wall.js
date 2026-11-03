@@ -70,6 +70,7 @@
   }
 
   // Every viewer aims at the same instant: target = server now − delay. Big error → seek; small → nudge the rate.
+  video.preservesPitch = video.mozPreservesPitch = video.webkitPreservesPitch = true;   // any rate change never deepens voices
   function syncTick() {
     const pdt = playingDate();
     sync.offset = offset; sync.pdtOff = pdtOff;
