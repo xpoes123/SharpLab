@@ -50,13 +50,10 @@ FULLSCREEN_JS = """(async () => {
   // the pinned video (NBC News NOW's live watch page, 2026-11-03). Re-marked every round: YouTube re-renders the player.
   const flat = () => { for (let e = v.parentElement; e && e !== document.documentElement; e = e.parentElement) e.setAttribute('data-tvfs-a', ''); return true; };
   if (v.hasAttribute('data-tvfs')) return flat();        // already pinned by the CSS fallback
-  if (!v.offsetWidth && document.fullscreenElement !== v) return false;
-  const r = v.getBoundingClientRect(), fits = Math.abs(r.width - innerWidth) <= 4 || Math.abs(r.height - innerHeight) <= 4;
-  if (document.fullscreenElement === v && fits) return true;
-  if (document.fullscreenElement) await Promise.race([document.exitFullscreen(), new Promise((ok) => setTimeout(ok, 800))]);
-  // some pages never resolve requestFullscreen (an ad overlay, a stuck request): give it 1.5 s, then pin the video with CSS
-  const done = await Promise.race([v.requestFullscreen().then(() => true, () => false), new Promise((ok) => setTimeout(() => ok(false), 1500))]);
-  if (done && document.fullscreenElement === v) return true;
+  // never the browser's own fullscreen: every re-tile / resize made the old "fits?" check exit and re-enter it, and that
+  // animation showed on the TV. The tile window can't go truly fullscreen anyway — the CSS pin fills it, instantly.
+  if (document.fullscreenElement) await Promise.race([document.exitFullscreen().catch(() => {}), new Promise((ok) => setTimeout(ok, 800))]);
+  if (!v.offsetWidth) return false;
   if (!document.getElementById('__tvfs')) {
     const st = document.createElement('style'); st.id = '__tvfs';
     st.textContent = 'video[data-tvfs]{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;z-index:2147483647!important;background:#000!important;object-fit:contain!important;transform:none!important;margin:0!important}html,body{overflow:hidden!important}'
