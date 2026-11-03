@@ -4,6 +4,9 @@
   "use strict";
   const $ = (id) => document.getElementById(id);
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  const ico = (name) => { const i = el("span", "i i-" + name); i.setAttribute("aria-hidden", "true"); return i; };   // white icons (wall.css .i)
+  // server-made lines (DJ Jev, notices) start with an emoji the TV overlay uses; this page shows them without it
+  const noEmoji = (t) => t.replace(/^(?:\p{Extended_Pictographic}\uFE0F?\s*)+/u, "");
   const HLS_URL = "/api/v1/wall/hls/index.m3u8";
 
   let me = null, cfg = { delay: 6, vote_s: 60 }, ws = null, wall = null, retry = 1000;
@@ -115,7 +118,7 @@
 
   const showMute = () => {
     const b = $("muteBtn");
-    b.querySelector(".ico").textContent = video.muted ? "🔇" : "🔊";
+    b.querySelector(".ico").className = "ico i i-" + (video.muted ? "mute" : "volume");
     b.querySelector(".lbl").textContent = video.muted ? " Sound off" : " Sound on";
     b.setAttribute("aria-label", video.muted ? "Sound off" : "Sound on");
     const live = !!(wall && wall.running);   // nothing to hear while the wall is off: no sound controls at all
@@ -199,7 +202,8 @@
     if (!inFs()) return;
     const li = el("li", m.kind === "system" ? "sys" : m.guest ? "guest" : ""); li.dataset.id = m.id;
     if (m.kind !== "system") li.append(el("b", null, m.name || "?"));
-    li.append(document.createTextNode(m.text || ""));
+    else if (JEV_LINE.test(m.text || "")) li.append(el("b", null, "DJ Jev"));
+    li.append(document.createTextNode(m.kind === "system" ? noEmoji((m.text || "").replace(JEV_LINE, "")) : m.text || ""));
     const box = $("fmsgs"); box.append(li);
     while (box.children.length > FCHAT_MAX) box.firstChild.remove();
     setTimeout(() => li.classList.add("gone"), FCHAT_LIFE_MS - 1000);
@@ -356,8 +360,8 @@
       const name = tileName(u, labels[i]);
       const t = el("div", "tile" + (wall.sound === i ? " sound" : ""));
       t.append(el("b", "num", String(i + 1)), el("span", "lbl", name));
-      if (wall.sound === i) { const s = el("span", "snd", "🔊"); s.title = "Sound is from this tile"; t.append(s); }
-      else if (!ownPage(u)) { const b = el("button", null, "🔊"); b.title = "Move the sound here"; b.setAttribute("aria-label", "Move the sound here"); b.onclick = () => propose({ op: "sound", i }); t.append(b); }   // our data pages are silent
+      if (wall.sound === i) { const s = el("span", "snd"); s.append(ico("volume")); s.title = "Sound is from this tile"; s.setAttribute("aria-label", "Sound is from this tile"); t.append(s); }
+      else if (!ownPage(u)) { const b = el("button"); b.append(ico("volume")); b.title = "Move the sound here"; b.setAttribute("aria-label", "Move the sound here"); b.onclick = () => propose({ op: "sound", i }); t.append(b); }   // our data pages are silent
       if (i > 0 && (wall.urls || []).length >= 2) {   // tile 1 is the big one
         const p = el("button", null, "Main"); p.title = "Make this the main tile";
         p.onclick = () => propose({ op: "promote", i, label: name }); t.append(p);
@@ -402,7 +406,7 @@
   }
   function starBtn(url, label) {
     const on = ((wall && wall.favorites) || []).includes(url);
-    const b = el("button", "star", on ? "★" : "☆");
+    const b = el("button", "star"); b.append(ico(on ? "star" : "star-outline"));
     b.title = on ? "Unfavorite" : "Favorite (max 2): tiles 3–4 return to it after a break";
     b.setAttribute("aria-label", on ? "Unfavorite" : "Favorite"); b.setAttribute("aria-pressed", String(on));
     b.onclick = () => propose({ op: "favorite", url, on: !on, label });
@@ -531,7 +535,7 @@
     return el("span", "av", v.initials || "?");
   }
   // DJ Jev: the wall's decision model, shown as a member of the party (it runs the dashboards, the streams, the sound)
-  const JEV_AV = "/dj-jev.svg";
+  const JEV_AV = "/dj-jev.svg?v=2";
   const JEV_LINE = /^(?:🤖|🎧|🎬|🔊|📊)\s*(?:DJ )?Jev:\s*/u;
   let pubN = 0, lastViewers = null;   // public-link viewers (a count only) and the last list, to re-render on a count change
   function renderViewers(list) {
@@ -582,9 +586,9 @@
       li.className = "jev";
       li.append(avatar({ avatar: JEV_AV }));
       const body = el("span"); body.append(el("span", "who", "DJ Jev"));
-      const icon = (m.text.match(/^🔊/u) || [""])[0];   // only the sound icon carries meaning
-      body.append(document.createTextNode((icon ? icon + " " : "") + m.text.replace(JEV_LINE, ""))); li.append(body);
-    } else if (m.kind === "system") li.append(el("span", null, m.text));
+      if (/^🔊/u.test(m.text)) body.append(ico("volume"), " ");   // only the sound icon carries meaning
+      body.append(document.createTextNode(m.text.replace(JEV_LINE, ""))); li.append(body);
+    } else if (m.kind === "system") li.append(el("span", null, noEmoji(m.text)));
     else {
       li.append(avatar({ avatar: m.avatar, initials: (m.name || "?").slice(0, 1).toUpperCase() }));
       const body = el("span"); body.append(el("span", "who", m.name));
@@ -734,7 +738,7 @@
     chime();
   }
   function showDing() {
-    $("dingBtn").textContent = dingOn ? "🔔" : "🔕";
+    $("dingBtn").replaceChildren(ico(dingOn ? "bell" : "bell-off"));
     $("dingBtn").setAttribute("aria-pressed", String(dingOn));
     $("dingBtn").title = dingOn ? "Message sound: on" : "Message sound: off";
   }

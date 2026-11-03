@@ -464,3 +464,23 @@ body.public .fchat-form, body.public #fsayBtn { display: none !important; }
 /* no votes: only the owner/admins get the wall controls; everyone else asks DJ Jev in chat */
 body.no-control .controls, body.no-control #props, body.no-control .tile button { display: none !important; }
 body.no-control #chatIn::placeholder { color: var(--muted); }
+
+/* no purple on this page: hqstyle's second accent (chat names, the unread badge, bettors) is the main accent here */
+:root { --accent2: var(--accent); }
+
+/* ---- icons: small white glyphs (web/static/icons/*.svg used as masks) in place of emoji ---- */
+.i { display: inline-block; flex: none; width: clamp(14px, 1.15em, 18px); height: clamp(14px, 1.15em, 18px); vertical-align: -0.2em;
+  background-color: #fff; -webkit-mask: var(--i) center / contain no-repeat; mask: var(--i) center / contain no-repeat; }
+.i-volume { --i: url(/icons/volume.svg); }
+.i-mute { --i: url(/icons/mute.svg); }
+.i-chat { --i: url(/icons/chat.svg); }
+.i-pencil { --i: url(/icons/pencil.svg); }
+.i-fullscreen { --i: url(/icons/fullscreen.svg); }
+.i-pip { --i: url(/icons/pip.svg); }
+.i-bell { --i: url(/icons/bell.svg); }
+.i-bell-off { --i: url(/icons/bell-off.svg); }
+.i-star { --i: url(/icons/star.svg); }
+.i-star-outline { --i: url(/icons/star-outline.svg); }
+.i-close { --i: url(/icons/close.svg); }
+.fs-ctl .i, .chat-toggle .i, .ding .i, .bar .ico { width: 18px; height: 18px; }
+.unmute .i { margin-right: 4px; }

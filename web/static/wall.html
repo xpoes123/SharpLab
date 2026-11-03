@@ -6,7 +6,7 @@
 <meta name="theme-color" content="var(--bg)" />
 <title>Live Election</title>
 <link rel="stylesheet" href="/hqstyle.css" />
-<link rel="stylesheet" href="/wall.css?v=20261103rot" />
+<link rel="stylesheet" href="/wall.css?v=20261103icons" />
 <link rel="stylesheet" href="/wall-bets.css?v=20261103clean" />
 <link rel="stylesheet" href="/wall-election.css?v=20261103clean" />
 <link rel="stylesheet" href="/wall-election-live.css?v=20261103clean" />
@@ -58,8 +58,8 @@
             <div id="preshow" class="preshow" hidden></div>
           </div>
         </div>
-        <button id="unmute" class="unmute" hidden>🔇 Tap for sound</button>
-        <button id="chatToggle" class="chat-toggle" type="button" aria-label="Chat" aria-pressed="false">💬<span id="unread" class="badge" hidden></span></button>
+        <button id="unmute" class="unmute" hidden><span class="i i-mute" aria-hidden="true"></span> Tap for sound</button>
+        <button id="chatToggle" class="chat-toggle" type="button" aria-label="Chat" aria-pressed="false"><span class="i i-chat" aria-hidden="true"></span><span id="unread" class="badge" hidden></span></button>
         <!-- full screen only: the chat floating over the video, Twitch-style (wall.js fchat) -->
         <div id="fchat" class="fchat">
           <ol id="fmsgs" class="fmsgs" aria-live="polite"></ol>
@@ -69,17 +69,17 @@
           </form>
         </div>
         <div class="fs-ctl">
-          <button id="fsayBtn" type="button" aria-label="Write in the chat" title="Write">✎</button>
-          <button id="fchatBtn" type="button" aria-label="Chat over the video" aria-pressed="true" title="Chat overlay: on">💬</button>
-          <button id="fsExit" type="button" aria-label="Exit full screen" title="Exit full screen">✕</button>
+          <button id="fsayBtn" type="button" aria-label="Write in the chat" title="Write"><span class="i i-pencil" aria-hidden="true"></span></button>
+          <button id="fchatBtn" type="button" aria-label="Chat over the video" aria-pressed="true" title="Chat overlay: on"><span class="i i-chat" aria-hidden="true"></span></button>
+          <button id="fsExit" type="button" aria-label="Exit full screen" title="Exit full screen"><span class="i i-close" aria-hidden="true"></span></button>
         </div>
       </div>
       <div class="bar">
         <button id="elecBtn" class="pill btn elec-btn" type="button" aria-label="Election map" hidden><span class="lbl">Election</span></button>
-        <button id="muteBtn" class="pill btn" type="button" aria-label="Sound off" hidden><span class="ico">🔇</span><span class="lbl"> Sound off</span></button>
+        <button id="muteBtn" class="pill btn" type="button" aria-label="Sound off" hidden><span class="ico i i-mute" aria-hidden="true"></span><span class="lbl"> Sound off</span></button>
         <input id="vol" class="vol" type="range" min="0" max="100" step="1" aria-label="Volume" title="Volume" hidden />
-        <button id="fsBtn" class="pill btn" type="button" aria-label="Full screen"><span class="ico">⛶</span><span class="lbl"> Full screen</span></button>
-        <button id="pipBtn" class="pill btn" type="button" aria-label="Picture in picture" title="Picture in picture" hidden><span class="ico">⧉</span><span class="lbl"> Pop out</span></button>
+        <button id="fsBtn" class="pill btn" type="button" aria-label="Full screen"><span class="ico i i-fullscreen" aria-hidden="true"></span><span class="lbl"> Full screen</span></button>
+        <button id="pipBtn" class="pill btn" type="button" aria-label="Picture in picture" title="Picture in picture" hidden><span class="ico i i-pip" aria-hidden="true"></span><span class="lbl"> Pop out</span></button>
         <span id="sync" class="pill">syncing…</span>
         <span id="count" class="pill">0 watching</span>
         <span id="wallName" class="muted"></span>
@@ -146,7 +146,7 @@
         </div>
       </details>
       <div class="card chat">
-        <div class="chat-head"><h3>Chat</h3><button id="dingBtn" class="ding" type="button" aria-pressed="true" aria-label="Message sound" title="Message sound">🔔</button></div>
+        <div class="chat-head"><h3>Chat</h3><button id="dingBtn" class="ding" type="button" aria-pressed="true" aria-label="Message sound" title="Message sound"><span class="i i-bell" aria-hidden="true"></span></button></div>
         <ol id="msgs"></ol>
         <form id="chatForm">
           <input id="chatIn" maxlength="300" autocomplete="off" enterkeyhint="send" placeholder="Say something…" />
@@ -161,9 +161,9 @@
   <aside id="elecSheet" class="es-sheet" hidden aria-hidden="true" aria-label="State results and markets"></aside>
 </main>
 <script src="/vendor/hls.min.js"></script>
-<script src="/wall.js?v=20261103rot"></script>
+<script src="/wall.js?v=20261103icons"></script>
 <script src="/wall-bets.js?v=20261103mem"></script>
-<script src="/wall-election.js?v=20261103clean"></script>
+<script src="/wall-election.js?v=20261103icons"></script>
 <script src="/wall-election-live.js?v=20261103clean"></script>
 </body>
 </html>

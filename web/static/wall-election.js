@@ -13,6 +13,7 @@
   const PARTY = { D: "Dem", R: "Rep", I: "Ind", O: "Other" };
   const OFFICE = { S: "Senate", G: "Governor", H: "House" };
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  const star = () => { const i = el("span", "i i-star"); i.setAttribute("role", "img"); i.setAttribute("aria-label", "big gap"); return i; };   // white icon (wall.css .i)
   const svgEl = (tag, attrs) => { const e = document.createElementNS("http://www.w3.org/2000/svg", tag); for (const k in attrs || {}) e.setAttribute(k, attrs[k]); return e; };
   const fmtTime = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   const pct = (v) => (v == null ? "–" : `${v < 1 && v > 0 ? v.toFixed(1) : Math.round(v)}%`);
@@ -52,7 +53,7 @@
       const t = mid50(r.turnout || []), hot = [...(r.turnout || []), ...(r.shares || [])].some((x) => x.hot);
       const tr = el("tr", hot ? "hot" : null);
       tr.append(el("td", null, name(r)), el("td", "num", t ? `${t.op === "≈" ? "~" : t.op}${f(t.v)}` : "–"),
-        el("td", "num muted", r.proj ? `${f(r.proj)} ±${f(r.sd)}` : "–"), el("td", null, hot ? "★" : ""));
+        el("td", "num muted", r.proj ? `${f(r.proj)} ±${f(r.sd)}` : "–"), (() => { const td = el("td"); if (hot) td.append(star()); return td; })());
       return tr;
     };
     const table = (rs) => {
@@ -71,7 +72,7 @@
       const d = el("details"); d.append(el("summary", "small", `House districts (${house.length})`), table(house)); box.append(d);
     }
     if (!races.length) box.append(el("div", "muted small", "No turnout markets for this state."));
-    box.append(el("div", "muted small", "★ big gap between model and Kalshi. Projections start once enough vote is in."));
+    const note = el("div", "muted small"); note.append(star(), " big gap between model and Kalshi. Projections start once enough vote is in."); box.append(note);
     return box;
   }
   let localNews = null;   // {ST: [{name, url}]}: local-news.json, YouTube channels' /live pages
