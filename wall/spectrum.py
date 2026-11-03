@@ -19,7 +19,8 @@ def load(path: Path = PATH) -> tuple[dict, ...]:
         groups = json.loads(path.read_text()).get("groups") or []
     except (OSError, ValueError, AttributeError):
         return ()
-    return tuple({"group": g["label"], "name": s["name"], "url": s["url"], "note": s.get("note", "")}
+    return tuple({"group": g["label"], "name": s["name"], "url": s["url"], "note": s.get("note", ""),
+                  "hosts": s.get("hosts", "")}
                  for g in groups for s in g.get("streams") or [])
 
 
