@@ -454,6 +454,23 @@ class MarketsCog(commands.Cog):
             "🗑️ Key deleted. Revoke it on Kalshi too (Account → API Keys)." if gone
             else "No Kalshi account linked.", ephemeral=True)
 
+    @kalshi_group.command(name="wall", description="Show (or stop showing) your open Kalshi positions on the watch-party wall")
+    @app_commands.describe(share="on = your positions show on the wall's Bets panel and TV overlay (members + the stream)",
+                           exact="Also show exact contract counts and $ P&L (default: size buckets and % only)")
+    async def kalshi_wall(self, interaction: discord.Interaction, share: bool, exact: bool = False) -> None:
+        uid = str(interaction.user.id)
+        await queries.set_kalshi_wall_optin(uid, share, exact and share, interaction.user.display_name)
+        linked = await queries.get_kalshi_account(uid) is not None
+        if not share:
+            msg = "🙈 Your Kalshi positions are off the wall."
+        else:
+            msg = ("📺 Your open Kalshi positions now show on the watch-party wall (Bets panel + the TV overlay, which is "
+                   "also on the stream). " + ("Exact counts and $ P&L are shown." if exact else
+                                                "Only side, size buckets and P&L % — no dollar amounts.")
+                   + ("" if linked else "\nYou haven't linked Kalshi yet — run `/kalshi link`.")
+                   + "\n`/kalshi wall share:False` turns it off.")
+        await interaction.response.send_message(msg, ephemeral=True)
+
     @kalshi_group.command(name="positions", description="Open Kalshi positions (yours or a tagged user's), marked to market")
     @app_commands.describe(user="Whose positions to show (defaults to you)",
                            private="Show only to you instead of posting in the channel")

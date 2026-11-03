@@ -51,3 +51,19 @@ def test_fill_dedup_trajectory_and_summary(tmp_db):
         assert s["total_pnl_dollars"] == 58.0 * 10 / 100  # pnl_c * count / 100
 
     _run(go())
+
+
+def test_wall_optin_defaults_off_and_needs_a_linked_key(tmp_db):
+    async def go():
+        assert await _queries.get_kalshi_wall_optin("1") == {"share": False, "exact": False, "name": ""}
+        await _queries.set_kalshi_wall_optin("1", True, False, "David")
+        await _queries.set_kalshi_wall_optin("2", True, True, "Steph")       # opted in, but no key linked
+        await _queries.set_kalshi_wall_optin("3", False, False, "Kim")       # linked, not sharing
+        await _queries.set_kalshi_account("1", "k1", b"x")
+        await _queries.set_kalshi_account("3", "k3", b"x")
+        assert await _queries.list_kalshi_wall_sharers() == [{"uid": "1", "name": "David", "exact": False}]
+        await _queries.set_kalshi_wall_optin("1", True, True)                 # no name: keeps the old one
+        assert await _queries.get_kalshi_wall_optin("1") == {"share": True, "exact": True, "name": "David"}
+        await _queries.set_kalshi_wall_optin("1", False, False)
+        assert await _queries.list_kalshi_wall_sharers() == []
+    _run(go())

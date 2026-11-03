@@ -1132,6 +1132,14 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        try:  # members who share their open Kalshi positions on the watch-party wall (/kalshi wall, the watch page); default off
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS kalshi_wall_optin ("
+                "discord_user TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', share INTEGER NOT NULL DEFAULT 0, "
+                "exact INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)")
+            await db.commit()
+        except Exception:
+            pass
         try:  # Poké Hoops: every verified 82-game season (server re-ran the draft + sim — see shared/pokehoops.py)
             await db.execute(
                 "CREATE TABLE IF NOT EXISTS pokehoops_seasons ("
