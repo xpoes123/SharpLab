@@ -215,6 +215,9 @@ def noop(a: dict, wall: dict | None) -> str:
         return "There's no such tile." if a["i"] >= len(urls) else ""
     if op == "promote":
         return "That's already the main tile." if a["i"] == 0 else "There's no such tile." if a["i"] >= len(urls) else ""
+    if op == "tile" and a["i"] < 2 and "/p/election/" not in a["url"] and \
+            ((ov.get("board") == "election") or any("/p/election/" in u for u in urls)):
+        return "Tiles 1–2 are the election dashboards — put streams on tiles 3–4."
     if op == "tile":
         if a["i"] < len(urls) and urls[a["i"]] == a["url"]:
             return "That's already on that tile."
@@ -275,6 +278,8 @@ def check_action(a: object) -> dict:
         return {"op": "promote", "i": _tile(a.get("i")), **label}
     if op == "tile":
         return {"op": "tile", "i": _tile(a.get("i"), 4), "url": _url(a.get("url")), **label}
+    if op == "default":   # election night: the default screens back on every tile
+        return {"op": "default"}
     if op == "rotate":   # election data tiles: hold this screen / the next one now (either holds 5 min, then rotates again)
         if a.get("act") not in ("hold", "next"):
             raise ValueError("act is hold or next")
@@ -333,6 +338,8 @@ def describe(a: dict) -> str:
         return f"move the sound to tile {a['i'] + 1}"
     if op == "layout":
         return f"switch the overlay to {'L-bar' if a['layout'] == 'lbar' else 'full'}"
+    if op == "default":
+        return "put the default election screens back"
     if op == "rotate":
         return f"hold tile {a['i'] + 1} on this screen for 5 min" if a["act"] == "hold" else f"switch tile {a['i'] + 1} to its next screen"
     if op == "spotlight":
@@ -593,6 +600,8 @@ def _route(a: dict) -> tuple[str, str, dict]:
         return "POST", "/i/discord/sound", body
     if op == "layout":
         return "POST", "/i/discord/board", {"layout": a["layout"], "visible": True}
+    if op == "default":
+        return "POST", "/i/discord/default", {}
     if op == "rotate":
         return "POST", "/i/discord/rotate", body
     if op == "spotlight":

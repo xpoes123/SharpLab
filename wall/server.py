@@ -41,6 +41,7 @@ from wall.sync import STEP_S, Runner, SyncStore, tile_games
 from wall.exitpoll import ExitPoll
 from wall.turnout import Turnout
 from wall.events import Events
+from wall import streams
 
 log = logging.getLogger("wall.server")
 TAILNET = ipaddress.ip_network("100.64.0.0/10")
@@ -272,6 +273,13 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
                         log.warning("odds: %s", e)
         events = Events()
 
+        async def streams_ticker():   # YouTube tiles: is the stream on yet (the watch page shows live / starts at)
+            while True:
+                await asyncio.sleep(15)
+                urls = [u for i in instances.values() for u in i.urls]
+                if urls:
+                    await asyncio.to_thread(streams.refresh, urls)
+
         async def events_ticker():   # election night: a race call / first votes → on top of the spotlight + its map on a tile
             while True:
                 await asyncio.sleep(5)
@@ -288,7 +296,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         runner.start()
         tasks = [asyncio.create_task(ticker()), asyncio.create_task(chat_ticker()), asyncio.create_task(bets_ticker()),
                  asyncio.create_task(spot_ticker()), asyncio.create_task(odds_ticker()),
-                 asyncio.create_task(events_ticker())]
+                 asyncio.create_task(events_ticker()), asyncio.create_task(streams_ticker())]
         yield
         for task in tasks:
             task.cancel()
@@ -486,6 +494,15 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
     async def pin(name: str, request: Request) -> dict:
         d = await body(request)
         await asyncio.to_thread(target(name).pin, num(d, "i"))
+        return inst(name).state()
+
+    @app.post("/i/{name}/default")
+    async def default(name: str) -> dict:
+        """The default election screens back (the first preset with the Election board): one press, from the watch page."""
+        p = next((p for p in store.presets if p.get("overlay") == "election"), None)
+        if p is None:
+            raise WallError("no preset with the Election board to go back to")
+        await asyncio.to_thread(target(name).reset, list(p["urls"]))
         return inst(name).state()
 
     @app.post("/i/{name}/rotate")

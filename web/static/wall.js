@@ -237,6 +237,14 @@
         const p = el("button", null, "⬆ main"); p.title = "Make this the main (big) tile";
         p.onclick = () => propose({ op: "promote", i, label: name }); t.append(p);
       }
+      const live = (wall.streams || [])[i];   // a YouTube tile: is it on yet (wall/streams.py)
+      if (live) t.append(el("span", "small " + (live.live ? "live-on" : "muted"), live.live ? "● live" : live.starts
+        ? `starts ${new Date(live.starts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : live.live === false ? "not live" : ""));
+      if (elecMode && i < 2 && !ownPage(u)) {   // a stream on a dashboard tile: one tap back to a dashboard
+        const free = ELEC_SCREENS.find(([scr]) => !(wall.urls || []).includes(OWN + scr));
+        if (free) { const d = el("button", null, "↩ dashboard"); d.title = `Back to ${free[1]}`;
+          d.onclick = () => propose({ op: "tile", i, url: OWN + free[0], label: free[1] }); t.append(d); }
+      }
       const rot = (wall.rotate || []).find((r) => r.i === i);   // an election data tile: rotates every minute
       if (rot) {
         t.append(el("span", "muted small", rot.held ? `held · ${Math.ceil(rot.in / 60)} min` : `next in ${rot.in}s`));
@@ -271,8 +279,10 @@
     }
     return yt[1] + " live";
   }
-  const pickTile = () => {   // the Tile menu's pick, or the next empty one
-    const n = (wall && wall.urls) ? wall.urls.length : 0, picked = +$("tileI").value;
+  const pickTile = (stream) => {   // the Tile menu's pick, or the next empty one; election streams never on the dashboards (1–2)
+    const n = (wall && wall.urls) ? wall.urls.length : 0;
+    let picked = +$("tileI").value;
+    if (stream && picked < 2 && (wall.urls || []).some(ownPage)) picked = n > 3 ? 3 : Math.max(2, Math.min(n, 3));
     return picked < n ? picked : Math.min(n, 3);
   };
   function renderElec() {
@@ -280,10 +290,13 @@
     const pick = (url, label) => {
       const b = el("button", "btn", label + (onWall.has(url) ? " · on the wall" : ""));
       b.disabled = onWall.has(url);
-      b.onclick = () => propose({ op: "tile", i: pickTile(), url, label });
+      b.onclick = () => propose({ op: "tile", i: pickTile(!ownPage(url)), url, label });
       return b;
     };
-    $("elecScreens").replaceChildren(...ELEC_SCREENS.map(([scr, label]) => pick(OWN + scr, label)));
+    const def = el("button", "btn", "↺ Default");
+    def.title = "Put the default election screens back on every tile (dashboards on 1–2, the default streams on 3–4)";
+    def.onclick = () => propose({ op: "default" });
+    $("elecScreens").replaceChildren(def, ...ELEC_SCREENS.map(([scr, label]) => pick(OWN + scr, label)));
     const sel = $("newsSt");
     if (localNews && !sel.options.length) {
       sel.replaceChildren(...Object.keys(localNews).sort().map((st) => { const o = el("option", null, st); o.value = st; return o; }));

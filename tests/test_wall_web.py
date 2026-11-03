@@ -763,3 +763,15 @@ def test_promote_moves_a_tile_to_the_main_spot():
     assert wall._route(a) == ("POST", "/i/discord/move", {"i": 2, "j": 0})
     w = {"running": True, "urls": ["https://a.tv", "https://b.tv"]}
     assert wall.noop({"op": "promote", "i": 0}, w) and wall.noop({"op": "promote", "i": 3}, w) and not wall.noop({"op": "promote", "i": 1}, w)
+
+
+def test_election_default_and_dashboard_tiles_guard():
+    from web.wall import check_action, noop, describe, _route
+    assert check_action({"op": "default"}) == {"op": "default"} and _route({"op": "default"})[1] == "/i/discord/default"
+    assert describe({"op": "default"}) == "put the default election screens back"
+    w = {"running": True, "urls": ["http://127.0.0.1:7795/p/election/races", "http://127.0.0.1:7795/p/election/map", "x", "y"],
+         "overlay": {"board": "election"}}
+    stream = check_action({"op": "tile", "i": 0, "url": "https://www.youtube.com/@WCVB/live"})
+    assert "dashboards" in noop(stream, w)
+    assert noop(check_action({"op": "tile", "i": 3, "url": "https://www.youtube.com/@WCVB/live"}), w) == ""
+    assert noop(check_action({"op": "tile", "i": 0, "url": "http://127.0.0.1:7795/p/election/turnout"}), w) == ""
