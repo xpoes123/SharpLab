@@ -102,6 +102,10 @@ Window {
         b: w.bands; geo: w.bandGeo; unit: w.width; lbarShown: w.lbar; bets: w.bets
         boardData: (w.lbar ? side : whole).last ? (w.lbar ? side : whole).last.data : null
     }
+    SpeakerBadge {   // the badge on the sound tile, like Overlay.qml's speaker surface
+        visible: w.layout !== "full" && w.layout !== "matchup"; width: w.width; height: w.height; b: w.bands; unit: w.width
+        area: w.bands && w.bands.n > 0 ? G.wallArea(w.width, w.height, !!w.bands.lbar) : null
+    }
     Board {
         id: side; visible: w.lbar
         x: w.geo.gridW; width: w.geo.side; height: w.height; unit: w.width
