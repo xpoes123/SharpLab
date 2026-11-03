@@ -34,3 +34,8 @@
   .bet-row .b-who { grid-column: 1 / -1; }
   .bet-row .b-book, .bet-row .spark { display: none; }
 }
+/* election night: a called race spans the row on top, calm (no animation) */
+.bet-row .b-called { grid-column: 1 / -1; font-size: 13px; }
+.bet-row.called-won .b-called { color: var(--green); }
+.bet-row.called-lost .b-called { color: var(--muted); }
+.bet-row .b-status { grid-column: 2 / -1; }

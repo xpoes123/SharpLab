@@ -114,8 +114,21 @@
     }
     if (!d) { root.append(el("p", "muted", "Loading…")); return; }
     if (d.error) root.append(el("p", "muted small", d.error));
-    const games = d.games || [];
-    if (!games.length) root.append(el("p", "muted", "No live games on the wall right now."));
+    const games = d.games || [], elec = d.election || [];
+    if (elec.length) {   // midterm positions: live (results aren't a picture, so no delay), with the race's status
+      const box = el("div", "bet-game on-wall");
+      const gh = el("div", "bet-game-head");
+      gh.append(el("b", null, "Election night"), el("span", "muted small", "Kalshi · live, not delayed"));
+      box.append(gh);
+      elec.forEach((r) => {
+        const tr = row(r);
+        if (r.highlight) { tr.classList.add(r.won ? "called-won" : "called-lost"); tr.prepend(el("b", "b-called", r.highlight)); }
+        if (r.status) tr.append(el("span", "b-status muted small", r.status));
+        box.append(tr);
+      });
+      root.append(box);
+    }
+    if (!games.length && !elec.length) root.append(el("p", "muted", "No live games on the wall right now."));
     games.forEach((g) => {
       const box = el("div", "bet-game" + (g.tile != null ? " on-wall" : ""));
       const gh = el("div", "bet-game-head");
