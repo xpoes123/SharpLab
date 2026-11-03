@@ -136,6 +136,7 @@ REVEAL_WAIT_S = 15.0
 # measures its own decoded audio (an analyser on video.captureStream(), never connected to the speakers) every AUDIO_EVERY_S;
 # silent SILENT_RELOAD_S → one reload; silent SILENT_GIVE_UP_S → the slot is "silent" (ad-skip moves the sound off it / swaps it)
 AUDIO_EVERY_S, SILENT_RELOAD_S, SILENT_GIVE_UP_S = 10.0, 20.0, 45.0
+SILENT_PEAK = 0.002   # a broken decode isn't always exact zeros: PBS sat at 5e-5 (speech peaks 0.1–0.6)
 AUDIO_JS = """(async () => {
   const v = [...document.querySelectorAll('video')].sort((a, b) => b.offsetWidth * b.offsetHeight - a.offsetWidth * a.offsetHeight)[0];
   if (!v || v.paused || v.readyState < 3) return -1;
@@ -658,11 +659,11 @@ class Driver:
                     self._aud_at[slot] = now
                     pk = (call("Runtime.evaluate", {"expression": AUDIO_JS, "awaitPromise": True, "returnByValue": True})
                           .get("result", {}).get("value"))
-                    if isinstance(pk, (int, float)) and pk > 0:
+                    if isinstance(pk, (int, float)) and pk >= SILENT_PEAK:
                         self._quiet_since.pop(slot, None)
                         self._quiet_reloaded.discard(slot)
                         self.silent.discard(slot)
-                    elif pk == 0:
+                    elif isinstance(pk, (int, float)) and pk >= 0:
                         since = self._quiet_since.setdefault(slot, now)
                         if now - since >= SILENT_GIVE_UP_S:
                             if slot not in self.silent:
