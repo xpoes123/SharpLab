@@ -118,6 +118,7 @@ class Session:
     profiles: str = os.path.expanduser("~/.local/state/tv")
     prefix: str = ""
     overlay_api: str = "http://127.0.0.1:7790"
+    bands_api: str = ""            # where the overlay's band layer polls GET <it>/bands (this service's /i/<name>; "" = no bands)
     unmute_on_stop: bool = False   # the TV: tile mutes are remembered per app name ("Chromium" = the kiosk too)
     extra_flags: list = field(default_factory=list)
 
@@ -147,8 +148,8 @@ for (const w of workspace.windowList()) {{
 }}"""
 
 
-def overlay_cmd(api: str) -> list[str]:
-    return ["qml6", str(QML), "--", "--api", api]
+def overlay_cmd(api: str, bands: str = "") -> list[str]:
+    return ["qml6", str(QML), "--", "--api", api, *(["--bands", bands] if bands else [])]
 
 
 def overlay_env(env: dict) -> dict:
@@ -369,7 +370,7 @@ class Driver:
     def _ensure_overlay(self) -> None:
         if self.ov is None or self.ov.poll() is not None:
             try:
-                self.ov = subprocess.Popen(overlay_cmd(self.s.overlay_api), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                self.ov = subprocess.Popen(overlay_cmd(self.s.overlay_api, self.s.bands_api), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                            stderr=subprocess.DEVNULL, env=overlay_env(self.s.child_env()))
             except OSError as e:
                 log.warning("%s overlay failed to start: %s", self.s.name, e)

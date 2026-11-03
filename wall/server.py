@@ -23,6 +23,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import ValidationError
 
+from wall.bands import ScoreTape, build_view, default_delay
 from wall.chat import POLL_S, ChatFeed
 from wall.engine import Session
 from wall.headless import Headless
@@ -128,8 +129,12 @@ class Cfg:
 
 
 def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, scores: Scores | None = None,
-          store: PresetStore | None = None, guard: LLMGuard | None = None, chat: ChatFeed | None = None) -> FastAPI:
+          store: PresetStore | None = None, guard: LLMGuard | None = None, chat: ChatFeed | None = None,
+          delay=None) -> FastAPI:
+    """delay(url) -> (seconds, src): each tile's spoiler delay for the band headers (default: 45 s everywhere)."""
     cfg = cfg or Cfg()
+    delay = delay or default_delay
+    tape = ScoreTape()
     chat = chat or ChatFeed(cfg.web_url, cfg.web_key, cfg.owner_id, cfg.owner_name)
     guard = guard or LLMGuard(cfg.ollama, cfg.llm_guard)
     scores = scores or Scores()
@@ -138,11 +143,13 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         instances = {}
         if cfg.tv:
             instances["tv"] = Instance("tv", Session("tv", cdp_base=9231, profiles=cfg.tv_profiles, overlay_api=cfg.tv_overlay_api,
-                                                     unmute_on_stop=True), store, scores)
+                                                     bands_api=f"http://127.0.0.1:{cfg.port}/i/tv", unmute_on_stop=True),
+                                       store, scores)
         if cfg.discord:
             instances["discord"] = Instance(
                 "discord", Session("discord", cdp_base=9241, profiles=str(cfg.state), prefix="discord-",
-                                   overlay_api=f"http://127.0.0.1:{cfg.port}/i/discord", extra_flags=["--ozone-platform=wayland"]),
+                                   overlay_api=f"http://127.0.0.1:{cfg.port}/i/discord",
+                                   bands_api=f"http://127.0.0.1:{cfg.port}/i/discord", extra_flags=["--ozone-platform=wayland"]),
                 store, scores, headless=Headless("discord", cfg.state), idle_s=cfg.idle_s, first_viewer_s=cfg.first_viewer_s,
                 max_hours=cfg.max_hours, min_free_mb=cfg.min_free_mb, max_load=cfg.max_load, min_avail_mb=cfg.min_avail_mb)
     disc, tv = instances.get("discord"), instances.get("tv")
@@ -192,6 +199,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
 
     app = FastAPI(title="sharplab-wall", lifespan=lifespan)
     app.state.instances, app.state.store, app.state.scores, app.state.guard, app.state.chat = instances, store, scores, guard, chat
+    app.state.tape = tape
 
     @app.middleware("http")
     async def gate(request: Request, call_next):
@@ -388,6 +396,16 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
     @app.get("/i/{name}/api/overlay")
     async def ov_data(name: str, board: str = "") -> dict:
         return await asyncio.to_thread(inst(name).overlay_data, board)
+
+    # ---- the bands around the tiles (the overlay's band layer, qml/Bands.qml) ----
+    @app.get("/i/{name}/bands")
+    def get_bands(name: str) -> dict:
+        i = inst(name)
+        with i.lock:
+            lv = i.live
+            args = dict(urls=list(i.urls), sound=i.driver.sound, lbar=bool(getattr(i.driver, "lbar", False)), view=i.view,
+                        title=i.preset_name, live_league=lv.league if lv else "", live_ids=list(lv.games) if lv else [])
+        return build_view(**args, scores=i.scores, tape=tape, delay=delay, chat=chat.view(party_on()))
 
     # ---- the watch party's chat, for the TV router (loopback only: not in REMOTE_OK) ----
     def party_on() -> bool:
