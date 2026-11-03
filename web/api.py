@@ -33,6 +33,7 @@ from web.liarsdice import router as liarsdice_router, liarsdice_websocket, clean
 from web.penalties import router as penalties_router, penalties_websocket, cleanup_stale_penalties_rooms
 from web.pd import router as pd_router, pd_websocket, cleanup_stale_pd_rooms
 from web.contraband import router as contraband_router, contraband_websocket, cleanup_stale_contraband_rooms
+from web.wall import router as wall_router, wall_websocket
 from web.wallstreet import router as wallstreet_router, wallstreet_websocket, cleanup_stale_wallstreet_rooms, refund_all_wallstreet_rooms
 from web.hq import router as hq_router, quote_refresh_loop
 from web.cards import router as cards_router
@@ -234,9 +235,15 @@ app.include_router(penalties_router)
 app.include_router(pd_router)
 app.include_router(contraband_router)
 app.include_router(wallstreet_router)
+app.include_router(wall_router)
 
 
 # WebSocket endpoint (not on the API router — different path pattern)
+@app.websocket("/ws/wall")
+async def ws_wall(websocket: WebSocket):
+    await wall_websocket(websocket)
+
+
 @app.websocket("/ws/sudoku/{room_id}")
 async def ws_sudoku(websocket: WebSocket, room_id: str):
     await sudoku_websocket(websocket, room_id)
