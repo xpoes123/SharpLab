@@ -255,6 +255,7 @@ class Driver:
                 log.warning("%s overlay failed to start: %s", self.s.name, e)
 
     def stop(self) -> None:
+        had = bool(self.tiles)
         self._stop.set()
         for p in self.procs:
             if p.poll() is None:
@@ -265,7 +266,7 @@ class Driver:
         _end(self.ov)
         self.ov = None
         self.layout, self.lbar = "", False
-        if self.s.unmute_on_stop:
+        if had and self.s.unmute_on_stop:
             unmute_all(self.s.child_env())
 
     def focus(self, i: int) -> None:

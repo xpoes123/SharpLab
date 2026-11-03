@@ -47,6 +47,7 @@ class Cfg:
         self.max_hours = float(env.get("WALL_MAX_HOURS", "6"))
         self.min_free_mb = int(env.get("WALL_MIN_FREE_MB", "2500"))
         self.discord = env.get("WALL_DISCORD", "1") not in ("0", "false", "")
+        self.tv = env.get("WALL_TV", "1") not in ("0", "false", "")
 
 
 def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, scores: Scores | None = None,
@@ -55,8 +56,10 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
     scores = scores or Scores()
     store = store or PresetStore(str(cfg.state), cfg.import_from)
     if instances is None:
-        instances = {"tv": Instance("tv", Session("tv", cdp_base=9231, profiles=cfg.tv_profiles, overlay_api=cfg.tv_overlay_api,
-                                                  unmute_on_stop=True), store, scores)}
+        instances = {}
+        if cfg.tv:
+            instances["tv"] = Instance("tv", Session("tv", cdp_base=9231, profiles=cfg.tv_profiles, overlay_api=cfg.tv_overlay_api,
+                                                     unmute_on_stop=True), store, scores)
         if cfg.discord:
             instances["discord"] = Instance(
                 "discord", Session("discord", cdp_base=9241, profiles=str(cfg.state), prefix="discord-",
