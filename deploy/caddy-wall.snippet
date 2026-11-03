@@ -1,0 +1,32 @@
+# OPTIONAL — NOT APPLIED. For David's review before any public-exposure change on the VPS.
+#
+# The watch party already works through the existing sharplab.djiang.xyz site with NO Caddy change:
+#   page   https://sharplab.djiang.xyz/wall.html     (the site's catch-all file_server, web/static/wall.html)
+#   HLS    /api/v1/wall/hls/*                        (handle /api/* → localhost:8000; session-checked in web/wall.py)
+#   socket /ws/wall                                  (handle /ws/* → localhost:8000; session-checked at the handshake)
+# The homelab wall service (100.67.232.59:7795) is only reached by sharplab-web over Tailscale with WALL_API_TOKEN;
+# nothing here proxies to it, and its control API (/presets, /i/*) is never routed publicly.
+#
+# What this adds, if wanted: a pretty /wall URL. Paste inside the `sharplab.djiang.xyz { … }` block, next to the
+# other page rewrites (above the catch-all `root * /opt/sharplab/web/static` / `file_server`), then
+# `caddy validate --config /etc/caddy/Caddyfile && systemctl reload caddy`.
+
+    @wallPage path /wall /wall/
+    handle @wallPage {
+        rewrite * /wall.html
+        root * /opt/sharplab/web/static
+        file_server
+    }
+
+# Not recommended, listed for completeness: serving HLS straight from the homelab with Caddy forward_auth (saves the
+# app proxying ~4.5 Mb/s per distinct segment, which the app caches, so N viewers ≈ one upstream fetch anyway):
+#
+#    handle_path /wall/hls/* {
+#        forward_auth localhost:8000 {
+#            uri /api/v1/wall/me          # 200 with a session, 401 without
+#        }
+#        rewrite * /hls/discord{path}
+#        reverse_proxy 100.67.232.59:7795 {
+#            header_up Authorization "Bearer {env.WALL_API_TOKEN}"
+#        }
+#    }

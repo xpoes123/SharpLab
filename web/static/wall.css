@@ -8,7 +8,7 @@
 .offline { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; background: var(--panel); }
 .unmute { position: absolute; left: 12px; bottom: 12px; border: 0; border-radius: var(--r-pill); padding: 8px 14px;
   background: rgba(17,18,26,.8); color: var(--fg); font: inherit; cursor: pointer; }
-.unmute[hidden] { display: none; }
+.unmute[hidden], .offline[hidden], #room[hidden], #gate[hidden] { display: none; }
 
 .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
 .bar .pill { font-size: 12px; padding: 3px 10px; }
