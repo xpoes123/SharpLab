@@ -30,6 +30,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from web import auth
 from wall import spectrum
 from web._apisec import check_api_key
+from web import wall_jev
 from web.wall_guard import Guard
 
 log = logging.getLogger(__name__)
@@ -750,10 +751,18 @@ class EdgeClock:
         return moved
 
 
+async def _ask_jev(state: str, questions: dict) -> dict | None:
+    from web import wall_election   # it imports this module
+    return await wall_election._jev(state, questions, timeout=wall_jev.TIMEOUT_S)
+
+
 # ---- the hub: sockets + state ----------------------------------------------------------------------------------------
 class Hub:
-    def __init__(self, clock=time.time, execute=None, fetch_state=None) -> None:
+    def __init__(self, clock=time.time, execute=None, fetch_state=None, ask_jev=None) -> None:
         self.clock = clock
+        self.ask_jev = ask_jev or _ask_jev   # chat commands to Jev ("jev show the senate map"); tests stub it
+        self.jev_user, self.jev_all = RateLimit(1, 10), RateLimit(6, 60)
+        self._jev_tasks: set[asyncio.Task] = set()
         self.execute = execute or service_execute
         self.fetch_state = fetch_state or service_state
         self.presence = Presence()
@@ -916,6 +925,45 @@ class Hub:
         await self.broadcast({"t": "proposal", "p": self.pub(p)})
         await self.refresh_wall()
 
+    # -- chat commands to Jev: "jev put fox on" → one Jev choice → the panel's own tile action, proposed as that viewer
+    def jev_command(self, user: dict, text: object) -> str:
+        """Fire a "jev …" chat line in the background (after the line itself is posted; never delays chat). "" = fired, or
+        not a Jev command; else why not (for the sender only)."""
+        if not wall_jev.is_command(text) or user.get("public") or not user.get("id") or not verified(user):
+            return ""
+        now = self.clock()
+        if not self.jev_user.allow(user["id"], now):
+            return "One Jev command every 10 s."
+        if not self.jev_all.allow("*", now):
+            return "Jev is busy — try again in a minute."
+        t = asyncio.create_task(self._jev_command(user, str(text)))
+        self._jev_tasks.add(t)
+        t.add_done_callback(self._jev_tasks.discard)
+        return ""
+
+    async def _jev_command(self, user: dict, text: str) -> None:
+        try:
+            try:
+                a = await asyncio.wait_for(self.ask_jev(wall_jev.state(text), wall_jev.questions()), wall_jev.TIMEOUT_S)
+            except Exception as e:  # noqa: BLE001 — a timeout or a failure: Jev wasn't reached
+                log.warning("jev command: %s", type(e).__name__)
+                a = None
+            if a is None:
+                await self.say(wall_jev.UNREACHABLE)
+                return
+            choice, conf = wall_jev.answer(a)
+            if choice == "none" or conf < wall_jev.MIN_CONF:
+                await self.say(wall_jev.HELP)
+                return
+            action, name, msg = wall_jev.plan(choice, text, self.wall)
+            if not action:
+                await self.say(msg)
+                return
+            p, err = await self.propose(user, action)
+            await self.say(wall_jev.reply(p, err, action, name, conf))
+        except Exception as e:  # noqa: BLE001 — a background task: log, never raise into the loop
+            log.warning("jev command failed: %s", e)
+
     async def say(self, text: str, **extra) -> None:
         m = self.chat.system(text, self.clock())
         m.update(extra)
@@ -972,6 +1020,7 @@ class Hub:
         m, err = self.chat.post(user, text, self.clock())
         if m:
             await self.broadcast({"t": "chat", "msg": m})
+            self.jev_command(user, m["text"])
         return m, err
 
     def state(self) -> dict:
@@ -1145,6 +1194,8 @@ async def handle(h: Hub, cid: int, ws: WebSocket, user: dict, msg: dict) -> None
         m, err = h.chat.post(user, text, now)
         if m:
             await h.broadcast({"t": "chat", "msg": m})
+            if why := h.jev_command(user, m["text"]):
+                await h.send(ws, {"t": "error", "text": why, "chat": True})
         else:
             if err in ("Slow down a little.", "You just said that."):
                 await h.strike(ident, "chat flood", client_ip(ws), user.get("name", ""), user["id"])
