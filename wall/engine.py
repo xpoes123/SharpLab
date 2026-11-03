@@ -132,6 +132,23 @@ FADE_OUT_JS = """(() => { const r = document.documentElement; r.style.background
 # a stream page loading in a tile is never seen: from its first paint everything is invisible on black (TV_HIDE_JS, run at
 # document start) until its video is fullscreen in the tile, then it fades in (TV_REVEAL_JS). REVEAL_WAIT_S at most.
 REVEAL_WAIT_S = 15.0
+# a live stream can arrive with its audio decoding to pure silence (YouTube live, 2026-11-03: NBC, then LiveNOW): the tile
+# measures its own decoded audio (an analyser on video.captureStream(), never connected to the speakers) every AUDIO_EVERY_S;
+# silent SILENT_RELOAD_S → one reload; silent SILENT_GIVE_UP_S → the slot is "silent" (ad-skip moves the sound off it / swaps it)
+AUDIO_EVERY_S, SILENT_RELOAD_S, SILENT_GIVE_UP_S = 10.0, 20.0, 45.0
+AUDIO_JS = """(async () => {
+  const v = [...document.querySelectorAll('video')].sort((a, b) => b.offsetWidth * b.offsetHeight - a.offsetWidth * a.offsetHeight)[0];
+  if (!v || v.paused || v.readyState < 3) return -1;
+  let A = window.__tvA;
+  if (!A || A.v !== v) {
+    try { const ctx = new AudioContext(); const an = ctx.createAnalyser(); an.fftSize = 2048;
+          ctx.createMediaStreamSource(v.captureStream()).connect(an); A = window.__tvA = { v, ctx, an }; } catch (e) { return -1; }
+  }
+  if (A.ctx.state !== 'running') { try { await A.ctx.resume(); } catch (e) {} if (A.ctx.state !== 'running') return -1; }
+  const b = new Float32Array(2048); let pk = 0;
+  for (let i = 0; i < 5; i++) { await new Promise((r) => setTimeout(r, 150)); A.an.getFloatTimeDomainData(b); for (const x of b) pk = Math.max(pk, Math.abs(x)); }
+  return pk;
+})()"""
 # the stream is shown only once its video plays for real (enough buffered, not paused, time moving) — never its spinner,
 # YouTube's controls or the player swapping in
 PLAYING_JS = """(() => { const v = [...document.querySelectorAll('video')].sort((a, b) => b.offsetWidth * b.offsetHeight
@@ -407,6 +424,10 @@ class Driver:
         self.on_change = lambda: None   # tile died / relaunched → the owner bumps its rev
 
         self._stalls: dict[int, Stall] = {}   # slot → stall watchdog
+        self._aud_at: dict[int, float] = {}       # slot → last audio check
+        self._quiet_since: dict[int, float] = {}  # slot → decoded audio silent since
+        self._quiet_reloaded: set[int] = set()
+        self.silent: set[int] = set()             # slots whose stream plays silent audio (AUDIO_JS)
         self.pages: set[int] = set()          # slots showing one of our own pages (no video: left alone by _tend)
         self.artifacts: dict[int, float] = {}  # slots showing a claude.ai artifact → when it was last (re)loaded
 
@@ -507,9 +528,20 @@ class Driver:
             self._ensure_overlay()
         threading.Thread(target=self._run, args=(self._stop,), name=f"wall-{self.s.name}", daemon=True).start()
 
+    def silent_tiles(self) -> set[int]:
+        """Tile indexes whose stream's audio decodes to silence (see AUDIO_JS)."""
+        return {i for i, (_, slot) in enumerate(self.tiles) if slot in self.silent}
+
+    def _forget_audio(self, slot: int) -> None:
+        self._quiet_since.pop(slot, None)
+        self._quiet_reloaded.discard(slot)
+        self.silent.discard(slot)
+        self._aud_at.pop(slot, None)
+
     def set_tile(self, i: int, url: str) -> None:
         if 0 <= i < len(self.tiles):
             p, slot = self.tiles[i]
+            self._forget_audio(slot)
             if self._navigate(p, slot, url):
                 self._mark(url, slot)
                 self._stalls.pop(slot, None)
@@ -621,6 +653,26 @@ class Driver:
         try:
             with cdp_page(port) as call:
                 call("Runtime.evaluate", {"expression": FULLSCREEN_JS, "userGesture": True, "awaitPromise": True})
+                now = time.monotonic()
+                if now - self._aud_at.get(slot, 0.0) >= AUDIO_EVERY_S:
+                    self._aud_at[slot] = now
+                    pk = (call("Runtime.evaluate", {"expression": AUDIO_JS, "awaitPromise": True, "returnByValue": True})
+                          .get("result", {}).get("value"))
+                    if isinstance(pk, (int, float)) and pk > 0:
+                        self._quiet_since.pop(slot, None)
+                        self._quiet_reloaded.discard(slot)
+                        self.silent.discard(slot)
+                    elif pk == 0:
+                        since = self._quiet_since.setdefault(slot, now)
+                        if now - since >= SILENT_GIVE_UP_S:
+                            if slot not in self.silent:
+                                log.info("%s tile slot %d: its audio is silent — giving the sound / the tile up", self.s.name, slot)
+                            self.silent.add(slot)
+                        elif now - since >= SILENT_RELOAD_S and slot not in self._quiet_reloaded:
+                            self._quiet_reloaded.add(slot)
+                            log.info("%s tile slot %d: audio silent %.0f s — reloading", self.s.name, slot, now - since)
+                            call("Page.reload", {"ignoreCache": True})
+                            return
                 probe = call("Runtime.evaluate", {"expression": PROBE_JS, "returnByValue": True}).get("result", {}).get("value")
                 act = stall_action(self._stalls.setdefault(slot, Stall()), probe, time.monotonic())
                 if act and act[0] == "seek":

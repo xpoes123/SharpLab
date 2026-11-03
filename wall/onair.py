@@ -225,7 +225,8 @@ class Policy:
             if held is not None:
                 return held
         target = None
-        if board.is_(urls[s], AWAY, SOUND_AD_S, now):
+        silent = getattr(inst.driver, "silent_tiles", lambda: set())()
+        if s in silent or board.is_(urls[s], AWAY, SOUND_AD_S, now):
             target = self._on_air(urls, video, s, board, favs, now)
         elif self.auto_sound:
             back = [k for k in video if board.is_(urls[k], "coverage", SOUND_BACK_S, now)]
@@ -250,7 +251,7 @@ class Policy:
 
     def _on_air(self, urls: list[str], video: list[int], s: int, board: Board, favs: list[str], now: float) -> int | None:
         """Where the sound goes off a break: a favorite on air, else the manual pick, else the surest."""
-        on_air = [k for k in video if k != s and board.is_(urls[k], "coverage", 0, now)]
+        on_air = [k for k in video if k != s and k not in silent and board.is_(urls[k], "coverage", 0, now)]
         target = next((k for k in on_air if urls[k] in favs), None)
         if target is None:
             target = next((k for k in on_air if urls[k] == self.pref), None)
@@ -329,6 +330,7 @@ class Policy:
                                                          if k != i and not own_page(urls[k]))
             from wall import streams as _streams
             dead = (_streams.peek(u) or {}).get("live") is False   # a stream that hasn't started / has ended: real content now
+            dead = dead or i in getattr(inst.driver, "silent_tiles", lambda: set())()   # its audio decodes to silence
             if dead or board.is_(u, SWAP_AWAY, SWAP_SOUND_S if stuck else SWAP_AFTER_S, now):
                 cands = [c for c in board.fresh() if c not in on_wall and board.is_(c, "coverage", FRESH_S, now)
                          and (board.get(c).get("soon") or 0) < 0.6]   # not one that's about to break itself
