@@ -1,5 +1,6 @@
 """Election-night ad-skip: the keyword pass (wall/adwatch.py), the wall's policy + favorites (wall/onair.py), the service's
 POST /adwatch + state + toggles (wall/server.py), the web's classify endpoint and watch-page ops. No network, no GPU."""
+from collections import deque
 import asyncio
 
 import pytest
@@ -17,24 +18,6 @@ LOCAL = "https://www.youtube.com/@WSBTV/live"
 
 
 # ---- the keyword pass -------------------------------------------------------------------------------------------------------
-def test_heuristic_clear_cut_ads_and_coverage():
-    ad = "Ask your doctor about Rybelsus. Side effects may include nausea. Call now, terms apply, 3.9% APR financing."
-    assert adwatch.heuristic(ad) == ("ad", 0.9)
-    cov = ("Polls have closed in Georgia and we can now project the Senate race there. Votes are still being counted in "
-           "Fulton County, where turnout was high, and the governor's race remains too early to call.")
-    assert adwatch.heuristic(cov)[0] == "coverage"
-    assert adwatch.heuristic("", quiet=1.0) == ("break", 0.7)   # dead air between segments
-    # not clear-cut → the LLM decides
-    assert adwatch.heuristic("Stay with us, we'll be right back after this with more on the Senate.") == (None, 0.0)
-    assert adwatch.heuristic("Of course, what happens to the weapons that have already been purchased?") == (None, 0.0)
-    assert adwatch.heuristic("This campaign ad was paid for by the committee. I approve this message, says the candidate.")[0] is None
-    # the web didn't answer: a weaker call
-    assert adwatch.fallback("Stay with us, we'll be right back.") == ("break", 0.55)
-    assert adwatch.fallback("Order today and save up to 40 percent") == ("ad", 0.6)
-    assert adwatch.fallback("the senate") == ("coverage", 0.6)
-    assert adwatch.fallback("hmm") == ("unknown", 0.0)
-
-
 def test_movie_arg_escapes_colons_and_quotes():
     assert adwatch.movie_arg("https://h/x:y/it's") == "'https\\://h/x\\:y/it\\'\\''s'"
 
@@ -47,17 +30,18 @@ def test_rms_and_wav():
 class StubStream:
     def __init__(self, url):
         self.url = url
-        self.text, self.status, self.last_classify = [], {"label": "unknown", "confidence": 0, "since": 0, "text_tail": ""}, 0.0
+        self.text, self.status, self.last_classify = deque(), {"label": "unknown", "confidence": 0, "since": 0, "text_tail": ""}, 0.0
 
     window = adwatch.Stream.window
     add = adwatch.Stream.add
     close = lambda self: None  # noqa: E731
 
 
-def test_watcher_labels_asks_the_web_only_when_unclear_and_posts(monkeypatch):
+def test_watcher_always_asks_the_model_and_posts(monkeypatch):
     asked, posted = [], []
     w = adwatch.Watcher(env={"WALL_ADWATCH_POOL": f"{NBC},{PBS}"}, stt=lambda pcm: "",
-                        classify=lambda u, t: asked.append(u) or ("coverage", 0.7), post=posted.append,
+                        classify=lambda u, t: asked.append(u) or (("ad", 0.95) if "doctor" in t else ("nonsense", 0) if "zzz" in t else ("coverage", 0.7)),
+                        post=posted.append,
                         walls=lambda: {"tv": {"running": True, "urls": [OWN + "races", OWN + "map?view=S", LOCAL, NBC],
                                               "favorites": [ABC], "adwatch": {"orig": {"3": CBS}}}},
                         live=lambda u: u == NBC, clock=lambda: 5000.0)
@@ -68,7 +52,9 @@ def test_watcher_labels_asks_the_web_only_when_unclear_and_posts(monkeypatch):
     w.streams[NBC].add("Of course, what happens next is anyone's guess", False, 4990)
     body = w.cycle(5000.0)
     assert body["streams"][LOCAL]["label"] == "ad" and body["streams"][NBC]["label"] == "coverage"
-    assert asked == [NBC] and posted == [body]
+    assert sorted(asked) == sorted([LOCAL, NBC]) and posted == [body]   # every label is the model's, keywords decide nothing
+    w.streams[NBC].add("zzz", False, 5100)
+    assert w.cycle(5100.0)["streams"][NBC]["label"] == "unknown"        # no usable answer: unknown, never a keyword guess
     w.sync_streams([NBC])
     assert list(w.streams) == [NBC]
     w.walls = lambda: {"tv": {"running": False, "urls": []}}

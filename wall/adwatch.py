@@ -4,14 +4,15 @@ coverage / ad / break / offtopic every CLASSIFY_S, and posts the labels to the w
 wall/onair.py moves the sound and swaps tiles.
 
     uv run python -m wall.adwatch                 (user unit deploy/sharplab-adwatch.service)
-    uv run python -m wall.adwatch --once <url>    (one 15 s chunk: resolve, transcribe, keyword pass — a sanity check)
+    uv run python -m wall.adwatch --once <url>    (one 15 s chunk: resolve, transcribe, cue counts — a sanity check)
 
 Per stream: `yt-dlp -g` gives the HLS URL (refreshed every HLS_TTL or on failure). Text comes from (a) CEA-608/708
 captions in the video track when ffprobe sees them (ffmpeg's lavfi `movie=…[out0+subcc]`; YouTube's live HLS normally
 has none), else (b) speech-to-text over CHUNK_S audio chunks (`ffmpeg … -f s16le`): faster-whisper on the GPU (one small
 model shared by every stream; `uv sync --extra adwatch`), or the homelab's CPU whisper service over HTTP
-(WALL_ADWATCH_WHISPER_URL; serialized, enough for one or two streams). Labels: a keyword pass first; anything not
-clear-cut goes to sharplab-web's POST /api/v1/wall/election/classify (Claude Haiku; WALL_WEB_URL + WALL_WEB_KEY).
+(WALL_ADWATCH_WHISPER_URL; serialized, enough for one or two streams). Labels: every window goes to sharplab-web's
+POST /api/v1/wall/election/classify (TypeSafe Jev, Claude Haiku when Jev is unsure; WALL_WEB_URL + WALL_WEB_KEY) — no
+keyword ever decides a label (no false "ad" on coverage); no answer or silence = "unknown", which the policy ignores.
 Nothing runs while no wall is up.
 
 Env: WALL_ADWATCH_POOL (comma-separated URLs), WALL_ADWATCH_MAX (streams at once, 8), WALL_ADWATCH_STT (gpu | http),
@@ -69,32 +70,6 @@ def cues(text: str) -> tuple[int, int, int]:
     """(ad, break, coverage): how many distinct cues of each kind the text has."""
     return sum(bool(r.search(text)) for r in _AD), sum(bool(r.search(text)) for r in _BREAK), \
         sum(bool(r.search(text)) for r in _COV)
-
-
-def heuristic(text: str, quiet: float = 0.0) -> tuple[str | None, float]:
-    """The keyword pass: (label, confidence) when it's clear-cut, (None, 0) when the LLM should decide. `quiet` = the
-    share of the window's audio that was silence."""
-    words = len(text.split())
-    ad, brk, cov = cues(text)
-    if words < 8 and quiet >= 0.6:
-        return "break", 0.7
-    if ad >= 3 and cov <= 1 or ad >= 2 and cov == 0:
-        return "ad", 0.9 if ad >= 3 else 0.8
-    if cov >= 4 and ad == 0 and brk == 0 or cov >= 3 and ad == 0 and brk == 0 and words >= 40:
-        return "coverage", 0.9 if cov >= 4 else 0.8
-    return None, 0.0
-
-
-def fallback(text: str, quiet: float = 0.0) -> tuple[str, float]:
-    """No answer from the web: a weaker keyword call ("unknown" when there's nothing to go on)."""
-    ad, brk, cov = cues(text)
-    if ad > cov and ad:
-        return "ad", 0.6
-    if brk and not cov:
-        return "break", 0.55
-    if cov:
-        return "coverage", 0.6
-    return ("break", 0.5) if quiet >= 0.6 else ("unknown", 0.0)
 
 
 # ---- I/O helpers (separate so the logic above tests without network) --------------------------------------------------
@@ -381,11 +356,11 @@ class Watcher:
 
     def label(self, s: Stream, now: float) -> None:
         text, quiet = s.window()
-        lab, conf = heuristic(text, quiet)
-        if lab is None:
-            lab, conf = self.classify(s.url, text[-2000:]) if text.strip() else ("unknown", 0.0)
-            if lab not in ("coverage", "ad", "break", "offtopic"):
-                lab, conf = fallback(text, quiet)
+        # every label is the model's (Jev, Haiku when unsure): no keyword call can mislabel coverage as an ad; no answer
+        # or no words (silence) = "unknown", which the policy never acts on
+        lab, conf = self.classify(s.url, text[-2000:]) if text.strip() else ("unknown", 0.0)
+        if lab not in ("coverage", "ad", "break", "offtopic"):
+            lab, conf = "unknown", 0.0
         if lab != s.status["label"]:
             s.status["since"] = now
         s.status.update(label=lab, confidence=round(conf, 2), text_tail=text[-160:])
@@ -430,7 +405,7 @@ class Watcher:
 
 
 def once(url: str) -> None:
-    """A sanity check from any box: resolve, 15 s of audio, transcribe, keyword pass."""
+    """A sanity check from any box: resolve, 15 s of audio, transcribe, cue counts (informational only)."""
     t = time.time()
     hls = hls_url(url)
     print(f"hls in {time.time() - t:.1f}s")
@@ -440,8 +415,7 @@ def once(url: str) -> None:
     t = time.time()
     text = make_stt()(pcm)
     print(f"stt in {time.time() - t:.1f}s: {text}")
-    print("cues (ad, break, coverage):", cues(text), "heuristic:", heuristic(text, float(rms(pcm) < QUIET_RMS)),
-          "fallback:", fallback(text))
+    print("cues (ad, break, coverage):", cues(text))
 
 
 def main() -> None:
