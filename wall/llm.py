@@ -1,7 +1,8 @@
 """The box's local LLM (Ollama, :11434: Sage's gemma/qwen) steps out of the GPU's way while any wall runs.
 
 Same mechanism as the TV OS's LLMGuard (xpoes123/tv src/tv/video.py), which covers the TV's own apps: unload what's
-loaded (keep_alive 0) and remember it; when no wall runs any more, warm those back with the callers' options. It runs
+loaded (keep_alive 0). Nothing is warmed back when the walls stop: the next real request loads the model (and Ollama's
+own keep-alive unloads it again), so an idle GPU never holds a model on our account. It runs
 every tick, so a model a caller reloads mid-wall (Sage's local_chat keeps working, it just reloads) is evicted again
 within one tick.
 
@@ -69,10 +70,4 @@ class LLMGuard:
             except Exception as e:  # noqa: BLE001
                 log.warning("llm guard: can't start ollama: %s", e)
                 return
-        try:
-            for name in list(self.parked):   # same options Sage uses, so its next call doesn't reload
-                self.call(self.base, "/api/generate", {"model": name, "keep_alive": "24h", "options": {"num_ctx": 16384}})
-                self.parked.remove(name)
-                log.info("warmed %s back", name)
-        except Exception as e:  # noqa: BLE001
-            log.warning("llm guard: %s", e)
+        self.parked.clear()   # no warm-back: the next real request loads it — no idle GPU hold
