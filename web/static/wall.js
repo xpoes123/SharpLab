@@ -263,8 +263,8 @@
   function setMedia() {
     if (!media || !window.MediaMetadata) return;
     try {
-      media.metadata = new MediaMetadata({ title: (wall && wall.running && wall.name) || "The wall", artist: "SharpLab watch party",
-                                           album: "SharpLab Wall", artwork: [{ src: "/wall-art.png", sizes: "512x512", type: "image/png" }] });
+      media.metadata = new MediaMetadata({ title: (wall && wall.running && wall.name) || "The wall", artist: "Live Election",
+                                           album: "Live Election", artwork: [{ src: "/wall-art.png", sizes: "512x512", type: "image/png" }] });
     } catch (e) { /* older browsers: no metadata */ }
   }
   if (media) {
@@ -860,7 +860,7 @@
       document.body.classList.add("inroom");
       applyMode();
       connect();
-    }).catch(() => showGate("Couldn't reach SharpLab."));
+    }).catch(() => showGate("Couldn't reach the server."));
   }
   $("nick").oninput = () => nickError("");
   $("guestForm").onsubmit = (e) => {
@@ -877,7 +877,7 @@
         try { localStorage.setItem("wall.nick", name); } catch (e) { /* not remembered next time, still joined */ }
         boot();
       })
-      .catch(() => nickError("Couldn't reach SharpLab."))
+      .catch(() => nickError("Couldn't reach the server."))
       .finally(() => { if (!holdT) { btn.disabled = false; btn.textContent = "Join"; } });
   };
   // Too many joins from this network just now: count down on the button, then let them try again.
