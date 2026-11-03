@@ -1,10 +1,9 @@
-"""Daily NBA/MLB pick'em.
+"""Daily NBA/WNBA/MLB/NFL pick'em — played on the website (/pickem).
 
-Each morning (10 AM ET) the bot recaps last night's results, then posts today's
-NBA + MLB slate — one message per game with ✈️ (away) and 🏠 (home) reactions.
-Vote by reacting; voting locks at each game's tip-off. Resolved off the existing
-score pipeline (games.status='final'). Leaderboard ranks by total correct,
-accuracy, or streak points.
+Each morning (10 AM ET) the bot opens today's full slate for picks. It no longer posts
+to Discord (too noisy); older posted games still get their messages locked/resolved.
+Picks lock at tip-off and resolve off the score pipeline (games.status='final'), paying
+coins. /pickem today|leaderboard|favorites remain as on-demand commands.
 """
 
 from __future__ import annotations
@@ -69,32 +68,15 @@ PICKEM_COINS_PER_UNIT = 50  # casino coins paid per unit WON on a correct pick (
 
 def _pickem_win_coins(gain_units: float) -> int:
     return max(0, round(gain_units * PICKEM_COINS_PER_UNIT))
-# Monday-morning "last week's winner" callout — runs daily, but only fires on Mondays.
-WEEK_WINNER_TIME = time(hour=11, minute=0, tzinfo=ET)
 
 PICKEM_CHANNEL_DEFAULT = 1510694785034354849
 _PICKEM_CHANNEL_SETTING = "pickem_channel"
-_WEEK_WINNER_SETTING = "pickem_week_winner"  # stores the ISO-week label already announced
 
 AWAY_EMOJI = "✈️"
 HOME_EMOJI = "🏠"
 SPORT_EMOJI = {"nba": "🏀", "wnba": "🏀", "mlb": "⚾", "nfl": "🏈"}
 
-# Per-sport daily pick'em cap. Sports not listed post their whole slate. MLB runs
-# ~15 games/day, so we keep only 5: any game with a pinned team (below) first,
-# then filled out with the marquee (biggest-favorite) games. NFL Sundays run ~13
-# games, so cap it too (preseason days stay well under the cap and all post).
-_SPORT_DAILY_CAP = {"mlb": 5, "nfl": 8}
 PICKEM_SPORTS = ("nba", "wnba", "mlb", "nfl")
-PICKEM_WEB_URL = "https://sharplab.djiang.xyz/pickem"  # full slate lives here
-# MLB teams whose games are always kept in the daily slate. Matched as a substring
-# of either team's full name (e.g. "red sox" ⊂ "Boston Red Sox").
-_PINNED_MLB = ("brewers", "red sox", "mets", "rockies", "dodgers")
-
-
-def _pinned_mlb(game) -> bool:
-    names = f"{game.home_team} {game.away_team}".lower()
-    return any(p in names for p in _PINNED_MLB)
 
 
 MIN_FAV_LEN = 3  # a favorite shorter than this would match too many teams
@@ -163,13 +145,6 @@ def _filter_week(rows: list[dict], s_utc: str, e_utc: str) -> list[dict]:
     return out
 
 
-async def _weekly_standings(dt: datetime) -> dict[str, dict]:
-    """Pick'em standings over the week that contains `dt`."""
-    rows = await queries.get_pickem_resolved_picks()
-    s_utc, e_utc = _week_bounds(dt)
-    return compute_pickem_standings(_filter_week(rows, s_utc, e_utc))
-
-
 def _winner_from_scores(home_score: int, away_score: int) -> str:
     return "home" if home_score > away_score else "away"
 
@@ -214,12 +189,6 @@ def _game_message(game: dict, *, locked: bool = False, result: str | None = None
     if locked:
         return f"{head}{odds}\n🔒 Voting closed — game underway."
     return f"{head}{odds}\n🕒 {_discord_time(game['start_time'])} — tap a team to bet!"
-
-
-def _result_line(game: dict, counts: dict[str, int]) -> str:
-    winner_team = game["home_team"] if game["winner"] == "home" else game["away_team"]
-    tally = f"{AWAY_EMOJI} {counts.get('away', 0)} · {HOME_EMOJI} {counts.get('home', 0)}"
-    return f"✅ **{winner_team}** won — votes: {tally}"
 
 
 # ── Daily card: scores, picks, payouts ───────────────────────────────────────
@@ -603,14 +572,12 @@ class PickemCog(commands.Cog):
         self.lock_loop.start()
         self.resolve_loop.start()
         self.favorites_loop.start()
-        self.week_winner_loop.start()
 
     async def cog_unload(self) -> None:
         self.post_loop.cancel()
         self.lock_loop.cancel()
         self.resolve_loop.cancel()
         self.favorites_loop.cancel()
-        self.week_winner_loop.cancel()
 
     pickem = app_commands.Group(name="pickem", description="Daily NBA/WNBA/MLB pick'em")
     favorites = app_commands.Group(name="favorites", description="Auto-pick your favorite teams", parent=pickem)
@@ -628,51 +595,20 @@ class PickemCog(commands.Cog):
 
     @tasks.loop(time=POST_TIME)
     async def post_loop(self) -> None:
-        channel = await self._channel()
-        if channel is None:
-            log.warning("pickem: alerts channel not found")
-            return
+        """Open today's slate for picks on the website. Nothing posts to Discord anymore (too noisy)."""
+        now_et = datetime.now(ET)
+        today = now_et.date().isoformat()
+        start = now_et.replace(hour=0, minute=0, second=0, microsecond=0)
         try:
-            await self._post_recap(channel)
-            await self._post_today(channel)
+            for g in await self._slate(start.astimezone(timezone.utc).isoformat(),
+                                       (start + timedelta(days=1)).astimezone(timezone.utc).isoformat()):
+                await self._persist_web_game(g, today)
         except Exception:
-            log.exception("pickem: morning routine failed")
+            log.exception("pickem: morning slate failed")
 
     @post_loop.before_loop
     async def _before_post(self) -> None:
         await self.bot.wait_until_ready()
-
-    async def _post_recap(self, channel: discord.TextChannel) -> None:
-        yesterday = (datetime.now(ET).date() - timedelta(days=1)).isoformat()
-        games = await queries.get_pickem_games_for_date(yesterday)
-        resolved = [g for g in games if g["resolved"]]
-        if not resolved:
-            return
-        embed = discord.Embed(
-            title=f"🌙 Last Night's Pick'em — {yesterday}", colour=0x9B59B6,
-        )
-        per_user: dict[str, list[int]] = {}  # uid -> [correct, total]
-        game_lines = []
-        for g in resolved:
-            counts = await queries.get_pickem_vote_counts(g["message_id"])
-            game_lines.append(_result_line(g, counts).replace("✅ ", ""))
-            for p in await queries.get_pickem_picks_for_message(g["message_id"]):
-                rec = per_user.setdefault(p["discord_user"], [0, 0])
-                rec[1] += 1
-                if p["correct"]:
-                    rec[0] += 1
-        embed.add_field(name="Results", value="\n".join(game_lines)[:1024], inline=False)
-        if per_user:
-            ranked = sorted(per_user.items(), key=lambda kv: (kv[1][0], kv[1][0] / kv[1][1]), reverse=True)
-            lines = []
-            for uid, (correct, total) in ranked[:15]:
-                try:
-                    name = (await self.bot.fetch_user(int(uid))).display_name
-                except Exception:
-                    name = f"Player {uid[:6]}"
-                lines.append(f"**{name}** — {correct}/{total}")
-            embed.add_field(name="How everyone did", value="\n".join(lines)[:1024], inline=False)
-        await channel.send(embed=embed)
 
     async def _slate(self, s_utc: str, e_utc: str) -> list:
         """The FULL pick'em slate across all sports in [s_utc, e_utc), sorted by tip time.
@@ -683,38 +619,6 @@ class PickemCog(commands.Cog):
                 slate += await queries.get_games_in_window(s_utc, e_utc, sport=sport)
             except Exception:
                 log.exception("pickem: failed to load %s games", sport)
-        slate.sort(key=lambda g: g.start_time_utc_iso)
-        return slate
-
-    async def _capped(self, full: list) -> list:
-        """The Discord subset of the full slate: a sport with a daily cap
-        (see _SPORT_DAILY_CAP) keeps only its most lopsided 'marquee favorite' games —
-        ranked by distance from a coin flip — plus any pinned-team games (MLB). The
-        website still shows every game; this just keeps the Discord post from spamming."""
-        by_sport: dict[str, list] = {}
-        for g in full:
-            by_sport.setdefault(g.sport, []).append(g)
-
-        slate: list = []
-        for sport, games in by_sport.items():
-            cap = _SPORT_DAILY_CAP.get(sport)
-            if cap is None or len(games) <= cap:
-                slate += games
-                continue
-            pinned = sorted((g for g in games if sport == "mlb" and _pinned_mlb(g)),
-                            key=lambda g: g.start_time_utc_iso)
-            pinned_ids = {g.game_id for g in pinned}
-            scored = []
-            for g in games:
-                if g.game_id in pinned_ids:
-                    continue
-                probs = await _win_probs(g.game_id)
-                dev = abs(probs[0] - 0.5) if probs else -1.0  # no odds → fill last
-                scored.append((dev, g.start_time_utc_iso, g))
-            scored.sort(key=lambda t: (-t[0], t[1]))  # most lopsided, then earliest
-            fill = max(0, cap - len(pinned))
-            slate += pinned[:cap] + [g for _, _, g in scored[:fill]]
-
         slate.sort(key=lambda g: g.start_time_utc_iso)
         return slate
 
@@ -731,95 +635,6 @@ class PickemCog(commands.Cog):
         await queries.add_pickem_game(
             g.game_id, g.game_id, g.sport, g.home_team, g.away_team,
             g.start_time_utc_iso, posted_date, hp, ap, src,
-        )
-
-    async def _post_today(self, channel: discord.TextChannel) -> None:
-        now_et = datetime.now(ET)
-        today = now_et.date().isoformat()
-        start = now_et.replace(hour=0, minute=0, second=0, microsecond=0)
-        end = start + timedelta(days=1)
-        s_utc = start.astimezone(timezone.utc).isoformat()
-        e_utc = end.astimezone(timezone.utc).isoformat()
-
-        full = await self._slate(s_utc, e_utc)
-
-        if not full:
-            await channel.send(f"📋 **Daily Pick'em — {today}**\nNo games on the slate today.")
-            return
-
-        posted = await self._capped(full)
-        posted_ids = {g.game_id for g in posted}
-        extra = len(full) - len(posted)
-        more = (f"\n🌐 That's the marquee slate — pick **all {len(full)} games** "
-                f"({extra} more) at {PICKEM_WEB_URL}") if extra > 0 else ""
-        await channel.send(
-            f"📋 **Daily Pick'em — {today}**\n"
-            "Tap a team, then stake **1–5 units**. Everyone starts at 0u and can go "
-            "negative — beat the market to climb the board. Each game locks at tip-off!" + more
-        )
-        for g in posted:
-            if await queries.pickem_game_exists(g.game_id, today):
-                continue
-            if await queries.get_game_scores(g.game_id) is not None:
-                continue  # already final earlier today — skip voting
-            await self._post_game(channel, {
-                "game_id": g.game_id, "sport": g.sport,
-                "home_team": g.home_team, "away_team": g.away_team,
-                "start_time": g.start_time_utc_iso,
-            }, today)
-        # Persist the rest of the full slate as web-only picks (not posted to Discord).
-        for g in full:
-            if g.game_id not in posted_ids:
-                await self._persist_web_game(g, today)
-
-    async def _post_for_date(self, channel: discord.TextChannel, date: str) -> None:
-        """Post (or re-post) the pick'em slate for an explicit date string (YYYY-MM-DD)."""
-        dt = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=ET)
-        start = dt.replace(hour=0, minute=0, second=0, microsecond=0)
-        end = start + timedelta(days=1)
-        s_utc = start.astimezone(timezone.utc).isoformat()
-        e_utc = end.astimezone(timezone.utc).isoformat()
-
-        full = await self._slate(s_utc, e_utc)
-
-        if not full:
-            await channel.send(f"📋 **Pick'em — {date}**\nNo games on the slate for {date}.")
-            return
-
-        posted = await self._capped(full)
-        posted_ids = {g.game_id for g in posted}
-        extra = len(full) - len(posted)
-        more = (f"\n🌐 Pick **all {len(full)} games** ({extra} more) at {PICKEM_WEB_URL}") if extra > 0 else ""
-        await channel.send(
-            f"📋 **Pick'em — {date}**\n"
-            "Tap a team, then stake **1–5 units**." + more
-        )
-        for g in posted:
-            if await queries.pickem_game_exists(g.game_id, date):
-                continue
-            await self._post_game(channel, {
-                "game_id": g.game_id, "sport": g.sport,
-                "home_team": g.home_team, "away_team": g.away_team,
-                "start_time": g.start_time_utc_iso,
-            }, date)
-        for g in full:
-            if g.game_id not in posted_ids:
-                await self._persist_web_game(g, date)
-
-    async def _post_game(self, channel: discord.TextChannel, gd: dict, posted_date: str) -> None:
-        probs = await _win_probs(gd["game_id"])
-        if probs:
-            gd["home_prob"], gd["away_prob"], gd["odds_source"] = probs
-        try:
-            msg = await channel.send(_game_message(gd))
-            await msg.edit(view=GamePickView(str(msg.id), gd["away_team"], gd["home_team"]))
-        except discord.HTTPException:
-            log.exception("pickem: failed to post game %s", gd["game_id"])
-            return
-        await queries.add_pickem_game(
-            str(msg.id), gd["game_id"], gd["sport"], gd["home_team"], gd["away_team"],
-            gd["start_time"], posted_date,
-            gd.get("home_prob"), gd.get("away_prob"), gd.get("odds_source"),
         )
 
     # ── Lock + resolve loops ─────────────────────────────────────────────────
@@ -980,75 +795,6 @@ class PickemCog(commands.Cog):
 
     # ── Week winner callout ──────────────────────────────────────────────────
 
-    @tasks.loop(time=WEEK_WINNER_TIME)
-    async def week_winner_loop(self) -> None:
-        """On Monday morning ET, celebrate last week's top pick'em player. Deduped
-        via a bot_setting so it posts at most once per completed week."""
-        if datetime.now(ET).weekday() != 0:  # Mondays only
-            return
-        try:
-            await self._post_week_winner()
-        except Exception:
-            log.exception("pickem: week-winner callout failed")
-
-    @week_winner_loop.before_loop
-    async def _before_week_winner(self) -> None:
-        await self.bot.wait_until_ready()
-
-    async def _post_week_winner(self) -> None:
-        # "Last completed week" = the week containing 7 days ago.
-        last_week = datetime.now(timezone.utc) - timedelta(days=7)
-        label = _iso_week_label(last_week)
-        if await queries.get_bot_setting(_WEEK_WINNER_SETTING) == label:
-            return  # already announced this week
-        s_utc, e_utc = _week_bounds(last_week)
-        rows = await queries.get_pickem_resolved_picks()
-        standings = compute_pickem_standings(_filter_week(rows, s_utc, e_utc))
-        channel = await self._channel()
-        if channel is None:
-            log.warning("pickem: week-winner channel not found")
-            return  # retry next run; don't mark done
-        if not standings:
-            await queries.set_bot_setting(_WEEK_WINNER_SETTING, label)  # nothing to celebrate
-            return
-        # Winner: most units, then streak points, then raw correct.
-        ranked = sorted(
-            standings.items(),
-            key=lambda kv: (kv[1]["units"], kv[1]["points"], kv[1]["correct"]),
-            reverse=True,
-        )
-        uid, s = ranked[0]
-        try:
-            name = (await self.bot.fetch_user(int(uid))).display_name
-        except Exception:
-            name = f"Player {uid[:6]}"
-        w, losses = s["correct"], s["total"] - s["correct"]
-        week_num = label.split("W")[-1].lstrip("0") or "0"
-        embed = discord.Embed(
-            title=f"🏆 Week {week_num} Pick'em Winner",
-            description=(
-                f"👑 **{name}** ran the table last week!\n"
-                f"**{w}-{losses}** · **{s['units']:+.1f}u** · {s['points']} streak pts"
-            ),
-            colour=0xF1C40F,
-        )
-        if len(ranked) > 1:
-            others = []
-            medals = {1: "🥈", 2: "🥉"}
-            for i, (ouid, os_) in enumerate(ranked[1:3], 1):
-                try:
-                    onm = (await self.bot.fetch_user(int(ouid))).display_name
-                except Exception:
-                    onm = f"Player {ouid[:6]}"
-                others.append(
-                    f"{medals.get(i, f'#{i+1}')} **{onm}** — "
-                    f"{os_['units']:+.1f}u ({os_['correct']}-{os_['total'] - os_['correct']})"
-                )
-            embed.add_field(name="Runners-up", value="\n".join(others), inline=False)
-        embed.set_footer(text="Fresh week, fresh slate — /pickem leaderboard to chase the crown.")
-        await channel.send(embed=embed)
-        await queries.set_bot_setting(_WEEK_WINNER_SETTING, label)
-
     # ── Commands ─────────────────────────────────────────────────────────────
 
     @favorites.command(name="add", description="Add a favorite team — auto-picks it in every pick'em game")
@@ -1203,45 +949,6 @@ class PickemCog(commands.Cog):
         embed.set_footer(text="🔵 live · 🟢/🔴 your side ahead/behind · payouts at market win%")
         await interaction.followup.send(embed=embed)
 
-    @pickem.command(name="channel", description="Set the pick'em channel")
-    @app_commands.describe(channel="Where the daily pick'em is posted")
-    async def channel_cmd(
-        self, interaction: discord.Interaction, channel: discord.TextChannel,
-    ) -> None:
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message(
-                "You need **Manage Server** to set the pick'em channel.", ephemeral=True,
-            )
-            return
-        await queries.set_bot_setting(_PICKEM_CHANNEL_SETTING, str(channel.id))
-        await interaction.response.send_message(
-            f"✅ Daily pick'em will post in {channel.mention}.", ephemeral=True,
-        )
-
-    @pickem.command(name="post", description="Post today's (or a specific date's) pick'em now (admin)")
-    @app_commands.describe(date="Date to post in YYYY-MM-DD format (default: today)")
-    async def post_now(self, interaction: discord.Interaction, date: str | None = None) -> None:
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message(
-                "You need **Manage Server** to trigger a post.", ephemeral=True,
-            )
-            return
-        await interaction.response.defer(ephemeral=True)
-        channel = await self._channel()
-        if channel is None:
-            await interaction.followup.send("Pick'em channel not found.", ephemeral=True)
-            return
-        if date:
-            try:
-                datetime.strptime(date, "%Y-%m-%d")
-            except ValueError:
-                await interaction.followup.send("Invalid date format — use YYYY-MM-DD.", ephemeral=True)
-                return
-            await self._post_for_date(channel, date)
-        else:
-            await self._post_recap(channel)
-            await self._post_today(channel)
-        await interaction.followup.send(f"Posted in {channel.mention}.", ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:

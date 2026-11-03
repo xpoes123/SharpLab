@@ -162,7 +162,7 @@ Commands are organized into nested subcommand groups to stay under Discord's 100
 |---|---|
 | `/kalshi [market]` / `/mlb-kalshi [market]` | Yes/no price + depth on a Kalshi contract |
 | `/signals channel|scan` | Arbitrage / middle / steam-move market alerts |
-| `/pickem leaderboard|channel|post` | Daily NBA/MLB pick'em contest |
+| `/pickem today|leaderboard|favorites` | Daily pick'em (played on the website; no Discord posts) |
 | `/reactionrole create|bind|unbind|list` | Reaction-role (auto-role) panels |
 | Sports news (auto) | `sportsnews.py` posts NBA/NFL/MLB breaking news + pings the league role |
 | CLV (auto) | When a game closes, bot posts CLV for anyone who logged a bet on it |
