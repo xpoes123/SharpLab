@@ -3,7 +3,7 @@
     dbus-run-session -- kwin_wayland --virtual … --exit-with-session=hold.sh      (process group = ours to end)
     pactl load-module module-null-sink sink_name=wall_<name>                     (the tiles' audio, never the TV's speakers)
     qml6 Cast.qml -- Virtual-0                                                    (KWin makes a PipeWire node of the output)
-    gst-launch-1.0 pipewiresrc path=<node> → 30 fps → NV12 → nvh264enc (GOP 30)  ┐
+    gst-launch-1.0 pipewiresrc path=<node> → 60 fps (WALL_FPS) → NV12 → nvh264enc (GOP = fps, WALL_KBPS)  ┐
                    pipewiresrc target-object=wall_<name> (monitor) → avenc_aac   ┴→ mpegtsmux → stdout
     ffmpeg -i pipe: -c copy -f hls -hls_time 1 (+ PROGRAM-DATE-TIME)              → <state>/hls/<name>/index.m3u8
 
@@ -191,7 +191,7 @@ class Headless:
         if self.hls.exists():
             shutil.rmtree(self.hls)
         self.hls.mkdir(parents=True)
-        self.gst = _spawn(gst_cmd(node, sink), self.dir / "gst.log", env=self._base_env(), stdout=subprocess.PIPE,
+        self.gst = _spawn(gst_cmd(node, sink, kbps=int(os.environ.get("WALL_KBPS", "8000")), fps=int(os.environ.get("WALL_FPS", "60"))), self.dir / "gst.log", env=self._base_env(), stdout=subprocess.PIPE,
                           preexec_fn=no_core)
         with open(self.dir / "ffmpeg.log", "wb") as f:
             self.ff = subprocess.Popen(ffmpeg_cmd(self.hls), stdin=self.gst.stdout, stdout=subprocess.DEVNULL, stderr=f,
