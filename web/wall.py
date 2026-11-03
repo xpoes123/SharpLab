@@ -1057,6 +1057,8 @@ def public_msg(msg: dict) -> dict | None:
         return {"t": "chat", "msg": public_chat(msg["msg"])}
     if msg.get("t") == "del":
         return {"t": "del", "id": msg.get("id")}
+    if msg.get("t") == "clock":   # the stream's clock offset: without it a public player sat ~4 s "off" and kept seeking
+        return msg
     if msg.get("t") == "wall" and isinstance(msg.get("state"), dict):   # public viewers watch the stream too (no origin ids)
         return {"t": "wall", "state": public_wall(msg["state"])}
     return None
@@ -1158,7 +1160,8 @@ async def public_websocket(ws: WebSocket) -> None:
     h.pubs[cid] = ws
     await h.send(ws, {"t": "hello", "me": {"public": True, "id": "", "name": "", "guest": False, "admin": False, "owner": False},
                       "now": h.clock() * 1000, "history": [public_chat(m) for m in h.chat.log], "viewers": [],
-                      "proposals": [], "wall": public_wall(h.wall), "count": h.counts(), "cfg": {"chat_max": CHAT_MAX}})
+                      "proposals": [], "wall": public_wall(h.wall), "count": h.counts(), "pdt_off": h.edge.off,
+                      "cfg": {"chat_max": CHAT_MAX, "delay": cfg()["delay"]}})   # the same shared point as the party
     await h.push_counts(force=True)
     h.ensure_ticker()
     ident = "ip:" + ip
@@ -1169,7 +1172,7 @@ async def public_websocket(ws: WebSocket) -> None:
             if h.guard.limit(ident, t != "ping", now):
                 continue
             if t == "ping":
-                await h.send(ws, {"t": "pong", "c": msg.get("c"), "s": now * 1000})
+                await h.send(ws, {"t": "pong", "c": msg.get("c"), "s": now * 1000, "pdt_off": h.edge.off})
             elif t != "hb" and h.guard.tell(("pub", cid), now):
                 await h.send(ws, {"t": "error", "text": "The chat is read-only here — the watch party is invite-only.", "chat": t == "chat"})
     except (WebSocketDisconnect, RuntimeError, ValueError):
