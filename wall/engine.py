@@ -139,9 +139,10 @@ PLAYING_JS = """(() => { const v = [...document.querySelectorAll('video')].sort(
 # a constructed stylesheet on the document, not a <style> element: YouTube rewrites the page's DOM while it boots (an element
 # or attribute we add at document start is gone a second later), but it leaves document.adoptedStyleSheets alone
 TV_HIDE_JS = """(() => { const sh = new CSSStyleSheet(); sh.replaceSync('html{background:#000!important} html *{visibility:hidden!important}');
-  window.__tvHide = sh; document.adoptedStyleSheets = [...document.adoptedStyleSheets, sh]; })()"""
-TV_REVEAL_JS = """(() => { const sh = window.__tvHide; if (!sh) return; const r = document.documentElement; r.style.opacity = '0';
-  document.adoptedStyleSheets = document.adoptedStyleSheets.filter((x) => x !== sh); window.__tvHide = null;
+  sh.__tvhide = true; window.__tvHide = sh; document.adoptedStyleSheets = [...document.adoptedStyleSheets, sh]; })()"""
+# every hide sheet goes (two quick swaps can leave two: removing only the last one left a tile black)
+TV_REVEAL_JS = """(() => { if (!document.adoptedStyleSheets.some((x) => x.__tvhide)) return; const r = document.documentElement;
+  r.style.opacity = '0'; document.adoptedStyleSheets = document.adoptedStyleSheets.filter((x) => !x.__tvhide); window.__tvHide = null;
   requestAnimationFrame(() => { r.style.transition = 'opacity 0.5s ease-out'; r.style.opacity = '1'; }); })()"""
 ARTIFACT = re.compile(r"^https://claude\.ai/(code/)?artifact/[\w-]+")
 ARTIFACT_RELOAD_S = 300.0
@@ -452,8 +453,11 @@ class Driver:
                 # this session's script runs at the start of every document it loads, while it's open: nothing of the new
                 # page (not even a white flash before its CSS) shows until it's ready
                 call("Page.enable")
-                call("Page.addScriptToEvaluateOnNewDocument", {"source": TV_HIDE_JS})
+                sid = call("Page.addScriptToEvaluateOnNewDocument", {"source": TV_HIDE_JS}).get("identifier")
                 call("Page.navigate", {"url": resolve_live(url)})
+                time.sleep(1.0)   # the new document has run it: never again (a later swap / reload starts clean)
+                if sid:
+                    call("Page.removeScriptToEvaluateOnNewDocument", {"identifier": sid})
                 ready = FULLSCREEN_JS if stream else "document.readyState === 'complete'"   # a stream: its video fullscreen
                 end = time.monotonic() + (REVEAL_WAIT_S if stream else 5.0)
                 while time.monotonic() < end:
