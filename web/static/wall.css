@@ -336,3 +336,13 @@
 }
 
 .live-on { color: #E0605A; font-weight: 600; }
+
+/* Desktop (≥ 1400 px): the whole width — a bigger video and map — and a wider right rail that stays in view while the main
+   column scrolls: who's watching, the chat (filling what's left of the screen) and the live updates feed under it. */
+@media (min-width: 1400px) {
+  #wall { max-width: none; padding: 16px 24px; }
+  #room { grid-template-columns: minmax(0, 1fr) clamp(380px, 24vw, 520px); }
+  .side { position: sticky; top: 12px; max-height: calc(100vh - 24px); grid-template-rows: auto minmax(0, 1fr) auto; }
+  .side .chat { height: auto; min-height: 320px; }
+  .side .lv-feed { max-height: 38vh; overflow-y: auto; }
+}
