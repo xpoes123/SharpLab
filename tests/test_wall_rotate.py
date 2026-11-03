@@ -10,7 +10,7 @@ def test_screen_and_next():
     assert next_url(URLS, 0) == B + "map?view=S"                    # the unpinned map starts the cycle
     assert next_url([B + "map?view=G", B + "races"], 0) == B + "turnout"         # races is taken: skips it
     assert next_url([B + "turnout", B + "map?view=S"], 0) == B + "exitpoll"
-    assert next_url([B + "exitpoll", B + "map?view=S"], 0) == B + "map?view=H"  # wraps, skipping the map tile 2 has
+    assert next_url([B + "exitpoll", B + "map?view=S"], 0) == B + "races"     # wraps past every map: tile 2 has one
 
 
 def test_due_staggers_and_holds():
@@ -39,3 +39,11 @@ def test_show_screen_skips_held_tiles_and_screens_already_up():
     i.rot.hold(0, t[0])                                   # a vote holds tile 1
     assert i.show_screen("map?view=G") and got == [(1, B + "map?view=G")]
     assert i.rot.at[1] == t[0] + 2 * EVERY_S
+
+
+def test_dashboards_never_two_of_a_kind():
+    from wall.rotate import next_url
+    assert next_url([B + "map?view=S", B + "races"], 1) == B + "turnout"          # not a second map next to the map
+    assert next_url([B + "map?view=S", B + "races"], 0) == B + "map?view=H"      # a map may follow a map on the same tile
+    from wall.headless import gain_stages
+    assert gain_stages(20) == ["volume", "volume=10", "!", "volume", "volume=2", "!"] and gain_stages(2) == ["volume", "volume=2", "!"]

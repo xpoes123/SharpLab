@@ -200,7 +200,8 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         snap = results.snapshot()
         return {"races": ke.compact_races(snap["races"], set(bets.need)), "offices": snap["offices"]}
 
-    policies = {k: onair.Policy(cfg.adwatch) for k in instances}
+    adw_file = cfg.state / "adwatch-on"   # the owner's ad-skip toggle survives a restart (env WALL_ADWATCH = the first default)
+    policies = {k: onair.Policy(adw_file.read_text().strip() == "1" if adw_file.exists() else cfg.adwatch) for k in instances}
 
     def onair_state(i: Instance) -> dict:
         src = i.source if i.follow and i.source is not None else i   # a mirror shows the TV's policy
@@ -533,6 +534,10 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
             raise ValueError("on is a boolean")
         t = target(name)
         policies[t.name].set_on(d["on"])
+        try:
+            adw_file.write_text("1" if d["on"] else "0")
+        except OSError as e:
+            log.warning("adwatch toggle: %s", e)
         t._bump()
         inst(name)._bump()
         return inst(name).state()

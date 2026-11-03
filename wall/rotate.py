@@ -18,13 +18,19 @@ def screen(url: str) -> str | None:
     return rest if rest.split("?")[0] in ("map", "races", "turnout", "exitpoll") else None
 
 
+def kind(s: str | None) -> str | None:
+    """"map?view=S" → "map": the dashboards never show two of one kind at once (two maps side by side)."""
+    return s.split("?")[0] if s else None
+
+
 def next_url(urls: list[str], i: int) -> str | None:
-    """Tile i's next screen, skipping the ones already on the wall (None: nothing else to show)."""
+    """Tile i's next screen: not one already on the wall, nor the same kind as another dashboard (None: nothing else)."""
     cur, taken = screen(urls[i]), {screen(u) for u in urls}
+    others = {kind(screen(u)) for j, u in enumerate(urls) if j != i and screen(u)}
     start = SCREENS.index(cur) if cur in SCREENS else -1
     for k in range(1, len(SCREENS) + 1):
         s = SCREENS[(start + k) % len(SCREENS)]
-        if s not in taken:
+        if s not in taken and kind(s) not in others:
             return urls[i].split(MARK, 1)[0] + MARK + s
     return None
 
@@ -43,7 +49,7 @@ class Rotation:
 
     def due(self, urls: list[str], now: float) -> list[tuple[int, str]]:
         """(tile, its next screen's URL) for the rotating tiles whose turn it is; the caller swaps them in."""
-        out, urls = [], list(urls)
+        out, urls = [], list(urls)   # next_url keeps the kinds apart; a kind clash already on the wall heals on its next turn
         for i, u in enumerate(urls):
             if screen(u) is None:
                 self.at.pop(i, None)
