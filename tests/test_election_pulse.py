@@ -47,3 +47,9 @@ def test_share_race_parsing():
     assert ep.share_race("KXVOTEGENERAL-SENATENE26DOSB")["state"] == "NE"
     assert ep.turnout_race_id("AKAL") == ["H-AK-1", "H-AK"]
     assert ep.turnout_race_id("GASEN")[0] == "S-GA"
+
+
+def test_wall_status_line_carries_projection():
+    from shared import election_markets as em
+    assert em.status_line(_race("H", "NJ", 7, 50, 150_000, 80_000, 70_000)).endswith("~300K votes projected")
+    assert "projected" not in em.status_line(_race("H", "NJ", 7, 2, 1000, 600, 400))

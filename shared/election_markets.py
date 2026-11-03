@@ -13,6 +13,7 @@ is tight, else its last trade.
 """
 from __future__ import annotations
 
+from shared import election_pulse as ep
 from shared import kalshi_election as ke
 from shared import kalshi_wall as kw
 
@@ -152,7 +153,9 @@ def status_line(r: dict) -> str:
         return f"✓ {(w or {}).get('name') or r['called']} ({r['called']}) · {r.get('caller') or ''}".rstrip(" ·")
     if r.get("votes"):
         lead = (r.get("cands") or [{}])[0]
-        return f"{round(r.get('pct') or 0)}% in · {lead.get('name', '')} +{r.get('margin') or 0:g}"
+        pj = ep.project(r)   # Election Pulse: votes ÷ % in (shared/election_pulse.py; /pulse.html has the markets)
+        proj = f" · ~{ep.short(pj['proj'])} votes projected" if pj and (r.get("pct") or 0) < 99 else ""
+        return f"{round(r.get('pct') or 0)}% in · {lead.get('name', '')} +{r.get('margin') or 0:g}{proj}"
     if r.get("uncontested"):
         return "uncontested"
     return "no votes yet"
