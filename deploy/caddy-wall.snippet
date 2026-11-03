@@ -34,13 +34,13 @@
 # ---- The TV wall's chat poll (wall/chat.py on the homelab), the private path ------------------------------------------
 # sharplab-web listens on 127.0.0.1:8000 only, so the homelab can't reach it over Tailscale today (only through the
 # public https://sharplab.djiang.xyz, which also works: WALL_WEB_URL=https://sharplab.djiang.xyz). This adds a listener
-# on the VPS's Tailscale address that forwards just the chat bot API (X-Api-Key still required by the app). Paste at the
+# on the VPS's Tailscale address that forwards just the chat + bets-feed bot API (X-Api-Key still required by the app). Paste at the
 # top level of the Caddyfile (not inside a site), then validate + `systemctl reload caddy` (graceful; no app restart).
 # The homelab then uses WALL_WEB_URL=http://100.81.31.34:8796 (WireGuard-encrypted; nothing public).
 
 http://100.81.31.34:8796 {
     bind 100.81.31.34
-    @chat path /api/v1/wall/chat
+    @chat path /api/v1/wall/chat /api/v1/wall/bets/feed
     handle @chat {
         reverse_proxy localhost:8000
     }
