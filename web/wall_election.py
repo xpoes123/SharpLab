@@ -710,7 +710,10 @@ async def _classify_jev(text: str, recent: str = "") -> dict | None:
                    f"garbled):\n{text}\n\nThe last ~20 s of it:\n{recent}",
                    {"segment": {"type": "choice", "question": "What is this stream airing right now?", "criteria": JEV_CRITERIA},
                     "soon": {"type": "choice", "question": "Judging by the last ~20 s, is this stream about to cut to a "
-                             "commercial break within the next minute?", "criteria": JEV_SOON}})
+                             "commercial break within the next minute?", "criteria": JEV_SOON},
+                    "important": {"type": "choice", "question": "Is something important happening right now that viewers "
+                                  "shouldn't miss (breaking news, a race call/projection, a candidate speaking, major results)?",
+                                  "criteria": JEV_IMPORTANT}})
     seg = a.get("segment") if a else None
     if not isinstance(seg, dict) or seg.get("choice") not in JEV_CRITERIA:
         return None
@@ -718,6 +721,9 @@ async def _classify_jev(text: str, recent: str = "") -> dict | None:
     soon = _jev_p(a.get("soon"), "soon")
     if soon is not None:
         out["soon"] = soon
+    imp = _jev_p(a.get("important"), "yes")   # the stream director's "jump to it now" signal (wall/streamdir.py)
+    if imp is not None:
+        out["important"] = imp
     return out
 
 
@@ -759,6 +765,7 @@ async def classify(stream: str, text: str, now: float | None = None, recent: str
     src = "jev"
     got = await _classify_jev(text, recent)
     jev_soon = got.get("soon") if isinstance(got, dict) else None
+    jev_imp = got.get("important") if isinstance(got, dict) else None
     if not got or not isinstance(got.get("confidence"), (int, float)) or got["confidence"] < JEV_MIN:
         src = "llm"
         try:
@@ -775,6 +782,8 @@ async def classify(stream: str, text: str, now: float | None = None, recent: str
     soon = jev_soon if jev_soon is not None else got.get("soon")   # Jev's read of "a break is coming" first, then Haiku's
     if isinstance(soon, (int, float)) and not isinstance(soon, bool):
         ans["soon"] = round(max(0.0, min(1.0, float(soon))), 2)
+    if isinstance(jev_imp, (int, float)) and not isinstance(jev_imp, bool):
+        ans["important"] = jev_imp
     _cls["last"][stream] = (now, ans)
     if len(_cls["cache"]) > 2000:
         _cls["cache"].clear()
@@ -792,15 +801,18 @@ async def post_direct(request: Request, x_api_key: str = Header("")):
     except ValueError:
         body = None
     state, options = (body.get("state"), body.get("options")) if isinstance(body, dict) else (None, None)
+    question = body.get("question") if isinstance(body, dict) else None   # the stream director's (wall/streamdir.py)
     if not isinstance(state, str) or not isinstance(options, dict) or not 2 <= len(options) <= 12 or \
-            not all(isinstance(k, str) and isinstance(v, str) for k, v in options.items()):
-        return JSONResponse({"error": "state is a string, options {screen: description}"}, status_code=422)
+            not all(isinstance(k, str) and isinstance(v, str) for k, v in options.items()) or \
+            not (question is None or isinstance(question, str) and question.strip()):
+        return JSONResponse({"error": "state is a string, options {screen: description}, question a string"}, status_code=422)
     key = os.environ.get("JEV_API_KEY", "")
     if not key:
         return {}
     req = {"model": "jev-latest", "state": "An election-night TV wall has two dashboard tiles next to live news streams. "
            "What is happening right now:\n" + state[:4000],
-           "questions": {"screen": {"type": "choice", "question": "Which dashboard is the most useful to show right now?",
+           "questions": {"screen": {"type": "choice",
+                                    "question": (question or "Which dashboard is the most useful to show right now?")[:300],
                                     "criteria": {k[:60]: v[:300] for k, v in options.items()}}}}
     try:
         async with httpx.AsyncClient(timeout=4) as c:

@@ -306,6 +306,14 @@
     const tog = el("button", "btn", `Auto ad-skip: ${aw.on ? "on" : "off"}`);
     tog.title = "Sound leaves a stream at a commercial; a stream tile at a break for a minute swaps to one on air, then comes back";
     tog.onclick = () => propose({ op: "adwatch", on: !aw.on });
+    const sd = (wall && wall.stream_director) || {};   // Jev runs tiles 3–4 + the sound (wall/streamdir.py)
+    const dir = el("button", "btn", `Auto-director: ${sd.on ? "on" : "off"}`);
+    dir.title = "Jev picks the two stream tiles and the sound every minute — sticky, never mid-moment; it pauses 10 min on a tile you change (works with auto ad-skip on)";
+    dir.onclick = () => propose({ op: "director", on: !sd.on });
+    const picks = ((sd.last || {}).picks || []).map((p) => p.name);
+    const line = sd.on && sd.active && picks.length
+      ? el("span", "muted small", `🎬 Jev picks: ${picks.join(" · ")}` + (sd.next_in != null ? ` (next look in ${sd.next_in}s)` : ""))
+      : null;
     const pool = (aw.pool || []).map((p) => {
       const name = tileName(p.url), w = el("span", "pool");
       const put = el("button", "btn", name); put.title = "Put it on a stream tile";
@@ -314,7 +322,7 @@
       const air = onairBadge(p); if (air) w.append(air);
       return w;
     });
-    return [tog, ...pool];
+    return [tog, dir, ...(line ? [line] : []), ...pool];
   }
   // Election night: our own /p/election/<screen> pages and local stations get names, not URLs
   const OWN = "http://127.0.0.1:7795/p/election/";
