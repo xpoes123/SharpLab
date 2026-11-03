@@ -483,3 +483,15 @@ def test_discord_wall_starts_only_while_the_tv_is_idle(api, monkeypatch):
     assert c.post("/i/discord/start", json={"urls": ["https://a.tv"]}).json()["running"]
     monkeypatch.setattr("wall.server.tv_active", lambda api: "football")   # already running: changes still go through
     assert c.post("/i/discord/start", json={"urls": ["https://b.tv"]}).status_code == 200
+
+
+def test_discord_wall_mirrors_the_tv_wall_when_the_tv_is_on_it(api, monkeypatch):
+    app, _ = api
+    local, remote = client(app), client(app, "100.81.31.34", "s3cret")
+    assert local.post("/i/tv/start", json={"urls": ["https://a.tv", "https://b.tv"], "board": "nfl"}).json()["running"]
+    monkeypatch.setattr("wall.server.tv_active", lambda api: "wall")
+    st = remote.post("/i/discord/start", json={"urls": ["https://b.tv"]}).json()   # asked for b.tv: gets the TV's tiles
+    assert st["urls"] == ["https://a.tv", "https://b.tv"] and st["overlay"]["board"] == "nfl"
+    remote.post("/i/discord/stop")
+    monkeypatch.setattr("wall.server.tv_active", lambda api: "casino")
+    assert remote.post("/i/discord/start", json={"urls": ["https://a.tv"]}).status_code == 409
