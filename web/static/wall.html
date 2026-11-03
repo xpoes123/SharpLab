@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="/hqstyle.css" />
 <link rel="stylesheet" href="/wall.css?v=20261103g" />
 <link rel="stylesheet" href="/wall-bets.css?v=20261103c" />
+<link rel="stylesheet" href="/wall-election.css?v=20261103a" />
 </head>
 <body>
 <header>
@@ -63,10 +64,12 @@
         <span id="sync" class="pill">syncing…</span>
         <span id="count" class="pill">0 watching</span>
         <span id="wallName" class="muted"></span>
+        <button id="elecBtn" class="pill btn" type="button" aria-label="Election map" hidden><span class="ico">🗺</span><span class="lbl"> Election</span></button>
         <span id="mirror" class="pill" hidden title="The stream follows the living-room TV's wall">📺 mirroring the TV</span>
       </div>
       <div id="props" class="props"></div>
       <section id="betsPanel" class="card bets" hidden></section>
+      <section id="elecPanel" class="card elec" hidden aria-label="Election map"></section>
       <details class="card controls sheet-host">
         <summary><span class="sum-full">Change the wall</span><span class="sum-short">⚙ Change</span> <span id="ownerNote" class="muted"></span></summary>
         <div class="sheet">
@@ -116,9 +119,12 @@
     </aside>
   </div>
   <div id="scrim" class="scrim" hidden></div>
+  <div id="elecScrim" class="es-scrim" hidden></div>
+  <aside id="elecSheet" class="es-sheet" hidden aria-hidden="true" aria-label="State results and markets"></aside>
 </main>
 <script src="/vendor/hls.min.js"></script>
 <script src="/wall.js?v=20261103g"></script>
 <script src="/wall-bets.js?v=20261103c"></script>
+<script src="/wall-election.js?v=20261103a"></script>
 </body>
 </html>
