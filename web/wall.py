@@ -41,7 +41,7 @@ LINK_TTL = 600
 LAYOUTS = ("lbar", "full")
 BOARDS = ("", "nfl", "nba")
 _CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f​-‏‪-‮⁦-⁩]")
-_HLS_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}\.(m3u8|ts)$")
+_HLS_NAME = re.compile(r"^(index\.m3u8|seg\d{6}\.ts)$")   # exactly what the wall service serves
 
 
 def cfg() -> dict:
@@ -365,23 +365,25 @@ _used_links: dict[str, float] = {}
 
 
 def mint_link(discord_id: str, username: str, avatar: str | None) -> str:
-    t = _link_signer.dumps({"id": str(discord_id), "username": username or "Player", "avatar": avatar, "n": secrets.token_hex(4)})
+    t = _link_signer.dumps({"id": str(discord_id), "username": username or "Player", "avatar": avatar, "n": secrets.token_urlsafe(16)})
     return f"{auth.WEB_BASE_URL}/api/v1/wall/login?t={t}"
 
 
 def redeem_link(token: str, now: float | None = None) -> dict | None:
-    """The member a link was minted for, once (a second use of the same link is refused)."""
+    """The member a link was minted for, once (a second use of the same link is refused). Spent links are keyed by their
+    signed nonce, not the token text: base64's spare bits give each signature several spellings that verify alike."""
     now = time.time() if now is None else now
     for k, exp in list(_used_links.items()):
         if exp < now:
             del _used_links[k]
-    if token in _used_links:
-        return None
     try:
         data = _link_signer.loads(token, max_age=LINK_TTL)
     except (BadSignature, SignatureExpired):
         return None
-    _used_links[token] = now + LINK_TTL
+    n = data.get("n") if isinstance(data, dict) else None
+    if not n or n in _used_links:
+        return None
+    _used_links[n] = now + LINK_TTL + 60
     return data
 
 
@@ -654,7 +656,16 @@ def session_user(sess: dict | None) -> dict | None:
 
 
 # ---- socket ----------------------------------------------------------------------------------------------------------
+def origin_ok(origin: str | None) -> bool:
+    """The socket rides the session cookie, which every *.djiang.xyz page would send too (same-site): only our own page
+    may open it. No Origin = not a browser."""
+    return origin is None or origin.rstrip("/") == auth.WEB_BASE_URL.rstrip("/")
+
+
 async def wall_websocket(ws: WebSocket) -> None:
+    if not origin_ok(ws.headers.get("origin")):
+        await ws.close(code=4403, reason="bad origin")
+        return
     user = session_user(auth.read_session(ws))
     if not user:
         await ws.close(code=4401, reason="Log in to SharpLab first")
@@ -793,9 +804,10 @@ async def hls(name: str, request: Request):
                 if playlist:
                     await hub.observe_playlist(body.decode("utf-8", "replace"))
                 _cache[name] = hit
-                for k, v in list(_cache.items()):
-                    if v[0] < time.monotonic() - 120:
+                for k, v in list(_cache.items()):   # expired segments go now: ~0.5 MB each, on a 2 GB VPS
+                    if v[0] < time.monotonic():
                         _cache.pop(k, None)
+                        _locks.pop(k, None)
     return Response(hit[1], media_type=ctype, headers={"Cache-Control": "no-cache" if playlist else "private, max-age=60"})
 
 

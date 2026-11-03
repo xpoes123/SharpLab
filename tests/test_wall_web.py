@@ -395,10 +395,30 @@ def test_login_link_mint_and_redeem_once(setup):
 
 
 def test_login_link_expires(monkeypatch):
-    t = wall._link_signer.dumps({"id": "1", "username": "x", "avatar": None})
+    t = wall._link_signer.dumps({"id": "1", "username": "x", "avatar": None, "n": "n1"})
     assert wall.redeem_link(t)
     monkeypatch.setattr(wall, "LINK_TTL", -1)
-    assert wall.redeem_link(wall._link_signer.dumps({"id": "2", "username": "x", "avatar": None})) is None
+    assert wall.redeem_link(wall._link_signer.dumps({"id": "2", "username": "x", "avatar": None, "n": "n2"})) is None
+
+
+def test_login_link_respelled_signature_is_still_spent():
+    """base64's spare low bits: flipping the last character of the signature verifies the same, but it's the same link."""
+    t = wall.mint_link("7", "x", None).split("t=", 1)[1]
+    alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    twin = t[:-1] + alpha[alpha.index(t[-1]) ^ 1]
+    assert wall._link_signer.loads(twin)   # the respelling really does verify
+    assert wall.redeem_link(t) and wall.redeem_link(twin) is None
+    assert wall.redeem_link(wall._link_signer.dumps({"id": "8", "username": "x", "avatar": None})) is None   # no nonce
+
+
+def test_socket_refuses_other_origins(setup):
+    """Every *.djiang.xyz page sends the (SameSite=Lax) session cookie along: only our own origin may open the socket."""
+    client, *_ = setup
+    from starlette.websockets import WebSocketDisconnect
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/ws/wall", headers={"Origin": "https://share.djiang.xyz"}) as ws:
+            ws.receive_json()
+    assert wall.origin_ok(None) and wall.origin_ok(wall.auth.WEB_BASE_URL) and not wall.origin_ok("https://evil.example")
 
 
 def test_hls_needs_session_and_caches(setup, monkeypatch):
@@ -416,6 +436,7 @@ def test_hls_needs_session_and_caches(setup, monkeypatch):
     for k, v in cookie("300").items():
         client.cookies.set(k, v)
     assert client.get("/api/v1/wall/hls/../secret").status_code == 404
+    assert client.get("/api/v1/wall/hls/anything.ts").status_code == 404   # only index.m3u8 / segNNNNNN.ts
     assert client.get("/api/v1/wall/hls/index.m3u8").text == "#EXTM3U\n"
     client.get("/api/v1/wall/hls/index.m3u8")
     assert calls == ["index.m3u8"]   # second viewer within 0.5 s: cached
