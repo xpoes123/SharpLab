@@ -1,0 +1,456 @@
+"""The wall watch page backend (web/wall.py): session gate, chat, who's watching, votes, bot API, login links."""
+import pytest
+from fastapi import FastAPI, WebSocket
+from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
+
+from web import auth, wall
+from web.wall import Chat, Presence, Proposal, Votes, check_action, clean_text, need, verdict
+
+OWNER, ADMIN = "100", "200"
+
+
+@pytest.fixture(autouse=True)
+def env(monkeypatch):
+    monkeypatch.setenv("WALL_OWNER_ID", OWNER)
+    monkeypatch.setenv("WALL_ADMIN_IDS", ADMIN)
+    monkeypatch.setenv("WALL_SOUND_APPROVALS", "2")
+    monkeypatch.setenv("WALL_VOTE_S", "60")
+    monkeypatch.setenv("WALL_JOIN_NOTICES", "0")
+    monkeypatch.setattr(wall, "check_api_key", lambda k: k == "sekrit")
+
+
+class Clock:
+    def __init__(self, t=1000.0):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+
+@pytest.fixture
+def setup():
+    clock, done = Clock(), []
+
+    async def execute(action):
+        done.append(action)
+        return True, ""
+
+    async def fetch_state():
+        return {"running": True, "urls": ["https://a.example"], "presets": ["Live NFL"]}
+
+    hub = wall.reset_hub(clock=clock, execute=execute, fetch_state=fetch_state)
+    app = FastAPI()
+    app.include_router(wall.router)
+
+    @app.websocket("/ws/wall")
+    async def ws(websocket: WebSocket):
+        await wall.wall_websocket(websocket)
+
+    return TestClient(app), hub, clock, done
+
+
+def cookie(uid, name="User", avatar=None):
+    return {auth.COOKIE_NAME: auth.make_session_cookie({"id": uid, "username": name, "avatar": avatar})}
+
+
+def connect(client, uid, name="User"):
+    client.cookies.clear()
+    for k, v in cookie(uid, name).items():
+        client.cookies.set(k, v)
+    return client.websocket_connect("/ws/wall")
+
+
+def until(ws, t):
+    while True:
+        m = ws.receive_json()
+        if m["t"] == t:
+            return m
+
+
+# ---- socket auth -----------------------------------------------------------------------------------------------------
+def test_socket_without_cookie_is_refused(setup):
+    client, *_ = setup
+    with pytest.raises(WebSocketDisconnect) as e:
+        with client.websocket_connect("/ws/wall") as ws:
+            ws.receive_json()
+    assert e.value.code == 4401
+
+
+def test_socket_with_forged_cookie_is_refused(setup):
+    client, *_ = setup
+    client.cookies.set(auth.COOKIE_NAME, "eyJpZCI6IjEifQ.forged.sig")
+    with pytest.raises(WebSocketDisconnect) as e:
+        with client.websocket_connect("/ws/wall") as ws:
+            ws.receive_json()
+    assert e.value.code == 4401
+
+
+def test_socket_with_session_gets_hello_and_viewer_list(setup):
+    client, *_ = setup
+    with connect(client, "300", "Steph") as ws:
+        hello = ws.receive_json()
+        assert hello["t"] == "hello" and hello["me"]["id"] == "300" and hello["me"]["name"] == "Steph"
+        assert hello["me"]["initials"] == "S" and not hello["me"]["admin"]
+        assert hello["cfg"]["delay"] == 6 and hello["wall"]["running"]
+        v = until(ws, "viewers")["list"]
+        assert [x["name"] for x in v] == ["Steph"] and v[0]["away"] is False
+
+
+def test_chat_roundtrip_strips_control_chars(setup):
+    client, *_ = setup
+    with connect(client, "300", "Steph") as ws:
+        ws.receive_json()
+        ws.send_json({"t": "chat", "text": "hi‮ <b>there</b>\x07"})
+        m = until(ws, "chat")["msg"]
+        assert m["text"] == "hi <b>there</b>" and m["name"] == "Steph"   # markup kept as text; the page uses textContent
+
+
+def test_moderation_needs_admin(setup):
+    client, hub, *_ = setup
+    with connect(client, "300") as ws:
+        ws.receive_json()
+        ws.send_json({"t": "chat", "text": "hello"})
+        mid = until(ws, "chat")["msg"]["id"]
+        ws.send_json({"t": "del", "id": mid})
+        assert "admins" in until(ws, "error")["text"]
+    assert any(m["id"] == mid for m in hub.chat.log)
+    with connect(client, ADMIN, "Mod") as ws:
+        ws.receive_json()
+        ws.send_json({"t": "del", "id": mid})
+        assert until(ws, "del")["id"] == mid
+        ws.send_json({"t": "mute", "uid": "300", "minutes": 5})
+        assert "muted" in until(ws, "chat")["msg"]["text"]
+    assert not any(m["id"] == mid for m in hub.chat.log) and hub.chat.is_muted("300", hub.clock())
+
+
+def test_ping_returns_server_time(setup):
+    client, _, clock, _ = setup
+    with connect(client, "300") as ws:
+        ws.receive_json()
+        ws.send_json({"t": "ping", "c": 5})
+        p = until(ws, "pong")
+        assert p["c"] == 5 and p["s"] == clock.t * 1000
+
+
+def test_vote_over_socket_passes_and_executes(setup):
+    client, hub, clock, done = setup
+    with connect(client, "300", "A") as ws:
+        ws.receive_json()
+        ws.send_json({"t": "propose", "action": {"op": "layout", "layout": "full"}})   # solo viewer: 1 of 1 = majority
+        p = until(ws, "proposal")["p"]
+        assert p["status"] == "passed"
+    assert done == [{"op": "layout", "layout": "full"}]
+
+
+# ---- pure: chat ------------------------------------------------------------------------------------------------------
+def test_chat_limits():
+    c, u = Chat(), {"id": "1", "name": "A"}
+    assert c.post(u, "", 0)[0] is None
+    m, _ = c.post(u, "x" * 999, 0)
+    assert len(m["text"]) == 300
+    assert c.post(u, "too soon", 1)[1] == "Slow down a little."
+    t = 2.0
+    for _ in range(7):
+        assert c.post(u, "ok", t)[0]
+        t += 2
+    assert c.post(u, "burst", t)[0] is None   # 8 in 30 s
+    assert c.post(u, "later", t + 31)[0]
+    c.mute("1", 1, t + 31)
+    assert c.post(u, "muted", t + 40)[1] == "You're muted for now."
+
+
+def test_scrollback_keeps_last_200():
+    c = Chat()
+    for i in range(250):
+        c.system(f"m{i}", i)
+    assert len(c.log) == 200 and c.log[0]["text"] == "m50"
+
+
+def test_clean_text():
+    assert clean_text("a\nb\tc   d") == "a b c d"
+    assert clean_text(None) == ""
+
+
+# ---- pure: presence --------------------------------------------------------------------------------------------------
+def test_presence_away_when_hidden_or_silent():
+    p = Presence()
+    p.join(1, {"id": "a", "name": "Ann"}, 0)
+    p.join(2, {"id": "b", "name": "Bob"}, 0)
+    p.join(3, {"id": "b", "name": "Bob"}, 0)   # second tab
+    assert p.active(10) == {"a", "b"}
+    p.beat(1, True, 10)
+    assert p.active(10) == {"b"}
+    assert p.active(61) == set()               # Bob: no heartbeat for 61 s
+    p.beat(3, False, 61)
+    assert p.active(61) == {"b"}
+    v = {x["name"]: x for x in p.listing(61)}
+    assert v["Ann"]["away"] and not v["Bob"]["away"] and v["Ann"]["initials"] == "A"
+    assert p.leave(2) is None and p.leave(3) == "b"
+
+
+# ---- pure: votes -----------------------------------------------------------------------------------------------------
+def prop(kind="screen", uid="a", yes=None, no=None, expires=60):
+    return Proposal(1, uid, "A", {"op": "sound", "i": 1} if kind == "sound" else {"op": "stop"}, kind, 0, expires,
+                    yes=set(yes or {uid}), no=set(no or ()))
+
+
+def test_majority_of_active_viewers():
+    active = {"a", "b", "c"}
+    assert verdict(prop(), active, 1, 2) == "open"                  # 1 of 3
+    assert verdict(prop(yes={"a", "b"}), active, 1, 2) == "passed"  # 2 of 3
+    assert verdict(prop(no={"b", "c"}), active, 1, 2) == "failed"   # can't reach 2
+
+
+def test_away_viewers_dont_count():
+    # 4 watching, 2 away: the electorate is the 2 active ones
+    assert need(prop(), {"a", "b"}, 2) == 2
+    assert verdict(prop(yes={"a", "b"}), {"a", "b"}, 1, 2) == "passed"
+
+
+def test_tie_fails():
+    active = {"a", "b", "c", "d"}
+    assert need(prop(), active, 2) == 3
+    assert verdict(prop(yes={"a", "b"}, no={"c", "d"}), active, 1, 2) == "failed"
+    assert verdict(prop(yes={"a", "b"}), {"a", "b", "c", "d"}, 61, 2) == "expired"
+
+
+def test_expiry():
+    assert verdict(prop(), {"a", "b", "c"}, 59, 2) == "open"
+    assert verdict(prop(), {"a", "b", "c"}, 60, 2) == "expired"
+
+
+def test_proposer_counts_yes_even_from_discord():
+    # proposed from Discord by someone not on the page: they join the electorate as a yes
+    p = prop(uid="z")
+    assert "z" in p.yes and need(p, {"a"}, 2) == 2
+
+
+def test_sound_needs_two_or_one_when_solo():
+    assert verdict(prop("sound"), {"a"}, 1, 2) == "passed"                 # alone: 1 is enough
+    assert verdict(prop("sound"), {"a", "b", "c"}, 1, 2) == "open"
+    assert verdict(prop("sound", yes={"a", "c"}), {"a", "b", "c"}, 1, 2) == "passed"
+    assert verdict(prop("sound", yes={"a", "c"}), {"a", "b", "c", "d", "e"}, 1, 2) == "passed"   # not a majority, just 2
+    assert verdict(prop("sound", yes={"a", "c"}), {"a", "b", "c"}, 1, 3) == "open"            # threshold is config
+
+
+def test_proposal_rate_limit_and_owner_override():
+    v, a = Votes(), {"id": "a", "name": "A"}
+    p, _ = v.propose(a, {"op": "stop"}, 0, 60)
+    assert p and p.yes == {"a"}
+    assert v.propose(a, {"op": "stop"}, 1, 60)[1] == "You already have a proposal open."
+    p.status = "failed"
+    assert "every" in v.propose(a, {"op": "stop"}, 5, 60)[1]
+    assert v.propose(a, {"op": "stop"}, 21, 60)[0]
+    o, _ = v.propose({"id": OWNER, "name": "David"}, {"op": "stop"}, 21, 60, owner=True)
+    assert o.status == "override"
+
+
+def test_check_action():
+    assert check_action({"op": "tile", "i": 0, "url": "https://x.y/z"})["url"] == "https://x.y/z"
+    for bad in ({"op": "tile", "i": 0, "url": "javascript:alert(1)"}, {"op": "tile", "i": 5, "url": "https://x"},
+                {"op": "layout", "layout": "weird"}, {"op": "rm -rf"}, "stop", {"op": "start", "preset": True},
+                {"op": "start", "urls": ["file:///etc/passwd"]}, {"op": "start"}, {"op": "board"}, {"op": "remove", "i": 9}):
+        with pytest.raises(ValueError):
+            check_action(bad)
+
+
+@pytest.mark.anyio
+async def test_hub_owner_applies_instantly_and_others_wait():
+    clock, done = Clock(), []
+
+    async def execute(a):
+        done.append(a)
+        return True, ""
+
+    async def fetch_state():
+        return {}
+
+    hub = wall.Hub(clock=clock, execute=execute, fetch_state=fetch_state)
+    for cid, uid in ((1, "a"), (2, "b"), (3, "c")):
+        hub.presence.join(cid, {"id": uid, "name": uid}, 0)
+    clock.t = 1
+    p, _ = await hub.propose({"id": "a", "name": "a"}, {"op": "stop"})
+    assert p.status == "open" and not done
+    await hub.vote({"id": "b", "name": "b"}, p.id, True)
+    assert p.status == "passed" and done == [{"op": "stop"}]
+    q, _ = await hub.propose({"id": "c", "name": "c"}, {"op": "layout", "layout": "lbar"})
+    clock.t = 62
+    for cid in (1, 2, 3):
+        hub.presence.beat(cid, False, 62)   # all three still here
+    await hub.tick()
+    assert q.status == "expired" and len(done) == 1
+    o, _ = await hub.propose({"id": OWNER, "name": "David"}, {"op": "board", "board": "nba"})
+    assert o.status == "override" and done[-1] == {"op": "board", "board": "nba"}
+    assert any("owner" in m["text"] for m in hub.chat.log)
+
+
+@pytest.mark.anyio
+async def test_hub_failed_service_call_marks_error():
+    async def execute(a):
+        return False, "boom"
+
+    async def fetch_state():
+        return {}
+
+    hub = wall.Hub(clock=Clock(), execute=execute, fetch_state=fetch_state)
+    hub.presence.join(1, {"id": "a", "name": "a"}, 1000)
+    p, _ = await hub.propose({"id": "a", "name": "a"}, {"op": "stop"})
+    assert p.status == "error" and "boom" in hub.chat.log[-1]["text"]
+
+
+def test_route_maps_to_service_api():
+    assert wall._route({"op": "start", "preset": "Live NFL"}) == ("POST", "/i/discord/start", {"preset": "Live NFL"})
+    assert wall._route(check_action({"op": "start", "live": "nfl", "tiles": 3, "board": "nfl"})) == \
+        ("POST", "/i/discord/start", {"urls": [], "live": "nfl", "tiles": 3, "board": "nfl"})
+    assert wall._route({"op": "board", "board": ""}) == ("POST", "/i/discord/board", {"visible": False})
+    assert wall._route({"op": "board", "board": "nba"}) == ("POST", "/i/discord/board", {"board": "nba", "visible": True})
+    assert wall._route({"op": "layout", "layout": "full"}) == ("POST", "/i/discord/board", {"layout": "full", "visible": True})
+    assert wall._route({"op": "sound", "i": 2}) == ("POST", "/i/discord/sound", {"i": 2})
+    assert wall._route(check_action({"op": "remove", "i": 1})) == ("DELETE", "/i/discord/tile/1", {})
+    assert wall._route(check_action({"op": "tile", "i": 4, "url": "https://x.y", "label": "BUF"})) == \
+        ("POST", "/i/discord/tile", {"i": 4, "url": "https://x.y"})   # i == len adds a tile; the label is ours
+
+
+PLAYLIST = """#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-TARGETDURATION:1
+#EXT-X-MEDIA-SEQUENCE:7
+#EXTINF:1.000000,
+#EXT-X-PROGRAM-DATE-TIME:2026-11-02T20:20:44.760-0500
+seg000007.ts
+#EXTINF:1.000000,
+#EXT-X-PROGRAM-DATE-TIME:2026-11-02T20:20:45.760-0500
+seg000008.ts
+"""
+
+
+def test_playlist_edge_is_last_pdt_plus_duration():
+    from datetime import datetime
+    want = datetime.fromisoformat("2026-11-02T20:20:46.760-05:00").timestamp() * 1000
+    assert wall.playlist_edge(PLAYLIST) == pytest.approx(want)
+    assert wall.playlist_edge("#EXTM3U\n") is None
+
+
+def test_edge_clock_keeps_freshest_sample_and_resets_on_jump():
+    c = wall.EdgeClock()
+    assert c.observe(14_000, 10_000) and c.off == 4000          # encoder 4 s ahead of the box clock
+    assert not c.observe(14_400, 10_900) and c.off == 4000      # a staler playlist (3.5 s) doesn't drag it down
+    assert c.observe(15_200, 11_000) and c.off == 4200
+    assert c.observe(30_000, 12_000) and c.off == 18_000        # encoder restarted: start over
+    assert not c.observe(80_000 + 18_000, 80_000)
+
+
+@pytest.mark.anyio
+async def test_hub_broadcasts_clock_from_proxied_playlist():
+    async def fetch_state():
+        return {}
+
+    hub = wall.Hub(clock=Clock(1793665000.0), fetch_state=fetch_state)
+    await hub.observe_playlist(PLAYLIST)
+    assert hub.edge.off is not None
+
+
+# ---- HTTP: bot API, links, HLS gate ----------------------------------------------------------------------------------
+def test_bot_api_requires_key(setup):
+    client, *_ = setup
+    assert client.get("/api/v1/wall/state").status_code == 401
+    assert client.get("/api/v1/wall/state", headers={"X-Api-Key": "nope"}).status_code == 401
+    assert client.post("/api/v1/wall/link", json={"discord_id": "1"}).status_code == 401
+    r = client.get("/api/v1/wall/state", headers={"X-Api-Key": "sekrit"})
+    assert r.status_code == 200 and r.json()["viewers"] == [] and r.json()["watch_url"].endswith("/wall.html")
+
+
+def test_bot_propose_and_vote(setup):
+    client, hub, clock, done = setup
+    h = {"X-Api-Key": "sekrit"}
+    for cid, uid in ((1, "1"), (2, "2"), (3, "3")):
+        hub.presence.join(cid, {"id": uid, "name": uid}, clock.t)
+    p = client.post("/api/v1/wall/propose", headers=h, json={"discord_id": "1", "name": "One", "action": {"op": "stop"}}).json()
+    assert p["status"] == "open" and p["needed"] == 2 and p["summary"] == "stop the wall" and p["yes"] == 1 and not p["applied"]
+    st = client.get("/api/v1/wall/state", headers=h).json()
+    assert st["proposals"][0]["id"] == p["id"] and st["proposals"][0]["expires"] == clock.t + 60
+    assert {"id", "name", "avatar", "away"} <= set(st["viewers"][0])
+    p = client.post("/api/v1/wall/vote", headers=h, json={"discord_id": "2", "proposal_id": p["id"], "yes": True}).json()
+    assert p["passed"] and p["status"] == "passed" and done == [{"op": "stop"}]
+    o = client.post("/api/v1/wall/propose", headers=h, json={"discord_id": OWNER, "name": "David", "action": {"op": "remove", "i": 1}}).json()
+    assert o["applied"] and done[-1] == {"op": "remove", "i": 1}
+    r = client.post("/api/v1/wall/propose", headers=h, json={"discord_id": "x", "action": {"op": "stop"}})
+    assert r.status_code == 422
+
+
+def test_login_link_mint_and_redeem_once(setup):
+    client, *_ = setup
+    url = client.post("/api/v1/wall/link", headers={"X-Api-Key": "sekrit"},
+                      json={"discord_id": "555", "username": "Steph", "avatar": "abc"}).json()["url"]
+    path = url[url.index("/api/v1/wall/login"):]
+    client.cookies.clear()
+    r = client.get(path, follow_redirects=False)
+    assert r.status_code == 307 and r.headers["location"].endswith("/wall.html")
+    sess = auth._session_signer.loads(r.cookies[auth.COOKIE_NAME])
+    assert sess["id"] == "555" and sess["username"] == "Steph"
+    r2 = client.get(path, follow_redirects=False)
+    assert "link_expired" in r2.headers["location"]
+    assert "link_expired" in client.get("/api/v1/wall/login?t=garbage", follow_redirects=False).headers["location"]
+
+
+def test_login_link_expires(monkeypatch):
+    t = wall._link_signer.dumps({"id": "1", "username": "x", "avatar": None, "n": "n1"})
+    assert wall.redeem_link(t)
+    monkeypatch.setattr(wall, "LINK_TTL", -1)
+    assert wall.redeem_link(wall._link_signer.dumps({"id": "2", "username": "x", "avatar": None, "n": "n2"})) is None
+
+
+def test_login_link_respelled_signature_is_still_spent():
+    """base64's spare low bits: flipping the last character of the signature verifies the same, but it's the same link."""
+    t = wall.mint_link("7", "x", None).split("t=", 1)[1]
+    alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    twin = t[:-1] + alpha[alpha.index(t[-1]) ^ 1]
+    assert wall._link_signer.loads(twin)   # the respelling really does verify
+    assert wall.redeem_link(t) and wall.redeem_link(twin) is None
+    assert wall.redeem_link(wall._link_signer.dumps({"id": "8", "username": "x", "avatar": None})) is None   # no nonce
+
+
+def test_socket_refuses_other_origins(setup):
+    """Every *.djiang.xyz page sends the (SameSite=Lax) session cookie along: only our own origin may open the socket."""
+    client, *_ = setup
+    from starlette.websockets import WebSocketDisconnect
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/ws/wall", headers={"Origin": "https://share.djiang.xyz"}) as ws:
+            ws.receive_json()
+    assert wall.origin_ok(None) and wall.origin_ok(wall.auth.WEB_BASE_URL) and not wall.origin_ok("https://evil.example")
+
+
+def test_hls_needs_session_and_caches(setup, monkeypatch):
+    client, *_ = setup
+    calls = []
+
+    async def upstream(name):
+        calls.append(name)
+        return 200, b"#EXTM3U\n", "application/vnd.apple.mpegurl"
+
+    monkeypatch.setattr(wall, "fetch_upstream", upstream)
+    wall._cache.clear()
+    client.cookies.clear()
+    assert client.get("/api/v1/wall/hls/index.m3u8").status_code == 401
+    for k, v in cookie("300").items():
+        client.cookies.set(k, v)
+    assert client.get("/api/v1/wall/hls/../secret").status_code == 404
+    assert client.get("/api/v1/wall/hls/anything.ts").status_code == 404   # only index.m3u8 / segNNNNNN.ts
+    assert client.get("/api/v1/wall/hls/index.m3u8").text == "#EXTM3U\n"
+    client.get("/api/v1/wall/hls/index.m3u8")
+    assert calls == ["index.m3u8"]   # second viewer within 0.5 s: cached
+    assert client.get("/api/v1/wall/me").json()["id"] == "300"
+
+
+def test_me_without_session_points_to_login(setup):
+    client, *_ = setup
+    client.cookies.clear()
+    r = client.get("/api/v1/wall/me")
+    assert r.status_code == 401 and r.json()["login"].endswith("next=/wall.html")
+
+
+def test_routes_are_wired_into_the_app():
+    from web.api import app
+    paths = {getattr(r, "path", "") for r in app.routes}
+    assert {"/ws/wall", "/api/v1/wall/hls/{name}", "/api/v1/wall/state"} <= paths

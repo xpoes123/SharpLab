@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SharpLab Wall</title>
+<link rel="stylesheet" href="/hqstyle.css" />
+<link rel="stylesheet" href="/wall.css" />
+</head>
+<body>
+<header>
+  <div class="brand"><a href="/">Sharp<span>Lab</span> HQ</a></div>
+  <nav class="nav"><a href="/">Server</a><a href="/games">Games</a><a href="/wall.html" class="on">Wall</a></nav>
+  <div id="navRight"></div>
+</header>
+<main id="wall">
+  <section id="gate" class="card" hidden>
+    <h2>Watch the wall</h2>
+    <p class="muted">The wall is for SharpLab members. Log in with Discord (you need to be in the SharpLab server).</p>
+    <a id="loginBtn" class="btn primary" href="/api/v1/auth/discord/login?next=/wall.html">Log in with Discord</a>
+    <p id="gateErr" class="muted"></p>
+  </section>
+
+  <div id="room" hidden>
+    <section class="stage">
+      <div class="player">
+        <video id="video" playsinline muted autoplay></video>
+        <div id="offline" class="offline" hidden><div><b>The wall is off.</b><br><span class="muted">Propose a preset below to start it.</span></div></div>
+        <button id="unmute" class="unmute">🔇 Tap for sound</button>
+      </div>
+      <div class="bar">
+        <span id="sync" class="pill">syncing…</span>
+        <span id="count" class="pill">0 watching</span>
+        <span id="wallName" class="muted"></span>
+      </div>
+      <div id="tiles" class="tiles"></div>
+      <div id="props" class="props"></div>
+      <details class="card controls" open>
+        <summary>Change the wall <span id="ownerNote" class="muted"></span></summary>
+        <div class="row">
+          <label>Preset <select id="preset"></select></label>
+          <button data-act="start" class="btn">Start</button>
+          <button data-act="stop" class="btn">Stop</button>
+        </div>
+        <div class="row">
+          <span>Layout</span>
+          <button data-act="layout" data-v="lbar" class="btn">L-bar</button>
+          <button data-act="layout" data-v="full" class="btn">Full</button>
+          <span>Board</span>
+          <button data-act="board" data-v="" class="btn">None</button>
+          <button data-act="board" data-v="nfl" class="btn">NFL</button>
+          <button data-act="board" data-v="nba" class="btn">NBA</button>
+        </div>
+        <div class="row">
+          <label>Tile <select id="tileI"><option value="0">1</option><option value="1">2</option><option value="2">3</option><option value="3">4</option></select></label>
+          <input id="tileUrl" type="url" placeholder="https://… (a stream page)" maxlength="500" />
+          <button data-act="tile" class="btn">Put on tile</button>
+        </div>
+        <p class="muted small">Screen changes pass on a majority of active viewers within 60 s; moving the sound needs 2 approvals (1 if you're alone).</p>
+      </details>
+    </section>
+
+    <aside class="side">
+      <div class="card viewers">
+        <h3>Watching</h3>
+        <ul id="viewers"></ul>
+      </div>
+      <div class="card chat">
+        <h3>Chat</h3>
+        <ol id="msgs"></ol>
+        <form id="chatForm">
+          <input id="chatIn" maxlength="300" autocomplete="off" placeholder="Say something…" />
+          <button class="btn primary">Send</button>
+        </form>
+        <p id="chatErr" class="muted small"></p>
+      </div>
+    </aside>
+  </div>
+</main>
+<script src="/vendor/hls.min.js"></script>
+<script src="/wall.js"></script>
+</body>
+</html>
