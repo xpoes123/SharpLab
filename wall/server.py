@@ -253,7 +253,6 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
             while True:
                 await asyncio.sleep(1)
                 if spot.due():
-                    spot.fetched = time.time()
                     try:
                         await asyncio.to_thread(spot.refresh)
                     except Exception as e:  # noqa: BLE001
@@ -604,12 +603,12 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
     async def set_spot(name: str, request: Request) -> dict:
         inst(name)
         d = await body(request)
-        st = d.get("state")
-        if not isinstance(st, str):
-            raise ValueError("state is a two-letter code, or \"\" to close it")
+        st, race = d.get("state", ""), d.get("race", "")
+        if not isinstance(st, str) or not isinstance(race, str) or not (st or race or "state" in d):
+            raise ValueError("state is a two-letter code (\"\" closes the spotlight), race a race id (S-GA, H-WI-3)")
         by = d.get("by") if isinstance(d.get("by"), str) else ("watch party" if name == "discord" else "TV remote")
         results.touch()
-        return {"spot": spot.set(st, by), "configured": spot.configured}
+        return {"spot": spot.set(st, by, race), "configured": spot.configured}
 
     @app.get("/i/{name}/spotlight")
     def get_spot(name: str) -> dict:

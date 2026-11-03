@@ -264,7 +264,7 @@ async def chart_payload(key: str, snap: dict, want: list[str] | None = None) -> 
     return {"key": key, "lines": lines, "marks": em.marks(race, called_at), "split": em.windows(now)["split"], "now": now}
 
 
-async def spot_payload(state: str, snap: dict) -> dict:
+async def spot_payload(state: str, snap: dict, race: str = "") -> dict:
     """The TV spotlight card: the state's races that matter most (Senate, Governor, then the House races with markets,
     closest first), each with its top two picks, prices, 24 h change and a sparkline of the favourite."""
     full = await state_payload(state, snap, None)
@@ -273,6 +273,8 @@ async def spot_payload(state: str, snap: dict) -> dict:
     house = sorted((r for r in rs if r["office"] == "H" and r["markets"]),
                    key=lambda r: abs((r["markets"][0]["prob"] or 100) - 50))
     pick = (top + house)[:3]
+    if race:   # one race asked for (the spotlight queue): that one first, whatever its rank
+        pick = [r for r in rs if r["id"] == race][:1] or pick
     now = markets.clock()
     cards = []
     for r in pick:
@@ -490,13 +492,13 @@ async def get_chart(key: str, request: Request, t: str = ""):
 
 
 @router.get("/spot/{st}")
-async def get_spot(st: str, x_api_key: str = Header("")):
+async def get_spot(st: str, x_api_key: str = Header(""), race: str = ""):
     """The wall service (homelab) asks for the TV spotlight card of a state. Never positions."""
     wall._need_key(x_api_key)
     st = st.upper()
     if st not in we.STATES:
         return JSONResponse({"error": "no such state"}, status_code=404)
-    return await spot_payload(st, await snapshot())
+    return await spot_payload(st, await snapshot(), race if re.match(r"^[SGH]-[A-Z]{2}(-\d{1,2})?(-special)?$", race) else "")
 
 
 @router.post("/spotlight")
@@ -511,9 +513,15 @@ async def post_spotlight(request: Request):
     except ValueError:
         body = None
     st = body.get("state") if isinstance(body, dict) else None
-    if not isinstance(st, str) or (st and st.upper() not in we.STATES):
+    race = body.get("race", "") if isinstance(body, dict) else ""
+    if not isinstance(st, str) or (st and st.upper() not in we.STATES) or not isinstance(race, str):
         return JSONResponse({"error": "state is a two-letter code"}, status_code=422)
-    p, err = await wall.hub.propose(user, {"op": "spotlight", "state": st.upper()})
+    try:
+        label = body.get("label") if isinstance(body.get("label"), str) else ""
+        action = wall.check_action({"op": "spotlight", "state": st.upper(), **({"race": race, "label": label} if race else {})})
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    p, err = await wall.hub.propose(user, action)
     if not p:
         return JSONResponse({"error": err}, status_code=409)
     return {"id": p.id, "status": p.status, "text": wall.describe(p.action)}
