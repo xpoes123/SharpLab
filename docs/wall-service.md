@@ -23,7 +23,7 @@ the homelab and can drive two walls at once:
              sharplab-wall (homelab, user unit, :7795)  ── Chromium tiles, KWin scripts, CDP, pactl, qml6 overlay
                  ▲  control API (bearer)     │ HLS (bearer)            └─ discord: nested kwin + gst/NVENC + ffmpeg → HLS
                  │ Tailscale only            ▼
- Discord ── sharplab-bot (VPS) ──────► sharplab-web (VPS)  /wall page, /wall/hls/*, /ws/wall (chat, viewers, votes)
+ Discord ── sharplab-bot (VPS) ──────► sharplab-web (VPS)  /wall.html, /api/v1/wall/hls/*, /ws/wall (chat, viewers, votes)
                                              ▲ SharpLab session cookie (Discord OAuth, guild-gated)
                                          friends' browsers (public, via the existing sharplab.djiang.xyz Caddy site)
 ```
@@ -34,7 +34,7 @@ the homelab and can drive two walls at once:
   is public.
 * **sharplab-web** (VPS) owns everything viewer-facing: the watch page, the SharpLab-session gate, chat, the
   viewer list and voting. It fetches HLS from the wall service over Tailscale with the service token and serves it
-  under `/wall/hls/*` only to logged-in members. So the existing `sharplab.djiang.xyz` Caddy site already reaches
+  under `/api/v1/wall/hls/*` only to logged-in members. So the existing `sharplab.djiang.xyz` Caddy site already reaches
   it — no new public hostname, and the homelab is never exposed. (`deploy/caddy-wall.snippet` holds the optional
   Caddy change for review — not applied.)
 * **sharplab-bot** (VPS) has `/wall`. It talks to the wall service over Tailscale (control API, bearer token)
@@ -46,11 +46,11 @@ the homelab and can drive two walls at once:
 |---|---|
 | TV router → wall service | loopback (127.0.0.1) is trusted |
 | bot / web (VPS) → wall service | `Authorization: Bearer $WALL_API_TOKEN` (Tailscale address only) |
-| browser → web `/wall*` | the SharpLab session cookie (`sharplab_session`, Discord OAuth, guild-gated — `web/auth.py`); no session → redirect to `/api/v1/auth/discord/login?next=/wall` |
+| browser → web `/wall.html`, `/api/v1/wall/hls/*`, `/ws/wall` | the SharpLab session cookie (`sharplab_session`, Discord OAuth, guild-gated — `web/auth.py`); no session → redirect to `/api/v1/auth/discord/login?next=/wall.html` |
 | bot → web `/api/v1/wall/*` | `X-API-Key: $WEB_API_SECRET` (as other bot↔web calls) |
 
 A SharpLab account *is* a Discord identity in the SharpLab guild (there is no separate signup). The bot's
-**Get my link** button mints a 10-minute signed login link (`/wall/login?t=…`, itsdangerous, own salt) for the
+**Get my link** button mints a 10-minute signed login link (`/api/v1/wall/login?t=…`, itsdangerous, own salt) for the
 clicking member; opening it sets the normal session cookie, exactly as the OAuth callback would. Someone not in
 the guild cannot click the button; on the web they hit the OAuth guild gate.
 
@@ -153,8 +153,8 @@ Found missing (not needed, so nothing to install): gst `pulsesrc`/`mp4mux` (gst-
 
 ## Watch page, sync, chat, viewers, votes (sharplab-web, `web/wall.py`)
 
-* `GET /wall` — the player page (hls.js vendored at `web/static/vendor/hls.min.js`, no CDN). Login required.
-* `GET /wall/hls/{file}` — session-gated proxy to the service; a playlist is cached ~0.5 s and segments ~60 s in
+* `GET /wall.html` — the player page (static; `/wall` needs the optional Caddy snippet) (hls.js vendored at `web/static/vendor/hls.min.js`, no CDN). Login required.
+* `GET /api/v1/wall/hls/{file}` — session-gated proxy (under /api because the live Caddy only forwards /api/* and /ws/* to the app) to the service; a playlist is cached ~0.5 s and segments ~60 s in
   memory, so N viewers cost one upstream fetch.
 * **Sync:** every viewer is pinned to the same instant of the stream: the web server reads the live edge from the
   playlist it proxies (last segment's PDT + its duration, observed at server time T) and target = edge + (server_now − T)
