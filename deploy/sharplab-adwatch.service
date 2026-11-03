@@ -1,0 +1,24 @@
+# Election-night ad-skip listener (wall/adwatch.py, docs/wall-service.md "Ad-skip") on the homelab, next to sharplab-wall:
+#   cd ~/SharpLab && uv sync --extra adwatch          (faster-whisper for the GPU; without it the CPU whisper service is used)
+#   cp deploy/sharplab-adwatch.service ~/.config/systemd/user/ && systemctl --user daemon-reload
+#   systemctl --user enable --now sharplab-adwatch.service
+# It only labels streams; the wall acts on them when WALL_ADWATCH=1 (in .env.wall) or the owner's toggle is on.
+# Idle (no ffmpeg, no GPU work) while no wall is up.
+[Unit]
+Description=SharpLab wall ad-skip listener (news streams → coverage / ad / break)
+After=sharplab-wall.service network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/SharpLab
+# WALL_WEB_URL + WALL_WEB_KEY (the classify endpoint); optional WALL_ADWATCH_* knobs (wall/adwatch.py)
+EnvironmentFile=%h/SharpLab/.env.wall
+ExecStart=%h/SharpLab/.venv/bin/python -m wall.adwatch
+KillMode=mixed
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=10
+Nice=5
+
+[Install]
+WantedBy=default.target

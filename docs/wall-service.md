@@ -471,6 +471,39 @@ House ones on "Show price chart". On phones the panel itself is a sheet opened f
 **Presets** (seeded once, `wall-election-seeded` marker): "Election Night" (map, key races, NBC News NOW, PBS News), "Election +
 NBA" and "Election map + NBA" (`fixed: true`: the preset's URLs stay as fixed tiles, live NBA games fill the rest).
 
+## Ad-skip: commercials, breaks and favorites (`wall/adwatch.py`, `wall/onair.py`)
+
+**Listening** — `python -m wall.adwatch`, its own user unit `deploy/sharplab-adwatch.service` (same `.env.wall`). Idle while
+no wall is up. It follows the streams on the walls (+ the originals the policy swapped away + the favorites) and a pool of
+national news channels (`WALL_ADWATCH_POOL`, default NBC News NOW, PBS NewsHour, ABC News, CBS News, LiveNOW from FOX;
+each checked live with `wall.streams.check` every 10 min), at most `WALL_ADWATCH_MAX` (8) at once.
+* Per stream: `yt-dlp -g` HLS URL, refreshed every 20 min or on failure. Text: CEA-608/708 captions when ffprobe sees
+  "Closed Captions" on the lowest rendition (lavfi `movie=…[out0+subcc]`) — YouTube's live HLS carried none in a check
+  on 2026-11-03 — else 15 s mono 16 kHz audio chunks → faster-whisper `small.en` on the GPU (`int8_float16`, VAD, one
+  model for every stream; `uv sync --extra adwatch`). No CUDA / no extra → the homelab's CPU whisper service
+  (`WALL_ADWATCH_WHISPER_URL`, serialized, ~realtime: enough for one or two streams). Chunks older than 40 s are dropped.
+* Every 20 s per stream, the last ~45 s: a keyword pass (ad cues: "ask your doctor", "side effects", "terms apply",
+  "% APR", "call now", "brought to you by"…; coverage cues: election, polls, votes, Senate, projected…; ≥ 60 % silence =
+  break); anything not clear-cut → sharplab-web `POST /api/v1/wall/election/classify` (X-Api-Key; Claude Haiku
+  `claude-haiku-5-5`, effort low, 8 s timeout → "unknown"; ≤ 1 call per stream per 15 s, cached by text hash). No answer →
+  a weaker keyword call.
+* Every 5 s: `POST /adwatch {streams: {url: {label, confidence, since, text_tail}}}` (loopback only).
+
+**Acting** (`wall/onair.py`, in the wall service; only while on: `WALL_ADWATCH=1` at start, or `POST /i/{inst}/adwatch
+{on}` through `target()` — the watch page's "Auto ad-skip" toggle, owner / admins only):
+* Sound: the sound tile's stream at ad/break ≥ 10 s → to a tile on air (a favorite first, then the last manual pick, then
+  the surest). After an automatic move it goes back to a favorite on air / the manual pick once that's coverage ≥ 10 s.
+* Tiles: a stream tile (never a /p/ page, never tiles 1–2 in election mode) at ad/break/off-topic ≥ 60 s swaps in place to
+  the best pool stream on air (≥ 10 s) not already up (favorites first). It goes home — to its favorite once that is
+  coverage ≥ 20 s, else the original after ≥ 30 s. At most one swap per tile per 2 min. Changes by people (votes, the
+  owner, the TV's phones, the default screens) are noticed by diffing the tiles: that tile's auto-swaps pause 10 min and
+  its remembered original is dropped.
+* Favorites: `POST /i/{inst}/favorite {url, on}` (op `favorite`, ★ on every stream tile and pool stream in the panel), two
+  at most (a third replaces the oldest), `$WALL_STATE_DIR/favorites.json`. Starring a stream that isn't up puts it on
+  tile 3 or 4 (whichever doesn't hold the other favorite).
+* State: `onair: [{label, confidence, since, tail} | null per tile]`, `favorites: [url]`, `adwatch: {on, orig: {tile:
+  url}, pool: [{url, label, …}]}` (a mirror shows the TV's). The watch page shows "● on air" / "⏸ break" / "ad" per tile.
+
 ## `/wall` in Discord (`bot/cogs/wall.py`)
 
 `/wall start [preset]`, `/wall stop`, `/wall status`, `/wall set` (layout / board / sound / tile from a live game, a

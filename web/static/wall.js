@@ -258,6 +258,9 @@
       const live = (wall.streams || [])[i];   // a YouTube tile: is it on yet (wall/streams.py)
       if (live) t.append(el("span", "small " + (live.live ? "live-on" : "muted"), live.live ? "● live" : live.starts
         ? `starts ${new Date(live.starts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : live.live === false ? "not live" : ""));
+      const air = onairBadge((wall.onair || [])[i]);   // ad-skip (wall/onair.py): on air / at a break / an ad
+      if (air) t.append(air);
+      if (!ownPage(u)) t.append(starBtn(u, name));
       if (elecMode && i < 2 && !ownPage(u)) {   // a stream on a dashboard tile: one tap back to a dashboard
         const free = ELEC_SCREENS.find(([scr]) => !(wall.urls || []).includes(OWN + scr));
         if (free) { const d = el("button", null, "↩ dashboard"); d.title = `Back to ${free[1]}`;
@@ -273,6 +276,37 @@
       }
       tiles.append(t);
     });
+  }
+  // Ad-skip: each stream's label from wall/adwatch.py, and the ★ favorites (two at most: the tiles' home streams)
+  function onairBadge(a) {
+    if (!a || !a.label) return null;
+    const txt = { coverage: "● on air", ad: "ad", break: "⏸ break", offtopic: "off-topic" }[a.label];
+    if (!txt) return null;
+    const b = el("span", "small " + (a.label === "coverage" ? "live-on" : "muted"), txt);
+    b.title = (a.tail ? `“…${a.tail}”` : "") + (a.confidence ? ` (${Math.round(a.confidence * 100)}%)` : "");
+    return b;
+  }
+  function starBtn(url, label) {
+    const on = ((wall && wall.favorites) || []).includes(url);
+    const b = el("button", null, on ? "★" : "☆");
+    b.title = on ? "Unstar: no longer a home stream for tiles 3–4" : "Star (two at most): tiles 3–4 come back to it after a break";
+    b.onclick = () => propose({ op: "favorite", url, on: !on, label });
+    return b;
+  }
+  function adRow() {   // the election screens row: the ad-skip toggle + the pool of other news streams (with stars)
+    const aw = (wall && wall.adwatch) || {};
+    const tog = el("button", "btn", `Auto ad-skip: ${aw.on ? "on" : "off"}`);
+    tog.title = "Sound leaves a stream at a commercial; a stream tile at a break for a minute swaps to one on air, then comes back";
+    tog.onclick = () => propose({ op: "adwatch", on: !aw.on });
+    const pool = (aw.pool || []).map((p) => {
+      const name = tileName(p.url), w = el("span", "pool");
+      const put = el("button", "btn", name); put.title = "Put it on a stream tile";
+      put.onclick = () => propose({ op: "tile", i: pickTile(true), url: p.url, label: name });
+      w.append(put, starBtn(p.url, name));
+      const air = onairBadge(p); if (air) w.append(air);
+      return w;
+    });
+    return [tog, ...pool];
   }
   // Election night: our own /p/election/<screen> pages and local stations get names, not URLs
   const OWN = "http://127.0.0.1:7795/p/election/";
@@ -314,7 +348,7 @@
     const def = el("button", "btn", "↺ Default");
     def.title = "Put the default election screens back on every tile (dashboards on 1–2, the default streams on 3–4)";
     def.onclick = () => propose({ op: "default" });
-    $("elecScreens").replaceChildren(def, ...ELEC_SCREENS.map(([scr, label]) => pick(OWN + scr, label)));
+    $("elecScreens").replaceChildren(def, ...ELEC_SCREENS.map(([scr, label]) => pick(OWN + scr, label)), ...adRow());
     const sel = $("newsSt");
     if (localNews && !sel.options.length) {
       sel.replaceChildren(...Object.keys(localNews).sort().map((st) => { const o = el("option", null, st); o.value = st; return o; }));

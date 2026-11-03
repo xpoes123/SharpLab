@@ -84,6 +84,7 @@ class Instance:
         # the L-bar asked for (lbar_req) vs brought up for the bets (auto_lbar: 1 or 4 tiles, no L-bar, bets shown —
         # the bets live in the L-bar, never over the video; 2 and 3 tiles have the bands instead)
         self.lbar_req, self.auto_lbar, self._bets_seen = False, False, 0.0
+        self.extra = None                        # inst → dict merged into state() (the server's ad-skip: onair, favorites)
 
     # ---- state -------------------------------------------------------------------------------------------------------
     def _bump(self) -> None:
@@ -115,6 +116,8 @@ class Instance:
                 out["sync"] = self.sync_view()
             if self.headless:
                 out["capture"] = "screen" if self.screen else "tiles" if self.urls else ""
+            if self.extra is not None:
+                out.update(self.extra(self))
             if self.headless:
                 out["stream"] = {"hls": f"/hls/{self.name}/index.m3u8", "up": self.headless.up, "last_fetch": self.last_fetch}
             return out

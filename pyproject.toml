@@ -24,6 +24,10 @@ dependencies = [
     "yfinance>=1.3.0",
 ]
 
+[project.optional-dependencies]
+# wall/adwatch.py's GPU speech-to-text (the homelab: `uv sync --extra adwatch`)
+adwatch = ["faster-whisper>=1.1"]
+
 [tool.setuptools.packages.find]
 include = ["bot*", "db*", "shared*", "temporal*", "wall*"]
 
