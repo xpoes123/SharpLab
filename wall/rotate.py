@@ -78,7 +78,7 @@ class Rotation:
                 s, p = screen(nxt), RANK["probs"]
                 if RANK["order"] and now - RANK["at"] < STALE_S and s in p:
                     from wall.director import NAMES
-                    SAID.append(f"📊 Jev: {NAMES.get(s, s)} on the dashboard ({round(100 * float(p[s]))}%)"
+                    SAID.append(f"📊 DJ Jev: {NAMES.get(s, s)} on the dashboard ({round(100 * float(p[s]))}%)"
                                 + (f" — {RANK['why']}" if RANK.get("why") else ""))
         return out
 

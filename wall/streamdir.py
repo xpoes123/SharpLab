@@ -248,7 +248,7 @@ class StreamDirector:
             acts.append(f"director: tile {i + 1} {name_of(cur)}→{name_of(u)} ({sn:.2f} vs {sc:.2f})")
             if not self.note:
                 q = quote(board.get(u))
-                self.note = f"🎬 Jev: {name_of(u)} on tile {i + 1} ({round(100 * sn)}% vs {name_of(cur)} {round(100 * sc)}%)" + \
+                self.note = f"🎬 DJ Jev: {name_of(u)} on tile {i + 1} ({round(100 * sn)}% vs {name_of(cur)} {round(100 * sc)}%)" + \
                     (f" — {WHY[self.reason]}" if self.reason in WHY else "") + (f" · “{q}”" if q else "")
         s = inst.driver.sound
         if s in tiles and len(tiles) == 2:
@@ -262,7 +262,7 @@ class StreamDirector:
                 self._sound(inst, policy, best, now)
                 acts.append(f"director: sound {name_of(cur)}→{name_of(urls[best])} ({sb:.2f} vs {sc:.2f})")
                 if not self.note:
-                    self.note = f"🔊 Jev: sound to {name_of(urls[best])} ({round(100 * sb)}% vs {name_of(cur)} {round(100 * sc)}%)" + \
+                    self.note = f"🔊 DJ Jev: sound to {name_of(urls[best])} ({round(100 * sb)}% vs {name_of(cur)} {round(100 * sc)}%)" + \
                         (f" — {WHY[self.reason]}" if self.reason in WHY else "")
         return acts
 
@@ -291,7 +291,7 @@ class StreamDirector:
         self.jumped, self.jumped_to[u] = now, now
         q = quote(board.get(u))
         return [f"director: jump tile {i + 1} {name_of(cur)}→{name_of(u)} (important {board.get(u)['important']:.2f})"], \
-            f"🎬 Switching to {name_of(u)}" + (f" — “{q}”" if q else "")
+            f"🎬 DJ Jev: switching to {name_of(u)}" + (f" — “{q}”" if q else "")
 
     def tick(self, inst, policy, board: onair.Board, favs: list[str], night: Callable[[], str],
              chat: list[dict] | None = None) -> tuple[list[str], str]:
