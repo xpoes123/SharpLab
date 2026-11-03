@@ -54,9 +54,10 @@ Item {
             if (seen[l.id]) continue
             seen[l.id] = true
             if (!l.fresh) continue
+            if (l.sys && String(l.text).trim().indexOf("\uD83D\uDCCA") === 0) continue   // the dashboard director's notes: the tiles already show it
             lastAt = nowMs = now
             lines.append({ lid: l.id, born: now, sys: !!l.sys, guest: !!l.guest,
-                           html: l.sys ? esc(l.text) : "<b>" + esc(l.name || "?") + "</b>&nbsp; " + esc(l.text) })
+                           html: l.sys ? esc(String(l.text).replace(/^[^A-Za-z0-9]+/, "")) : "<b>" + esc(l.name || "?") + "</b>&nbsp; " + esc(l.text) })
         }
         while (lines.count > maxLines) lines.remove(0)
     }
@@ -115,9 +116,9 @@ Item {
                         elide: Text.ElideRight
                         font.pixelSize: cf.fontPx
                         font.family: cf.family || Qt.application.font.family
-                        font.weight: line.sys ? Font.DemiBold : Font.Medium
+                        font.weight: Font.Medium
                         // the accent (tokens.css) for notices; docked, the sidebar's ink (cInk / cMuted)
-                        color: line.sys ? "#FFB000" : cf.dock ? (line.guest ? "#B3AD9D" : "#ECE6D6") : line.guest ? "#E8E8E8" : "#FFFFFF"
+                        color: line.sys ? (cf.dock ? "#B3AD9D" : "#FFB000") : cf.dock ? (line.guest ? "#B3AD9D" : "#ECE6D6") : line.guest ? "#E8E8E8" : "#FFFFFF"
                         style: cf.dock ? Text.Normal : Text.Outline; styleColor: Qt.rgba(0, 0, 0, 0.9)
                     }
                     SequentialAnimation on opacity {
