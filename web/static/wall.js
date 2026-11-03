@@ -616,17 +616,23 @@
   const sheets = [...document.querySelectorAll(".sheet-host")];
   const chatIn = $("chatIn"), msgs = $("msgs");
 
-  // The room is pinned to the *visual* viewport, so the iOS keyboard shrinks the chat instead of covering the input.
+  // The room is pinned to the *visual* viewport while a text box has focus, so the iOS keyboard shrinks the chat instead
+  // of covering the input. Otherwise the CSS falls back to 100dvh: phones report the visual viewport late around a
+  // rotation / full screen, and a stale landscape height left the portrait room ~390 px tall, squeezing the video away.
+  const typing = () => { const a = document.activeElement; return !!a && (a.tagName === "TEXTAREA" || (a.tagName === "INPUT" && !/^(range|checkbox|radio|button|submit)$/.test(a.type))); };
   function fitViewport() {
     const st = document.documentElement.style;
-    st.setProperty("--vvh", (vv ? vv.height : innerHeight) + "px");
-    st.setProperty("--vvtop", (vv ? vv.offsetTop : 0) + "px");
+    if (vv && typing()) {
+      st.setProperty("--vvh", vv.height + "px");
+      st.setProperty("--vvtop", vv.offsetTop + "px");
+    } else { st.removeProperty("--vvh"); st.removeProperty("--vvtop"); }
     const wasStuck = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 40;
     document.body.classList.toggle("kb", PORTRAIT.matches && COARSE.matches && document.activeElement === chatIn);
     if (wasStuck) msgs.scrollTop = msgs.scrollHeight;
   }
   if (vv) { vv.addEventListener("resize", fitViewport); vv.addEventListener("scroll", fitViewport); }
   addEventListener("resize", fitViewport);
+  document.addEventListener("focusin", fitViewport); document.addEventListener("focusout", () => setTimeout(fitViewport, 0));
   chatIn.addEventListener("focus", () => { fitViewport(); setUnread(0); clearTimeout(hideT); });
   chatIn.addEventListener("blur", () => { fitViewport(); if (!pinned) peek(); });
 
