@@ -58,6 +58,9 @@ def classify(event_ticker: str) -> dict | None:
     if len(parts) < 2:
         return None
     series = parts[0]
+    if series == "KXGENERALCOUNTY" and len(parts) >= 3:   # one county of a statewide race (KXGENERALCOUNTY-GOVPARTYCA-26)
+        c = classify("-".join(parts[1:]))
+        return {**c, "type": "county"} if c and c["type"] == "race" else None
     if series == "KXHOUSERACE" and len(parts) >= 3:
         m, y = _HOUSERACE.match(parts[1]), _year(parts[2])
         if m and m["st"] in STATES and y in (2026, 2027, 2028):
@@ -176,6 +179,10 @@ def market_label(c: dict, p: dict, m: dict) -> str:
         return f"{where} {OFFICE_NAME[c['office']]}" + (" (sp.)" if c.get("special") else "") + (f" · {who}" if who else "")
     if c["type"] == "control":
         return f"{OFFICE_NAME[c['office']]} control · {PARTY_NAME.get(p['party'], p['party'])}"
+    if c["type"] == "county":   # "Will Steve Hilton win Riverside County?", yes_sub_title "Riverside"
+        county = (m.get("yes_sub_title") or "").strip() or (m.get("ticker") or "").rsplit("-", 1)[-1].title()
+        who = p["name"].split()[-1] if p["name"] else PARTY_NAME.get(p["party"], "")
+        return f"{c['state']} {OFFICE_NAME[c['office']]} · {county} Co." + (f" · {who}" if who else "")
     sub = (m.get("yes_sub_title") or "").strip() or (m.get("ticker") or "").rsplit("-", 1)[-1]
     return f"{PARTY_NAME[c['party']]} {OFFICE_NAME[c['office']]} seats{' won' if c['basis'] == 'won' else ''} · {sub}"
 
@@ -187,6 +194,9 @@ def market_info(m: dict) -> dict | None:
     if not c or "state senate" in (m.get("title") or "").lower():
         return None
     p = pick(m)
+    if c["type"] == "county":   # the sub-title is the county; the person is in the title
+        w = re.match(r"^Will (.+?) win\b", m.get("title") or "")
+        p = {"party": p["party"] if p["name"] else "", "name": w[1] if w else ""}
     if c["type"] == "control" and not p["party"]:
         p["party"] = tk.rsplit("-", 1)[-1].upper()[:1]
     return {"class": c, "pick": p, "label": market_label(c, p, m),
@@ -216,6 +226,10 @@ def status(info: dict | None, side: str, races: dict[str, dict], offices: dict[s
         return {"race": "", "text": "", "called": "", "won": None, "chip": ""}
     c, p = info["class"], info["pick"]
     out = {"race": "", "text": "", "called": "", "won": None, "chip": "", "pct_in": None, "leader": ""}
+    if c["type"] == "county":   # filed under the statewide race; never won / lost from statewide results (the county can differ)
+        who = p["name"].split()[-1] if p["name"] else p["party"] or "?"
+        out.update(race=race_ids(c)[0], chip=f"{side} {who} (county)", text="county market")
+        return out
     if c["type"] == "race":
         r = resolve(c, p, races)
         if not r:
