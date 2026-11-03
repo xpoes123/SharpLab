@@ -14,6 +14,8 @@ docs/wall-service.md ("Election map + Kalshi") has the whole picture; the logic 
 from __future__ import annotations
 
 import asyncio
+import gzip
+import json
 import logging
 import os
 import re
@@ -25,6 +27,7 @@ from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse, Response
 
 from shared import election_markets as em
+from shared import election_pulse as ep
 from shared import kalshi_account as ka
 from shared import kalshi_election as ke
 from web import wall, wall_bets
@@ -122,6 +125,19 @@ class Markets:
         async def go():
             return (await self._get("/markets", {"series_ticker": series, "limit": 1000})).get("markets") or []
         return await self.cache.get(("markets", series), MARKETS_TTL, go)
+
+    async def all_open(self, series: str) -> list[dict]:
+        """Every open market in a series, all pages (the turnout series has 1000+)."""
+        async def go():
+            out, cursor = [], ""
+            for _ in range(10):
+                got = await self._get("/markets", {"series_ticker": series, "status": "open", "limit": 1000, **({"cursor": cursor} if cursor else {})})
+                out += got.get("markets") or []
+                cursor = got.get("cursor") or ""
+                if not cursor:
+                    break
+            return out
+        return await self.cache.get(("open", series), MARKETS_TTL, go)
 
     async def state_markets(self, state: str) -> list[dict]:
         names = (await self.series()).get(state, []) + [em.HOUSERACE]
@@ -295,6 +311,29 @@ async def get_map(request: Request):
             "updated": snap.get("updated", 0), "error": snap.get("error", ""), "calls": (snap.get("calls") or [])[:8],
             "states": we.STATES, "member": bool(user), "owner": bool(user and wall.hub.is_owner(user["id"])),
             "now": snap.get("now")}
+
+
+@router.get("/pulse")
+async def get_pulse(request: Request):
+    """Election Pulse (web/static/pulse.html): results x % in -> projected finals, against Kalshi's count markets."""
+    if not who(request)[1]:
+        return _deny()
+    snap = await snapshot()
+    got = await asyncio.gather(*(markets.all_open(s) for s in ep.SERIES), return_exceptions=True)
+    mk, bad = {}, []
+    for s, g in zip(ep.SERIES, got):
+        if isinstance(g, Exception):
+            log.warning("pulse kalshi %s: %s", s, type(g).__name__)
+            bad.append(s)
+        else:
+            mk[s] = g
+    out = ep.pulse(snap, mk)
+    if bad:
+        out["error"] = (out["error"] + " · " if out["error"] else "") + "Kalshi didn't answer for " + ", ".join(bad)
+    body = json.dumps(out, separators=(",", ":")).encode()   # ~1.7 MB of markets; ~200 KB gzipped (Caddy doesn't encode)
+    if "gzip" in request.headers.get("accept-encoding", ""):
+        return Response(gzip.compress(body, 5), media_type="application/json", headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
+    return Response(body, media_type="application/json")
 
 
 @router.get("/shapes")
