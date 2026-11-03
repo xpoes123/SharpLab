@@ -39,6 +39,7 @@ class Instance:
         self.min_free_mb, self.vram = min_free_mb, vram
         self.max_load, self.min_avail_mb, self.sysload = max_load, min_avail_mb, sysload or system_load
         self._over_since = 0.0
+        self.before_start = lambda: None   # e.g. the LLM guard parking Ollama's models
         self.lock = threading.RLock()
         self.urls: list[str] = []
         self.live: LiveRun | None = None
@@ -125,6 +126,7 @@ class Instance:
             self._stop_locked("")
             if self.headless:
                 self._guard()
+                self.before_start()
                 free = self.vram()
                 if free is not None and free < self.min_free_mb:
                     raise WallError(f"GPU busy: {free} MB free, the headless wall wants {self.min_free_mb}")
@@ -391,6 +393,7 @@ class Instance:
         with self.lock:
             self._stop_locked("")
             self._guard()
+            self.before_start()
             try:
                 self.headless.capture_screen(self.capture_output, self.screen_sink)
             except Exception as e:  # noqa: BLE001

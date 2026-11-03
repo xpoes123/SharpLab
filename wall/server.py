@@ -26,6 +26,7 @@ from pydantic import ValidationError
 from wall.engine import Session
 from wall.headless import Headless
 from wall.instance import BOARDS, Instance, WallError
+from wall.llm import LLMGuard
 from wall.live import LEAGUES, STREAM, TEAMS, Scores, live_games
 from wall.presets import PresetStore, check_url, errors
 
@@ -114,13 +115,16 @@ class Cfg:
         self.tv = env.get("WALL_TV", "1") not in ("0", "false", "")
         self.tv_output = env.get("WALL_TV_OUTPUT", "HDMI-A-1")   # mirror mode streams this output of the TV ("" = copy with tiles)
         self.tv_sink = env.get("WALL_TV_SINK", "")                # and this sink's sound ("" = the default sink)
+        self.ollama = env.get("WALL_OLLAMA_URL", "http://127.0.0.1:11434")
+        self.llm_guard = env.get("WALL_LLM_GUARD", "unload")   # unload | stop | off (wall/llm.py)
         self.max_load = float(env.get("WALL_MAX_LOAD", "16"))
         self.min_avail_mb = int(env.get("WALL_MIN_AVAIL_MB", "3072"))
 
 
 def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, scores: Scores | None = None,
-          store: PresetStore | None = None) -> FastAPI:
+          store: PresetStore | None = None, guard: LLMGuard | None = None) -> FastAPI:
     cfg = cfg or Cfg()
+    guard = guard or LLMGuard(cfg.ollama, cfg.llm_guard)
     scores = scores or Scores()
     store = store or PresetStore(str(cfg.state), cfg.import_from)
     if instances is None:
@@ -140,12 +144,22 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         disc.source_board = lambda: tv_board(cfg.tv_overlay_api)
         disc.tv_on_wall = lambda: tv_active(cfg.tv_overlay_api) == "wall"
         disc.capture_output, disc.screen_sink = cfg.tv_output, cfg.tv_sink
+    for i in instances.values():
+        if i.headless:
+            i.before_start = guard.park   # the LLM's VRAM is free before the budget check
 
     @asynccontextmanager
     async def lifespan(app):
         async def ticker():
+            n = 0
             while True:
                 await asyncio.sleep(1)
+                n += 1
+                if n % 10 == 0:   # any wall up: the local LLM stays off the GPU
+                    try:
+                        await asyncio.to_thread(guard.tick, any(i.urls for i in instances.values()))
+                    except Exception as e:  # noqa: BLE001
+                        log.warning("llm guard: %s", e)
                 for inst in instances.values():
                     try:
                         await asyncio.to_thread(inst.tick)
@@ -158,7 +172,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
             await asyncio.to_thread(inst.stop, "service stopped")
 
     app = FastAPI(title="sharplab-wall", lifespan=lifespan)
-    app.state.instances, app.state.store, app.state.scores = instances, store, scores
+    app.state.instances, app.state.store, app.state.scores, app.state.guard = instances, store, scores, guard
 
     @app.middleware("http")
     async def gate(request: Request, call_next):

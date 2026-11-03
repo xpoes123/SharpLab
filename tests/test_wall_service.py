@@ -14,6 +14,7 @@ import wall.engine as engine
 from wall.engine import TILES, Driver, Session, tile_js, tile_map, tile_of
 from wall.headless import Headless, ffmpeg_cmd, find_cast_node, gst_cmd
 from wall.instance import Instance, WallError
+from wall.llm import LLMGuard
 from wall.live import ET, REFRESH_S, STREAM, TEAMS, LiveRun, assign, carries, live_games, matchup, parse_scoreboard, rank, stream_url, team_slug
 from wall.presets import PresetStore, clean_url
 from wall.server import Cfg, build
@@ -400,7 +401,7 @@ def api(tmp_path, monkeypatch):
     (tmp_path / "hls").mkdir()
     disc = Instance("discord", Session("discord"), store, FakeScores(data), driver=FakeDriver(), run=lambda f: None, headless=h,
                     vram=lambda: None, sysload=lambda: (1.0, 64000))
-    app = build(cfg, {"tv": tv, "discord": disc}, FakeScores(data), store)
+    app = build(cfg, {"tv": tv, "discord": disc}, FakeScores(data), store, guard=LLMGuard(mode="off"))
     return app, tmp_path
 
 
@@ -728,3 +729,36 @@ def test_resource_guard(tmp_path):
     i.seen()
     i.tick()
     assert not i.urls and "overloaded" in i.stopped_why
+
+
+# ---- the local LLM steps aside ---------------------------------------------------------------------------------------------
+def test_llm_guard_parks_models_while_a_wall_runs_and_warms_them_after():
+    loaded = ["gemma4:12b"]
+    calls, ctl = [], []
+    def call(base, path, body=None, timeout=0):
+        calls.append((path, body))
+        if path == "/api/ps":
+            return {"models": [{"name": m} for m in loaded]}
+        if body and body.get("keep_alive") == 0:
+            loaded.remove(body["model"])
+        return {}
+    g = LLMGuard("http://x:11434", call=call, systemctl=ctl.append)
+    g.tick(True)
+    assert loaded == [] and g.parked == ["gemma4:12b"]
+    loaded.append("gemma4:12b")   # Sage called mid-wall: it reloads, the next tick evicts it again
+    g.tick(True)
+    assert loaded == [] and g.parked == ["gemma4:12b"] and ctl == []
+    g.tick(False)
+    assert g.parked == [] and calls[-1] == ("/api/generate", {"model": "gemma4:12b", "keep_alive": "24h", "options": {"num_ctx": 16384}})
+    s = LLMGuard(call=lambda *a, **k: {"models": []}, systemctl=ctl.append, mode="stop")
+    s.tick(True); s.tick(True); s.tick(False)
+    assert ctl == ["stop", "start"]
+
+
+def test_the_guard_runs_before_a_headless_start(tmp_path):
+    order = []
+    h = FakeHeadless(tmp_path)
+    i, d, clock = inst(tmp_path, {}, headless=h, vram=lambda: order.append("vram") or 9000)
+    i.before_start = lambda: order.append("park")
+    i.start(urls=["https://a.tv"])
+    assert order == ["park", "vram"]

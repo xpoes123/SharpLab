@@ -1,0 +1,8 @@
+// Optional (WALL_LLM_GUARD=stop): lets davidj's sharplab-wall stop / start ollama.service while a wall runs.
+// Install as root: cp deploy/ollama-wall.polkit.rules /etc/polkit-1/rules.d/50-ollama-wall.rules
+polkit.addRule(function (action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" && action.lookup("unit") == "ollama.service" &&
+        (action.lookup("verb") == "stop" || action.lookup("verb") == "start") && subject.user == "davidj") {
+        return polkit.Result.YES;
+    }
+});
