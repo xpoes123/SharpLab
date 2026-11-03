@@ -128,6 +128,22 @@
     else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
   };
 
+  // Hotkeys (not while typing): m mute, f fullscreen, space pause / back to live (the sync loop catches it up), ↑ ↓ volume
+  document.addEventListener("keydown", (e) => {
+    const t = e.target;
+    if (e.ctrlKey || e.metaKey || e.altKey || (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(t.tagName)))) return;
+    if (!(wall && wall.running)) return;
+    const k = e.key.toLowerCase();
+    if (k === "m") toggleMute();
+    else if (k === "f") $("fsBtn").click();
+    else if (k === " ") { if (video.paused) video.play().catch(() => {}); else video.pause(); }
+    else if (k === "arrowup" || k === "arrowdown") {
+      const v = Math.max(0, Math.min(100, (video.muted ? 0 : Math.round(video.volume * 100)) + (k === "arrowup" ? 5 : -5)));
+      $("vol").value = String(v); $("vol").oninput();
+    } else return;
+    e.preventDefault();
+  });
+
   // ---- picture-in-picture: keep watching while in other apps ----
   // The standard API (Chrome, Android, desktop Safari), else iPhone Safari's presentation mode. autopictureinpicture
   // on the <video> + the media session's enterpictureinpicture handler let Chrome pop out by itself on an app switch.
