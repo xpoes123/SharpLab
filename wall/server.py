@@ -38,11 +38,12 @@ from wall.live import LEAGUES, STREAM, TEAMS, Scores, live_games
 from wall.presets import PresetStore, check_url, errors
 from wall.spotlight import Spotlight, state_list
 from wall.sync import STEP_S, Runner, SyncStore, tile_games
+from wall.exitpoll import ExitPoll
 from wall.turnout import Turnout
 
 log = logging.getLogger("wall.server")
 TAILNET = ipaddress.ip_network("100.64.0.0/10")
-REMOTE_OK = re.compile(r"^/(healthz|teams|live/[a-z]+|presets|sync|i/discord(/.*)?|hls/discord/[A-Za-z0-9_.]+|p/election/turnout\.json)$")
+REMOTE_OK = re.compile(r"^/(healthz|teams|live/[a-z]+|presets|sync|i/discord(/.*)?|hls/discord/[A-Za-z0-9_.]+|p/election/(turnout|exitpoll)\.json)$")
 HLS_FILE = re.compile(r"^(index\.m3u8|seg\d{6}\.ts)$")
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 PAGES = (Path(__file__).parent / "pages").resolve()
@@ -147,11 +148,13 @@ class Cfg:
 def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, scores: Scores | None = None,
           store: PresetStore | None = None, guard: LLMGuard | None = None, chat: ChatFeed | None = None,
           sync: SyncStore | None = None, bets: BetsFeed | None = None, runner: Runner | None = None,
-          results: Results | None = None, spot: Spotlight | None = None, turnout: Turnout | None = None) -> FastAPI:
+          results: Results | None = None, spot: Spotlight | None = None, turnout: Turnout | None = None,
+          exitpoll: ExitPoll | None = None) -> FastAPI:
     cfg = cfg or Cfg()
     results = results or Results(replay(cfg.election_replay) if cfg.election_replay else None, cfg.state)
     sync = sync or SyncStore(cfg.state / "sync.json", cfg.sync_default)
     turnout = turnout or Turnout(state_dir=cfg.state)
+    exitpoll = exitpoll or ExitPoll()
     bets = bets or BetsFeed(cfg.web_url, cfg.web_key)
     spot = spot or Spotlight(urllib_http(cfg.web_url, cfg.web_key, timeout=8) if cfg.web_url and cfg.web_key else None)
     tape = ScoreTape()   # every scoreboard as first seen: the band headers' delayed scores
@@ -634,6 +637,12 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         """Official turnout by state (wall/turnout.py): the turnout tile polls it; polling keeps the fetcher going."""
         turnout.touch()
         return JSONResponse(turnout.snapshot(), headers={"Cache-Control": "no-store"})
+
+    @app.get("/p/election/exitpoll.json")
+    def exitpoll_json(groups: int = 0) -> Response:
+        """NBC's national exit poll (wall/exitpoll.py), All voters; ?groups=1 adds the other voter groups' crosstabs."""
+        exitpoll.touch()
+        return JSONResponse(exitpoll.snapshot(groups=bool(groups)), headers={"Cache-Control": "no-store"})
 
     @app.get("/p/election/board.json")
     def election_board_json() -> dict:

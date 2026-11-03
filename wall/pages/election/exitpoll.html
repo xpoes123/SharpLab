@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head><link rel="stylesheet" href="https://share.djiang.xyz/ui/ui.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exit polls</title>
+<link rel="stylesheet" href="election.css">
+<style>
+  .body { position: absolute; left: 1.2rem; right: 1.2rem; top: 4.4rem; bottom: 2.3rem; display: flex; flex-direction: column; gap: 0.8rem; }
+  .q { font-size: 1.9rem; font-weight: 700; line-height: 1.15; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .cols, .row { display: grid; grid-template-columns: 15rem 5.5rem 1fr; gap: 1rem; align-items: center; }
+  .cols { font-size: 0.85rem; color: var(--muted); }
+  .cols span:nth-child(2), .row .sh { text-align: right; }
+  .cols .vs { display: flex; justify-content: space-between; }
+  .rows { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 0.35em; }
+  .row { flex: 0 1 2.6em; min-height: 0; }
+  .row .lb { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .sh { color: var(--muted); }
+  .bar { position: relative; display: flex; justify-content: space-between; height: 100%; max-height: 2.4em; background: var(--surface2); }
+  .bar i { display: flex; align-items: center; height: 100%; font-style: normal; color: var(--bg); padding: 0 0.4em; overflow: hidden; white-space: nowrap; }
+  .bar i.d { background: var(--dem); } .bar i.r { background: var(--rep); justify-content: flex-end; }
+  .bar i.d.trail { background: var(--dem-lead); color: var(--ink); } .bar i.r.trail { background: var(--rep-lead); color: var(--ink); }
+  .bar .mid { position: absolute; left: 50%; top: -0.15em; bottom: -0.15em; border-left: 1px solid var(--rule-strong); }
+  .hold { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; gap: 1.2rem; padding: 3rem; }
+  .hold .big { font-size: 4.2rem; font-weight: 800; color: var(--accent); }
+  .hold .when { font-size: 1.9rem; }
+  .hold .k { font-size: 1rem; color: var(--muted); }
+  .foot span { overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
+<body>
+<div class="head"><span class="title caps">Exit polls</span><span class="sub mono muted" id="sub"></span><span class="clock num" id="clock"></span></div>
+<div id="views"></div>
+<div class="foot"><span class="unofficial caps">Exit poll · early numbers shift</span><span class="muted mono" id="foot"></span></div>
+<script src="election.js"></script>
+<script>
+"use strict";
+// Exit polls (wall/exitpoll.py → NBC News / Edison, national, All voters): one question every 12 s (?every=), each answer
+// = its share of the electorate and how that group voted, D vs R. Before NBC releases anything: a holding screen.
+const Q = new URLSearchParams(location.search), EVERY = (+Q.get("every") || 12) * 1000;
+E.tickClock(document.getElementById("clock"));
+let data = null, idx = 0, shown = "";
+const pct = (v) => v == null ? "–" : `${Math.round(v)}%`;
+function row(a) {
+  const d = a.d || 0, r = a.r || 0, lead = d === r ? "" : d > r ? "D" : "R";
+  return `<div class="row"><span class="lb">${E.esc(a.label)}</span><span class="sh num">${pct(a.share)}</span>
+    <div class="bar num"><i class="d${lead === "R" ? " trail" : ""}" style="width:${d}%">${a.d == null ? "" : "D " + Math.round(d)}</i>
+    <i class="r${lead === "D" ? " trail" : ""}" style="width:${r}%">${a.r == null ? "" : "R " + Math.round(r)}</i><span class="mid"></span></div></div>`;
+}
+function question(q) {
+  const n = q.answers.length, fs = Math.min(1.7, 19 / Math.max(n, 1) / 1.35);   // long answer lists shrink to fit
+  return `<div class="body"><div class="q">${E.esc(q.q)}</div>
+    <div class="cols caps"><span>Answer</span><span>Share</span><span class="vs"><span class="D">Voted Dem</span><span class="R">Voted Rep</span></span></div>
+    <div class="rows" style="font-size:${fs.toFixed(2)}rem">${q.answers.map(row).join("")}</div></div>`;
+}
+function hold(d) {
+  const st = d && d.error ? `<span class="err">${E.esc(d.error)}</span>` : d && d.updated ? `NBC page checked ${E.clock(d.updated)}` : "Waiting for NBC's exit poll page…";
+  return `<div class="hold"><div class="big caps">Exit polls</div>
+    <div class="when">First results expected ~5–7 PM ET · full national 8 PM ET</div>
+    <div class="k mono">NBC News · Edison Research national exit poll · ${st}</div></div>`;
+}
+function show(html) {
+  if (html === shown) return;
+  shown = html;
+  const box = document.getElementById("views"), old = [...box.children];
+  const v = document.createElement("div");
+  v.className = "view";
+  v.innerHTML = html;
+  box.appendChild(v);
+  void v.offsetWidth;   // let the browser see it at opacity 0 first, so it fades in
+  v.classList.add("on");
+  old.forEach((o) => { o.classList.remove("on"); setTimeout(() => o.remove(), 2100); });
+}
+function paint() {
+  const qs = (data && data.questions) || [];
+  const sub = document.getElementById("sub"), foot = document.getElementById("foot");
+  if (!qs.length) {
+    sub.textContent = "National · NBC News / Edison";
+    foot.textContent = "";
+    show(hold(data));
+    return;
+  }
+  const i = idx % qs.length;
+  sub.textContent = `National · All voters${data.as_of ? " · as of " + data.as_of : ""} · ${i + 1}/${qs.length}`;
+  foot.innerHTML = `NBC News / Edison · share = % of all voters · checked ${E.clock(data.updated)}` +
+    (data.error ? ` · <span class="err">${E.esc(data.error)}</span>` : "");
+  show(question(qs[i]));
+}
+function load() {
+  fetch("exitpoll.json", { cache: "no-store" }).then((r) => r.json()).then((d) => { data = d; paint(); }, () => {});
+}
+load();
+setInterval(load, 60000);
+setInterval(() => { idx++; paint(); }, EVERY);
+</script>
+</body>
+</html>
