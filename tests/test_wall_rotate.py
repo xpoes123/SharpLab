@@ -10,7 +10,8 @@ def test_screen_and_next():
     assert next_url(URLS, 0) == B + "map?view=S"                    # the unpinned map starts the cycle
     assert next_url([B + "map?view=G", B + "races"], 0) == B + "turnout"         # races is taken: skips it
     assert next_url([B + "turnout", B + "map?view=S"], 0) == B + "exitpoll"
-    assert next_url([B + "exitpoll", B + "map?view=S"], 0) == B + "races"     # wraps past every map: tile 2 has one
+    assert next_url([B + "exitpoll", B + "map?view=S"], 0) == B + "swing"
+    assert next_url([B + "swing", B + "map?view=S"], 0) == B + "races"        # wraps past every map: tile 2 has one
 
 
 def test_due_staggers_and_holds():

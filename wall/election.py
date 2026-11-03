@@ -402,8 +402,9 @@ def replay(spec: str) -> list:
     year = next((int(p.name.split("-")[1]) for p in sorted(root.glob("cnn-*-SG.json*"))), 2024)
 
     def fetch(url: str):
-        kind, name = ("bop" if "/bop/" in url else "races"), url.rsplit("/", 1)[1].removesuffix(".json")
-        for f in (root / f"cnn-{'bop-' if kind == 'bop' else ''}{name}.json", root / f"cnn-{'bop-' if kind == 'bop' else ''}{name}.json.gz"):
+        kind = "bop" if "/bop/" in url else "county" if "/county-races/" in url else "races"
+        name, pre = url.rsplit("/", 1)[1].removesuffix(".json"), {"bop": "bop-", "county": "county-", "races": ""}[kind]
+        for f in (root / f"cnn-{pre}{name}.json", root / f"cnn-{pre}{name}.json.gz"):
             if f.exists():
                 data = json.loads(gzip.decompress(f.read_bytes()) if f.suffix == ".gz" else f.read_text())
                 return partial(data, float(share)) if share and kind == "races" else data

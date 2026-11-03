@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head><link rel="stylesheet" href="https://share.djiang.xyz/ui/ui.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vs 2024</title>
+<link rel="stylesheet" href="election.css">
+<style>
+  .body { position: absolute; left: 1.2rem; right: 1.2rem; top: 4.6rem; bottom: 2.3rem; }
+  .rows { display: grid; grid-auto-rows: 1fr; gap: 0.45rem; height: 100%; }
+  .row { display: grid; grid-template-columns: 11rem 6.5rem 6.5rem 1fr 6.8rem 4.6rem; gap: 0.9rem; align-items: center;
+         background: var(--surface); border-left: 0.3rem solid var(--rule-strong); padding: 0 0.9rem 0 0.8rem; min-height: 0; }
+  .row.sD { border-left-color: var(--dem); } .row.sR { border-left-color: var(--rep); }
+  .row .st { font-size: 1.4rem; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.05; }
+  .row .of { font-size: 0.75rem; }
+  .row .v { font-size: 1.35rem; text-align: right; }
+  .row .v small, .k { font-size: 0.72rem; color: var(--muted); display: block; font-weight: 500; }
+  .row .sw { font-size: 1.6rem; text-align: right; }
+  .row .in { font-size: 0.85rem; text-align: right; }
+  .hdr { display: grid; grid-template-columns: 11rem 6.5rem 6.5rem 1fr 6.8rem 4.6rem; gap: 0.9rem; padding: 0 0.9rem 0 1.1rem;
+         font-size: 0.72rem; color: var(--muted); margin-top: -1.1rem; height: 1.1rem; }
+  .hdr span:nth-child(n+2) { text-align: right; } .hdr span:nth-child(4) { text-align: center; }
+  /* diverging swing bar: toward the Dems grows left in blue, toward the Reps right in red; ±SCALE pts fills a side */
+  .div { position: relative; height: 0.7rem; background: var(--surface2); }
+  .div::after { content: ""; position: absolute; left: 50%; top: -0.25rem; bottom: -0.25rem; width: 1px; background: var(--rule-strong); }
+  .div i { position: absolute; top: 0; bottom: 0; transition: width 3s ease-in-out; }
+  .div i.D { right: 50%; background: var(--dem); } .div i.R { left: 50%; background: var(--rep); }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); grid-auto-rows: 1fr; gap: 0.8rem; height: 100%; }
+  .card { background: var(--surface); padding: 0.8rem 0.9rem; display: flex; flex-direction: column; gap: 0.35rem; min-height: 0; overflow: hidden;
+          border-top: 0.3rem solid var(--rule-strong); }
+  .card.sD { border-top-color: var(--dem); } .card.sR { border-top-color: var(--rep); }
+  .card > * { flex: none; }
+  .card .t { font-size: 1.3rem; line-height: 1.15; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card .big { font-size: 2.6rem; line-height: 1; }
+  .card .mv { display: grid; grid-template-columns: 1fr auto; gap: 0.1rem 0.6rem; font-size: 0.95rem; margin-top: auto; }
+  .card .mv span:nth-child(even) { text-align: right; }
+  .tn { display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: 1fr; gap: 0.45rem 1.4rem; height: 100%; }
+  .tr { display: grid; grid-template-columns: 9rem 1fr 5.2rem; gap: 0.7rem; align-items: center; min-height: 0; }
+  .tr .st { font-size: 1.25rem; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tr .pc { font-size: 1.45rem; text-align: right; }
+  .tbar { position: relative; height: 1.1rem; background: var(--surface2); }
+  .tbar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); opacity: 0.85; transition: width 3s ease-in-out; }
+  .tbar b { position: absolute; top: -0.2rem; bottom: -0.2rem; width: 2px; background: var(--ink); }
+  .tr .k { grid-column: 2 / -1; margin-top: -0.35rem; }
+  .w2 { display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: 1fr; gap: 0.45rem 1rem; height: 100%; }
+  .wr { display: grid; grid-template-columns: 1fr 6.5rem; align-items: center; background: var(--surface); padding: 0 0.8rem;
+        border-left: 0.3rem solid var(--rule-strong); min-height: 0; }
+  .wr.sD { border-left-color: var(--dem-lead); } .wr.sR { border-left-color: var(--rep-lead); }
+  .wr .st { font-size: 1.3rem; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wr .v { font-size: 1.4rem; text-align: right; }
+  .none { position: absolute; inset: 0; display: grid; place-items: center; font-size: 1.6rem; color: var(--muted); text-align: center; padding: 3rem; }
+</style>
+</head>
+<body>
+<div class="head"><span class="title caps" id="title">vs 2024</span><span class="sub mono muted" id="sub"></span><span class="clock num" id="clock"></span></div>
+<div id="views"></div>
+<div class="foot" id="foot"></div>
+<script src="election.js"></script>
+<script>
+"use strict";
+// Tonight vs 2024 (wall/swing.py, swing.json every 30 s). Once votes count, the sub-views rotate every 12 s (?every=s),
+// a 2 s crossfade: race swing (key races, most votes first: margin now vs 2024's presidential margin there), county swing
+// (counties ≥ 95 % in: weighted median per race + the biggest movers), turnout vs 2024. Before votes: the 2024
+// baselines of tonight's key races. Margins are Dem minus Rep; "D+3" = 3 points toward the Dems. ?view=races|counties|
+// turnout|watch&page=n pins one (renders, tests).
+const Q = new URLSearchParams(location.search), EVERY = (+Q.get("every") || 12) * 1000, SCALE = 15, PER = 7, CARDS = 6;
+const TAG = { S: "Senate", G: "Governor", H: "House" };
+E.tickClock(document.getElementById("clock"));
+let data = null, idx = 0, shown = "";
+const p = (m) => m == null ? "" : m > 0 ? "D" : m < 0 ? "R" : "";
+const mt = (m, side = "D") => m == null ? "—" : Math.abs(m) < 0.05 ? "Even" : `${m > 0 ? side : "R"}+${Math.abs(m).toFixed(1)}`;
+const ms = (m, side) => `<span class="${p(m) === "D" && side === "I" ? "I" : p(m)}">${mt(m, side)}</span>`;
+const fmt = (n) => n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 1 : 2) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "K" : String(n || 0);
+const chunk = (a, n) => { const o = []; for (let i = 0; i < a.length; i += n) o.push(a.slice(i, i + n)); return o; };
+
+function bar(sw) {
+  if (sw == null) return `<div class="div"></div>`;
+  const w = Math.min(50, 50 * Math.abs(sw) / SCALE);
+  return `<div class="div"><i class="${sw >= 0 ? "D" : "R"}" style="width:${w}%"></i></div>`;
+}
+function raceView(rows) {
+  return `<div class="hdr mono"><span></span><span>Now</span><span>2024 pres</span><span>swing</span><span></span><span>in</span></div>
+    <div class="rows">${rows.map((r) => `<div class="row s${p(r.swing)}">
+      <div><div class="st cond">${E.esc(r.label)}</div><div class="of caps muted">${TAG[r.office]}${r.called ? " · called" : ""}</div></div>
+      <div class="v num">${ms(r.now, r.side)}</div>
+      <div class="v num muted">${mt(r.was)}</div>
+      ${bar(r.swing)}
+      <div class="sw num">${r.swing == null ? `<span class="muted">—</span>` : ms(r.swing)}</div>
+      <div class="in mono"><span class="num">${Math.round(r.pct || 0)}%</span><small class="k">${fmt(r.votes)}</small></div>
+    </div>`).join("")}${"<div></div>".repeat(PER - rows.length)}</div>`;
+}
+function countyView(cs) {
+  return `<div class="cards">${cs.map((c) => `<div class="card s${p(c.median)}">
+      <div class="t cond">${E.esc(c.label)} <span class="muted caps" style="font-size:0.8rem">${TAG[c.office]}</span></div>
+      <div class="big num">${ms(c.median)}</div>
+      <div class="k mono">median swing vs ${E.esc(c.base)}<br>${c.n}/${c.of} counties ≥ ${data.min_pct}% in · mean ${mt(c.mean)}</div>
+      <div class="mv mono">${c.movers.map((m) => `<span>${E.esc(m.name)}</span><span class="num">${ms(m.swing)}</span>`).join("")}</div>
+    </div>`).join("")}</div>`;
+}
+function turnoutView(ts) {
+  return `<div class="tn">${ts.map((t) => {
+    const w = t.share == null ? 0 : Math.min(100, t.share / 1.2);   // the bar runs to 120 % of 2024; the white tick is 2024
+    return `<div class="tr"><div class="st cond">${E.esc(t.name)}</div>
+      <div class="tbar"><i style="width:${w}%"></i><b style="left:${100 / 1.2}%"></b></div>
+      <div class="pc num">${t.share == null ? "—" : Math.round(t.share) + "%"}</div>
+      <div class="k mono">${fmt(t.votes)} of ${fmt(t.was)} (2024)${t.pct != null ? ` · ${Math.round(t.pct)}% in` : ""}</div></div>`;
+  }).join("")}</div>`;
+}
+function watchView(rows) {
+  return `<div class="w2">${rows.map((r) => `<div class="wr s${p(r.was)}"><div><div class="st cond">${E.esc(r.label)}</div>
+      <div class="k caps">${TAG[r.office]}</div></div><div class="v num">${ms(r.was)}</div></div>`).join("")}</div>`;
+}
+
+function views() {
+  const d = data || {}, out = [];
+  if ((d.races || []).length) {
+    chunk(d.races, PER).forEach((rs, i, a) => out.push({ k: "races", t: "Race swing", s: `key races · now vs 2024 presidential${a.length > 1 ? ` · ${i + 1}/${a.length}` : ""}`, h: raceView(rs) }));
+    chunk(d.counties || [], CARDS).forEach((cs, i, a) => out.push({ k: "counties", t: "County swing", s: `counties ≥ ${d.min_pct}% reporting vs the last presidential race${a.length > 1 ? ` · ${i + 1}/${a.length}` : ""}`, h: countyView(cs) }));
+    const ts = (d.turnout || []).filter((t) => t.votes).slice(0, 16);
+    if (ts.length) out.push({ k: "turnout", t: "Turnout vs 2024", s: "votes counted so far as a share of the 2024 presidential vote", h: turnoutView(ts) });
+  } else {
+    const w = d.watch || [], house = w.filter((r) => r.office === "H");   // the House's closest 2024 districts only
+    chunk(w.filter((r) => r.office !== "H").concat(house.slice(0, 32)), 16).forEach((rs, i, a) => out.push({ k: "watch", t: "What to watch", s: `2024 presidential margin where tonight's key races are${a.length > 1 ? ` · ${i + 1}/${a.length}` : ""}`, h: watchView(rs) }));
+  }
+  const pin = Q.get("view");
+  if (pin) { const f = out.filter((v) => v.k === pin); return f.length ? [f[(+Q.get("page") || 0) % f.length]] : []; }
+  return out;
+}
+function show(html) {
+  if (html === shown) return;
+  shown = html;
+  const box = document.getElementById("views"), old = [...box.children];
+  const v = document.createElement("div");
+  v.className = "view";
+  v.innerHTML = html;
+  box.appendChild(v);
+  void v.offsetWidth;
+  v.classList.add("on");
+  old.forEach((o) => { o.classList.remove("on"); setTimeout(() => o.remove(), 2100); });
+}
+function paint() {
+  const vs = views(), foot = document.getElementById("foot");
+  if (data) foot.innerHTML = E.footer(data).replace("calls:", "baselines: CNN 2024 final, NYT/AP districts · calls:");
+  if (!vs.length) {
+    document.getElementById("sub").textContent = "";
+    show(`<div class="none">${data && data.error ? E.esc(data.error) : "Waiting for results…"}</div>`);
+    return;
+  }
+  const v = vs[idx % vs.length];
+  document.getElementById("title").textContent = v.t;
+  document.getElementById("sub").textContent = v.s;
+  show(`<div class="body">${v.h}</div>`);
+}
+function load() {
+  fetch("swing.json", { cache: "no-store" }).then((r) => r.json()).then((d) => { data = d; paint(); }, () => {});
+}
+load();
+setInterval(load, 30000);
+setInterval(() => { idx++; paint(); }, EVERY);
+</script>
+</body>
+</html>

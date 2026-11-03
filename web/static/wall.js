@@ -327,12 +327,12 @@
   // Election night: our own /p/election/<screen> pages and local stations get names, not URLs
   const OWN = "http://127.0.0.1:7795/p/election/";
   const ELEC_SCREENS = [["map?view=S", "Senate map"], ["map?view=H", "House map"], ["map?view=G", "Governor map"],
-    ["races", "Key races"], ["turnout", "Turnout"], ["exitpoll", "Exit polls"]];
+    ["races", "Key races"], ["turnout", "Turnout"], ["exitpoll", "Exit polls"], ["swing", "vs 2024"]];
   const ownPage = (u) => { try { return new URL(u).pathname.startsWith("/p/election/"); } catch { return false; } };
   function ownName(u) {
     const x = new URL(u), scr = x.pathname.slice("/p/election/".length).replace(/\/$/, "");
     if (scr === "map") return { S: "Senate map", H: "House map", G: "Governor map" }[x.searchParams.get("view")] || "Election map";
-    return { races: "Key races", turnout: "Turnout", exitpoll: "Exit polls" }[scr] || "Election " + scr;
+    return { races: "Key races", turnout: "Turnout", exitpoll: "Exit polls", swing: "vs 2024" }[scr] || "Election " + scr;
   }
   let localNews = null;   // {ST: [{name, url}]}: YouTube channels' /live pages
   fetch("/local-news.json").then((r) => r.json()).then((j) => { localNews = j; if (!$("newsSt").closest("[data-elec]").hidden) renderElec(); }).catch(() => {});
