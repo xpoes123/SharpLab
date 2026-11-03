@@ -85,6 +85,9 @@ All JSON. `{inst}` is `tv` or `discord`. Errors: `{"error": "…"}` with 4xx.
 * `POST /i/{inst}/start` body one of `{"preset": 3}` / `{"preset": "Live NFL"}` / `{"urls": [...], "live": "nfl", "tiles": 4,
   "board": "nfl", "layout": "lbar"}` → state. A live preset plans its tiles from ESPN right away (no page checks; those
   run in the background every 120 s and swap finished games, as on the TV today).
+  `{"mirror": true}` = stream the TV's wall and follow it (see Mirror mode); `"origin": {"guild", "channel"}` on any start
+  is kept in the state so the bot posts the link where the start came from.
+* `POST /i/{inst}/follow` → mirror the TV again (after a change on this wall stopped the following)
 * `POST /i/{inst}/stop` → state
 * `POST /i/{inst}/tile` `{"i": 1, "url": "…"}` → swap tile i (i == len → add; ≤ 4). A live tile set this way leaves the auto-swap.
 * `DELETE /i/{inst}/tile/{i}` → remove (never the last one)
@@ -115,6 +118,47 @@ All JSON. `{inst}` is `tv` or `discord`. Errors: `{"error": "…"}` with 4xx.
   15 min after start with no viewer at all, and in any case after `WALL_MAX_HOURS` (default 6).
 * **Priority:** the TV's wall wins: `discord` never touches the real session or its audio (its tiles play into a
   private null sink, `wall_discord`).
+
+## Mirror mode (the discord wall streams the TV's wall)
+
+A bare `/wall start` (the web page's "Same as the TV", the panel's first choice) sends `{"mirror": true}`; any start
+while the TV is on its wall mirrors too. The service then:
+
+* **Captures the TV's real output** (`WALL_TV_OUTPUT`, default `HDMI-A-1`, 2560×1440 on the box): `Cast.qml` asks the
+  user's KWin for a zkde_screencast of that output (no portal, unattended — verified on the box), and the same
+  gst → ffmpeg path encodes it, scaled to 1080p on the GPU (`cudaupload ! cudaconvertscale ! nvh264enc`), with the TV's
+  default sink's monitor as the sound (`WALL_TV_SINK`). No tiles of its own: the tiles, overlay and sound are exactly
+  what the TV shows, so every TV change is on the stream by itself. State: `"mirror": true, "capture": "screen"`.
+* **Never streams another TV app:** the TV router's `/healthz` is checked every 3 s; when the TV leaves its wall the
+  capture ends — while someone watches (a playlist fetch in the last 90 s) the stream falls back to tiles of its own
+  with the last URLs, else the wall stops.
+* **Refused pages:** if a TV tile may not be streamed (`public_url`: LAN / tailnet / loopback), the screen can't be,
+  so the mirror runs its own tiles without that one and posts a notice; when it's gone, back to the screen.
+* **Tiles mode** (no capture output set, a refused page, the TV left its wall) follows the TV's `rev`: swaps, adds,
+  removes, moves (moved, not reloaded), sound and overlay are copied on the next tick. The TV stopping leaves the last
+  tiles up.
+* **Breaking / restoring:** any change made on the discord wall itself (a vote that passed, the owner) stops the
+  following (`"mirror": false`, a notice "No longer mirroring the TV"); a screen mirror turns into tiles first.
+  `POST /i/discord/follow` (the "Follow the TV" button / `{"op": "follow"}` proposal) restores it.
+* Switching between screen and tiles keeps the session (`started`, `origin`), so the bot doesn't post the link again.
+
+## Box safety
+
+* **No crash storms.** The nested session's private bus (`wall/nested-bus.conf`) has no service directories, so its
+  clients can't D-Bus-activate xdg-desktop-portal-kde / ksecretd / kwalletd (they crash-looped there on 2026-11-02, each
+  crash a systemd-coredump compressing 15 MB at full CPU). Tiles get `--password-store=basic`, `GTK_USE_PORTAL=0`;
+  every child runs with `RLIMIT_CORE=0`; tiles close via CDP `Browser.close` before SIGTERM (3 s) / SIGKILL.
+* **Hardware decode.** Chromium 154 only uses nvidia-vaapi-driver with `VaapiOnNvidiaGPUs,VaapiVideoDecoder` enabled
+  (CDP Media: `FFmpegVideoDecoder` → `VaapiVideoDecoder`; a live topstreamer NFL tile: renderer 47.6 % → 5.3 % CPU,
+  29 fps, NVDEC 0 → 5 %). Same flags for the tv instance.
+* **Resource guard.** The discord wall won't start above load 16 or under 3 GB available (`WALL_MAX_LOAD`,
+  `WALL_MIN_AVAIL_MB`) and auto-stops after 30 s past either.
+* **The local LLM steps aside** (`wall/llm.py`, `WALL_LLM_GUARD=unload|stop|off`): with any wall up, Ollama's models are
+  unloaded every 10 s (and before a discord start, so the VRAM check counts them), warmed back after. Sage's
+  `local_chat` keeps working meanwhile (it reloads the model, which the next tick evicts); `stop` mode stops
+  ollama.service instead so Sage goes straight to its cloud path (needs `deploy/ollama-wall.polkit.rules`).
+* **Stall watchdog** (the CDP loop, every 2 s per tile): a video stuck 3 s jumps to the next buffered range + 0.3 s,
+  after 10 s with nothing ahead to the live edge − 3 s, after 30 s the tile reloads.
 
 ## Headless `discord` session (verified on the box 2026-11-02)
 
@@ -174,6 +218,17 @@ Found missing (not needed, so nothing to install): gst `pulsesrc`/`mp4mux` (gst-
   posted into chat. Discord `/wall` changes by non-owners become proposals on the same table.
 * **Bot API:** `GET /api/v1/wall/state` (viewers, open proposals), `POST /api/v1/wall/propose`, `POST /api/v1/wall/vote`,
   `POST /api/v1/wall/link` (login link for a Discord member).
+* **Demo mode** (`WALL_DEMO=1` + `WALL_DEMO_KEY`, ≥ 16 random chars, on sharplab-web; off by default). The watch link
+  becomes `/wall.html?k=<key>` (the bot posts that one: it takes `watch_url` from `GET /api/v1/wall/state`). With the
+  key and no SharpLab login, the page asks for a nickname (2–24 letters / digits / space . ' - _, made unique among
+  who's watching: "Kim (guest)") → `POST /api/v1/wall/guest` sets a signed 24 h guest cookie bound to the key (rotating
+  the key or turning demo off ends every guest session). Guests watch, chat, vote (their votes count), and may propose
+  sound / layout / board / follow; starting, stopping and putting a page on a tile need a login. They show with a
+  "guest" tag in the viewer list and chat. Limits: 5 nicknames / 5 min and 10 socket connects / min per IP (behind
+  Caddy: X-Forwarded-For), the chat limits as before; the owner and admins still mute and delete. Without the key the
+  page is the normal login gate. Proxy cost stays bounded: every viewer, guest or not, shares the same 0.5 s playlist /
+  60 s segment cache (≈ 60 segments × ~0.6 MB), so N guests cost one upstream fetch — only the VPS's egress grows
+  (~4.5 Mb/s per viewer).
 * Discord ↔ web chat mirroring: **not built** (it would need the bot to relay both ways and map identities; easy to add
   later with the same bot API).
 
@@ -181,7 +236,10 @@ Found missing (not needed, so nothing to install): gst `pulsesrc`/`mp4mux` (gst-
 
 `/wall start [preset]`, `/wall stop`, `/wall status`, `/wall set` (layout / board / sound / tile from a live game, a
 team or a URL), and an interactive view (preset select, live-game select, team picker, layout + board + sound
-buttons). One embed per channel, edited in place: what's on each tile, layout/board/sound, "Watching: David,
+buttons). When the wall starts (a /wall command, the panel, a vote that passed, the web page) the embed is posted in the channel
+the start came from (web-page starts: the last channel used, else `WALL_CHANNEL_ID`); embed locations persist in
+`WALL_BOT_STATE` (default `data/wall_bot.json`) and the panel is a persistent view. A bare `/wall start` = "same as the
+TV". One embed per channel, edited in place: what's on each tile, layout/board/sound, "Watching: David,
 Steph, +3", open proposals, the link, and **Get my link** (ephemeral login link). Permission: `WALL_PERMISSION=anyone`
 or `roles` with `WALL_ROLE_IDS`; the owner always. For non-owners, changes are proposals (votes from the page).
 
