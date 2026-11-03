@@ -228,7 +228,7 @@ async def panel(at_ms: float | None, state: dict | None, others: list[dict]) -> 
 
 
 # ---- HTTP ------------------------------------------------------------------------------------------------------------
-router = APIRouter(prefix="/api/v1/wall/bets", tags=["wall"])
+router = APIRouter(prefix="/api/v1/wall/bets", tags=["wall"], dependencies=wall.guarded)
 
 
 def member(request: Request) -> tuple[dict | None, JSONResponse | None]:

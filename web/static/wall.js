@@ -197,7 +197,9 @@
       case "viewers": renderViewers(m.list); break;
       case "proposal": if (m.p.status === "open") props.set(m.p.id, m.p); else props.delete(m.p.id); renderProps(); break;
       case "wall": setWall(m.state); break;
-      case "error": $("chatErr").textContent = m.text; setTimeout(() => ($("chatErr").textContent = ""), 4000); break;
+      case "error":
+        if (m.chat && !$("chatIn").value) $("chatIn").value = lastChat;   // a refused message goes back in the box
+        $("chatErr").textContent = m.text; setTimeout(() => ($("chatErr").textContent = ""), 4000); break;
     }
   }
 
@@ -350,10 +352,11 @@
     while (box.children.length > 200) box.firstChild.remove();
     if (stick) box.scrollTop = box.scrollHeight;
   }
+  let lastChat = "";
   $("chatForm").onsubmit = (e) => {
     e.preventDefault();
     const t = $("chatIn").value.trim();
-    if (t) { send({ t: "chat", text: t }); $("chatIn").value = ""; }
+    if (t) { lastChat = t; send({ t: "chat", text: t }); $("chatIn").value = ""; }
   };
 
   // ---- phone layouts (keep these queries in step with wall.css) ----

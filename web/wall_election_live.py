@@ -180,7 +180,7 @@ def live_payload(snap: dict, r: we.Results, key_only: bool, n: int = 60) -> dict
 
 
 # ---- HTTP --------------------------------------------------------------------------------------------------------------
-router = APIRouter(prefix="/api/v1/wall/election", tags=["wall"])
+router = APIRouter(prefix="/api/v1/wall/election", tags=["wall"], dependencies=wel.wall.guarded)
 
 
 @router.get("/live")

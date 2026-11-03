@@ -360,7 +360,7 @@ async def odds_payload(snap: dict) -> dict[str, dict]:
 
 
 # ---- HTTP ------------------------------------------------------------------------------------------------------------
-router = APIRouter(prefix="/api/v1/wall/election", tags=["wall"])
+router = APIRouter(prefix="/api/v1/wall/election", tags=["wall"], dependencies=wall.guarded)
 
 
 def who(request: Request) -> tuple[dict | None, bool]:
