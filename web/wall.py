@@ -833,6 +833,8 @@ class Hub:
             self._count_sig = sig
             for ws in list(self.pubs.values()):
                 await self.send(ws, c)
+            for ws, _ in list(self.socks.values()):   # the party sees how many follow along on the public link
+                await self.send(ws, c)
 
     def viewers(self) -> list[dict]:
         return self.presence.listing(self.clock())
@@ -1042,7 +1044,13 @@ def public_msg(msg: dict) -> dict | None:
         return {"t": "chat", "msg": public_chat(msg["msg"])}
     if msg.get("t") == "del":
         return {"t": "del", "id": msg.get("id")}
+    if msg.get("t") == "wall" and isinstance(msg.get("state"), dict):   # public viewers watch the stream too (no origin ids)
+        return {"t": "wall", "state": public_wall(msg["state"])}
     return None
+
+
+def public_wall(st: dict | None) -> dict | None:
+    return {k: v for k, v in st.items() if k != "origin"} if isinstance(st, dict) else st
 
 
 hub = Hub()
@@ -1137,7 +1145,7 @@ async def public_websocket(ws: WebSocket) -> None:
     h.pubs[cid] = ws
     await h.send(ws, {"t": "hello", "me": {"public": True, "id": "", "name": "", "guest": False, "admin": False, "owner": False},
                       "now": h.clock() * 1000, "history": [public_chat(m) for m in h.chat.log], "viewers": [],
-                      "proposals": [], "wall": None, "count": h.counts(), "cfg": {"chat_max": CHAT_MAX}})
+                      "proposals": [], "wall": public_wall(h.wall), "count": h.counts(), "cfg": {"chat_max": CHAT_MAX}})
     await h.push_counts(force=True)
     h.ensure_ticker()
     ident = "ip:" + ip
@@ -1416,7 +1424,7 @@ async def hls_get(name: str) -> tuple | None:
 
 @router.get("/hls/{name}")
 async def hls(name: str, request: Request):
-    if not viewer(request):
+    if not viewer(request) and not public_mode():   # public mode: the plain link watches the stream too (David, 2026-11-03)
         return JSONResponse({"error": "log in"}, status_code=401)
     if not _HLS_NAME.match(name):
         return JSONResponse({"error": "no such file"}, status_code=404)

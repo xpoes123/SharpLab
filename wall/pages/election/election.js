@@ -1,5 +1,8 @@
 // Shared by the election data tiles: polls GET data.json (wall/election.py's snapshot) every 30 s, formats, colours.
 "use strict";
+// the TV's tiles hide the mouse (election.css cursor: none); anywhere else (the watch page's widget / pop-out) shows it
+if (location.port !== "7795") document.documentElement.style.setProperty("cursor", "auto");
+if (location.port !== "7795") addEventListener("DOMContentLoaded", () => { document.body.style.cursor = "auto"; });
 const E = (() => {
   const PARTY = { D: "Dem", R: "Rep", I: "Ind", O: "Other" };
   const OFFICE = { S: "Senate", H: "House", G: "Governor" };

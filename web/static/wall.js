@@ -216,7 +216,7 @@
         offset = m.now - Date.now();
         if (m.pdt_off != null) pdtOff = m.pdt_off;
         $("msgs").replaceChildren(); m.history.forEach(addMsg);
-        if (me.public) { showCount(m.count); break; }   // public: the chat read-only + a head count, nothing else
+        if (me.public) { showCount(m.count); setWall(m.wall); break; }   // public: the stream, the chat read-only, a head count
         $("ownerNote").textContent = me.owner ? "· you're the owner: changes apply at once" : "";
         $("offSub").textContent = "Start it from “Change the wall” below.";
         renderViewers(m.viewers);
@@ -457,8 +457,14 @@
     $("vcount").textContent = names.slice(0, 2).join(", ") + (names.length > 2 ? ` +${names.length - 2}` : "");
   }
 
-  function showCount(c) {   // public viewers: how many are at the party (never who)
+  function showCount(c) {   // public viewers: how many are at the party (never who); the party: how many follow publicly
     if (!c) return;
+    if (me && !me.public) {
+      let p = $("pubCount");
+      if (!p) { p = el("span", "pill"); p.id = "pubCount"; p.title = "Watching on the public link"; $("count").after(p); }
+      p.textContent = `👀 ${c.public || 0} public`;
+      return;
+    }
     $("count").textContent = `${c.watching} at the watch party` + (c.public ? ` · ${c.public} following along` : "");
   }
 
@@ -491,6 +497,7 @@
   $("chatForm").onsubmit = (e) => {
     e.preventDefault();
     const t = $("chatIn").value.trim();
+    if (t && me && me.public) { $("chatErr").textContent = "Message @xpoes on Discord to get chat permissions."; return; }
     if (t) { lastChat = t; send({ t: "chat", text: t }); $("chatIn").value = ""; }
   };
 
@@ -728,7 +735,7 @@
       if (j.public) {   // the plain page in public mode: live election data only — no stream, no votes, chat read-only
         document.body.classList.add("public");
         $("publicNote").hidden = false;
-        $("chatIn").disabled = true;
+        $("chatIn").placeholder = "Say something…";
         const a = el("a", "pub-login", "Member? Log in"); a.href = j.login || "/api/v1/auth/discord/login?next=/wall.html";
         $("navRight").replaceChildren(a);
       } else {
