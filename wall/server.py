@@ -287,7 +287,9 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
                 if not results.updated or not (tv and tv.urls):
                     continue
                 try:
-                    for e in events.check(results.snapshot()):
+                    snap = results.snapshot()
+                    by = {r["id"]: r for r in snap.get("races") or []}
+                    for e in events.check(snap) + events.check_odds(odds.view(), by, time.time()):
                         log.info("event: %s %s", e["by"], e["race"])
                         await asyncio.to_thread(spot.set, e["state"], e["by"], e["race"])
                         await asyncio.to_thread(tv.show_screen, f"map?view={e['office']}")
