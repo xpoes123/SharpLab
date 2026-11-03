@@ -189,7 +189,8 @@
     box.append(stats(d));
     if (d.totals.history && d.totals.history.label && d.totals.history.margin != null)
       box.append(el("p", "muted small lv-note", `${d.totals.history.label}: ${d.totals.history.margin >= 0 ? "D" : "R"}+${Math.abs(d.totals.history.margin).toFixed(1)}`));
-    if (d.counties) box.append(countiesBox(id, d.counties));
+    if (d.counties && d.counties.reporting) box.append(countiesBox(id, d.counties));
+    else if (d.counties) box.append(el("p", "muted small lv-note", `County results (${d.counties.n} counties) appear as counting starts.`));
     box.append(timelineBox(id, d.timeline || []));
     box.append(el("p", "muted small lv-note", `${d.source || ""} · this race refreshes every ${d.fast_s || 10} s while open`));
     return box;

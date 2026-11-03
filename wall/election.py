@@ -379,7 +379,8 @@ def board(snap: dict, positions: list[dict] | None = None) -> dict:
             "watch": [r for r in sorted(snap.get("races") or [], key=lambda r: (r["called"] != "", r["margin"] if r["margin"] is not None else 99))
                       if r["watch"] and r["office"] in ("S", "G") and r["votes"] > 0][:6],
             "trades": trades(positions, snap),
-            "latest": [{k: u.get(k) for k in ("race", "head", "kind", "sig", "text", "t", "party", "flip", "pct", "key")}
+            "latest": [{k: u.get(k) for k in ("race", "head", "kind", "sig", "text", "t", "party", "flip", "pct", "key",
+                                                     "lead", "m0", "m1", "dv", "states")}
                        for u in snap.get("latest") or []],
             "note": "" if snap.get("races") else (snap.get("error") or "Loading results…")}
 

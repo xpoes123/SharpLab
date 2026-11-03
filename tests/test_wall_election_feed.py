@@ -298,3 +298,14 @@ def test_web_live_and_race_views(env):  # noqa: F811
     assert c.get("/api/v1/wall/election/race/S-ZZ").status_code == 404
     assert c.get("/api/v1/wall/election/race/nope").status_code == 404
     wlv.focus.clear()
+
+
+@pytest.mark.skipif(__import__("shutil").which("qml6") is None, reason="qml6 not installed")
+@pytest.mark.parametrize("layout", ["lbar", "full"])
+def test_tv_latest_renders_in_the_overlay(tmp_path, layout):
+    """The Election board's "Latest" (lead changes, big drops, calls, poll closings from a sped-up night) draws cleanly."""
+    from test_wall_election import _overlay_render
+    r, src, clk = sim_night(steps=40)
+    assert r.snapshot()["latest"]
+    out, errs = _overlay_render(tmp_path, layout, results=r)
+    assert errs == [] and out.exists() and out.stat().st_size > 20_000

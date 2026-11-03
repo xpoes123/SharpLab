@@ -94,6 +94,7 @@ class SimCnn(Cnn):
             p = (c.get("majorParty") or "")[:1]
             w = 1 + (lean if p == "D" else -lean if p == "R" else 0)
             c["voteNum"] = int((c.get("voteNum") or 0) * f * w)
+            c["votePercentNum"] = 0   # wall/election.race() recomputes it from the votes
             tot += c["voteNum"]
         r["totalVote"] = tot
         r["percentReporting"] = round(99 * f) if f < 1 else 100
