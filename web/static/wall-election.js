@@ -20,6 +20,21 @@
   const partyCls = (p) => ({ D: "D", R: "R", I: "I" })[p] || "O";
 
   let data = null, shapes = null, office = "S", sheet = null, timers = [];
+  let turnout = null;     // official turnout by state (/turnout → wall/turnout.py), refreshed every minute
+  const loadTurnout = () => get("/turnout").then((r) => { if (r.ok) turnout = r.j; }).catch(() => {});
+  loadTurnout(); setInterval(loadTurnout, 60000);
+  function turnoutBlock(t) {   // E-day so far (+ last report) and advance by party; party = registration, not vote choice
+    const n = (d) => d ? ["D", "R", "O", "N"].reduce((a, p) => a + (d[p] || 0), 0) : 0, f = (x) => (x || 0).toLocaleString("en-US");
+    const m = (v) => v == null ? "" : ` · ${v >= 0 ? "D" : "R"}+${Math.abs(100 * v).toFixed(1)}`;
+    const box = el("div", "es-turnout");
+    box.append(el("div", "muted small", `Turnout · ${t.source || ""}${t.as_of ? " · as of " + t.as_of : ""}`));
+    const b = (t.batches || [])[0];
+    if (n(t.eday)) box.append(el("div", null, `Election Day so far: ${f(n(t.eday))}` + (b ? ` (+${f(n(b))} last report)` : "")));
+    const a = t.advance;
+    if (n(a)) box.append(el("div", null, a.D || a.R ? `Advance (early + mail): ${f(a.D)} D · ${f(a.R)} R · ${f(a.O)} other${m(t.m_adv)}` : `Advance (early + mail): ${f(n(a))}`));
+    box.append(el("div", "muted small", "Party = voter registration, not vote choice."));
+    return box;
+  }
   let localNews = null;   // {ST: [{name, url}]}: local-news.json, YouTube channels' /live pages
   fetch("/local-news.json").then((r) => r.json()).then((j) => (localNews = j)).catch(() => {});
   // phones, portrait or landscape (keep in step with wall-election.css): the panel opens as a sheet from the bar's button
@@ -314,6 +329,8 @@
       bar.append(sp);
     }
     if (bar.childNodes.length) nodes.push(bar);
+    const to = turnout && turnout.states && turnout.states[s.st];
+    if (to) nodes.push(turnoutBlock(to));
     const local = (localNews || {})[s.st] || [];
     if (data.member && local.length && window.wallPropose) {
       const row = el("div", "es-local");

@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head><link rel="stylesheet" href="https://share.djiang.xyz/ui/ui.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Turnout</title>
+<link rel="stylesheet" href="election.css">
+<style>
+  .body { position: absolute; left: 1.2rem; right: 1.2rem; top: 4.6rem; bottom: 2.3rem; display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  .card { background: var(--surface); padding: 0.9rem 1rem; display: flex; flex-direction: column; gap: 0.5rem; min-height: 0; }
+  .card .k { font-size: 0.9rem; color: var(--muted); }
+  .big { font-size: 4.2rem; line-height: 1; }
+  .delta { font-size: 1.2rem; }
+  .bar { display: flex; height: 1.3rem; background: var(--surface2); }
+  .bar i { display: block; height: 100%; transition: width 3s ease-in-out; }
+  .legend { display: flex; gap: 1rem; font-size: 1.15rem; flex-wrap: wrap; }
+  .m { font-size: 2rem; }
+  .list { display: grid; gap: 0.3rem; font-size: 1.05rem; overflow: hidden; }
+  .list .r { display: grid; grid-template-columns: 1fr 6rem 7rem; gap: 0.5rem; white-space: nowrap; }
+  .list .r span:nth-child(n+2) { text-align: right; }
+  .card.wide { grid-column: 1 / -1; }
+  .foot span { overflow: hidden; text-overflow: ellipsis; }
+  .none { position: absolute; inset: 0; display: grid; place-items: center; font-size: 1.6rem; color: var(--muted); text-align: center; padding: 3rem; }
+</style>
+</head>
+<body>
+<div class="head"><span class="title caps" id="title">Turnout</span><span class="sub mono muted" id="sub"></span><span class="clock num" id="clock"></span></div>
+<div id="views"></div>
+<div class="foot"><span class="unofficial caps">Official turnout</span><span class="muted mono" id="foot"></span></div>
+<script src="election.js"></script>
+<script>
+"use strict";
+// Turnout (wall/turnout.py): one state at a time, every 15 s (?st=FL pins one). Left: Election Day so far + the latest
+// report; right: advance (early + mail) by party, or the county list. Party is registration, never vote choice.
+const Q = new URLSearchParams(location.search), EVERY = (+Q.get("every") || 15) * 1000;
+const NAMES = { FL: "Florida", DE: "Delaware", PA: "Pennsylvania", ID: "Idaho", NV: "Nevada", NJ: "New Jersey" };
+E.tickClock(document.getElementById("clock"));
+let data = null, idx = 0;
+const fmt = (n) => (n || 0).toLocaleString("en-US");
+const sum = (d) => d ? ["D", "R", "O", "N"].reduce((a, p) => a + (d[p] || 0), 0) : 0;
+const mtxt = (m) => m == null ? "" : `<span class="${m >= 0 ? "D" : "R"}">${m >= 0 ? "D" : "R"}+${Math.abs(100 * m).toFixed(1)}</span>`;
+function partyBlock(d) {
+  if (!d || !(d.D || d.R || d.O)) return `<div class="big num">${fmt(sum(d))}</div><div class="k mono">no party split published</div>`;
+  const n = d.D + d.R + d.O, w = (p) => (100 * d[p] / n).toFixed(1);
+  return `<div class="bar"><i style="width:${w("D")}%;background:var(--dem)"></i><i style="width:${w("O")}%;background:var(--none)"></i><i style="width:${w("R")}%;background:var(--rep)"></i></div>
+    <div class="legend num"><span class="D">DEM ${w("D")}%</span><span class="muted">OTH ${w("O")}%</span><span class="R">REP ${w("R")}%</span></div>
+    <div class="k mono">${fmt(d.D)} D · ${fmt(d.R)} R · ${fmt(d.O)} other — ${fmt(n)} total</div>`;
+}
+function view(s) {
+  const b = (s.batches || [])[0];
+  const left = sum(s.eday)
+    ? `<div class="k caps">Election Day so far</div><div class="big num">${fmt(sum(s.eday))}</div>
+       ${b ? `<div class="delta num">+${fmt(sum(b))} last report ${E.clock(b.t)} ${mtxt(b.m)}</div>` : ""}
+       ${(s.counties || []).length ? `<div class="list mono">${s.counties.slice().sort((a, c) => sum(c) - sum(a)).slice(0, 7).map((c) =>
+          `<div class="r"><span>${E.esc(c.name)}</span><span>${fmt(sum(c))}</span><span class="muted">${E.esc(c.at || "")}</span></div>`).join("")}</div>` : ""}`
+    : `<div class="k caps">Election Day</div><div class="k">No official Election Day turnout from ${E.esc(s.source || "the state")}.</div>`;
+  const right = s.advance ? `<div class="k caps">Advance vote (early + mail) ${mtxt(s.m_adv)}</div>${partyBlock(s.advance)}` : "";
+  if (!sum(s.eday)) return `<div class="body"><div class="card wide">${right}<div class="k">No official Election Day turnout from ${E.esc(s.source || "the state")}.</div></div></div>`;
+  return `<div class="body"><div class="card">${left}</div><div class="card">${right}</div></div>`;
+}
+function paint() {
+  const sts = Object.values((data && data.states) || {}).filter((s) => sum(s.eday) || sum(s.advance));
+  const box = document.getElementById("views");
+  const pin = Q.get("st");
+  const list = pin ? sts.filter((s) => s.st === pin) : sts.sort((a, c) => a.st.localeCompare(c.st));
+  if (!list.length) { box.innerHTML = `<div class="none">Waiting for the states' turnout feeds…</div>`; return; }
+  const s = list[idx % list.length];
+  document.getElementById("title").textContent = `Turnout · ${NAMES[s.st] || s.st}`;
+  document.getElementById("sub").textContent = `${s.source || ""}${s.as_of ? " · as of " + s.as_of : ""}${list.length > 1 ? ` · ${idx % list.length + 1}/${list.length}` : ""}`;
+  document.getElementById("foot").textContent = `party = voter registration, not vote choice · ${s.note || ""}${s.error ? " · " + s.error : ""}`;
+  box.innerHTML = `<div class="view on">${view(s)}</div>`;
+}
+function load() {
+  fetch("turnout.json", { cache: "no-store" }).then((r) => r.json()).then((d) => { data = d; paint(); }, () => {});
+}
+load();
+setInterval(load, 60000);
+setInterval(() => { idx++; paint(); }, EVERY);
+</script>
+</body>
+</html>

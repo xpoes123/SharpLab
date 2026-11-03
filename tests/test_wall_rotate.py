@@ -8,7 +8,8 @@ URLS = [B + "map", B + "races", "https://www.youtube.com/@NBCNews/live"]
 def test_screen_and_next():
     assert screen(B + "map?view=H") == "map?view=H" and screen(URLS[2]) is None and screen(B + "data.json") is None
     assert next_url(URLS, 0) == B + "map?view=S"                    # the unpinned map starts the cycle
-    assert next_url([B + "map?view=G", B + "races"], 0) == B + "map?view=S"   # races is taken: wraps past it
+    assert next_url([B + "map?view=G", B + "races"], 0) == B + "turnout"         # races is taken: skips it
+    assert next_url([B + "turnout", B + "map?view=S"], 0) == B + "map?view=H"   # wraps, skipping the map tile 2 has
 
 
 def test_due_staggers_and_holds():
