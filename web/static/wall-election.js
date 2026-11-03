@@ -35,19 +35,43 @@
     box.append(el("div", "muted small", "Party = voter registration, not vote choice."));
     return box;
   }
-  function pulseBlock(p) {   // Pulse for this state: projected final turnout + Kalshi's turnout / vote-share markets vs the model
-    const box = el("div", "es-turnout"), f = (x) => (x == null ? "–" : x >= 1e6 ? (x / 1e6).toFixed(2) + "M" : Math.round(x / 1e3) + "K");
-    const c = (v) => (v == null ? "–" : Math.round(v) + "¢"), pc = (v) => (v == null ? "–" : Math.round(v) + "%");
-    const st = p.state;
-    box.append(el("div", "muted small", "Pulse · votes ÷ % in → projected final, vs Kalshi"));
-    if (st) box.append(el("div", null, st.proj ? `${st.basis}: ${f(st.votes)} counted, ${Math.round(st.pct || 0)}% in → ~${f(st.proj)} final (±${f(st.sd)})`
-      : `${st.basis}: ${st.votes ? f(st.votes) + " counted, " + Math.round(st.pct || 0) + "% in — " : ""}projection once enough is in`));
-    for (const r of p.races || []) {
-      const lines = [...(r.turnout || []).map((t) => `${r.label} turnout ≥${f(t.strike)}: ${c(t.mid)} · model ${pc(t.model)}${t.hot ? " ★" : ""}`),
-        ...(r.shares || []).map((t) => `${t.name} ≥${t.strike}%: ${c(t.mid)} · model ${pc(t.model)}${t.hot ? " ★" : ""}`)];
-      for (const l of lines.slice(0, 6)) box.append(el("div", "small", l));
+  function pulseBlock(p) {   // Pulse for this state, one row per race: Kalshi's implied final (where its ladder crosses 50¢) vs our projection
+    const f = (x) => (x == null ? "–" : x >= 1e6 ? (x / 1e6).toFixed(2) + "M" : Math.round(x / 1e3) + "K");
+    const mid50 = (ladder) => {   // [{strike, mid}] → the strike where YES ("at least strike") is a coin flip
+      const l = ladder.filter((t) => t.strike != null && t.mid != null).sort((a, b) => a.strike - b.strike);
+      if (!l.length) return null;
+      if (l[0].mid < 50) return { v: l[0].strike, op: "<" };
+      for (let i = 0; i + 1 < l.length; i++) {
+        const a = l[i], b = l[i + 1];
+        if (a.mid >= 50 && b.mid < 50) return { v: a.strike + (b.strike - a.strike) * (a.mid - 50) / (a.mid - b.mid), op: "≈" };
+      }
+      return { v: l[l.length - 1].strike, op: ">" };
+    };
+    const name = (r) => r.office === "S" ? "Senate" : r.office === "G" ? "Governor" : r.label;
+    const row = (r) => {
+      const t = mid50(r.turnout || []), hot = [...(r.turnout || []), ...(r.shares || [])].some((x) => x.hot);
+      const tr = el("tr", hot ? "hot" : null);
+      tr.append(el("td", null, name(r)), el("td", "num", t ? `${t.op === "≈" ? "~" : t.op}${f(t.v)}` : "–"),
+        el("td", "num muted", r.proj ? `${f(r.proj)} ±${f(r.sd)}` : "–"), el("td", null, hot ? "★" : ""));
+      return tr;
+    };
+    const table = (rs) => {
+      const t = el("table", "es-pulse");
+      const h = el("tr"); ["", "Kalshi", "Projected", ""].forEach((x) => h.append(el("th", null, x))); t.append(h);
+      rs.forEach((r) => t.append(row(r)));
+      return t;
+    };
+    const box = el("div", "es-turnout");
+    const st = p.state, races = (p.races || []).filter((r) => (r.turnout || []).length);
+    box.append(el("div", "muted small", "Turnout · Kalshi's implied final vs our projection (votes ÷ % in)"));
+    if (st && st.proj) box.append(el("div", null, `${f(st.votes)} counted · ${Math.round(st.pct || 0)}% in → ~${f(st.proj)} final`));
+    const top = races.filter((r) => r.office !== "H"), house = races.filter((r) => r.office === "H");
+    if (top.length) box.append(table(top));
+    if (house.length) {
+      const d = el("details"); d.append(el("summary", "small", `House districts (${house.length})`), table(house)); box.append(d);
     }
-    box.append(el("div", "muted small", "★ = the model and Kalshi differ by a lot (not advice)."));
+    if (!races.length) box.append(el("div", "muted small", "No turnout markets for this state."));
+    box.append(el("div", "muted small", "Projections start once enough of the vote is in · ★ = a big gap between the model and Kalshi"));
     return box;
   }
   let localNews = null;   // {ST: [{name, url}]}: local-news.json, YouTube channels' /live pages
