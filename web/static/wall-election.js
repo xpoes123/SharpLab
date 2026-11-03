@@ -35,6 +35,21 @@
     box.append(el("div", "muted small", "Party = voter registration, not vote choice."));
     return box;
   }
+  function pulseBlock(p) {   // Pulse for this state: projected final turnout + Kalshi's turnout / vote-share markets vs the model
+    const box = el("div", "es-turnout"), f = (x) => (x == null ? "–" : x >= 1e6 ? (x / 1e6).toFixed(2) + "M" : Math.round(x / 1e3) + "K");
+    const c = (v) => (v == null ? "–" : Math.round(v) + "¢"), pc = (v) => (v == null ? "–" : Math.round(v) + "%");
+    const st = p.state;
+    box.append(el("div", "muted small", "Pulse · votes ÷ % in → projected final, vs Kalshi"));
+    if (st) box.append(el("div", null, st.proj ? `${st.basis}: ${f(st.votes)} counted, ${Math.round(st.pct || 0)}% in → ~${f(st.proj)} final (±${f(st.sd)})`
+      : `${st.basis}: ${st.votes ? f(st.votes) + " counted, " + Math.round(st.pct || 0) + "% in — " : ""}projection once enough is in`));
+    for (const r of p.races || []) {
+      const lines = [...(r.turnout || []).map((t) => `${r.label} turnout ≥${f(t.strike)}: ${c(t.mid)} · model ${pc(t.model)}${t.hot ? " ★" : ""}`),
+        ...(r.shares || []).map((t) => `${t.name} ≥${t.strike}%: ${c(t.mid)} · model ${pc(t.model)}${t.hot ? " ★" : ""}`)];
+      for (const l of lines.slice(0, 6)) box.append(el("div", "small", l));
+    }
+    box.append(el("div", "muted small", "★ = the model and Kalshi differ by a lot (not advice)."));
+    return box;
+  }
   let localNews = null;   // {ST: [{name, url}]}: local-news.json, YouTube channels' /live pages
   fetch("/local-news.json").then((r) => r.json()).then((j) => (localNews = j)).catch(() => {});
   // phones, portrait or landscape (keep in step with wall-election.css): the panel opens as a sheet from the bar's button
@@ -286,10 +301,11 @@
   async function refreshState(first) {
     const s = sheet;
     if (!s || s.kind !== "state") return;
-    const r = await get(`/state/${s.st}`);
+    const [r, pl] = await Promise.all([get(`/state/${s.st}`), get(`/pulse/state/${s.st}`)]);
     if (sheet !== s) return;
     if (!r.ok) { if (first) sheetEl.append(el("p", "muted", (r.j && r.j.error) || "Couldn't load this state.")); return; }
     s.d = r.j;
+    s.pulse = pl.ok ? pl.j : s.pulse;
     const offices = [...new Set(s.d.races.map((x) => x.office))];
     if (!s.office || !offices.includes(s.office)) s.office = offices.includes(office) ? office : offices[0] || "S";
     renderState();
@@ -331,6 +347,7 @@
     if (bar.childNodes.length) nodes.push(bar);
     const to = turnout && turnout.states && turnout.states[s.st];
     if (to) nodes.push(turnoutBlock(to));
+    if (s.pulse) nodes.push(pulseBlock(s.pulse));
     const local = (localNews || {})[s.st] || [];
     if (data.member && local.length && window.wallPropose) {
       const row = el("div", "es-local");

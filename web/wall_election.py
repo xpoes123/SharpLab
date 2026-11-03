@@ -316,11 +316,32 @@ async def get_map(request: Request):
             "now": snap.get("now")}
 
 
-@router.get("/pulse")
-async def get_pulse(request: Request):
-    """Election Pulse (web/static/pulse.html): results x % in -> projected finals, against Kalshi's count markets."""
+_pulse_cache: dict = {"at": 0.0, "data": None}
+_pulse_lock = asyncio.Lock()
+
+
+async def pulse_data() -> dict:
+    """Pulse for everyone, computed at most every 15 s (its Kalshi series are ~1.7 MB): the state sheets share it."""
+    async with _pulse_lock:
+        if _pulse_cache["data"] is None or time.monotonic() - _pulse_cache["at"] > 15:
+            _pulse_cache.update(data=await _pulse_compute(), at=time.monotonic())
+        return _pulse_cache["data"]
+
+
+@router.get("/pulse/state/{st}")
+async def get_pulse_state(st: str, request: Request):
+    """One state's Pulse for the map's state sheet: its turnout projection + its races' turnout / vote-share markets."""
     if not who(request)[1]:
         return _deny()
+    st = st.upper()
+    if st not in we.STATES:
+        return JSONResponse({"error": "no such state"}, status_code=404)
+    d = await pulse_data()
+    return {"state": next((s for s in d["states"] if s["state"] == st), None),
+            "races": [r for r in d["races"] if r["state"] == st], "error": d.get("error", ""), "updated": d.get("updated", 0)}
+
+
+async def _pulse_compute() -> dict:
     snap = await snapshot()
     got = await asyncio.gather(*(markets.all_open(s) for s in ep.SERIES), return_exceptions=True)
     mk, bad = {}, []
@@ -333,6 +354,15 @@ async def get_pulse(request: Request):
     out = ep.pulse(snap, mk)
     if bad:
         out["error"] = (out["error"] + " · " if out["error"] else "") + "Kalshi didn't answer for " + ", ".join(bad)
+    return out
+
+
+@router.get("/pulse")
+async def get_pulse(request: Request):
+    """Election Pulse (web/static/pulse.html): results x % in -> projected finals, against Kalshi's count markets."""
+    if not who(request)[1]:
+        return _deny()
+    out = await pulse_data()
     body = json.dumps(out, separators=(",", ":")).encode()   # ~1.7 MB of markets; ~200 KB gzipped (Caddy doesn't encode)
     if "gzip" in request.headers.get("accept-encoding", ""):
         return Response(gzip.compress(body, 5), media_type="application/json", headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
