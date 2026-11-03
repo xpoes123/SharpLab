@@ -45,6 +45,7 @@ from wall.events import Events
 from wall.director import Director, summary as night_summary
 from wall import onair, spectrum, streams
 from wall.streamdir import StreamDirector, chat_lines
+from wall import streamdir
 from wall.breaks import BreakLog
 
 log = logging.getLogger("wall.server")
@@ -253,8 +254,12 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
     def spectrum_view() -> dict:
         """{url: {label, live, starts}} for each Spectrum stream: its fresh ad-skip label (None = none / stale) and
         whether it's live yet (wall/streams.py)."""
-        return {u: {"label": (airs.get(u) or {}).get("label"), **{k: (streams.peek(u) or {}).get(k) for k in ("live", "starts")}}
-                for u in spectrum.urls()}
+        out = {}
+        for u in spectrum.urls():
+            v = airs.view(u) or {}   # + the break forecast (Jev's "soon", the clock model) like the tiles show
+            out[u] = {"label": (airs.get(u) or {}).get("label"), "soon": v.get("soon"), "clock": v.get("clock"),
+                      **{k: (streams.peek(u) or {}).get(k) for k in ("live", "starts")}}
+        return out
 
     for i in instances.values():
         i.feeds["election"] = election_feed
@@ -639,6 +644,40 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
             log.warning("adwatch toggle: %s", e)
         t._bump()
         inst(name)._bump()
+        return inst(name).state()
+
+    @app.post("/i/{name}/jevswap")
+    async def jev_swap(name: str, request: Request) -> dict:
+        """{i}: "DJ Jev, put something else on this stream tile" — the best on-air stream not up (Jev's latest scores when
+        fresh, else ad-skip's confidence), never one on / about to go on a break; a hand change (the director leaves it
+        10 min). The chat hears why."""
+        d = await body(request)
+        t, i = target(name), num(d, "i")
+        now = time.time()
+
+        def pick() -> tuple[str, float]:
+            with t.lock:
+                urls = list(t.urls)
+                if not 0 <= i < len(urls) or own_page(urls[i]):
+                    raise WallError("that isn't a stream tile")
+                cur_outlet = streamdir.outlet_key(urls[i])
+                cands = [c for c in airs.fresh() if c not in urls and not own_page(c) and airs.is_(c, "coverage", 10, now)
+                         and (airs.get(c).get("soon") or 0) < 0.6 and streamdir.outlet_key(c) != cur_outlet]
+            if not cands:
+                raise WallError("nothing else is on air right now — try again in a minute")
+            fresh = sdir.last and now - (sdir.last.get("t") or 0) < 300
+            score = (lambda c: sdir.probs.get(c, 0.0)) if fresh and any(c in sdir.probs for c in cands) else \
+                (lambda c: float(airs.get(c).get("confidence") or 0))
+            best = max(cands, key=score)
+            return best, score(best)
+
+        best, p = await asyncio.to_thread(pick)
+        await asyncio.to_thread(t.set_tile, i, best)
+        line = f"🎧 DJ Jev: swapping tile {i + 1} to {streamdir.name_of(best)}" + (f" ({round(100 * p)}%)" if p else "")
+        for inst_ in instances.values():
+            if inst_.urls:
+                inst_._say(line)
+                inst_._bump()
         return inst(name).state()
 
     @app.post("/i/{name}/director")

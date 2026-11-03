@@ -231,6 +231,8 @@ def noop(a: dict, wall: dict | None) -> str:
         return "" if any(r.get("i") == a["i"] for r in w.get("rotate") or []) else "That tile doesn't rotate."
     if op == "adwatch":
         return f"Auto ad-skip is already {'on' if a['on'] else 'off'}." if (w.get("adwatch") or {}).get("on") == a["on"] else ""
+    if op == "jevswap":
+        return "" if a["i"] < len(urls) and "/p/" not in urls[a["i"]] else "That isn't a stream tile."
     if op == "director":
         return f"The auto-director is already {'on' if a['on'] else 'off'}." \
             if (w.get("stream_director") or {}).get("on") == a["on"] else ""
@@ -297,6 +299,8 @@ def check_action(a: object) -> dict:
         if not isinstance(a.get("on"), bool):
             raise ValueError("on is true/false")
         return {"op": "adwatch", "on": a["on"]}
+    if op == "jevswap":   # "DJ Jev, put something else on this tile" (wall/server.py /jevswap)
+        return {"op": "jevswap", "i": _tile(a.get("i"))}
     if op == "director":   # election night: Jev runs the stream tiles 3–4 + the sound (wall/streamdir.py) on / off
         if not isinstance(a.get("on"), bool):
             raise ValueError("on is true/false")
@@ -367,6 +371,8 @@ def describe(a: dict) -> str:
         return "put the default election screens back"
     if op == "adwatch":
         return f"turn auto ad-skip {'on' if a['on'] else 'off'}"
+    if op == "jevswap":
+        return f"ask DJ Jev to swap tile {a['i'] + 1}"
     if op == "director":
         return f"turn the auto-director {'on' if a['on'] else 'off'}"
     if op == "favorite":
@@ -653,6 +659,8 @@ def _route(a: dict) -> tuple[str, str, dict]:
         return "POST", "/i/discord/default", {}
     if op == "adwatch":
         return "POST", "/i/discord/adwatch", {"on": a["on"]}
+    if op == "jevswap":
+        return "POST", "/i/discord/jevswap", {"i": a["i"]}
     if op == "director":
         return "POST", "/i/discord/director", {"on": a["on"]}
     if op == "favorite":
