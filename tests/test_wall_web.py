@@ -989,7 +989,7 @@ def test_wall_page_nav_is_hidden_until_a_member_and_has_no_discord_invite():
     static = Path(__file__).resolve().parents[1] / "web" / "static"
     html = (static / "wall.html").read_text()
     assert '<nav class="nav" id="topNav" hidden>' in html and "Live election results. Chat and votes are for the watch party." in html
-    assert 'j.tier === "member"' in (static / "wall.js").read_text()
+    assert '$("topNav").hidden = false' not in (static / "wall.js").read_text()   # never the site nav (standalone Live Election)
     assert 'class="nav" id="topNav" hidden' in (static / "pulse.html").read_text()
     for f in static.glob("*.html"):
         assert "discord.gg/" not in f.read_text() and "nav-discord" not in f.read_text(), f.name

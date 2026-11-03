@@ -850,7 +850,6 @@
         $("navRight").replaceChildren(a);
       } else {
         $("navRight").textContent = j.name + (j.guest ? " (guest)" : "");
-        if (j.tier === "member") $("topNav").hidden = false;   // friends and the public see only the page's own name
       }
       window.__wallMe = j;   // wall-bets.js / wall-election.js start from this (a public viewer never calls the Kalshi endpoints)
       window.dispatchEvent(new CustomEvent("wall:me", { detail: j }));
