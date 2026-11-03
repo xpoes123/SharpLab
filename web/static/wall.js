@@ -179,11 +179,7 @@
         break;
       case "pong": addOffset(m.c, m.s); if (m.pdt_off != null) pdtOff = m.pdt_off; break;
       case "clock": pdtOff = m.pdt_off; break;
-      case "chat": {
-        addMsg(m.msg);
-        if (LANDSCAPE.matches && m.msg.kind !== "system" && me && m.msg.uid !== me.id) { if (!pinned) setUnread(unread + 1); peek(); }
-        break;
-      }
+      case "chat": { const seen = chatInView(); addMsg(m.msg); incoming(m.msg, seen); break; }
       case "del": { const li = document.querySelector(`#msgs li[data-id="${m.id}"]`); if (li) li.remove(); break; }
       case "viewers": renderViewers(m.list); break;
       case "proposal": if (m.p.status === "open") props.set(m.p.id, m.p); else props.delete(m.p.id); renderProps(); break;
@@ -343,6 +339,69 @@
   }
   PORTRAIT.addEventListener("change", applyMode);
   LANDSCAPE.addEventListener("change", applyMode);
+
+  // ---- a gentle ding for new chat while the chat isn't in view ----
+  // Two soft sine notes (~150 ms, low gain) from Web Audio: no file, nothing that grabs the media session, so the
+  // stream keeps playing. The context is made on the first tap (mobile autoplay rules) and only when dings are on.
+  const DING_GAP_MS = 20000, BURST_QUIET_MS = 10000;
+  let actx = null, dingOn = true, lastDing = 0, lastOther = 0, dingedBurst = false;
+  const dingDbg = { count: 0 };
+  window.__wallDing = dingDbg;
+  try { dingOn = localStorage.getItem("wall.ding") !== "0"; } catch (e) { /* storage blocked: default on */ }
+  function unlockAudio() {
+    if (!dingOn) return;
+    if (actx) { if (actx.state !== "running") actx.resume().catch(() => {}); return; }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    try { actx = new AC(); } catch (e) { return; }
+    const s = actx.createBufferSource();          // a silent blip inside the gesture unlocks iOS
+    s.buffer = actx.createBuffer(1, 1, 22050); s.connect(actx.destination); s.start(0);
+  }
+  ["pointerdown", "keydown", "touchend"].forEach((ev) => document.addEventListener(ev, unlockAudio, { passive: true }));
+  function chime() {
+    if (!actx) return;
+    const play = () => {
+      const t = actx.currentTime + 0.01, out = actx.createGain();
+      out.gain.value = 0.05; out.connect(actx.destination);
+      [[659.25, 0], [987.77, 0.07]].forEach(([f, d]) => {     // E5 → B5
+        const o = actx.createOscillator(), g = actx.createGain();
+        o.type = "sine"; o.frequency.value = f;
+        g.gain.setValueAtTime(0.0001, t + d);
+        g.gain.exponentialRampToValueAtTime(1, t + d + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.08);
+        o.connect(g); g.connect(out); o.start(t + d); o.stop(t + d + 0.09);
+      });
+      dingDbg.count++;
+    };
+    if (actx.state === "running") play(); else actx.resume().then(play, () => {});
+  }
+  function chatInView() {
+    if (document.hidden || document.fullscreenElement || document.webkitFullscreenElement || video.webkitDisplayingFullscreen) return false;
+    if (LANDSCAPE.matches && !document.body.classList.contains("chat-on")) return false;
+    if (anySheet()) return false;
+    return msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 40;
+  }
+  function incoming(m, seen) {
+    if (m.kind === "system" || !me || m.uid === me.id) return;
+    const now = Date.now();
+    if (now - lastOther >= BURST_QUIET_MS) dingedBurst = false;   // a new burst
+    lastOther = now;
+    if (LANDSCAPE.matches) { if (!pinned) setUnread(unread + 1); peek(); }
+    if (!dingOn || seen || dingedBurst || now - lastDing < DING_GAP_MS) return;
+    lastDing = now; dingedBurst = true;
+    chime();
+  }
+  function showDing() {
+    $("dingBtn").textContent = dingOn ? "🔔" : "🔕";
+    $("dingBtn").setAttribute("aria-pressed", String(dingOn));
+    $("dingBtn").title = dingOn ? "Ding for new messages: on" : "Ding for new messages: off";
+  }
+  $("dingBtn").onclick = () => {
+    dingOn = !dingOn;
+    try { localStorage.setItem("wall.ding", dingOn ? "1" : "0"); } catch (e) { /* not remembered, still toggled */ }
+    showDing(); unlockAudio();
+  };
+  showDing();
 
   // ---- votes ----
   function propose(action) { send({ t: "propose", action }); }

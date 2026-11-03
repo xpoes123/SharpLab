@@ -62,6 +62,10 @@
 @media (max-width: 900px) { .chat { height: 60vh; } }
 .chat-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
 .chat-head h3 { margin: 0; }
+.ding { border: 0; background: none; color: var(--fg); font: inherit; font-size: 15px; line-height: 1; cursor: pointer;
+  border-radius: var(--r-pill); width: 32px; height: 32px; display: grid; place-items: center; }
+.ding:hover { background: var(--panel2); }
+.ding[aria-pressed="false"] { opacity: .6; }
 #msgs { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px;
   overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 #msgs li { display: flex; gap: 8px; font-size: 14px; line-height: 1.35; word-break: break-word; overflow-wrap: anywhere; }
@@ -170,6 +174,7 @@
     padding: 6px max(12px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); }
   .chat-head { margin-bottom: 6px; }
   .chat-head h3 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .ding { width: 44px; height: 44px; margin: -6px -10px -6px 0; font-size: 18px; }
   #msgs li { font-size: 15px; }
   #chatForm { margin-top: 8px; }
   #chatForm .btn { min-height: 44px; padding: 0 16px; }
@@ -216,6 +221,7 @@
   body.chat-on .chat { opacity: 1; visibility: visible; transform: none; transition: opacity .4s ease, transform .4s ease; }
   .chat-head { margin-bottom: 4px; }
   .chat-head h3 { font-size: 12px; color: var(--fg-2); }
+  .ding { width: 44px; height: 44px; margin: -8px -6px -8px 0; }
   #msgs li { font-size: 14px; text-shadow: 0 1px 2px rgba(0,0,0,.9); }
   #msgs li .mod { display: none; }   /* moderate from portrait or desktop; keep the overlay clean */
   #msgs li .av { width: 22px; height: 22px; font-size: 10px; }
