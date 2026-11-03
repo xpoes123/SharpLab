@@ -117,6 +117,19 @@ def test_chat_lines_only_while_the_party_is_on():
     assert view(s, tape, 1000, chat={"on": False, "messages": msgs})["chat"] == []
 
 
+def test_a_tile_without_a_live_game_says_whose_page_it_is():
+    nfl = board("nfl")
+    s, tape = Seq(nfl), ScoreTape()
+    view(s, tape, 900)
+    v = view(s, tape, 1000, urls=[url("nfl", "packers"), url("nfl", "bears"), "https://example.com/x"], live_ids=[])
+    final, team, other = v["tiles"]
+    assert final["game"]["state"] == "post" and final["game"]["status"] == "Final" and final["game"]["home"]["score"] == 27
+    assert team["game"] is None and team["label"] == "Bears · CHI"     # Monday's game isn't the tile's (sync maps it live)
+    assert other["game"] is None and other["label"] == "" and other["host"] == "example.com"
+    v = view(s, tape, 1000, urls=[url("nba", "clippers")], live_ids=[])   # no NBA scoreboard at all: the page's slug
+    assert v["tiles"][0]["label"] == "clippers"
+
+
 def test_status_strings():
     g = {"state": "in", "period": 2, "clock": "0:00", "detail": "Halftime"}
     assert status(g) == "Halftime"
@@ -177,7 +190,21 @@ def test_band_geometry(n, lbar, top, bottom, head):
     g = json.loads(out.stdout)
     assert (g["top"]["h"], g["bottom"]["h"], g["head"]) == (top, bottom, head)
     area_h = 1170 if lbar else 1440
-    assert g["bottom"]["y"] + g["bottom"]["h"] == area_h and g["top"]["y"] == 0
+    assert g["bottom"]["y"] + g["bottom"]["h"] == area_h and g["top"]["y"] == 0 and g["outer"]["h"] == area_h
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="needs node")
+def test_tiles_placed_for_the_l_bar_without_it_on_screen_leave_the_rest_to_the_bands():
+    """The real-KWin case: tiles in the L-bar's corner but no L-bar drawn — the bands own the whole screen, so the
+    kiosk / a panel never shows below or beside the tiles."""
+    js = LBAR_JS + "\nconsole.log(JSON.stringify([wallBands(2, 2560, 1440, true, false), wallBands(4, 2560, 1440, true, false)]));"
+    out = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=10)
+    two, four = json.loads(out.stdout)
+    assert two["outer"] == {"x": 0, "y": 0, "w": 2560, "h": 1440}
+    assert (two["top"]["h"], two["bottom"]["y"], two["bottom"]["h"], two["bottom"]["w"]) == (292, 877, 563, 2560)
+    assert two["right"] == {"x": 2080, "y": 292, "w": 480, "h": 585}
+    assert four["top"]["h"] == 0 and four["bottom"] == {"x": 0, "y": 1170, "w": 2560, "h": 270}
+    assert four["right"] == {"x": 2080, "y": 0, "w": 480, "h": 1170} and four["head"] == ["", "", "bottom", "bottom"]
 
 
 @pytest.mark.skipif(shutil.which("qml6") is None, reason="qml6 not installed")
@@ -209,7 +236,7 @@ def test_band_layer_renders(tmp_path):
         out = tmp_path / f"{name}.png"
         args = ["qml6", str(QML / "Preview.qml"), "--", "--layout", "none", "--n", "2", "--size", "1920x1080",
                 "--out", str(out), "--wait", "2500"] + (["--bets", f"http://127.0.0.1:{srv.server_port}/i/tv"] if bands else [])
-        r = subprocess.run(args, env={"QT_QPA_PLATFORM": "offscreen", "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+        r = subprocess.run(args, env={"QT_QPA_PLATFORM": "offscreen", "QT_FORCE_STDERR_LOGGING": "1", "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
                            capture_output=True, text=True, timeout=30)
         return out, [l for l in r.stderr.splitlines() if "Error" in l or "Unable to assign" in l or "is not defined" in l
                      or "TypeError" in l or "ReferenceError" in l]
@@ -252,3 +279,61 @@ process.stdout.write(JSON.stringify(out));"""
     r = subprocess.run(["node", "-e", prog], capture_output=True, text=True, timeout=20)
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout) == [[88, 88, "Q4 2:41", "#0"], [88, 88, "Q4 2:41", "#0"], [158, 158, "Q4 2:41", "#0"], 90]
+
+
+# ---- the TV OS's active app gates the overlay (never over Dreamscape / YouTube / News) ----------------------------------
+def _tv(tmp_path, app):
+    from tests.test_wall_service import inst
+    i, d, clock = inst(tmp_path, {"nfl": board("nfl")})
+    i.host_app = lambda: app["now"]
+    return i, d, clock
+
+
+def test_overlay_draws_only_while_the_tv_os_is_on_its_wall(tmp_path):
+    app = {"now": "wall"}
+    i, d, clock = _tv(tmp_path, app)
+    i.start(urls=["https://a.tv", "https://b.tv"], board="nfl", layout="lbar")
+    assert i.tv_owned and i.overlay_on() and i.overlay_view()["view"] == "lbar"
+    app["now"] = "dreamscape"
+    clock.t += 3
+    i.tick()
+    assert not i.overlay_on() and i.overlay_view()["view"] == "" and i.state()["tv_app"] == "dreamscape"
+    clock.t += 30
+    i.tick()
+    assert i.urls   # the TV OS started it: it stops it; we only hide
+    app["now"] = "wall"
+    clock.t += 3
+    i.tick()
+    assert i.overlay_on()
+
+
+def test_a_wall_the_tv_os_didnt_start_stops_when_the_tv_moves_on(tmp_path):
+    app = {"now": None}   # started through the service API while the TV OS sat on its home screen
+    i, d, clock = _tv(tmp_path, app)
+    i.start(urls=["https://a.tv", "https://b.tv"])
+    assert not i.tv_owned and not i.overlay_on()
+    clock.t += 30
+    i.tick()
+    assert i.urls   # home / unreachable: hidden, but nobody went anywhere
+    app["now"] = "dreamscape"
+    clock.t += 3
+    i.tick()
+    assert i.urls and not i.overlay_on()
+    clock.t += 5
+    i.tick()
+    assert i.urls   # 5 s away: not yet
+    clock.t += 4
+    i.tick()
+    assert not i.urls and "dreamscape" in i.state()["stopped"] and d.stopped
+
+
+def test_bands_and_bets_carry_on(tmp_path, monkeypatch):
+    app, sync, c = _app(tmp_path, monkeypatch)
+    tv = app.state.instances["tv"]
+    tv.host_app = lambda: "youtube"
+    c.post("/i/tv/start", json={"urls": [url("nfl", "bengals"), url("nfl", "rams")]})
+    assert c.get("/i/tv/bands").json()["on"] is False and c.get("/i/tv/api/overlay/bets").json()["on"] is False
+    tv.host_app = lambda: "wall"
+    tv._app_at = 0
+    tv.tick()
+    assert c.get("/i/tv/bands").json()["on"] is True
