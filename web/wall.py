@@ -172,52 +172,106 @@ class Chat:
 
 
 # ---- votes -----------------------------------------------------------------------------------------------------------
+def _url(u: object) -> str:
+    if not (isinstance(u, str) and u.startswith(("http://", "https://")) and len(u) <= 500 and not any(c.isspace() for c in u)):
+        raise ValueError("not an http(s) URL")
+    return u
+
+
+def _tile(i: object, top: int = 3) -> int:
+    if not isinstance(i, int) or isinstance(i, bool) or not 0 <= i <= top:
+        raise ValueError("tile is 1–4")
+    return i
+
+
 def check_action(a: object) -> dict:
-    """A proposal's action, validated (ValueError otherwise). Only what the wall service's control API can do."""
+    """A proposal's action, validated (ValueError otherwise): {"op": start|stop|tile|remove|board|sound|layout, …the wall
+    service's body for that call}. Only what the service's control API can do."""
     if not isinstance(a, dict):
         raise ValueError("bad action")
     op = a.get("op")
+    label = {"label": clean_text(a["label"], 80)} if isinstance(a.get("label"), str) and a["label"].strip() else {}
     if op == "stop":
         return {"op": "stop"}
     if op == "start":
         p = a.get("preset")
-        if isinstance(p, bool) or not (isinstance(p, int) and 0 <= p < 100 or isinstance(p, str) and 0 < len(p) <= 40):
-            raise ValueError("start needs a preset")
-        return {"op": "start", "preset": p}
-    if op in ("tile", "sound"):
-        i = a.get("i")
-        if not isinstance(i, int) or isinstance(i, bool) or not 0 <= i <= 3:
-            raise ValueError("tile is 1–4")
-        if op == "sound":
-            return {"op": "sound", "i": i}
-        u = a.get("url")
-        if not (isinstance(u, str) and u.startswith(("http://", "https://")) and len(u) <= 500 and not any(c.isspace() for c in u)):
-            raise ValueError("not an http(s) URL")
-        return {"op": "tile", "i": i, "url": u, **({"label": clean_text(a["label"], 60)} if a.get("label") else {})}
+        if p is not None:
+            if isinstance(p, bool) or not (isinstance(p, int) and 0 <= p < 100 or isinstance(p, str) and 0 < len(p) <= 40):
+                raise ValueError("start needs a preset")
+            return {"op": "start", "preset": p, **label}
+        urls = a.get("urls") or []
+        live = a.get("live") or ""
+        if not isinstance(urls, list) or len(urls) > 4 or live not in ("", "nfl", "nba") or not (urls or live):
+            raise ValueError("start needs a preset, 1–4 URLs or live games")
+        out = {"op": "start", "urls": [_url(u) for u in urls]}
+        if live:
+            out["live"] = live
+        if isinstance(a.get("tiles"), int) and not isinstance(a["tiles"], bool):
+            out["tiles"] = max(1, min(4, a["tiles"]))
+        if a.get("board") in BOARDS:
+            out["board"] = a["board"]
+        if a.get("layout") in LAYOUTS:
+            out["layout"] = a["layout"]
+        if isinstance(a.get("sound"), int) and not isinstance(a["sound"], bool):
+            out["sound"] = _tile(a["sound"])
+        return {**out, **label}
+    if op == "sound":
+        return {"op": "sound", "i": _tile(a.get("i")), **label}
+    if op == "remove":
+        return {"op": "remove", "i": _tile(a.get("i")), **label}
+    if op == "tile":
+        return {"op": "tile", "i": _tile(a.get("i"), 4), "url": _url(a.get("url")), **label}
     if op == "layout":
         if a.get("layout") not in LAYOUTS:
             raise ValueError("layout is lbar or full")
         return {"op": "layout", "layout": a["layout"]}
     if op == "board":
-        if a.get("board") not in BOARDS:
-            raise ValueError("board is nfl, nba or none")
-        return {"op": "board", "board": a["board"]}
+        out = {"op": "board"}
+        if "board" in a:
+            if a["board"] not in BOARDS:
+                raise ValueError("board is nfl, nba or none")
+            out["board"] = a["board"]
+        if "visible" in a:
+            if not isinstance(a["visible"], bool):
+                raise ValueError("visible is true/false")
+            out["visible"] = a["visible"]
+        if "layout" in a:
+            if a["layout"] not in LAYOUTS:
+                raise ValueError("layout is lbar or full")
+            out["layout"] = a["layout"]
+        if len(out) == 1:
+            raise ValueError("board needs board, visible or layout")
+        return out
     raise ValueError("unknown action")
 
 
 def describe(a: dict) -> str:
     op = a["op"]
     if op == "start":
-        return f"start preset {a['preset'] if isinstance(a['preset'], str) else '#' + str(a['preset'] + 1)}"
+        if "preset" in a:
+            return f"start {a.get('label') or (a['preset'] if isinstance(a['preset'], str) else 'preset #' + str(a['preset'] + 1))}"
+        what = f"live {a['live'].upper()} games" if a.get("live") else f"{len(a['urls'])} tiles"
+        return f"start {a.get('label') or what}"
     if op == "stop":
         return "stop the wall"
     if op == "tile":
         return f"put {a.get('label') or a['url']} on tile {a['i'] + 1}"
+    if op == "remove":
+        return f"remove tile {a['i'] + 1}"
     if op == "sound":
         return f"move the sound to tile {a['i'] + 1}"
     if op == "layout":
         return f"switch the overlay to {'L-bar' if a['layout'] == 'lbar' else 'full'}"
-    return f"show the {a['board'].upper()} board" if a["board"] else "hide the board"
+    parts = []
+    if "board" in a:
+        parts.append(f"show the {a['board'].upper()} board" if a["board"] else "hide the board")
+    if a.get("visible") is False and "board" not in a:
+        parts.append("hide the board")
+    elif a.get("visible") is True and "board" not in a:
+        parts.append("show the board")
+    if "layout" in a:
+        parts.append(f"use the {'L-bar' if a['layout'] == 'lbar' else 'full'} layout")
+    return " and ".join(parts)
 
 
 @dataclass
@@ -237,6 +291,12 @@ class Proposal:
         return {"id": self.id, "uid": self.uid, "name": self.name, "action": self.action, "text": describe(self.action),
                 "kind": self.kind, "yes": sorted(self.yes), "no": sorted(self.no), "status": self.status,
                 "left": max(0.0, round(self.expires - now, 1)), "need": need(self, active, sound_need)}
+
+    def for_bot(self, now: float, active: set[str], sound_need: int) -> dict:
+        """The bot's shape: counts, not voter ids; expires as epoch seconds."""
+        return {"id": self.id, "kind": self.kind, "summary": describe(self.action), "by": self.name, "action": self.action,
+                "yes": len(self.yes), "no": len(self.no), "needed": need(self, active, sound_need), "expires": self.expires,
+                "status": self.status, "passed": self.status in ("passed", "override"), "applied": self.status in ("passed", "override")}
 
 
 def electorate(p: Proposal, active: set[str]) -> set[str]:
@@ -326,29 +386,41 @@ def redeem_link(token: str, now: float | None = None) -> dict | None:
 
 
 # ---- the wall service (homelab, over Tailscale) ----------------------------------------------------------------------
-def _route(a: dict) -> tuple[str, dict]:
+def _route(a: dict) -> tuple[str, str, dict]:
+    """(method, path, body) on the wall service."""
     op = a["op"]
+    body = {k: v for k, v in a.items() if k not in ("op", "label")}
     if op == "start":
-        return "/i/discord/start", {"preset": a["preset"]}
+        return "POST", "/i/discord/start", body
     if op == "stop":
-        return "/i/discord/stop", {}
+        return "POST", "/i/discord/stop", {}
     if op == "tile":
-        return "/i/discord/tile", {"i": a["i"], "url": a["url"]}
+        return "POST", "/i/discord/tile", body
+    if op == "remove":
+        return "DELETE", f"/i/discord/tile/{a['i']}", {}
     if op == "sound":
-        return "/i/discord/sound", {"i": a["i"]}
+        return "POST", "/i/discord/sound", body
     if op == "layout":
-        return "/i/discord/board", {"layout": a["layout"], "visible": True}
-    return "/i/discord/board", ({"board": a["board"], "visible": True} if a["board"] else {"visible": False})
+        return "POST", "/i/discord/board", {"layout": a["layout"], "visible": True}
+    if body.get("board") == "":   # "no board" = hide it
+        body = {k: v for k, v in body.items() if k != "board"} | {"visible": False}
+    elif "board" in body and "visible" not in body:
+        body["visible"] = True
+    return "POST", "/i/discord/board", body
 
 
 async def service_execute(action: dict) -> tuple[bool, str]:
     c = cfg()
-    path, body = _route(action)
+    method, path, body = _route(action)
     try:
         async with httpx.AsyncClient(timeout=20) as client:
-            r = await client.post(c["service"] + path, json=body, headers={"Authorization": f"Bearer {c['token']}"})
+            r = await client.request(method, c["service"] + path, json=body or None, headers={"Authorization": f"Bearer {c['token']}"})
         if r.status_code >= 400:
-            return False, (r.json().get("error") if r.headers.get("content-type", "").startswith("application/json") else r.text)[:200] or str(r.status_code)
+            try:
+                err = r.json().get("error") or ""
+            except ValueError:
+                err = r.text
+            return False, (err or f"HTTP {r.status_code}")[:200]
         return True, ""
     except httpx.HTTPError as e:
         return False, f"wall service unreachable ({type(e).__name__})"
@@ -366,6 +438,60 @@ async def service_state() -> dict | None:
         return None
 
 
+# ---- the stream's clock -----------------------------------------------------------------------------------------------
+def playlist_edge(text: str) -> float | None:
+    """The live edge of an HLS playlist in epoch ms: the last segment's EXT-X-PROGRAM-DATE-TIME + its EXTINF."""
+    from datetime import datetime
+    pdt = dur = None
+    edge = None
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("#EXTINF:"):
+            try:
+                dur = float(line[8:].split(",")[0])
+            except ValueError:
+                dur = None
+        elif line.startswith("#EXT-X-PROGRAM-DATE-TIME:"):
+            try:
+                pdt = datetime.fromisoformat(line[25:].replace("Z", "+00:00")).timestamp() * 1000
+            except ValueError:
+                pdt = None
+        elif line and not line.startswith("#"):
+            if pdt is not None and dur is not None:
+                edge = pdt + dur * 1000
+                pdt += dur * 1000   # a segment without its own tag follows on
+            dur = None
+    return edge
+
+
+class EdgeClock:
+    """Maps server time to the stream's program-date-time: pdt_at(now) = now + off. The encoder's PDT may be a fixed
+    few seconds off the box clock, so every viewer targets the same edge-relative instant instead of "server now − D".
+    Each playlist we proxy gives one sample off = edge − seen_at, which is the true offset minus however stale that
+    playlist was; the best (largest) sample in the last minute is the estimate. A jump of more than 5 s (the encoder
+    restarted) starts over."""
+
+    WINDOW_S = 60
+
+    def __init__(self) -> None:
+        self.samples: deque[tuple[float, float]] = deque()
+        self.off: float | None = None
+
+    def observe(self, edge_ms: float, now_ms: float) -> bool:
+        """True when the estimate moved by more than 100 ms (worth telling the viewers)."""
+        val = edge_ms - now_ms
+        if self.off is not None and abs(val - self.off) > 5000:
+            self.samples.clear()
+        self.samples.append((now_ms, val))
+        while self.samples and now_ms - self.samples[0][0] > self.WINDOW_S * 1000:
+            self.samples.popleft()
+        new = max(v for _, v in self.samples)
+        moved = self.off is None or abs(new - self.off) > 100
+        if moved:
+            self.off = new
+        return moved
+
+
 # ---- the hub: sockets + state ----------------------------------------------------------------------------------------
 class Hub:
     def __init__(self, clock=time.time, execute=None, fetch_state=None) -> None:
@@ -379,6 +505,7 @@ class Hub:
         self.cids = itertools.count(1)
         self.wall: dict | None = None
         self._viewers_sig: tuple = ()
+        self.edge = EdgeClock()
         self._ticker: asyncio.Task | None = None
 
     # -- roles
@@ -413,6 +540,14 @@ class Hub:
     def pub(self, p: Proposal) -> dict:
         c = cfg()
         return p.public(self.clock(), self.presence.active(self.clock()), c["sound_approvals"])
+
+    def bot_pub(self, p: Proposal) -> dict:
+        return p.for_bot(self.clock(), self.presence.active(self.clock()), cfg()["sound_approvals"])
+
+    async def observe_playlist(self, text: str) -> None:
+        edge = playlist_edge(text)
+        if edge is not None and self.edge.observe(edge, self.clock() * 1000):
+            await self.broadcast({"t": "clock", "pdt_off": self.edge.off})
 
     # -- votes
     async def propose(self, user: dict, action: object) -> tuple[Proposal | None, str]:
@@ -498,7 +633,7 @@ class Hub:
         now = self.clock()
         active = self.presence.active(now)
         return {"viewers": self.viewers(), "active": len(active), "watching": len(self.presence.watching()),
-                "proposals": [self.pub(p) for p in self.votes.open()], "wall": self.wall,
+                "proposals": [self.bot_pub(p) for p in self.votes.open()], "wall": self.wall,
                 "watch_url": f"{auth.WEB_BASE_URL}{PAGE}"}
 
 
@@ -535,7 +670,7 @@ async def wall_websocket(ws: WebSocket) -> None:
     c = cfg()
     await h.send(ws, {"t": "hello", "me": {**user, "initials": initials(user["name"]), "admin": h.is_admin(user["id"]),
                                             "owner": h.is_owner(user["id"])},
-                      "now": now * 1000, "history": list(h.chat.log), "viewers": h.viewers(),
+                      "now": now * 1000, "pdt_off": h.edge.off, "history": list(h.chat.log), "viewers": h.viewers(),
                       "proposals": [h.pub(p) for p in h.votes.open()], "wall": h.wall,
                       "cfg": {"delay": c["delay"], "vote_s": c["vote_s"], "sound_approvals": c["sound_approvals"],
                               "chat_max": CHAT_MAX}})
@@ -562,7 +697,7 @@ async def wall_websocket(ws: WebSocket) -> None:
 async def handle(h: Hub, cid: int, ws: WebSocket, user: dict, msg: dict) -> None:
     t, now = msg.get("t"), h.clock()
     if t == "ping":
-        await h.send(ws, {"t": "pong", "c": msg.get("c"), "s": now * 1000})
+        await h.send(ws, {"t": "pong", "c": msg.get("c"), "s": now * 1000, "pdt_off": h.edge.off})
         return
     if t == "hb":
         h.presence.beat(cid, bool(msg.get("hidden")), now)
@@ -655,6 +790,8 @@ async def hls(name: str, request: Request):
                 if code != 200:
                     return JSONResponse({"error": "the wall isn't streaming"}, status_code=404 if code == 404 else 502)
                 hit = (time.monotonic() + (0.5 if playlist else 60), body, ctype)
+                if playlist:
+                    await hub.observe_playlist(body.decode("utf-8", "replace"))
                 _cache[name] = hit
                 for k, v in list(_cache.items()):
                     if v[0] < time.monotonic() - 120:
@@ -676,7 +813,10 @@ def _bot_user(body: dict) -> dict:
     uid = str(body.get("discord_id") or "")
     if not uid.isdigit():
         raise HTTPException(422, "discord_id is required")
-    return {"id": uid, "name": clean_text(body.get("name") or "Player", 40), "avatar": body.get("avatar_url")}
+    name = body.get("name") or body.get("display_name") or body.get("username") or "Player"
+    avatar = body.get("avatar_url") or body.get("avatar")
+    return {"id": uid, "name": clean_text(name, 40) or "Player",
+            "avatar": avatar if isinstance(avatar, str) and avatar.startswith("https://") else None}
 
 
 @router.post("/propose")
@@ -686,7 +826,7 @@ async def bot_propose(request: Request, x_api_key: str = Header("")):
     p, err = await hub.propose(_bot_user(body), body.get("action"))
     if not p:
         return JSONResponse({"error": err}, status_code=409)
-    return hub.pub(p)
+    return hub.bot_pub(p)
 
 
 @router.post("/vote")
@@ -696,7 +836,7 @@ async def bot_vote(request: Request, x_api_key: str = Header("")):
     p, err = await hub.vote(_bot_user(body), body.get("proposal_id"), body.get("yes"))
     if not p:
         return JSONResponse({"error": err}, status_code=409)
-    return hub.pub(p)
+    return hub.bot_pub(p)
 
 
 @router.post("/link")
@@ -706,4 +846,7 @@ async def bot_link(request: Request, x_api_key: str = Header("")):
     uid = str(body.get("discord_id") or "")
     if not uid.isdigit():
         return JSONResponse({"error": "discord_id is required"}, status_code=422)
-    return {"url": mint_link(uid, clean_text(body.get("username") or "Player", 40), body.get("avatar")), "ttl": LINK_TTL}
+    name = body.get("username") or body.get("name") or body.get("display_name") or "Player"
+    avatar = body.get("avatar")   # the Discord avatar hash, as the OAuth session stores it
+    return {"url": mint_link(uid, clean_text(name, 40) or "Player", avatar if isinstance(avatar, str) and len(avatar) < 80 else None),
+            "ttl": LINK_TTL}

@@ -248,8 +248,9 @@ def test_proposal_rate_limit_and_owner_override():
 
 def test_check_action():
     assert check_action({"op": "tile", "i": 0, "url": "https://x.y/z"})["url"] == "https://x.y/z"
-    for bad in ({"op": "tile", "i": 0, "url": "javascript:alert(1)"}, {"op": "tile", "i": 4, "url": "https://x"},
-                {"op": "layout", "layout": "weird"}, {"op": "rm -rf"}, "stop", {"op": "start", "preset": True}):
+    for bad in ({"op": "tile", "i": 0, "url": "javascript:alert(1)"}, {"op": "tile", "i": 5, "url": "https://x"},
+                {"op": "layout", "layout": "weird"}, {"op": "rm -rf"}, "stop", {"op": "start", "preset": True},
+                {"op": "start", "urls": ["file:///etc/passwd"]}, {"op": "start"}, {"op": "board"}, {"op": "remove", "i": 9}):
         with pytest.raises(ValueError):
             check_action(bad)
 
@@ -299,10 +300,55 @@ async def test_hub_failed_service_call_marks_error():
 
 
 def test_route_maps_to_service_api():
-    assert wall._route({"op": "start", "preset": "Live NFL"}) == ("/i/discord/start", {"preset": "Live NFL"})
-    assert wall._route({"op": "board", "board": ""}) == ("/i/discord/board", {"visible": False})
-    assert wall._route({"op": "layout", "layout": "full"}) == ("/i/discord/board", {"layout": "full", "visible": True})
-    assert wall._route({"op": "sound", "i": 2}) == ("/i/discord/sound", {"i": 2})
+    assert wall._route({"op": "start", "preset": "Live NFL"}) == ("POST", "/i/discord/start", {"preset": "Live NFL"})
+    assert wall._route(check_action({"op": "start", "live": "nfl", "tiles": 3, "board": "nfl"})) == \
+        ("POST", "/i/discord/start", {"urls": [], "live": "nfl", "tiles": 3, "board": "nfl"})
+    assert wall._route({"op": "board", "board": ""}) == ("POST", "/i/discord/board", {"visible": False})
+    assert wall._route({"op": "board", "board": "nba"}) == ("POST", "/i/discord/board", {"board": "nba", "visible": True})
+    assert wall._route({"op": "layout", "layout": "full"}) == ("POST", "/i/discord/board", {"layout": "full", "visible": True})
+    assert wall._route({"op": "sound", "i": 2}) == ("POST", "/i/discord/sound", {"i": 2})
+    assert wall._route(check_action({"op": "remove", "i": 1})) == ("DELETE", "/i/discord/tile/1", {})
+    assert wall._route(check_action({"op": "tile", "i": 4, "url": "https://x.y", "label": "BUF"})) == \
+        ("POST", "/i/discord/tile", {"i": 4, "url": "https://x.y"})   # i == len adds a tile; the label is ours
+
+
+PLAYLIST = """#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-TARGETDURATION:1
+#EXT-X-MEDIA-SEQUENCE:7
+#EXTINF:1.000000,
+#EXT-X-PROGRAM-DATE-TIME:2026-11-02T20:20:44.760-0500
+seg000007.ts
+#EXTINF:1.000000,
+#EXT-X-PROGRAM-DATE-TIME:2026-11-02T20:20:45.760-0500
+seg000008.ts
+"""
+
+
+def test_playlist_edge_is_last_pdt_plus_duration():
+    from datetime import datetime
+    want = datetime.fromisoformat("2026-11-02T20:20:46.760-05:00").timestamp() * 1000
+    assert wall.playlist_edge(PLAYLIST) == pytest.approx(want)
+    assert wall.playlist_edge("#EXTM3U\n") is None
+
+
+def test_edge_clock_keeps_freshest_sample_and_resets_on_jump():
+    c = wall.EdgeClock()
+    assert c.observe(14_000, 10_000) and c.off == 4000          # encoder 4 s ahead of the box clock
+    assert not c.observe(14_400, 10_900) and c.off == 4000      # a staler playlist (3.5 s) doesn't drag it down
+    assert c.observe(15_200, 11_000) and c.off == 4200
+    assert c.observe(30_000, 12_000) and c.off == 18_000        # encoder restarted: start over
+    assert not c.observe(80_000 + 18_000, 80_000)
+
+
+@pytest.mark.anyio
+async def test_hub_broadcasts_clock_from_proxied_playlist():
+    async def fetch_state():
+        return {}
+
+    hub = wall.Hub(clock=Clock(1793665000.0), fetch_state=fetch_state)
+    await hub.observe_playlist(PLAYLIST)
+    assert hub.edge.off is not None
 
 
 # ---- HTTP: bot API, links, HLS gate ----------------------------------------------------------------------------------
@@ -321,9 +367,14 @@ def test_bot_propose_and_vote(setup):
     for cid, uid in ((1, "1"), (2, "2"), (3, "3")):
         hub.presence.join(cid, {"id": uid, "name": uid}, clock.t)
     p = client.post("/api/v1/wall/propose", headers=h, json={"discord_id": "1", "name": "One", "action": {"op": "stop"}}).json()
-    assert p["status"] == "open" and p["need"] == 2
+    assert p["status"] == "open" and p["needed"] == 2 and p["summary"] == "stop the wall" and p["yes"] == 1 and not p["applied"]
+    st = client.get("/api/v1/wall/state", headers=h).json()
+    assert st["proposals"][0]["id"] == p["id"] and st["proposals"][0]["expires"] == clock.t + 60
+    assert {"id", "name", "avatar", "away"} <= set(st["viewers"][0])
     p = client.post("/api/v1/wall/vote", headers=h, json={"discord_id": "2", "proposal_id": p["id"], "yes": True}).json()
-    assert p["status"] == "passed" and done == [{"op": "stop"}]
+    assert p["passed"] and p["status"] == "passed" and done == [{"op": "stop"}]
+    o = client.post("/api/v1/wall/propose", headers=h, json={"discord_id": OWNER, "name": "David", "action": {"op": "remove", "i": 1}}).json()
+    assert o["applied"] and done[-1] == {"op": "remove", "i": 1}
     r = client.post("/api/v1/wall/propose", headers=h, json={"discord_id": "x", "action": {"op": "stop"}})
     assert r.status_code == 422
 

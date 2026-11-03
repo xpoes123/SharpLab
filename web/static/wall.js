@@ -10,6 +10,7 @@
   const props = new Map();          // open proposals by id
   const offsets = [];               // server − local clock samples (ms), low-RTT ones kept
   let offset = 0;
+  let pdtOff = null;                // stream PDT − server time (ms), from the playlists the server proxies
 
   // ---- clock: server time from ping/pong, median of the best samples ----
   const serverNow = () => Date.now() + offset;
@@ -69,9 +70,10 @@
   // Every viewer aims at the same instant: target = server now − delay. Big error → seek; small → nudge the rate.
   function syncTick() {
     const pdt = playingDate();
-    sync.offset = offset;
+    sync.offset = offset; sync.pdtOff = pdtOff;
     if (pdt == null || video.paused || video.readyState < 2) { sync.err = null; showSync(); return; }
-    const target = serverNow() - cfg.delay * 1000;
+    // the live edge as the server sees it (cancels any encoder clock offset), minus the shared delay
+    const target = serverNow() + (pdtOff || 0) - cfg.delay * 1000;
     const err = (pdt - target) / 1000;                 // + = ahead of the others
     sync.pdt = pdt; sync.target = target; sync.err = err;
     if (Math.abs(err) > 3) {
@@ -113,13 +115,15 @@
       case "hello":
         me = m.me; cfg = { ...cfg, ...m.cfg };
         offset = m.now - Date.now();
+        if (m.pdt_off != null) pdtOff = m.pdt_off;
         $("ownerNote").textContent = me.owner ? "· you're the owner: changes apply at once" : "";
         $("msgs").replaceChildren(); m.history.forEach(addMsg);
         renderViewers(m.viewers);
         props.clear(); m.proposals.forEach((p) => props.set(p.id, p)); renderProps();
         setWall(m.wall);
         break;
-      case "pong": addOffset(m.c, m.s); break;
+      case "pong": addOffset(m.c, m.s); if (m.pdt_off != null) pdtOff = m.pdt_off; break;
+      case "clock": pdtOff = m.pdt_off; break;
       case "chat": addMsg(m.msg); break;
       case "del": { const li = document.querySelector(`#msgs li[data-id="${m.id}"]`); if (li) li.remove(); break; }
       case "viewers": renderViewers(m.list); break;
