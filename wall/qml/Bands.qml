@@ -7,13 +7,15 @@
 import QtQuick
 import "lbar.js" as G
 import "bands.js" as BJ
+import "board.js" as B
 
 Item {
     id: root
     property var b: null                 // the /bands payload
     property var boardData: null         // the overlay's own delayed board (Board.qml last.data): wins for a game it holds
     property string edge: "top"          // top | bottom | left | right (beside the tiles: the backdrop only)
-    property bool lbarShown: false       // the L-bar is on screen: it has the ticker + chat, the strip stays off
+    property bool lbarShown: false       // the L-bar is on screen: it has the ticker + chat + bets, the strip stays off
+    property var bets: null              // GET <bets>/api/overlay/bets: a chip per header; the detail in the bottom band
     property var geo: null               // G.wallBands(...)
     property real unit: 1920             // the screen width: 1 rem = unit / 120, like Board.qml
     readonly property real rem: unit / 120
@@ -28,6 +30,8 @@ Item {
     readonly property color cInk: "#ECE6D6"
     readonly property color cMuted: "#B3AD9D"
     readonly property color cAccent: "#FFB000"
+    readonly property color cOk: "#8ED07A"
+    readonly property color cDanger: "#FF9580"
     function pick(want) { var have = Qt.fontFamilies(); for (var i = 0; i < want.length; i++) if (have.indexOf(want[i]) >= 0) return want[i]; return "" }
     readonly property string fDisplay: pick(["Archivo", "Fira Sans Condensed", "DejaVu Sans Condensed"]) || "sans-serif"
     readonly property string fMono: pick(["IBM Plex Mono", "DejaVu Sans Mono"]) || "monospace"
@@ -230,11 +234,32 @@ Item {
                         font.capitalization: Font.AllUppercase; font.letterSpacing: size * 0.04
                     }
                 }
-                T {
+                Row {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    visible: hd.g !== null && hd.g.state !== "pre" && hd.s >= 4 * root.rem
-                    text: hd.tile ? Math.round(hd.tile.delay) + " s delay" : ""
-                    mono: true; size: Math.max(1.1 * root.rem, hd.s * 0.16); weight: 500; color: root.cMuted
+                    spacing: 0.5 * root.rem
+                    readonly property var tb: B.tileBets(root.bets, hd.index)
+                    Rectangle {   // "2 BETS ▲": the detail is in the L-bar / the bottom band, never on the video
+                        visible: parent.tb.count > 0
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: chipT.implicitWidth + 0.8 * root.rem; height: chipT.implicitHeight + 0.15 * root.rem
+                        radius: 0.2 * root.rem; color: root.cSurface
+                        border.width: Math.max(1, Math.round(0.08 * root.rem))
+                        border.color: parent.tb.dir === "up" ? root.cOk : parent.tb.dir === "down" ? root.cDanger : root.cRule
+                        T {
+                            id: chipT; anchors.centerIn: parent
+                            font.letterSpacing: size * 0.06
+                            text: parent.parent.tb.count + (parent.parent.tb.count === 1 ? " bet" : " bets") + (parent.parent.tb.dir === "up" ? " ▲" : parent.parent.tb.dir === "down" ? " ▼" : "")
+                            size: Math.max(1.1 * root.rem, hd.s * 0.16); weight: 700; wdth: 68
+                            color: parent.parent.tb.dir === "up" ? root.cOk : parent.parent.tb.dir === "down" ? root.cDanger : root.cInk
+                            font.capitalization: Font.AllUppercase
+                        }
+                    }
+                    T {
+                        anchors.verticalCenter: parent.verticalCenter
+                        visible: hd.g !== null && hd.g.state !== "pre" && hd.s >= 4 * root.rem
+                        text: hd.tile ? Math.round(hd.tile.delay) + " s delay" : ""
+                        mono: true; size: Math.max(1.1 * root.rem, hd.s * 0.16); weight: 500; color: root.cMuted
+                    }
                 }
             }
         }
@@ -260,17 +285,24 @@ Item {
     readonly property real stripH: 3.4 * rem
     readonly property var chatLines: b && b.chat ? b.chat : []
     readonly property bool roomy: strip && height - infoTop >= stripH + gap
+    // the bets' detail (no L-bar on screen): rows on the left above the strip; no room for one → the strip carries them
+    readonly property var betRows: strip ? B.betRows(bets, b ? b.n : 0) : []
+    readonly property real betH: 2.9 * rem
+    readonly property int betFits: Math.floor((height - infoTop - stripH - 2 * gap) / (betH + 0.4 * rem))
+    readonly property bool betsInStrip: betRows.length > 0 && betFits < 1
 
     Item {   // the strip of other games, paged slowly
         id: tick
         clip: true
-        visible: root.roomy && root.b && root.b.ticker.length > 0
+        visible: root.roomy && root.b && (root.b.ticker.length > 0 || root.betsInStrip)
         x: 1.5 * root.rem; y: root.height - height - root.gap
         width: root.width - 3 * root.rem - (root.chatLines.length ? chat.width + 1.5 * root.rem : 0)
         height: root.stripH
         readonly property real cellW: 20 * root.rem
         readonly property int per: Math.max(1, Math.floor((width - label.width - root.rem) / cellW))
-        readonly property int pages: root.b ? Math.max(1, Math.ceil(root.b.ticker.length / per)) : 1
+        readonly property var items: root.betsInStrip ? root.betRows.map(function (l) { return { bet: l } })
+                                                      : root.b ? root.b.ticker.map(function (g) { return BJ.headerGame(g, root.boardData) }) : []
+        readonly property int pages: Math.max(1, Math.ceil(items.length / per))
         property int shown: 0
         Timer {
             interval: 14000; running: tick.visible && tick.pages > 1; repeat: true
@@ -286,36 +318,78 @@ Item {
         T {
             id: label
             x: 1 * root.rem; anchors.verticalCenter: parent.verticalCenter
-            text: "Elsewhere"; size: 1.5 * root.rem; weight: 600; wdth: 68; color: root.cMuted
+            text: root.betsInStrip ? "Bets" : "Elsewhere"; size: 1.5 * root.rem; weight: 600; wdth: 68; color: root.cMuted
             font.capitalization: Font.AllUppercase; font.letterSpacing: size * 0.12
         }
         Row {
             id: cells
             x: label.x + label.width + 1.2 * root.rem; height: parent.height
             Repeater {
-                model: root.b ? root.b.ticker.map(function (g) { return BJ.headerGame(g, root.boardData) }).slice((tick.shown % tick.pages) * tick.per, (tick.shown % tick.pages + 1) * tick.per) : []
+                model: tick.items.slice((tick.shown % tick.pages) * tick.per, (tick.shown % tick.pages + 1) * tick.per)
                 Item {
                     required property var modelData
-                    width: tick.cellW; height: cells.height
-                    Rectangle { width: Math.max(1, 0.08 * root.rem); height: parent.height * 0.5; anchors.verticalCenter: parent.verticalCenter; color: root.cRule }
+                    readonly property var aw: modelData.away || ({})
+                    readonly property var hm: modelData.home || ({})
+                    width: modelData.bet ? tick.width - label.width - 3 * root.rem : tick.cellW; height: cells.height
+                    BetLine { visible: !!modelData.bet; l: modelData.bet || null; width: parent.width; height: parent.height }
+                    Rectangle { visible: !modelData.bet; width: Math.max(1, 0.08 * root.rem); height: parent.height * 0.5; anchors.verticalCenter: parent.verticalCenter; color: root.cRule }
                     Row {
+                        visible: !modelData.bet
                         x: 0.9 * root.rem; anchors.verticalCenter: parent.verticalCenter; spacing: 0.45 * root.rem
-                        Rectangle { width: 0.3 * root.rem; height: 1.6 * root.rem; color: modelData.away.color; anchors.verticalCenter: parent.verticalCenter }
-                        T { text: modelData.away.abbr; size: 1.8 * root.rem; weight: 700; wdth: 68; anchors.verticalCenter: parent.verticalCenter }
+                        Rectangle { width: 0.3 * root.rem; height: 1.6 * root.rem; color: aw.color || "transparent"; anchors.verticalCenter: parent.verticalCenter }
+                        T { text: aw.abbr || ""; size: 1.8 * root.rem; weight: 700; wdth: 68; anchors.verticalCenter: parent.verticalCenter }
                         T {
-                            text: modelData.state === "pre" ? "@" : (modelData.away.score ?? "") + "–" + (modelData.home.score ?? "")
+                            text: modelData.state === "pre" ? "@" : (aw.score ?? "") + "–" + (hm.score ?? "")
                             size: 1.8 * root.rem; weight: 800; wdth: 68; font.features: { "tnum": 1 }; anchors.verticalCenter: parent.verticalCenter
                             color: modelData.state === "pre" ? root.cMuted : root.cInk
                         }
-                        T { text: modelData.home.abbr; size: 1.8 * root.rem; weight: 700; wdth: 68; anchors.verticalCenter: parent.verticalCenter }
-                        Rectangle { width: 0.3 * root.rem; height: 1.6 * root.rem; color: modelData.home.color; anchors.verticalCenter: parent.verticalCenter }
+                        T { text: hm.abbr || ""; size: 1.8 * root.rem; weight: 700; wdth: 68; anchors.verticalCenter: parent.verticalCenter }
+                        Rectangle { width: 0.3 * root.rem; height: 1.6 * root.rem; color: hm.color || "transparent"; anchors.verticalCenter: parent.verticalCenter }
                         T {
-                            text: modelData.status; mono: true; size: 1.35 * root.rem; weight: 500; anchors.verticalCenter: parent.verticalCenter
+                            text: modelData.status || ""; mono: true; size: 1.35 * root.rem; weight: 500; anchors.verticalCenter: parent.verticalCenter
                             color: modelData.close && modelData.state === "in" ? root.cAccent : root.cMuted
                         }
                     }
                 }
             }
+        }
+    }
+
+    component BetLine: Rectangle {   // one position, one line: [2] DAVID  YES GSW −3.5  @42¢ → 51¢  ▲ 21%
+        id: bl
+        property var l: null
+        readonly property color tone: l && l.dir === "up" ? root.cOk : l && l.dir === "down" ? root.cDanger : root.cMuted
+        radius: 0.2 * root.rem
+        color: l && l.dir === "up" ? Qt.tint(root.cSurface, "#228ED07A") : l && l.dir === "down" ? Qt.tint(root.cSurface, "#22FF9580") : root.cSurface
+        Behavior on color { ColorAnimation { duration: 1500; easing.type: Easing.InOutQuad } }
+        Row {
+            x: 0.5 * root.rem; anchors.verticalCenter: parent.verticalCenter
+            spacing: 0.7 * root.rem
+            Rectangle {
+                anchors.verticalCenter: parent.verticalCenter
+                width: 2 * root.rem; height: 2 * root.rem; color: "#1F201C"; border.color: root.cRule; border.width: 1
+                T { anchors.centerIn: parent; text: bl.l ? String(bl.l.tile) : ""; size: 1.4 * root.rem; weight: 800; wdth: 68 }
+            }
+            T { anchors.verticalCenter: parent.verticalCenter; text: bl.l ? bl.l.who : ""; size: 1.75 * root.rem; weight: 700; wdth: 68; color: root.cAccent
+                width: Math.min(implicitWidth, 8 * root.rem) }
+            T { anchors.verticalCenter: parent.verticalCenter; text: bl.l ? bl.l.what : ""; size: 1.75 * root.rem; weight: 600; wdth: 68
+                width: Math.min(implicitWidth, bl.width * 0.4) }
+            T { anchors.verticalCenter: parent.verticalCenter; text: bl.l ? bl.l.px : ""; mono: true; size: 1.5 * root.rem; weight: 500 }
+            T { anchors.verticalCenter: parent.verticalCenter; text: bl.l ? bl.l.pct : ""; mono: true; size: 1.5 * root.rem; weight: 600; color: bl.tone
+                Behavior on color { ColorAnimation { duration: 1500 } } }
+        }
+    }
+
+    Column {   // the bets' detail above the strip (no L-bar on screen), as many as fit, in tile order
+        id: betCol
+        visible: root.roomy && root.betRows.length > 0 && !root.betsInStrip
+        x: 1.5 * root.rem
+        width: root.width - 3 * root.rem - (root.chatLines.length ? chat.width + 1.5 * root.rem : 0)
+        anchors.bottom: parent.bottom; anchors.bottomMargin: root.stripH + 2 * root.gap
+        spacing: 0.4 * root.rem
+        Repeater {
+            model: root.betRows.slice(0, Math.max(0, root.betFits))
+            BetLine { required property var modelData; l: modelData; width: Math.min(betCol.width, 60 * root.rem); height: root.betH }
         }
     }
 
