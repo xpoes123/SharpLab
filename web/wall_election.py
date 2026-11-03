@@ -262,7 +262,8 @@ async def spot_payload(state: str, snap: dict) -> dict:
         if r["chart"]:
             o, td, win = await markets.candles(r["chart"][0], now)
             spark = em.sparkline(em.chart_line(r["markets"][0], o, td, win, now))
-        cards.append({"id": r["id"], "office": r["office"], "label": r["label"], "status": r["status"], "called": r["called"],
+        short = f"✓ {r['called']} · {r['caller']}" if r["called"] else f"{round(r['pct'] or 0)}% in" if r["votes"] else "no votes yet"
+        cards.append({"id": r["id"], "office": r["office"], "label": r["label"], "status": r["status"], "short": short, "called": r["called"],
                       "pct": r["pct"], "cands": [{k: c[k] for k in ("name", "party", "pct", "winner")} for c in r["cands"][:2]],
                       "markets": [{k: m[k] for k in ("who", "party", "prob", "bid", "ask", "chg24")} for m in r["markets"][:2]],
                       "spark": spark, "spark_party": (r["markets"][0]["party"] if r["markets"] else "")})
