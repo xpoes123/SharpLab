@@ -29,13 +29,14 @@
   <div id="room" hidden>
     <section class="stage">
       <div class="player">
-        <video id="video" playsinline muted autoplay></video>
+        <video id="video" playsinline muted autoplay autopictureinpicture></video>
         <div id="offline" class="offline" hidden><div><b>The wall is off.</b><br><span class="muted">Propose a preset below to start it.</span></div></div>
         <button id="unmute" class="unmute">🔇 Tap for sound</button>
       </div>
       <div class="bar">
         <button id="muteBtn" class="pill btn" type="button">🔇 Sound off</button>
         <button id="fsBtn" class="pill btn" type="button">⛶ Full screen</button>
+        <button id="pipBtn" class="pill btn" type="button" aria-label="Picture in picture" title="Keep watching in a small window while you use other apps" hidden>⧉ Pop out</button>
         <span id="sync" class="pill">syncing…</span>
         <span id="count" class="pill">0 watching</span>
         <span id="wallName" class="muted"></span>

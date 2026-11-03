@@ -110,6 +110,40 @@
     else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
   };
 
+  // ---- picture-in-picture: keep watching while in other apps ----
+  // The standard API (Chrome, Android, desktop Safari), else iPhone Safari's presentation mode. autopictureinpicture
+  // on the <video> + the media session's enterpictureinpicture handler let Chrome pop out by itself on an app switch.
+  // Nothing here pauses on visibilitychange: hls.js and the sync loop keep running while the page is hidden.
+  const stdPip = !!(document.pictureInPictureEnabled && video.requestPictureInPicture && !video.disablePictureInPicture);
+  const iosPip = !stdPip && typeof video.webkitSetPresentationMode === "function" &&
+    (!video.webkitSupportsPresentationMode || video.webkitSupportsPresentationMode("picture-in-picture"));
+  const inPip = () => !!document.pictureInPictureElement || video.webkitPresentationMode === "picture-in-picture";
+  $("pipBtn").hidden = !(stdPip || iosPip);
+  $("pipBtn").onclick = () => {
+    if (stdPip) (inPip() ? document.exitPictureInPicture() : video.requestPictureInPicture()).catch(() => {});
+    else if (iosPip) video.webkitSetPresentationMode(inPip() ? "inline" : "picture-in-picture");
+  };
+  const showPip = () => $("pipBtn").setAttribute("aria-pressed", String(inPip()));
+  ["enterpictureinpicture", "leavepictureinpicture", "webkitpresentationmodechanged"].forEach((ev) => video.addEventListener(ev, showPip));
+
+  // lock screen / PiP window: the wall's name + SharpLab artwork, play/pause (the sync loop re-lands a resumed player)
+  const media = "mediaSession" in navigator ? navigator.mediaSession : null;
+  function setMedia() {
+    if (!media || !window.MediaMetadata) return;
+    try {
+      media.metadata = new MediaMetadata({ title: (wall && wall.running && wall.name) || "The wall", artist: "SharpLab watch party",
+                                           album: "SharpLab Wall", artwork: [{ src: "/wall-art.png", sizes: "512x512", type: "image/png" }] });
+    } catch (e) { /* older browsers: no metadata */ }
+  }
+  if (media) {
+    const on = (a, f) => { try { media.setActionHandler(a, f); } catch (e) { /* action not supported here */ } };
+    on("play", () => video.play().catch(() => {}));
+    on("pause", () => video.pause());
+    if (stdPip) on("enterpictureinpicture", () => video.requestPictureInPicture().catch(() => {}));
+    video.addEventListener("play", () => (media.playbackState = "playing"));
+    video.addEventListener("pause", () => (media.playbackState = "paused"));
+  }
+
   // ---- socket ----
   function send(m) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); }
   function ping() { send({ t: "ping", c: Date.now() }); }
@@ -156,6 +190,7 @@
     $("wallName").textContent = on ? wall.name || "" : "";
     $("mirror").hidden = !(on && wall.mirror);
     $("followBtn").hidden = !on || !!wall.mirror;
+    setMedia();
     if (on && runId !== null && wall.started !== runId) stopPlayer();   // the wall restarted: new segment numbers
     runId = on ? wall.started : null;
     if (on) startPlayer(); else if (wall) stopPlayer();
