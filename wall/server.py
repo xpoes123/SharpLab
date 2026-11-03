@@ -24,7 +24,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import ValidationError
 
-from wall.bands import TVCHAT_LINES, ScoreTape, build_view, chat_lines
+from wall.bands import TVCHAT_LINES, ScoreTape, build_view, chat_lines as band_chat_lines
 from wall.bets import POLL_S as BETS_POLL_S, BetsFeed, badge_rows
 from wall.chat import POLL_S, ChatFeed, urllib_http
 from shared import kalshi_election as ke
@@ -868,7 +868,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
                          chat=chat.view(party_on()))
         out["on"] = i.overlay_on()   # the TV OS is on its wall app (Overlay.qml draws nothing otherwise)
         # the chat floating over the tiles (qml/ChatFloat.qml): the owner's toggle + the last few lines
-        out["tvchat"] = {"on": tvchat["on"], "lines": chat_lines(chat.view(party_on()), time.time(), TVCHAT_LINES)}
+        out["tvchat"] = {"on": tvchat["on"], "lines": band_chat_lines(chat.view(party_on()), time.time(), TVCHAT_LINES)}
         return out
 
     # ---- the watch party's chat, for the TV router (loopback only: not in REMOTE_OK) ----
