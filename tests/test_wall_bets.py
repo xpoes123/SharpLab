@@ -134,7 +134,7 @@ def test_opt_out_is_immediate(env):
     assert [x["who"] for x in r.json()["games"]["nba:401909921"]] == ["David"]
 
 
-def test_guests_never_see_the_panel(env, monkeypatch):
+def test_friends_and_public_read_the_panel_but_never_change_it(env, monkeypatch):
     client, b, clock, k, optin = env
     poll(b)
     monkeypatch.setenv("WALL_DEMO", "1")
@@ -142,12 +142,23 @@ def test_guests_never_see_the_panel(env, monkeypatch):
     client.cookies.clear()
     r = client.post("/api/v1/wall/guest", json={"k": "k" * 20, "name": "Kim"})
     client.cookies.set(wall.GUEST_COOKIE, r.headers["set-cookie"].split(";")[0].split("=", 1)[1])
-    assert client.get("/api/v1/wall/me").json()["guest"] is True      # a guest of the watch page …
-    for path in ("/api/v1/wall/bets", "/api/v1/wall/bets/me"):
-        assert client.get(path).status_code == 403                    # … gets no bets
-    assert client.post("/api/v1/wall/bets/me", json={"share": True}).status_code == 403
+    assert client.get("/api/v1/wall/me").json()["tier"] == "friend"   # a friend of the watch page …
+    clock.t += 100
+    g = client.get("/api/v1/wall/bets").json()["games"]                 # … sees the opted-in members' positions
+    assert {r["who"] for x in g for r in x["rows"]} >= {"David", "Steph"} and g[0]["rows"]
+    assert client.get("/api/v1/wall/bets/me").json() == {"share": False, "exact": False, "linked": False, "guest": True}
+    assert client.post("/api/v1/wall/bets/me", json={"share": True}).status_code == 403   # nothing of theirs to share
+    assert client.post("/api/v1/wall/bets/sync", json={"show": False}).status_code == 403
     client.cookies.clear()
+    monkeypatch.delenv("WALL_PUBLIC", raising=False)
+    monkeypatch.delenv("WALL_GUEST_OPEN", raising=False)
     assert client.get("/api/v1/wall/bets").status_code == 401
+    monkeypatch.setenv("WALL_GUEST_OPEN", "1")                          # public mode: read-only too
+    assert {r["who"] for x in client.get("/api/v1/wall/bets").json()["games"] for r in x["rows"]} >= {"David", "Steph"}
+    assert client.get("/api/v1/wall/bets").json()["owner"] is False
+    assert client.get("/api/v1/wall/bets/me").json()["guest"] is True
+    assert client.post("/api/v1/wall/bets/me", json={"share": True}).status_code == 403
+    assert client.post("/api/v1/wall/bets/sync", json={"show": False}).status_code == 403
 
 
 def test_web_viewer_sees_prices_delayed_by_tile_delay_plus_sync_delay(env):

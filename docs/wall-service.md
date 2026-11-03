@@ -269,15 +269,24 @@ hidden while the full / matchup board is up. Every 2 s it reads `GET /i/<name>/b
 * **Demo mode** (`WALL_DEMO=1` + `WALL_DEMO_KEY`, ≥ 16 random chars, on sharplab-web; off by default). The watch link
   becomes `/wall.html?k=<key>` (the bot posts that one: it takes `watch_url` from `GET /api/v1/wall/state`). With the
   key and no SharpLab login, the page asks for a nickname (2–24 letters / digits / space . ' - _, made unique among
-  who's watching: "Kim (guest)") → `POST /api/v1/wall/guest` sets a signed 24 h guest cookie bound to the key (rotating
-  the key or turning demo off ends every guest session). Guests watch, chat, vote (their votes count), and may propose
-  sound / layout / board / follow; starting, stopping and putting a page on a tile need a login. They show with a
-  "guest" tag in the viewer list and chat. Limits: 5 nicknames / 5 min and 10 socket connects / min per IP (behind
+  who's watching: "Kim (guest)") → `POST /api/v1/wall/guest` sets a signed 24 h guest cookie bound to the key and marked
+  `"t": "friend"` (rotating the key or turning demo off ends every guest session; a cookie without the friend mark —
+  issued before tiers — counts as public). **Friends have a member's powers on the watch page**: the stream, chat,
+  votes, every proposal (start / stop / tiles / spotlight / favorites …), the Bets panel (read-only: no Kalshi key to
+  share) and every Kalshi view. Owner / admin powers (moderation, `/lift`, auto ad-skip, bets sync) and the other pages
+  stay Discord-only. They show with a "guest" tag in the viewer list and chat. Limits: 5 nicknames / 5 min and 10 socket connects / min per IP (behind
   Caddy: X-Forwarded-For), the chat limits as before; the owner and admins still mute and delete. Without the key the
   page is the normal login gate. Proxy cost stays bounded: every viewer, guest or not, shares the same 0.5 s playlist /
   60 s segment cache (≈ 60 segments × ~0.6 MB), so N guests cost one upstream fetch — only the VPS's egress grows
   (~4.5 Mb/s per viewer).
-* **Open guests** (`WALL_GUEST_OPEN=1`, with demo mode on): the plain watch page offers guest join too (nickname required) — for a watch-party night; unset it to go back to keyed links only.
+* **Public mode** (`WALL_PUBLIC=1`; the old `WALL_GUEST_OPEN=1` means the same): the plain `/wall.html` (no key, no
+  login, no cookie) is a read-only data page — the election map, state sheets, Kalshi markets / charts / Pulse, opted-in
+  members' positions and the Bets panel, the live updates feed, and the chat **read-only** over the socket (no Discord
+  ids or avatars in it). No stream (`/hls` 401s), no live-games list, no viewer list (a head count only, and public
+  viewers are never in the list or the TV's count), no votes / proposals / spotlight: a public socket's every message
+  but a ping is refused, `POST /election/spotlight` and `POST /bets/me|sync` 403. The page says "Live election data ·
+  watch party is invite-only". Off: the plain page is the Discord login gate, as before. The keyed link is unaffected.
+* **Nav:** the watch page and `/pulse.html` show the top nav (Server, Games …) to logged-in Discord members only.
 * **Chat on the TV wall.** While the discord wall runs, the service polls `GET /api/v1/wall/chat?after=<id>` (bot API,
   `X-Api-Key`) every 1.5 s → `{messages (after id), ids (still in the window: a moderator's delete drops out), last,
   viewers [{name, guest, away}], watching, active}`; a muted user's messages are left out while the mute lasts. It keeps

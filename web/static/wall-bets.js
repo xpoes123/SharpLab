@@ -98,7 +98,7 @@
     const ex = el("input"); ex.type = "checkbox"; ex.checked = !!(me && me.exact); ex.disabled = !(me && me.share);
     ex.onchange = async () => { const r = await api("/me", { share: true, exact: ex.checked }); if (r.ok) { me = { ...me, ...r.j }; refresh(); } };
     exl.append(ex, document.createTextNode(" exact sizes & $"));
-    head.append(opt, exl);
+    if (!(me && me.guest)) head.append(opt, exl);
     root.append(head);
     const sub = el("p", "muted small", "Members who share show here and on the TV (which is on the stream). Sizes are bucketed and P&L is % unless they chose exact numbers.");
     if (me && me.share && !me.linked) sub.textContent = "You share, but haven't linked Kalshi — run /kalshi link in Discord.";
@@ -151,13 +151,13 @@
     } finally { busy = false; }
   }
 
-  // Starts once wall.js knows who's watching (window.__wallMe / "wall:me"): a guest or a logged-out visitor never calls
-  // these member-only endpoints at all.
+  // Starts once wall.js knows who's watching (window.__wallMe / "wall:me"). Friends (the keyed link's guests) and
+  // public viewers get the panel read-only: no Kalshi key here to share.
   async function start(who) {
-    if (!who || who.guest || me) return;
+    if (!who || me) return;
     const r = await api("/me");
     if (!r.ok) return;
-    me = { ...r.j, uid: who.id };
+    me = { ...r.j, uid: who.id || "-" };
     root.hidden = false;
     render();
     refresh();

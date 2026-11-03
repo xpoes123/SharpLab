@@ -8,8 +8,9 @@ docs/wall-service.md ("Election map + Kalshi") has the whole picture; the logic 
   demand — a state's markets when someone opens it (and the page's light refresh while it stays open), a chart's
   candles when it's drawn. Everything is cached here and shared by every viewer: prices MARKETS_TTL, today's candles
   TODAY_TTL, the older days OLDER_TTL, the series list SERIES_TTL; concurrent asks for one key make one upstream call.
-* Who sees what: the map, races, prices and charts are public data — any viewer of the page (members and guests). Opted-in
-  members' positions are for members only, by the same rule as the Bets panel; a guest's answer never has them.
+* Who sees what: the map, races, prices, charts and opted-in members' positions are for every viewer of the page —
+  members, friends (the keyed link's guests) and, in public mode, anyone on the plain page (read-only: a public viewer
+  can't push the spotlight).
 """
 from __future__ import annotations
 
@@ -364,9 +365,9 @@ router = APIRouter(prefix="/api/v1/wall/election", tags=["wall"], dependencies=w
 
 
 def who(request: Request) -> tuple[dict | None, bool]:
-    """(the member or None, may view at all). Guests view; nobody logged in doesn't."""
-    user = wall.session_user(wall.auth.read_session(request))
-    return user, bool(user or wall.read_guest(request))
+    """(the member or friend, may view at all). None + True = a public viewer (public mode): sees the data, acts on nothing."""
+    user = wall.viewer(request)
+    return user, bool(user) or wall.public_mode()
 
 
 def _deny() -> JSONResponse:
@@ -382,7 +383,7 @@ async def get_map(request: Request):
     return {"races": em.map_races(snap.get("races") or []), "offices": snap.get("offices") or {}, "source": snap.get("source", ""),
             "updated": snap.get("updated", 0), "error": snap.get("error", ""), "calls": (snap.get("calls") or [])[:8],
             "states": we.STATES, "member": bool(user), "owner": bool(user and wall.hub.is_owner(user["id"])),
-            "now": snap.get("now")}
+            "public": not user, "now": snap.get("now")}
 
 
 _pulse_cache: dict = {"at": 0.0, "data": None}
@@ -563,7 +564,7 @@ async def get_state(st: str, request: Request):
     st = st.upper()
     if not _ST.match(st) or st not in we.STATES:
         return JSONResponse({"error": "no such state"}, status_code=404)
-    return await state_payload(st, await snapshot(), user)
+    return await state_payload(st, await snapshot(), user or wall.PUBLIC)   # positions for everyone who may view
 
 
 @router.get("/control/{office}")
@@ -573,7 +574,7 @@ async def get_control(office: str, request: Request):
         return _deny()
     if office not in ("S", "H"):
         return JSONResponse({"error": "office is S or H"}, status_code=404)
-    return await control_payload(office, await snapshot(), user)
+    return await control_payload(office, await snapshot(), user or wall.PUBLIC)
 
 
 @router.get("/chart/{key}")
@@ -614,11 +615,11 @@ async def get_odds(x_api_key: str = Header("")):
 
 @router.post("/spotlight")
 async def post_spotlight(request: Request):
-    """A member pushes a state to the TV's spotlight: a vote like any other change (the owner's applies at once).
-    Guests can't (the same rule as starting the wall or putting up pages)."""
-    user = wall.session_user(wall.auth.read_session(request))
+    """A member or friend pushes a state to the TV's spotlight: a vote like any other change (the owner's applies at once).
+    A public viewer can't."""
+    user = wall.viewer(request)
     if not user:
-        return JSONResponse({"error": "Members only."}, status_code=403 if wall.read_guest(request) else 401)
+        return JSONResponse({"error": "The watch party is invite-only."}, status_code=403 if wall.public_mode() else 401)
     try:
         body = await request.json()
     except ValueError:

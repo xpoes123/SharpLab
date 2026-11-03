@@ -289,7 +289,7 @@ def kw_market(t, k):
             "yes_bid_dollars": f"{k.px[t][0] / 100:.4f}", "yes_ask_dollars": f"{k.px[t][1] / 100:.4f}"}
 
 
-def test_members_see_opted_in_positions_guests_never(eenv, monkeypatch):
+def test_members_friends_and_public_all_see_markets_and_positions(eenv, monkeypatch):
     client, b, clock, k, optin, fk, cc = eenv
     opted_in_hansen(b, k, optin)
     poll(b)
@@ -301,15 +301,23 @@ def test_members_see_opted_in_positions_guests_never(eenv, monkeypatch):
     assert sga["markets"]                                                                   # and the public data, of course
     guest(client, monkeypatch)
     g = client.get("/api/v1/wall/election/state/GA")
-    assert g.status_code == 200 and "positions" not in g.json()                              # a guest: markets yes, positions no
+    assert g.status_code == 200 and {p["who"] for p in g.json()["positions"]} == {"Hansen"}  # a friend: like a member
     assert next(r for r in g.json()["races"] if r["id"] == "S-GA")["markets"]
-    assert "positions" not in client.get("/api/v1/wall/election/control/S").json()
+    assert "positions" in client.get("/api/v1/wall/election/control/S").json()
     m = client.get("/api/v1/wall/election/map").json()
-    assert m["member"] is False and m["races"] and "cands" not in m["races"][0]
+    assert m["member"] is True and m["public"] is False and m["races"] and "cands" not in m["races"][0]
     assert client.get("/api/v1/wall/election/chart/S-GA").status_code == 200
     client.cookies.clear()
-    for path in ("/map", "/state/GA", "/control/S", "/chart/S-GA", "/shapes"):
+    for path in ("/map", "/state/GA", "/control/S", "/chart/S-GA", "/shapes"):           # public mode off: nothing
         assert client.get("/api/v1/wall/election" + path).status_code == 401
+    monkeypatch.setenv("WALL_GUEST_OPEN", "1")                                               # public mode: every read
+    p = client.get("/api/v1/wall/election/state/GA").json()
+    assert {x["who"] for x in p["positions"]} == {"Hansen"} and all("uid" not in x for x in p["positions"])
+    assert next(r for r in p["races"] if r["id"] == "S-GA")["markets"]
+    m = client.get("/api/v1/wall/election/map").json()
+    assert m["member"] is False and m["public"] is True and m["owner"] is False
+    for path in ("/map", "/state/GA", "/control/S", "/chart/S-GA", "/shapes"):
+        assert client.get("/api/v1/wall/election" + path).status_code == 200, path
 
 
 def test_opt_out_drops_positions_from_the_sheet(eenv):
@@ -360,14 +368,21 @@ def test_spotlight_is_a_vote_for_members_at_once_for_the_owner(eenv, monkeypatch
     login(client, "100", "Owner")
     r = client.post("/api/v1/wall/election/spotlight", json={"state": "PA"})
     assert r.json()["status"] == "override" and done[-1] == {"op": "spotlight", "state": "PA"}
-    guest(client, monkeypatch)
+    guest(client, monkeypatch)                                                               # a friend: a vote, like a member
+    r = client.post("/api/v1/wall/election/spotlight", json={"state": "OH"})
+    assert r.status_code == 200 and r.json()["status"] == "open"
+    client.cookies.clear()
+    assert client.post("/api/v1/wall/election/spotlight", json={"state": "PA"}).status_code == 401
+    monkeypatch.setenv("WALL_GUEST_OPEN", "1")                                               # a public viewer: never
+    n = len(wall.hub.votes.props)
     assert client.post("/api/v1/wall/election/spotlight", json={"state": "PA"}).status_code == 403
+    assert len(wall.hub.votes.props) == n
     login(client, "1", "David")
     assert client.post("/api/v1/wall/election/spotlight", json={"state": "XX"}).status_code == 422
 
 
-def test_guests_cant_propose_a_spotlight_over_the_socket_either():
-    assert "spotlight" in wall.GUEST_OPS
+def test_public_viewers_cant_propose_over_the_socket_either():
+    assert not hasattr(wall, "GUEST_OPS")   # friends propose like members; public sockets can't send anything (test_wall_web)
 
 
 def test_spot_card_for_the_tv_needs_the_key_and_has_no_positions(eenv):

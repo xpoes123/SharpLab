@@ -6,7 +6,7 @@
 <meta name="theme-color" content="var(--bg)" />
 <title>SharpLab Wall</title>
 <link rel="stylesheet" href="/hqstyle.css" />
-<link rel="stylesheet" href="/wall.css?v=20261103s" />
+<link rel="stylesheet" href="/wall.css?v=20261103t2" />
 <link rel="stylesheet" href="/wall-bets.css?v=20261103c" />
 <link rel="stylesheet" href="/wall-election.css?v=20261103u" />
 <link rel="stylesheet" href="/wall-election-live.css?v=20261103a" />
@@ -14,10 +14,11 @@
 <body>
 <header>
   <div class="brand"><a href="/">Sharp<span>Lab</span> HQ</a></div>
-  <nav class="nav"><a href="/">Server</a><a href="/games">Games</a><a href="/wall.html" class="on">Wall</a><a href="https://discord.gg/zWmTnc8z" target="_blank" rel="noopener" class="nav-discord">Discord ↗</a></nav>
+  <nav class="nav" id="topNav" hidden><a href="/">Server</a><a href="/games">Games</a><a href="/wall.html" class="on">Wall</a></nav>
   <div id="navRight"></div>
 </header>
 <main id="wall">
+  <p id="publicNote" class="public-note" hidden>Live election data · watch party is invite-only</p>
   <section id="gate" class="gate" hidden aria-labelledby="gateTitle">
     <div class="gate-card">
       <p class="gate-kicker">SharpLab Wall</p>
@@ -43,8 +44,7 @@
         <p id="nickErr" class="gate-err" role="alert"></p>
       </form>
 
-      <p id="gateRoles" class="gate-roles" hidden>Guests can watch, chat and vote. Discord members can also change what's on the TV.</p>
-      <p class="gate-roles"><a href="https://discord.gg/zWmTnc8z" target="_blank" rel="noopener">Join the SharpLab Discord ↗</a> — to chat with everyone after tonight, and to log in as a member.</p>
+      <p id="gateRoles" class="gate-roles" hidden>With this link you can watch, chat, vote and change what's on the TV — the same as a Discord member.</p>
     </div>
   </section>
 
@@ -131,8 +131,8 @@
   <aside id="elecSheet" class="es-sheet" hidden aria-hidden="true" aria-label="State results and markets"></aside>
 </main>
 <script src="/vendor/hls.min.js"></script>
-<script src="/wall.js?v=20261103s"></script>
-<script src="/wall-bets.js?v=20261103d"></script>
+<script src="/wall.js?v=20261103t2"></script>
+<script src="/wall-bets.js?v=20261103tier"></script>
 <script src="/wall-election.js?v=20261103u"></script>
 <script src="/wall-election-live.js?v=20261103q"></script>
 </body>
