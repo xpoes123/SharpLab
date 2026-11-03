@@ -1,5 +1,5 @@
-"""The overlay's bets badges, rendered for real (qml6 offscreen, Preview.qml against a throwaway server): they draw
-without QML errors and only when bets are shown. Skipped where qml6 isn't installed."""
+"""The bets in the L layout (the sidebar's Bets section + ticker line), rendered for real (qml6 offscreen, Preview.qml
+against a throwaway server): they draw without QML errors and only when bets are shown. Skipped where qml6 isn't installed."""
 import json
 import shutil
 import subprocess

@@ -337,3 +337,83 @@ def test_bands_and_bets_carry_on(tmp_path, monkeypatch):
     tv._app_at = 0
     tv.tick()
     assert c.get("/i/tv/bands").json()["on"] is True
+
+
+# ---- bets live in the L layout -----------------------------------------------------------------------------------------
+def test_one_or_four_tiles_bring_the_l_bar_up_for_bets(tmp_path):
+    from tests.test_wall_service import inst
+    i, d, clock = inst(tmp_path, {"nfl": board("nfl")})
+    i.start(urls=["https://a.tv"])
+    i.bets_lbar(True, 100)
+    assert i.auto_lbar and d.overlays[-1] == ("", True)       # re-tiled into the L-bar's corner
+    i.bets_lbar(False, 110)
+    assert i.auto_lbar                                          # a quiet spell doesn't flap it
+    i.bets_lbar(False, 131)
+    assert not i.auto_lbar and d.overlays[-1] == ("", False)
+    i.overlay("lbar", True)
+    i.bets_lbar(True, 200)
+    assert not i.auto_lbar                                      # the L-bar is already up
+    i.overlay("", False)
+    i.set_tile(1, "https://b.tv")
+    i.bets_lbar(True, 300)
+    assert not i.auto_lbar                                      # 2 tiles: the bands carry the bets
+
+
+def test_bets_payload_carries_ticker_and_auto_lbar(tmp_path, monkeypatch):
+    app, sync, c = _app(tmp_path, monkeypatch, lbar=False)
+    c.post("/i/tv/start", json={"urls": [url("nfl", "bengals")]})
+    v = c.get("/i/tv/api/overlay/bets").json()
+    assert v["ticker"] is False and v["auto_lbar"] is False
+    assert c.post("/sync", json={"ticker": True}).json()["ticker"] is True
+    assert c.get("/i/tv/api/overlay/bets").json()["ticker"] is True and SyncStore(tmp_path / "sync.json").ticker
+    assert c.post("/sync", json={"ticker": "yes"}).status_code == 422
+
+
+@pytest.mark.skipif(shutil.which("qml6") is None, reason="qml6 not installed")
+def test_band_layer_carries_the_bets(tmp_path):
+    """2-up, no L-bar: the bets go to the header chips + the bottom band, and draw without QML errors."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+
+    s, tape = Seq(board("nfl")), ScoreTape()
+    view(s, tape, 900)
+    bands = view(s, tape, 1000, urls=[url("nfl", "bills"), url("nfl", "bengals")], live_ids=[BAL_BUF, TEN_CIN])
+    rows = [{"who": "David", "side": "YES", "label": "BUF −3.5", "entry": 42, "mark": 51, "dir": "up", "pct": 21, "size": "50+ ct"}]
+
+    def bets(show):
+        return {"show": show, "n": 2, "view": "", "default": 45, "delays": {}, "on": True, "ticker": False, "auto_lbar": False,
+                "tiles": [{"i": 0, "delay": 45, "src": "default", "label": "BAL @ BUF", "rows": rows}, {"i": 1, "delay": 45, "rows": []}]}
+
+    state = {"show": True}
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = bands if self.path.endswith("/bands") else bets(state["show"]) if self.path.endswith("/bets") else {}
+            b = json.dumps(body).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b)
+
+        def log_message(self, *a):
+            pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def render(name):
+        out = tmp_path / f"{name}.png"
+        r = subprocess.run(["qml6", str(QML / "Preview.qml"), "--", "--layout", "none", "--size", "1920x1080",
+                            "--bets", f"http://127.0.0.1:{srv.server_port}/i/tv", "--out", str(out), "--wait", "2500"],
+                           env={"QT_QPA_PLATFORM": "offscreen", "QT_FORCE_STDERR_LOGGING": "1", "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+                           capture_output=True, text=True, timeout=30)
+        return out, [l for l in r.stderr.splitlines() if "Error" in l or "Unable to assign" in l or "is not defined" in l]
+
+    try:
+        on, e1 = render("on")
+        state["show"] = False
+        off, e2 = render("off")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert e1 == [] and e2 == [] and on.read_bytes() != off.read_bytes()
