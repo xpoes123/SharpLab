@@ -75,6 +75,7 @@ COGS = [
     "bot.cogs.rosters",
     "bot.cogs.prefix",
     "bot.cogs.casino",
+    "bot.cogs.wall",
     "bot.cogs.cards",
     "bot.cogs.trading",
     "bot.cogs.baccarat",
