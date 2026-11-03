@@ -40,6 +40,11 @@ _PARAMS = {
     "medium": (9, (8, 16)),
     "hard":   (10, (13, 26)),
 }
+# Off-rotation big board (not in DIFFICULTIES, so the rotation cycle is untouched) — scheduled by a
+# one-off override in shared/daily.py. difficulty → (size, exit_row, cars, (lo, hi), attempts).
+# ponytail: on-demand 8×8 generation is slow (pure-Python BFS) — attempts kept low; pre-generate
+# offline + insert into daily_puzzles if you want a guaranteed-deep board.
+_BIG = {"expert": (8, 3, 16, (30, 60), 12)}
 
 
 # ── board / state helpers ─────────────────────────────────────────────────────
@@ -63,17 +68,17 @@ def _occupied(cars: list[dict], state: tuple, exclude: int) -> set:
     return occ
 
 
-def _solved(cars: list[dict], state: tuple, target: int) -> bool:
+def _solved(cars: list[dict], state: tuple, target: int, size: int = SIZE) -> bool:
     car = cars[target]
-    return state[target] + car["len"] - 1 == SIZE - 1     # red car reached the right edge
+    return state[target] + car["len"] - 1 == size - 1     # red car reached the right edge
 
 
-def _neighbors(cars: list[dict], state: tuple, target: int):
+def _neighbors(cars: list[dict], state: tuple, target: int, size: int = SIZE):
     """Yield (next_state, (car_id, delta)) for every legal single slide (any distance)."""
     for i, car in enumerate(cars):
         occ = _occupied(cars, state, i)
         cur = state[i]
-        maxv = SIZE - car["len"]
+        maxv = size - car["len"]
         # slide toward larger var (right/down), then smaller — stop at first blocked cell
         for step in (1, -1):
             v = cur + step
@@ -93,20 +98,21 @@ def solve(board: dict, want_path: bool = False):
     cars = board["cars"]
     target = next(i for i, c in enumerate(cars) if c["id"] == board.get("target", TARGET))
     start = tuple(_var(c) for c in cars)
-    if _solved(cars, start, target):
+    size = board.get("size", SIZE)
+    if _solved(cars, start, target, size):
         return (0, []) if want_path else 0
     seen = {start}
     q = deque([start])
     parent = {start: None}
-    bound = 50_000    # cap the search so a pathological board is rejected fast, not explored forever
+    bound = 50_000 if size == SIZE else 400_000    # cap the search so a pathological board is rejected fast, not explored forever
     while q and len(seen) < bound:
         state = q.popleft()
-        for ns, mv in _neighbors(cars, state, target):
+        for ns, mv in _neighbors(cars, state, target, size):
             if ns in seen:
                 continue
             seen.add(ns)
             parent[ns] = (state, mv)
-            if _solved(cars, ns, target):
+            if _solved(cars, ns, target, size):
                 depth = 0
                 path = []
                 cur = ns
@@ -122,37 +128,37 @@ def solve(board: dict, want_path: bool = False):
 
 
 # ── generation ────────────────────────────────────────────────────────────────
-def _try_board(rng: random.Random, n_cars: int) -> dict | None:
+def _try_board(rng: random.Random, n_cars: int, size: int = SIZE, exit_row: int = EXIT_ROW) -> dict | None:
     """Random valid packing with the target on the exit row. No solvability guarantee here —
     build_solvable filters with the BFS solver."""
     occ: set = set()
     cars: list[dict] = []
     # target: horizontal len-2 on the exit row, left of the exit
-    tc = rng.randint(0, 3)
+    tc = rng.randint(0, size // 2)
     for k in range(2):
-        occ.add((EXIT_ROW, tc + k))
-    cars.append({"id": TARGET, "r": EXIT_ROW, "c": tc, "len": 2, "orient": "h"})
-    names = iter("ABCDEFGHIJKLMNOP")
+        occ.add((exit_row, tc + k))
+    cars.append({"id": TARGET, "r": exit_row, "c": tc, "len": 2, "orient": "h"})
+    names = iter("ABCDEFGHIJKLMNOPQRSTUVWYZ")
     tries = 0
-    while len(cars) < n_cars and tries < 400:
+    while len(cars) < n_cars and tries < 400 * size:
         tries += 1
         orient = rng.choice(["h", "v"])
         length = rng.choice([2, 2, 3])
         if orient == "h":
-            r = rng.randint(0, SIZE - 1)
-            c = rng.randint(0, SIZE - length)
+            r = rng.randint(0, size - 1)
+            c = rng.randint(0, size - length)
             cells = [(r, c + k) for k in range(length)]
         else:
-            r = rng.randint(0, SIZE - length)
-            c = rng.randint(0, SIZE - 1)
+            r = rng.randint(0, size - length)
+            c = rng.randint(0, size - 1)
             cells = [(r + k, c) for k in range(length)]
         if any(cell in occ for cell in cells):
             continue
-        if r == EXIT_ROW and orient == "h":
+        if r == exit_row and orient == "h":
             continue  # keep the exit row clear except the target
         occ.update(cells)
         cars.append({"id": next(names), "r": r, "c": c, "len": length, "orient": orient})
-    return {"size": SIZE, "exit_row": EXIT_ROW, "target": TARGET, "cars": cars}
+    return {"size": size, "exit_row": exit_row, "target": TARGET, "cars": cars}
 
 
 def build_solvable(seed: int, difficulty: str) -> dict:
@@ -161,12 +167,16 @@ def build_solvable(seed: int, difficulty: str) -> dict:
     it returns the best solvable board found (closest to the range), and — as a last resort — a
     hand-built trivially-solvable board. NEVER raises and never runs unbounded (this used to block
     the web event loop). Still deterministic: same (seed, difficulty) → same board."""
-    n_cars, (lo, hi) = _PARAMS.get(difficulty, _PARAMS["medium"])
+    size, exit_row, attempts = SIZE, EXIT_ROW, 150
+    if difficulty in _BIG:
+        size, exit_row, n_cars, (lo, hi), attempts = _BIG[difficulty]
+    else:
+        n_cars, (lo, hi) = _PARAMS.get(difficulty, _PARAMS["medium"])
     best = None
     best_opt = -1
-    for attempt in range(150):
+    for attempt in range(attempts):
         rng = random.Random((seed + attempt * 2654435761) & 0xFFFFFFFF)
-        board = _try_board(rng, n_cars)
+        board = _try_board(rng, n_cars, size, exit_row)
         opt = solve(board)
         if opt is None:
             continue
@@ -207,7 +217,7 @@ def _apply(cars_pos: dict, board: dict, car_id: str, delta: int) -> bool:
     if car is None or delta == 0:
         return False
     cur = cars_pos[car_id]
-    maxv = SIZE - car["len"]
+    maxv = board.get("size", SIZE) - car["len"]
     target = cur + delta
     if not (0 <= target <= maxv):
         return False
@@ -238,7 +248,7 @@ def validate(puzzle: dict, solution: dict) -> dict | None:
         if not _apply(pos, puzzle, str(mv[0]), int(mv[1])):
             return None
     car = next(c for c in puzzle["cars"] if c["id"] == puzzle["target"])
-    if pos[car["id"]] + car["len"] - 1 != SIZE - 1:
+    if pos[car["id"]] + car["len"] - 1 != puzzle.get("size", SIZE) - 1:
         return None
     return {"solved": True, "primary": len(moves), "secondary": 0}
 

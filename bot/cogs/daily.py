@@ -51,6 +51,15 @@ def _fmt_ms(ms: int) -> str:
     return f"{s // 60}:{s % 60:02d}"
 
 
+def _expert_blurb(day: str, difficulty: str) -> str:
+    if difficulty != "expert":
+        return ""
+    if date.fromisoformat(day).weekday() == 6:
+        return "\n\n🔥 **Super-hard Sunday** — a big 8×8 expert board. Good luck."
+    return ("\n\n🔥 **Sneak peek:** from now on, **every Sunday is a super-hard puzzle** — a big 8×8 "
+            "expert board. Today's a taste of what's coming.")
+
+
 class Daily(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -114,7 +123,8 @@ class Daily(commands.Cog):
             e = discord.Embed(
                 title=f"🧩 Daily #{number} — {game.NAME} is live",
                 description=(f"Today's **{puz['difficulty']}** puzzle — same board for everyone, "
-                            f"fastest solve wins.\n\n**[▶ Play]({SITE})**"),
+                            f"fastest solve wins.{_expert_blurb(day, puz['difficulty'])}"
+                            f"\n\n**[▶ Play]({SITE})**"),
                 colour=0xBB9AF7)
             if board:
                 e.add_field(name=f"Yesterday's final standings — Daily #{daily.puzzle_number(prev)}",

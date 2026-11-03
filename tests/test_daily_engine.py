@@ -86,3 +86,10 @@ def test_placement_coins():
     assert daily.placement_coins(7, True) == 100
     assert daily.placement_coins(25, True) == 25
     assert daily.placement_coins(1, False) == 0
+
+
+def test_super_hard_sundays_forward_only():
+    assert daily.schedule("2026-11-03") == ("rushhour", "expert")   # sneak peek
+    assert daily.schedule("2026-11-08") == ("rushhour", "expert")   # a Sunday
+    assert daily.schedule("2026-11-01")[1] != "expert"             # past Sunday untouched
+    assert daily.schedule("2026-11-04")[1] != "expert"
