@@ -40,6 +40,16 @@ def resolve(host: str) -> list:
     return socket.getaddrinfo(host, None)
 
 
+def tv_active(api: str) -> str | None:
+    """What the living-room TV is running (TV OS /healthz "active"), or None when it's idle. Unreachable = idle."""
+    import json, urllib.request
+    try:
+        with urllib.request.urlopen(api.rstrip("/") + "/healthz", timeout=2) as r:
+            return json.load(r).get("active")
+    except (OSError, ValueError):
+        return None
+
+
 def browserish(request: Request) -> bool:
     """A request a web page made: the tiles are arbitrary sites in Chromium on this box, so a page's no-CORS POST (or a
     DNS-rebound one) would arrive from loopback. Real callers (the TV router's urllib, the qml6 overlay's XHR) send no
@@ -222,6 +232,10 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         tiles = d.get("tiles", 4)
         if not isinstance(tiles, int) or not 1 <= tiles <= 4:
             raise ValueError("tiles is 1–4")
+        if i.headless and not i.urls:   # anyone may start the discord wall, but only while nobody is using the TV
+            busy = await asyncio.to_thread(tv_active, cfg.tv_overlay_api)
+            if busy:
+                raise WallError(f"the TV is in use ({busy}) — try again when it's free")
         if i.headless and urls:
             await asyncio.to_thread(lambda: [public_url(u) for u in urls])
         return await asyncio.to_thread(i.start, preset=preset, urls=urls, live=d.get("live") or "", tiles=tiles,

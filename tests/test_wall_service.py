@@ -389,6 +389,7 @@ def test_capture_commands(tmp_path):
 def api(tmp_path, monkeypatch):
     fake_dns = {"a.tv": "93.184.216.34", "b.tv": "93.184.216.35", "lan.example": "192.168.1.1", "ts.example": "100.81.31.34", "localhost": "127.0.0.1"}
     monkeypatch.setattr("wall.server.resolve", lambda h: [(2, 1, 6, "", (fake_dns.get(h) or h, 0))])
+    monkeypatch.setattr("wall.server.tv_active", lambda api: None)
     cfg = Cfg({"WALL_STATE_DIR": str(tmp_path), "WALL_API_TOKEN": "s3cret", "WALL_IMPORT_FROM": ""})
     store = PresetStore(str(tmp_path))
     data = {"nfl": board("nfl")}
@@ -470,3 +471,15 @@ def test_api_flow(api):
     assert c.get("/hls/discord/seg000001.ts").content[:1] == b"\x47"
     assert c.get("/hls/discord/..%2Fwall.json").status_code == 404 and c.get("/hls/tv/index.m3u8").status_code == 404
     assert not c.post("/i/discord/stop").json()["running"]
+
+
+def test_discord_wall_starts_only_while_the_tv_is_idle(api, monkeypatch):
+    app, _ = api
+    c = client(app, "100.81.31.34", "s3cret")
+    monkeypatch.setattr("wall.server.tv_active", lambda api: "football")
+    r = c.post("/i/discord/start", json={"urls": ["https://a.tv"]})
+    assert r.status_code == 409 and "TV is in use" in r.json()["error"]
+    monkeypatch.setattr("wall.server.tv_active", lambda api: None)
+    assert c.post("/i/discord/start", json={"urls": ["https://a.tv"]}).json()["running"]
+    monkeypatch.setattr("wall.server.tv_active", lambda api: "football")   # already running: changes still go through
+    assert c.post("/i/discord/start", json={"urls": ["https://b.tv"]}).status_code == 200
