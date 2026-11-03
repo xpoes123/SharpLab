@@ -89,7 +89,7 @@ function ruleText() {
     return "Crack the secret code in as few guesses as you can — everyone gets today's code; fewest guesses wins, time breaks ties.";
   return isRush()
     ? "Slide the red car out through the exit in as few moves as you can — everyone gets today's board; time breaks ties."
-    : "Fence the pig in as few moves as you can — everyone gets today's board; time breaks ties.";
+    : "Fence the pig in as fast as you can — everyone gets today's board; fewest fences breaks ties.";
 }
 
 // ── Nav (mirrors threecardpoker.js) ──
