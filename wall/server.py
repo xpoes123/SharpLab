@@ -43,6 +43,7 @@ from wall.turnout import Turnout
 from wall.events import Events
 from wall.director import Director, summary as night_summary
 from wall import onair, spectrum, streams
+from wall.streamdir import StreamDirector
 from wall.breaks import BreakLog
 
 log = logging.getLogger("wall.server")
@@ -225,6 +226,13 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
     important = important_check(cfg.web_url, cfg.web_key) if cfg.web_url and cfg.web_key else None
     policies = {k: onair.Policy(adw_file.read_text().strip() == "1" if adw_file.exists() else cfg.adwatch, important)
                 for k in instances}
+    sdir_file = cfg.state / "stream-director-on"   # the owner's auto-director toggle (default on: it acts only with ad-skip on)
+    sdir = StreamDirector(urllib_http(cfg.web_url, cfg.web_key, timeout=6) if cfg.web_url and cfg.web_key else None,
+                          on=sdir_file.read_text().strip() != "0" if sdir_file.exists() else True)
+
+    def sdir_view() -> dict:
+        tv = instances.get("tv")
+        return sdir.view(bool(tv is not None and sdir.active(tv, policies.get("tv"))))
 
     def onair_state(i: Instance) -> dict:
         src = i.source if i.follow and i.source is not None else i   # a mirror shows the TV's policy
@@ -235,6 +243,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
                            "pool": [{"url": u, **airs.view(u)} for u in airs.fresh() if u not in on_wall][:12]}}
         if onair.election_mode(i):   # the Spectrum lineup: labels for the watch page + the web's gate; adwatch listens to it
             out["spectrum"] = spectrum_view()
+            out["stream_director"] = sdir_view()   # Jev on tiles 3–4 + the sound (wall/streamdir.py), the TV's
         return out
 
     def spectrum_view() -> dict:
@@ -323,6 +332,31 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
                 except Exception as e:  # noqa: BLE001
                     log.warning("director: %s", e)
 
+        async def sdir_ticker():   # election night: Jev runs the TV's stream tiles 3–4 + the sound (wall/streamdir.py)
+            def night() -> str:
+                if not results.updated:
+                    return ""
+                return night_summary(results.snapshot(), turnout.snapshot(), exitpoll.snapshot(), odds.view(), time.time())
+            while True:
+                await asyncio.sleep(5)
+                tv = instances.get("tv")
+                if not (tv and tv.urls):
+                    continue
+                try:
+                    acts, note = await asyncio.to_thread(sdir.tick, tv, policies["tv"], airs, list(favs.urls), night,
+                                                         list(chat.messages))
+                    for a in acts:
+                        log.info("%s", a)
+                    if note:   # into the watch-page chat: the web says each new notice of the wall it reads
+                        for i in instances.values():
+                            if i.urls:
+                                i._say(note)
+                                i._bump()
+                    if acts:
+                        tv._bump()
+                except Exception as e:  # noqa: BLE001
+                    log.warning("stream director: %s", e)
+
         async def spot_ticker():   # election night: the TV spotlight's card, refreshed from the web while it shows
             while True:
                 await asyncio.sleep(1)
@@ -368,7 +402,8 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         runner.start()
         tasks = [asyncio.create_task(ticker()), asyncio.create_task(chat_ticker()), asyncio.create_task(bets_ticker()),
                  asyncio.create_task(spot_ticker()), asyncio.create_task(odds_ticker()),
-                 asyncio.create_task(events_ticker()), asyncio.create_task(director_ticker()), asyncio.create_task(streams_ticker())]
+                 asyncio.create_task(events_ticker()), asyncio.create_task(director_ticker()), asyncio.create_task(streams_ticker()),
+                 asyncio.create_task(sdir_ticker())]
         yield
         for task in tasks:
             task.cancel()
@@ -382,6 +417,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
     app.state.spot = spot
     app.state.odds = odds
     app.state.board, app.state.favs, app.state.policies = airs, favs, policies
+    app.state.sdir = sdir
 
     @app.middleware("http")
     async def gate(request: Request, call_next):
@@ -590,6 +626,21 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
             log.warning("adwatch toggle: %s", e)
         t._bump()
         inst(name)._bump()
+        return inst(name).state()
+
+    @app.post("/i/{name}/director")
+    async def set_director(name: str, request: Request) -> dict:
+        """{on}: the stream director (wall/streamdir.py) on / off — the owner's toggle, kept across restarts."""
+        d = await body(request)
+        if not isinstance(d.get("on"), bool):
+            raise ValueError("on is a boolean")
+        sdir.on = d["on"]
+        try:
+            sdir_file.write_text("1" if d["on"] else "0")
+        except OSError as e:
+            log.warning("director toggle: %s", e)
+        for i in instances.values():
+            i._bump()
         return inst(name).state()
 
     @app.post("/i/{name}/favorite")

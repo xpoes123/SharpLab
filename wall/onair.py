@@ -67,12 +67,15 @@ class Board:
             soon = s.get("soon")
             soon = round(max(0.0, min(1.0, float(soon))), 2) \
                 if isinstance(soon, (int, float)) and not isinstance(soon, bool) else None
+            imp = s.get("important")   # P(something can't-miss is on now), from the same classify call (wall/streamdir.py)
+            imp = round(max(0.0, min(1.0, float(imp))), 2) \
+                if isinstance(imp, (int, float)) and not isinstance(imp, bool) else None
             prev = self.streams.get(url[:500], {}).get("label")
             if prev != s["label"]:
                 self.breaks.note(url[:500], prev, s["label"], min(since, now))
             self.streams[url[:500]] = {"label": s["label"], "confidence": round(max(0.0, min(1.0, conf)), 2),
                                        "since": min(since, now), "tail": tail[-160:], "recent": recent[-1200:],
-                                       "soon": soon, "at": now}
+                                       "soon": soon, "important": imp, "at": now}
             n += 1
         return n
 
@@ -161,6 +164,7 @@ class Policy:
         self.pre: dict | None = None          # a preemptive sound move waiting for its break: {from, at}
         self.no_pre: dict[str, float] = {}    # stream → no preempting it until
         self.checked: dict[str, float] = {}   # stream → last "important?" check
+        self.sound_hand = -1e9                # when someone last moved the sound (the stream director waits HAND_PAUSE_S)
 
     def set_on(self, on: bool) -> None:
         self.on = on
@@ -194,6 +198,7 @@ class Policy:
                 self.orig.pop(i, None)
             if s != self.seen_sound and 0 <= s < len(urls):   # someone moved the sound
                 self.pref, self.auto_sound, self.pre = urls[s], False, None
+                self.sound_hand = now
         self.seen, self.seen_sound = urls, s
 
     def tick(self, inst, board: Board, favs: list[str], now: float) -> list[str]:

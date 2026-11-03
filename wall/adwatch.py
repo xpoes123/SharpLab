@@ -317,21 +317,21 @@ class Watcher:
         self.streams: dict[str, Stream] = {}
         self.pool_live: dict[str, tuple[float, bool]] = {}
 
-    def _classify_web(self, url: str, text: str) -> tuple[str, float, float | None]:
-        """(label, confidence, soon): soon = P(a break within the next minute) from the last ~20 s, None if unanswered."""
+    def _classify_web(self, url: str, text: str) -> tuple[str, float, float | None, float | None]:
+        """(label, confidence, soon, important): soon = P(a break within the next minute) from the last ~20 s, important =
+        P(something viewers shouldn't miss is on now) — both from the same call, None if unanswered."""
         if not (self.web and self.key):
-            return "unknown", 0.0, None
+            return "unknown", 0.0, None, None
         s = self.streams.get(url)
         try:
             r = post_json(self.web + "/api/v1/wall/election/classify",
                           {"stream": url, "text": text, "recent": recent_text(s.text) if s else ""},
                           {"X-Api-Key": self.key}, timeout=12)
-            soon = r.get("soon")
-            return r.get("label", "unknown"), float(r.get("confidence") or 0), \
-                float(soon) if isinstance(soon, (int, float)) and not isinstance(soon, bool) else None
+            num = lambda v: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None  # noqa: E731
+            return r.get("label", "unknown"), float(r.get("confidence") or 0), num(r.get("soon")), num(r.get("important"))
         except Exception as e:  # noqa: BLE001
             log.info("classify: %s", e)
-            return "unknown", 0.0, None
+            return "unknown", 0.0, None, None
 
     def wanted(self) -> list[str]:
         """Streams on the walls first (and the originals the policy swapped away, and the favorites), then the live
@@ -393,11 +393,12 @@ class Watcher:
         got = self.classify(s.url, text[-2000:]) if text.strip() else ("unknown", 0.0)
         lab, conf = got[0], got[1]
         soon = got[2] if len(got) > 2 else None   # passed through: the wall's policy may move the sound before the break
+        imp = got[3] if len(got) > 3 else None    # and the stream director (wall/streamdir.py) may jump to a can't-miss moment
         if lab not in ("coverage", "ad", "break", "offtopic"):
-            lab, conf, soon = "unknown", 0.0, None
+            lab, conf, soon, imp = "unknown", 0.0, None, None
         if lab != s.status["label"]:
             s.status["since"] = now
-        s.status.update(label=lab, confidence=round(conf, 2), text_tail=text[-160:], soon=soon,
+        s.status.update(label=lab, confidence=round(conf, 2), text_tail=text[-160:], soon=soon, important=imp,
                         recent=recent_text(s.text)[-1200:])
         s.last_classify = now
 

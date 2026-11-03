@@ -230,6 +230,9 @@ def noop(a: dict, wall: dict | None) -> str:
         return "" if any(r.get("i") == a["i"] for r in w.get("rotate") or []) else "That tile doesn't rotate."
     if op == "adwatch":
         return f"Auto ad-skip is already {'on' if a['on'] else 'off'}." if (w.get("adwatch") or {}).get("on") == a["on"] else ""
+    if op == "director":
+        return f"The auto-director is already {'on' if a['on'] else 'off'}." \
+            if (w.get("stream_director") or {}).get("on") == a["on"] else ""
     if op == "favorite":
         starred = a["url"] in (w.get("favorites") or [])
         return ("That's already a favorite." if a["on"] else "That isn't a favorite.") if starred == a["on"] else ""
@@ -293,6 +296,10 @@ def check_action(a: object) -> dict:
         if not isinstance(a.get("on"), bool):
             raise ValueError("on is true/false")
         return {"op": "adwatch", "on": a["on"]}
+    if op == "director":   # election night: Jev runs the stream tiles 3–4 + the sound (wall/streamdir.py) on / off
+        if not isinstance(a.get("on"), bool):
+            raise ValueError("on is true/false")
+        return {"op": "director", "on": a["on"]}
     if op == "favorite":   # star a stream (two at most): its tile goes back to it after a break; not up yet → tile 3 or 4
         if not isinstance(a.get("on"), bool):
             raise ValueError("on is true/false")
@@ -359,6 +366,8 @@ def describe(a: dict) -> str:
         return "put the default election screens back"
     if op == "adwatch":
         return f"turn auto ad-skip {'on' if a['on'] else 'off'}"
+    if op == "director":
+        return f"turn the auto-director {'on' if a['on'] else 'off'}"
     if op == "favorite":
         return f"{'star' if a['on'] else 'unstar'} {a.get('label') or a['url']}"
     if op == "rotate":
@@ -643,6 +652,8 @@ def _route(a: dict) -> tuple[str, str, dict]:
         return "POST", "/i/discord/default", {}
     if op == "adwatch":
         return "POST", "/i/discord/adwatch", {"on": a["on"]}
+    if op == "director":
+        return "POST", "/i/discord/director", {"on": a["on"]}
     if op == "favorite":
         return "POST", "/i/discord/favorite", {"url": a["url"], "on": a["on"]}
     if op == "rotate":
@@ -861,6 +872,8 @@ class Hub:
             return None, "You're muted for now."
         if a["op"] == "adwatch" and not self.is_admin(user["id"]):
             return None, "Only the owner and admins can switch auto ad-skip."
+        if a["op"] == "director" and not self.is_admin(user["id"]):
+            return None, "Only the owner and admins can switch the auto-director."
         owner = self.is_owner(user["id"])
         p, err = self.votes.propose(user, a, now, cfg()["vote_s"], owner=owner)
         if not p:

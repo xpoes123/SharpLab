@@ -189,7 +189,8 @@ def test_classify_answer_carries_soon_and_the_important_check(monkeypatch):
         if "now" in questions:
             return {"now": {"choice": "yes", "confidence": 0.9, "probabilities": {"yes": 0.9, "no": 0.1}}}
         return {"segment": {"choice": "coverage", "confidence": 0.95},
-                "soon": {"choice": "soon", "confidence": 0.88}}   # no probabilities: P(soon) from the confidence
+                "soon": {"choice": "soon", "confidence": 0.88},   # no probabilities: P(soon) from the confidence
+                "important": {"choice": "yes", "confidence": 0.6, "probabilities": {"yes": 0.83, "no": 0.17}}}
 
     async def llm(text):
         raise AssertionError("Jev was sure")
@@ -203,9 +204,10 @@ def test_classify_answer_carries_soon_and_the_important_check(monkeypatch):
     c = TestClient(app)
     h, path = {"X-Api-Key": "sekrit"}, "/api/v1/wall/election/classify"
     r = c.post(path, json={"stream": NBC, "text": "the long window ... stay with us", "recent": "stay with us"}, headers=h).json()
-    assert r == {"label": "coverage", "confidence": 0.95, "soon": 0.88, "src": "jev"}
+    assert r == {"label": "coverage", "confidence": 0.95, "soon": 0.88, "important": 0.83, "src": "jev"}
     state, qs, _ = sent[-1]
-    assert set(qs) == {"segment", "soon"} and set(qs["soon"]["criteria"]) == {"soon", "not"} and state.endswith("stay with us")
+    assert len(sent) == 1   # important rides along in the same Jev request
+    assert set(qs) == {"segment", "soon", "important"} and set(qs["important"]["criteria"]) == {"yes", "no"} and set(qs["soon"]["criteria"]) == {"soon", "not"} and state.endswith("stay with us")
     assert c.post(path, json={"check": "important", "stream": NBC, "text": "we can now project"}, headers=h).json() == \
         {"important": 0.9}
     assert sent[-1][2] <= 1.5 and set(sent[-1][1]["now"]["criteria"]) == {"yes", "no"}

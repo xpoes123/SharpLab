@@ -525,6 +525,19 @@ each checked live with `wall.streams.check` every 10 min), plus the live Spectru
 * State: `onair: [{label, confidence, since, tail, soon, clock} | null per tile]`, `favorites: [url]`, `adwatch: {on, orig: {tile:
   url}, pool: [{url, label, …}]}` (a mirror shows the TV's). The watch page shows "● on air" / "⏸ break" / "ad" per tile.
 
+**Stream director** (`wall/streamdir.py`): Jev runs the TV's stream tiles 3–4 and the sound while the TV wall is in
+election mode, ad-skip is on and the "Auto-director" toggle is on (`POST /i/{inst}/director {on}`, owner / admins;
+`$WALL_STATE_DIR/stream-director-on`, default on). Every 60 s: the fresh coverage streams (≥ 20 s, ≤ 12) go to
+`/api/v1/wall/election/direct` with a `question` as choices s1…s12 ("name (group) — saying, as of 30s ago: …"); the state =
+the night summary + what's on tiles 3–4 / the sound + the last 5 min of watch-party chat (aged, plain text, marked
+untrusted). Picks: top 2 (+0.08 for a favorite; a different Spectrum group / outlet when within 0.1). Sticky: a tile
+changes only for ≥ +0.2, after 4 min on the tile, 10 min after a hand change, never at a break (ad-skip's) or while its
+stream's `important` ≥ 0.5 (unknown = hold); the pick becomes the tile's new home. Sound: to the better of 3–4 for ≥ +0.2,
+2 min after its last move, not after a hand move (10 min), not mid-break, not mid-moment. Jump: a stream off the wall with
+`important` ≥ 0.8 (the classify call's third Jev question — no extra call) while both tiles are < 0.5 → onto the
+lower-rated unpaused tile with the sound at once + a "🎬 Switching to …" chat notice (≤ 1 / 3 min, ≤ 1 / stream / 10 min;
+chat never triggers a jump). State: `stream_director: {on, active, last: {t, picks: [{url, name, p}]}, next_in}`.
+
 ## `/wall` in Discord (`bot/cogs/wall.py`)
 
 `/wall start [preset]`, `/wall stop`, `/wall status`, `/wall set` (layout / board / sound / tile from a live game, a
