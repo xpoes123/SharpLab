@@ -15,6 +15,7 @@ from wall.engine import Driver, Session, sound_tile
 from wall.headless import Headless, free_vram_mb
 from wall.live import LEAGUES, REFRESH_S, LiveRun, Scores, carries, matchup
 from wall.presets import PresetStore, check_url
+from wall.rotate import Rotation, next_url, screen
 
 log = logging.getLogger("wall.instance")
 APP_POLL_S = 2.0   # how often a TV wall asks the TV OS what it shows
@@ -46,6 +47,7 @@ class Instance:
         self.lock = threading.RLock()
         self.urls: list[str] = []
         self.live: LiveRun | None = None
+        self.rot = Rotation()                   # election data tiles rotating (wall/rotate.py)
         self.preset_name, self.preset = "", -1
         self.board, self.visible, self.layout, self.matchup, self.view = "", False, "lbar", "", ""
         self.ov_rev = 0
@@ -105,6 +107,8 @@ class Instance:
                    "started": self.started, "error": self.error, "stopped": self.stopped_why,
                    "mirror": self.follow, "notice": self.notice, "origin": self.origin,
                    "tv_app": self.app if self.host_app is not None else None, "overlay_on": self.overlay_on()}
+            rot = self.source.rot if self.follow and self.source is not None else self.rot   # mirroring: the TV's clocks
+            out["rotate"] = rot.view(self.urls, self.clock())
             if self.sync is not None:
                 out["sync"] = self.sync_view()
             if self.headless:
@@ -168,6 +172,7 @@ class Instance:
                     self._bump()
                     raise WallError(f"headless session failed: {e}") from e
             self.urls, self.live = urls, run
+            self.rot.reset()
             self.preset_name = p["name"] if p else ("Live " + LEAGUES[live] if live else "Custom")
             self.preset = self.store.presets.index(p) if p else -1
             self.started, self.last_fetch, self.error, self.stopped_why = self.clock(), 0.0, "", ""
@@ -199,6 +204,7 @@ class Instance:
             self.headless.stop()
             self.session.env = {}
         self.urls, self.live = [], None
+        self.rot.reset()
         self.auto_lbar = False
         self.preset_name, self.preset = "", -1
         self.board, self.visible, self.matchup, self.view = "", False, "", ""
@@ -238,6 +244,7 @@ class Instance:
                 raise WallError("tile index out of range (at most 4 tiles)")
             if self.live:
                 self.live.set_by_hand(i)
+            self.rot.hold(i, self.clock())
             self._bump()
             return self.state()
 
@@ -251,6 +258,7 @@ class Instance:
             self.driver.remove_tile(i)
             if self.live:
                 self.live.remove(i)
+            self.rot.reset()
             self._bump()
             return self.state()
 
@@ -267,6 +275,7 @@ class Instance:
                 self.driver.sound = j if s == i else (s - 1 if i < s <= j else s + 1 if j <= s < i else s)
                 if self.live:
                     self.live.move(i, j)
+                self.rot.reset()
                 self._bump()
             return self.state()
 
@@ -294,6 +303,25 @@ class Instance:
             if not (self.live and i < len(self.live.games) and self.live.games[i] is not None):
                 raise WallError("only a live game's tile can be pinned")
             self.live.pinned ^= {i}
+            self._bump()
+            return self.state()
+
+    def rotate(self, i: int, act: str) -> dict:
+        """A rotating data tile: "hold" keeps its screen, "next" moves it on now; either way it then stays put HOLD_S."""
+        with self.lock:
+            self._need()
+            self._own()
+            if not (0 <= i < len(self.urls) and screen(self.urls[i])):
+                raise WallError("that tile doesn't rotate")
+            if act == "next":
+                url = next_url(self.urls, i)
+                if not url:
+                    raise WallError("no other screen to show")
+                self.urls[i] = url
+                self.driver.set_tile(i, url)
+            elif act != "hold":
+                raise WallError("act is hold or next")
+            self.rot.hold(i, self.clock())
             self._bump()
             return self.state()
 
@@ -685,6 +713,13 @@ class Instance:
                     log.info("%s auto-stop: %s", self.name, why)
                     self._stop_locked(f"auto-stopped: {why}")
                     return
+            if not self.follow:   # a mirror copies the TV's rotation instead
+                swaps = self.rot.due(self.urls, now)
+                for i, url in swaps:
+                    self.urls[i] = url
+                    self.driver.set_tile(i, url)
+                if swaps:
+                    self._bump()
             lv = self.live
             if not lv:
                 return
