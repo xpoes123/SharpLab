@@ -26,3 +26,12 @@ def test_summary_and_ranked_rotation():
     assert rotate.next_url([B + "races", B + "map?view=H"], 1, now) == B + "map?view=S"         # its next, kinds kept apart
     assert rotate.next_url([B + "turnout", B + "map?view=H"], 0, now + 999) == B + "exitpoll"   # stale → the plain cycle
     rotate.set_rank([], 0.0)
+
+
+def test_stays_unless_clearly_better():
+    now = 1_800_000_000.0
+    rotate.set_rank(["turnout", "races", "exitpoll"], now, {"turnout": 0.58, "races": 0.41, "exitpoll": 0.01})
+    assert rotate.next_url([B + "turnout", B + "races"], 0, now) is None                     # nothing beats turnout: stay
+    assert rotate.next_url([B + "exitpoll", B + "races"], 0, now) == B + "turnout"           # 0.58 vs 0.01: switch
+    assert rotate.next_url([B + "turnout", B + "races"], 0, now, force=True) == B + "exitpoll"   # ⏭ next always moves
+    rotate.set_rank([], 0.0)

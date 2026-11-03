@@ -84,5 +84,5 @@ class Director:
             return
         probs = data.get("probabilities") if status == 200 and isinstance(data, dict) else None
         if isinstance(probs, dict) and probs:
-            rotate.set_rank(sorted((s for s in OPTIONS if s in probs), key=lambda s: -float(probs[s] or 0)), self.clock())
+            rotate.set_rank(sorted((s for s in OPTIONS if s in probs), key=lambda s: -float(probs[s] or 0)), self.clock(), probs)
             log.info("director: %s", ", ".join(f"{s} {probs[s]:.2f}" for s in rotate.RANK["order"][:3]))

@@ -9,11 +9,12 @@ SCREENS = ("map?view=S", "map?view=H", "map?view=G", "races", "turnout", "exitpo
 EVERY_S, HOLD_S = 60.0, 300.0
 MARK = "/p/election/"
 STALE_S = 180.0
-RANK: dict = {"order": [], "at": 0.0}   # wall/director.py: Jev's preferred screens, best first (empty / stale = plain order)
+STAY_BY = 0.15   # with Jev's ranking fresh, a tile keeps its screen unless an allowed one beats it by this much
+RANK: dict = {"order": [], "probs": {}, "at": 0.0}   # wall/director.py: Jev's preferred screens, best first (empty / stale = plain order)
 
 
-def set_rank(order: list[str], at: float) -> None:
-    RANK.update(order=[s for s in order if s in SCREENS], at=at)
+def set_rank(order: list[str], at: float, probs: dict | None = None) -> None:
+    RANK.update(order=[s for s in order if s in SCREENS], at=at, probs=dict(probs or {}))
 
 
 def screen(url: str) -> str | None:
@@ -29,7 +30,7 @@ def kind(s: str | None) -> str | None:
     return s.split("?")[0] if s else None
 
 
-def next_url(urls: list[str], i: int, now: float | None = None) -> str | None:
+def next_url(urls: list[str], i: int, now: float | None = None, force: bool = False) -> str | None:
     """Tile i's next screen: not one already on the wall, nor the same kind as another dashboard (None: nothing else).
     Jev's order when it's fresh (wall/director.py), else the plain cycle after the current screen."""
     import time
@@ -40,6 +41,9 @@ def next_url(urls: list[str], i: int, now: float | None = None) -> str | None:
     fresh = RANK["order"] and (time.time() if now is None else now) - RANK["at"] < STALE_S
     for s in (RANK["order"] if fresh else cycle):
         if s not in taken and kind(s) not in others:
+            if fresh and not force and RANK["probs"] and \
+                    float(RANK["probs"].get(s) or 0) - float(RANK["probs"].get(cur) or 0) < STAY_BY:
+                return None   # nothing clearly better than what's up: keep it (a ⏭ next / vote passes force)
             return urls[i].split(MARK, 1)[0] + MARK + s
     return None
 
