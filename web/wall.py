@@ -222,6 +222,11 @@ def noop(a: dict, wall: dict | None) -> str:
         return "That's already on the wall." if a["url"] in urls else ""
     if op == "rotate":
         return "" if any(r.get("i") == a["i"] for r in w.get("rotate") or []) else "That tile doesn't rotate."
+    if op == "adwatch":
+        return f"Auto ad-skip is already {'on' if a['on'] else 'off'}." if (w.get("adwatch") or {}).get("on") == a["on"] else ""
+    if op == "favorite":
+        starred = a["url"] in (w.get("favorites") or [])
+        return ("That's already a favorite." if a["on"] else "That isn't a favorite.") if starred == a["on"] else ""
     if op == "layout":
         return "That's already the layout." if ov.get("layout") == a["layout"] else ""
     if op == "board":
@@ -278,6 +283,14 @@ def check_action(a: object) -> dict:
         return {"op": "tile", "i": _tile(a.get("i"), 4), "url": _url(a.get("url")), **label}
     if op == "default":   # election night: the default screens back on every tile
         return {"op": "default"}
+    if op == "adwatch":   # election night: auto ad-skip (sound off commercials, break tiles to on-air streams) on / off
+        if not isinstance(a.get("on"), bool):
+            raise ValueError("on is true/false")
+        return {"op": "adwatch", "on": a["on"]}
+    if op == "favorite":   # star a stream (two at most): its tile goes back to it after a break; not up yet → tile 3 or 4
+        if not isinstance(a.get("on"), bool):
+            raise ValueError("on is true/false")
+        return {"op": "favorite", "url": _url(a.get("url")), "on": a["on"], **label}
     if op == "rotate":   # election data tiles: hold this screen / the next one now (either holds 5 min, then rotates again)
         if a.get("act") not in ("hold", "next"):
             raise ValueError("act is hold or next")
@@ -338,6 +351,10 @@ def describe(a: dict) -> str:
         return f"switch the overlay to {'L-bar' if a['layout'] == 'lbar' else 'full'}"
     if op == "default":
         return "put the default election screens back"
+    if op == "adwatch":
+        return f"turn auto ad-skip {'on' if a['on'] else 'off'}"
+    if op == "favorite":
+        return f"{'star' if a['on'] else 'unstar'} {a.get('label') or a['url']}"
     if op == "rotate":
         return f"hold tile {a['i'] + 1} on this screen for 5 min" if a["act"] == "hold" else f"switch tile {a['i'] + 1} to its next screen"
     if op == "spotlight":
@@ -473,7 +490,7 @@ def redeem_link(token: str, now: float | None = None) -> dict | None:
 # ---- demo mode: guests with the keyed link pick a nickname ------------------------------------------------------------
 GUEST_COOKIE = "sharplab_wall_guest"
 GUEST_TTL = 24 * 3600
-GUEST_OPS = {"start", "stop", "tile", "spotlight"}   # what a guest may not propose: no starting/stopping, no arbitrary pages on stream
+GUEST_OPS = {"start", "stop", "tile", "spotlight", "favorite"}   # what a guest may not propose: no starting/stopping, no arbitrary pages on stream
 _guest_signer = URLSafeTimedSerializer(auth.SESSION_SECRET, salt="sharplab-wall-guest")
 _NICK = re.compile(r"^[\w .'-]{2,24}$")
 
@@ -603,6 +620,10 @@ def _route(a: dict) -> tuple[str, str, dict]:
         return "POST", "/i/discord/board", {"layout": a["layout"], "visible": True}
     if op == "default":
         return "POST", "/i/discord/default", {}
+    if op == "adwatch":
+        return "POST", "/i/discord/adwatch", {"on": a["on"]}
+    if op == "favorite":
+        return "POST", "/i/discord/favorite", {"url": a["url"], "on": a["on"]}
     if op == "rotate":
         return "POST", "/i/discord/rotate", body
     if op == "spotlight":
@@ -799,6 +820,8 @@ class Hub:
         live_tile = a["op"] == "tile" and a["url"] in {g["url"] for g in _live["games"]}
         if user.get("guest") and a["op"] in GUEST_OPS and not live_tile:
             return None, "Guests can vote, chat and change the sound / layout / board — starting, stopping and new pages need a SharpLab login."
+        if a["op"] == "adwatch" and not self.is_admin(user["id"]):
+            return None, "Only the owner and admins can switch auto ad-skip."
         owner = self.is_owner(user["id"])
         p, err = self.votes.propose(user, a, now, cfg()["vote_s"], owner=owner)
         if not p:

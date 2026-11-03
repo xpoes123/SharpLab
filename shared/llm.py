@@ -26,6 +26,7 @@ import httpx
 log = logging.getLogger(__name__)
 
 HAIKU = "claude-haiku-4-5"
+HAIKU_FAST = "claude-haiku-5-5"   # the latest Haiku: short, latency-bound classifiers (wall ad-skip)
 
 
 def _parse_obj(text: str) -> dict | None:
@@ -86,15 +87,22 @@ async def local_text(prompt: str, *, max_tokens: int, fmt: str | None = None) ->
     return text
 
 
-async def _cloud_text(prompt: str, *, api_key: str, max_tokens: int) -> str | None:
+async def _cloud_text(prompt: str, *, api_key: str, max_tokens: int, model: str = HAIKU, system: str | None = None,
+                      effort: str | None = None, timeout: float = 60.0) -> str | None:
     if not api_key:
         return None
     try:
-        client = anthropic.AsyncAnthropic(api_key=api_key, timeout=60.0)
+        client = anthropic.AsyncAnthropic(api_key=api_key, timeout=timeout, max_retries=0 if timeout < 30 else 2)
+        extra: dict = {}
+        if system:
+            extra["system"] = system
+        if effort:
+            extra["output_config"] = {"effort": effort}
         msg = await client.messages.create(
-            model=HAIKU,
+            model=model,
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
+            **extra,
         )
         return "".join(b.text for b in msg.content if hasattr(b, "text"))
     except Exception as exc:  # noqa: BLE001 — APIError, timeouts, transport, SDK bugs
@@ -114,7 +122,8 @@ async def haiku_text(prompt: str, *, api_key: str, max_tokens: int = 300,
 
 
 async def haiku_json(prompt: str, *, api_key: str, max_tokens: int = 300,
-                     local: bool = False, meta: dict | None = None) -> dict | None:
+                     local: bool = False, meta: dict | None = None, model: str = HAIKU,
+                     system: str | None = None, effort: str | None = None, timeout: float = 60.0) -> dict | None:
     """First ``{...}`` JSON object out of the response, or None on any failure
     or unparseable JSON. ``local=True`` tries Ollama (format=json) first; an
     invalid local reply falls back to Haiku. Pass a ``meta`` dict to get
@@ -125,7 +134,9 @@ async def haiku_json(prompt: str, *, api_key: str, max_tokens: int = 300,
             if meta is not None:
                 meta["model"] = "ollama:" + (os.getenv("OLLAMA_MODEL") or "gemma4:12b")
             return _parse_obj(text)  # local_text already validated it parses
-    text = await _cloud_text(prompt, api_key=api_key, max_tokens=max_tokens)
+    opts = {k: v for k, v, default in (("model", model, HAIKU), ("system", system, None), ("effort", effort, None),
+                                       ("timeout", timeout, 60.0)) if v != default}   # only what a caller changed
+    text = await _cloud_text(prompt, api_key=api_key, max_tokens=max_tokens, **opts)
     if text is not None and meta is not None:
-        meta["model"] = HAIKU
+        meta["model"] = model
     return None if text is None else _parse_obj(text)

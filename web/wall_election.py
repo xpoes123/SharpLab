@@ -636,3 +636,68 @@ async def post_spotlight(request: Request):
     if not p:
         return JSONResponse({"error": err}, status_code=409)
     return {"id": p.id, "status": p.status, "text": wall.describe(p.action)}
+
+
+# ---- ad-skip: the homelab's wall/adwatch.py asks whether a news stream's last ~45 s of transcript is coverage or a
+# commercial (wall/onair.py acts on it). The Anthropic key lives here, so the LLM call does too. ----
+CLASSIFY_SYSTEM = (
+    "You label a ~45-second transcript snippet from a live US TV news stream on election night. Answer only JSON "
+    '{"label": "coverage"|"ad"|"break"|"offtopic", "confidence": 0..1}. coverage = news anchors, reporters or guests on '
+    "the election, politics or the news; ad = a commercial (products, drugs, insurance, cars, phone numbers, disclaimers); "
+    "break = bumpers, \"we'll be right back\", station IDs, promos for the channel's own shows, music or silence; "
+    "offtopic = regular programming unrelated to the news (lifestyle, sports, entertainment). Speech-to-text may be "
+    "garbled; judge the gist.")
+CLASSIFY_EVERY_S = 15.0
+CLASSIFY_TIMEOUT_S = 8.0
+_cls: dict = {"cache": {}, "last": {}}   # cache: text hash → (t, answer); last: stream → (t, answer)
+
+
+async def _classify_llm(text: str) -> dict | None:
+    from shared import llm
+    return await llm.haiku_json(f"Transcript:\n{text}", api_key=os.environ.get("ANTHROPIC_API_KEY", ""), max_tokens=400,
+                                model=llm.HAIKU_FAST, system=CLASSIFY_SYSTEM, effort="low", timeout=CLASSIFY_TIMEOUT_S)
+
+
+async def classify(stream: str, text: str, now: float | None = None) -> dict:
+    """{label, confidence, src}: cached by text, at most one LLM call per stream per CLASSIFY_EVERY_S (else that stream's
+    last answer), "unknown" on a timeout or a bad answer."""
+    import hashlib
+    now = time.monotonic() if now is None else now
+    key = hashlib.sha1(text.encode()).hexdigest()
+    hit = _cls["cache"].get(key)
+    if hit and now - hit[0] < 600:
+        return {**hit[1], "src": "cache"}
+    last = _cls["last"].get(stream)
+    if last and now - last[0] < CLASSIFY_EVERY_S:
+        return {**last[1], "src": "limited"}
+    _cls["last"][stream] = (now, {"label": "unknown", "confidence": 0.0})   # holds the slot while the call runs
+    try:
+        got = await asyncio.wait_for(_classify_llm(text), CLASSIFY_TIMEOUT_S + 2)
+    except Exception as e:  # noqa: BLE001 — timeouts included: never fail the caller
+        log.warning("classify: %s", type(e).__name__)
+        got = None
+    label = got.get("label") if isinstance(got, dict) else None
+    if label not in ("coverage", "ad", "break", "offtopic"):
+        return {"label": "unknown", "confidence": 0.0, "src": "llm"}
+    conf = got.get("confidence")
+    ans = {"label": label, "confidence": round(max(0.0, min(1.0, float(conf))), 2)
+           if isinstance(conf, (int, float)) and not isinstance(conf, bool) else 0.6}
+    _cls["last"][stream] = (now, ans)
+    if len(_cls["cache"]) > 2000:
+        _cls["cache"].clear()
+    _cls["cache"][key] = (now, ans)
+    return {**ans, "src": "llm"}
+
+
+@router.post("/classify")
+async def post_classify(request: Request, x_api_key: str = Header("")):
+    """{stream, text} → {label: coverage|ad|break|offtopic|unknown, confidence, src}. The wall service's key only."""
+    wall._need_key(x_api_key)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    stream, text = (body.get("stream"), body.get("text")) if isinstance(body, dict) else (None, None)
+    if not isinstance(stream, str) or not isinstance(text, str) or not text.strip():
+        return JSONResponse({"error": "stream and text are strings"}, status_code=422)
+    return await classify(stream[:300], text.strip()[-2000:])

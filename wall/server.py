@@ -41,7 +41,7 @@ from wall.sync import STEP_S, Runner, SyncStore, tile_games
 from wall.exitpoll import ExitPoll
 from wall.turnout import Turnout
 from wall.events import Events
-from wall import streams
+from wall import onair, streams
 
 log = logging.getLogger("wall.server")
 TAILNET = ipaddress.ip_network("100.64.0.0/10")
@@ -145,14 +145,18 @@ class Cfg:
         self.sync_default = float(env.get("WALL_BETS_DELAY_S", "45"))   # the spoiler delay until a tile is calibrated
         self.election_replay = env.get("WALL_ELECTION_REPLAY", "")   # a dir of recorded CNN files (wall/election.replay)
         self.sync_ocr = env.get("WALL_SYNC_OCR", "1") not in ("0", "false", "")   # 0 = no scorebug OCR (manual + default only)
+        self.adwatch = env.get("WALL_ADWATCH", "0") in ("1", "true", "on")   # ad-skip policy on at start (wall/onair.py)
 
 
 def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, scores: Scores | None = None,
           store: PresetStore | None = None, guard: LLMGuard | None = None, chat: ChatFeed | None = None,
           sync: SyncStore | None = None, bets: BetsFeed | None = None, runner: Runner | None = None,
           results: Results | None = None, spot: Spotlight | None = None, turnout: Turnout | None = None,
-          exitpoll: ExitPoll | None = None, odds: Odds | None = None) -> FastAPI:
+          exitpoll: ExitPoll | None = None, odds: Odds | None = None, board: onair.Board | None = None,
+          favs: onair.Favorites | None = None) -> FastAPI:
     cfg = cfg or Cfg()
+    airs = board or onair.Board()   # (not "board": the overlay endpoint below takes that name)
+    favs = favs or onair.Favorites(cfg.state / "favorites.json")
     results = results or Results(replay(cfg.election_replay) if cfg.election_replay else None, cfg.state)
     sync = sync or SyncStore(cfg.state / "sync.json", cfg.sync_default)
     turnout = turnout or Turnout(state_dir=cfg.state)
@@ -196,8 +200,19 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         snap = results.snapshot()
         return {"races": ke.compact_races(snap["races"], set(bets.need)), "offices": snap["offices"]}
 
+    policies = {k: onair.Policy(cfg.adwatch) for k in instances}
+
+    def onair_state(i: Instance) -> dict:
+        src = i.source if i.follow and i.source is not None else i   # a mirror shows the TV's policy
+        pol = policies.get(src.name)
+        on_wall = set(i.urls)
+        return {"onair": [airs.view(u) for u in i.urls], "favorites": list(favs.urls),
+                "adwatch": {**(pol.view() if pol else {"on": False, "orig": {}}),
+                            "pool": [{"url": u, **airs.view(u)} for u in airs.fresh() if u not in on_wall][:12]}}
+
     for i in instances.values():
         i.feeds["election"] = election_feed
+        i.extra = onair_state
         if i.headless:
             i.before_start = guard.park   # the LLM's VRAM is free before the budget check
         i.sync = sync
@@ -227,6 +242,12 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
                     except Exception as e:  # noqa: BLE001
                         log.warning("llm guard: %s", e)
                 for inst in instances.values():
+                    if n % 2 == 0 and inst.urls:   # ad-skip: sound off commercials, break tiles to on-air streams
+                        try:
+                            for a in await asyncio.to_thread(policies[inst.name].tick, inst, airs, list(favs.urls), time.time()):
+                                log.info("adwatch %s: %s", inst.name, a)
+                        except Exception as e:  # noqa: BLE001
+                            log.warning("adwatch %s: %s", inst.name, e)
                     try:
                         await asyncio.to_thread(inst.tick)
                         if inst.urls:   # 1 / 4 tiles with bets and no L-bar: bring the L-bar up for them
@@ -311,6 +332,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
     app.state.tape = tape
     app.state.spot = spot
     app.state.odds = odds
+    app.state.board, app.state.favs, app.state.policies = airs, favs, policies
 
     @app.middleware("http")
     async def gate(request: Request, call_next):
@@ -491,6 +513,52 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
             raise ValueError("give volume or delta")
         await asyncio.to_thread(target(name).volume, v, step)
         return inst(name).state()
+
+    # ---- ad-skip (wall/onair.py): wall/adwatch.py posts each stream's label; the owner turns the policy on / off and
+    # stars favorites ----
+    @app.post("/adwatch")
+    async def post_adwatch(request: Request) -> dict:
+        """{streams: {url: {label, confidence, since, text_tail}}} from wall/adwatch.py (loopback only)."""
+        d = await body(request)
+        n = airs.put(d.get("streams"))
+        for i in instances.values():
+            if i.urls:
+                i._bump()
+        return {"ok": True, "n": n}
+
+    @app.post("/i/{name}/adwatch")
+    async def set_adwatch(name: str, request: Request) -> dict:
+        d = await body(request)
+        if not isinstance(d.get("on"), bool):
+            raise ValueError("on is a boolean")
+        t = target(name)
+        policies[t.name].set_on(d["on"])
+        t._bump()
+        inst(name)._bump()
+        return inst(name).state()
+
+    @app.post("/i/{name}/favorite")
+    async def favorite(name: str, request: Request) -> dict:
+        """{url, on}: star / unstar a stream (two at most; a third replaces the oldest). A starred stream that isn't up
+        goes on tile 3 or 4 (whichever doesn't hold the other favorite)."""
+        d = await body(request)
+        if not isinstance(d.get("url"), str) or not isinstance(d.get("on"), bool):
+            raise ValueError("url is a string, on a boolean")
+        url = check_url(d["url"])
+        if own_page(url):
+            raise ValueError("only streams can be favorites")
+        i = inst(name)
+        if i.headless:
+            await asyncio.to_thread(public_url, url)
+        t = target(name)
+        favs.set(url, d["on"])
+        if d["on"] and t.urls and url not in t.urls:
+            k = onair.fav_tile(list(t.urls), favs.urls, url, onair.election_mode(t))
+            await asyncio.to_thread(t.set_tile, k, url)
+            policies[t.name].placed(t, k, url)
+        t._bump()
+        i._bump()
+        return i.state()
 
     @app.post("/i/{name}/pin")
     async def pin(name: str, request: Request) -> dict:
