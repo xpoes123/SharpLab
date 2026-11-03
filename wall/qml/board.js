@@ -95,7 +95,7 @@ var OFFICE_SHORT = { S: "SEN", H: "HOUSE", G: "GOV" };
 function bop(o) {   // one office's balance → the sidebar's block: numbers, bar segments (fractions of all seats), lines
     var s = o.seats, t = o.total || 1, D = s.D.held + s.D.won, R = s.R.held + s.R.won, I = s.I.held + s.I.won;
     var ctl = o.control && o.control.D ? o.control.D : 0, net = o.net || {};
-    var n = (net.D || 0) > 0 ? { text: "Dem +" + net.D, tone: "dem" } : (net.R || 0) > 0 ? { text: "Rep +" + net.R, tone: "rep" } : { text: "no net change", tone: "" };
+    var n = (net.D || 0) > 0 ? { text: "Dem +" + net.D, tone: "dem" } : (net.R || 0) > 0 ? { text: "Rep +" + net.R, tone: "rep" } : { text: "net ±0", tone: "" };
     return {
         id: o.office, name: o.name, dem: String(D), rep: String(R), ind: I ? I + " Ind" : "",
         segs: [{ f: D / t, c: "dem" }, { f: s.D.lead / t, c: "demLead" }, { f: I / t, c: "ind" }, { f: s.I.lead / t, c: "indLead" },
@@ -104,7 +104,7 @@ function bop(o) {   // one office's balance → the sidebar's block: numbers, ba
         need: ctl ? ctl + " for control" : o.up + " up",
         lead: (s.D.lead || s.R.lead) ? "leading " + s.D.lead + "–" + s.R.lead : "",
         net: o.office === "G" ? "" : n.text, netTone: n.tone,
-        left: o.out ? o.out + " not counted" : o.called + "/" + o.up + " called",
+        left: o.called + "/" + o.up + " called",   // short: the sidebar line never truncates ("35 not c…")
         winner: o.winner ? PARTY[o.winner] + " control" : "", winTone: o.winner === "D" ? "dem" : o.winner === "R" ? "rep" : ""
     };
 }
