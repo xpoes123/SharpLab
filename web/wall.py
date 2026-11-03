@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -21,12 +23,13 @@ from collections import deque
 from dataclasses import dataclass, field
 
 import httpx
-from fastapi import APIRouter, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from web import auth
 from web._apisec import check_api_key
+from web.wall_guard import Guard
 
 log = logging.getLogger(__name__)
 
@@ -34,8 +37,6 @@ PAGE = "/wall.html"
 AWAY_S = 60            # no heartbeat for this long (or a hidden tab) = away
 CHAT_MAX = 300
 SCROLLBACK = 200
-CHAT_GAP_S = 1.5       # one message per 1.5 s …
-CHAT_BURST = (8, 30)   # … and at most 8 per 30 s
 PROPOSE_GAP_S = 20
 LINK_TTL = 600
 LAYOUTS = ("lbar", "full")
@@ -128,10 +129,10 @@ class Presence:
 
 # ---- chat ------------------------------------------------------------------------------------------------------------
 class Chat:
-    def __init__(self) -> None:
+    def __init__(self, guard: Guard | None = None) -> None:
         self.log: deque[dict] = deque(maxlen=SCROLLBACK)
         self.ids = itertools.count(1)
-        self.sent: dict[str, deque] = {}
+        self.guard = guard or Guard()   # the per-sender token bucket + duplicate drop (web/wall_guard.py)
         self.muted: dict[str, float] = {}   # uid → until
 
     def is_muted(self, uid: str, now: float) -> bool:
@@ -144,12 +145,8 @@ class Chat:
         t = clean_text(text)
         if not t:
             return None, "Empty message."
-        q = self.sent.setdefault(user["id"], deque())
-        while q and now - q[0] > CHAT_BURST[1]:
-            q.popleft()
-        if q and now - q[-1] < CHAT_GAP_S or len(q) >= CHAT_BURST[0]:
-            return None, "Slow down a little."
-        q.append(now)
+        if why := self.guard.chat_ok("u:" + user["id"], t, now):
+            return None, why
         return self.add({"kind": "chat", "uid": user["id"], "name": user.get("name") or "Player",
                          "avatar": user.get("avatar"), "guest": bool(user.get("guest")), "text": t}, now), ""
 
@@ -707,7 +704,9 @@ class Hub:
         self.execute = execute or service_execute
         self.fetch_state = fetch_state or service_state
         self.presence = Presence()
-        self.chat = Chat()
+        self.guard = Guard()
+        self.chat = Chat(self.guard)
+        self._alert_ids = itertools.count(-1, -1)
         self.votes = Votes()
         self.socks: dict[int, tuple[WebSocket, dict]] = {}
         self.cids = itertools.count(1)
@@ -724,6 +723,26 @@ class Hub:
 
     def is_admin(self, uid: str) -> bool:
         return self.is_owner(uid) or uid in cfg()["admins"]
+
+    # -- the abuse watcher: a refusal counts; enough of them = a timeout, and the owner + admins hear about it
+    async def strike(self, ident: str, reason: str, ip: str = "", name: str = "", uid: str = "") -> None:
+        t = self.guard.strike(ident, self.clock(), reason, ip, name, exempt=bool(uid) and self.is_admin(uid))
+        if t:
+            await self.alert(f"⏱ {name or ident} is in a {round((t['until'] - self.clock()) / 60)}-min timeout ({reason}; "
+                             f"{ident}{', IP ' + ip if ip else ''}). Lift it: /lift {ident}")
+
+    async def alert(self, text: str) -> None:
+        """A system line only the owner and admins see (not in the scrollback, not on the TV)."""
+        m = {"id": next(self._alert_ids), "ts": self.clock(), "kind": "system", "uid": "", "name": "", "avatar": None,
+             "text": clean_text(text, 400), "private": True}
+        for ws, u in list(self.socks.values()):
+            if self.is_admin(u["id"]):
+                await self.send(ws, {"t": "chat", "msg": m})
+
+    def timeout_lines(self) -> list[str]:
+        now = self.clock()
+        return [f"⏱ {t['name'] or k}: {math.ceil(left / 60)} min left ({t['reason']}). /lift {k}"
+                for k, t in list(self.guard.timeouts.items()) if (left := self.guard.timed_out(k, now))]
 
     # -- broadcast
     async def send(self, ws: WebSocket, msg: dict) -> None:
@@ -764,6 +783,14 @@ class Hub:
             a = check_action(action)
         except ValueError as e:
             return None, str(e)
+        key = (user["id"], "propose", json.dumps(a, sort_keys=True))
+        if (same := self.guard.seen(key, self.clock())) is not None:   # a double tap / resend: the first one stands
+            return same
+        res = await self._propose(user, a)
+        self.guard.remember(key, res, self.clock())
+        return res
+
+    async def _propose(self, user: dict, a: dict) -> tuple[Proposal | None, str]:
         if self.wall and "running" in self.wall and (why := noop(a, self.wall)):   # no votes on changes that change nothing (state unknown: let it through)
             return None, why
         now = self.clock()
@@ -786,9 +813,13 @@ class Hub:
     async def vote(self, user: dict, pid: object, yes: object) -> tuple[Proposal | None, str]:
         if not isinstance(pid, int) or not isinstance(yes, bool):
             return None, "bad vote"
+        key = (user["id"], "vote", pid, yes)
+        if (same := self.guard.seen(key, self.clock())) is not None:
+            return same
         p, err = self.votes.vote(pid, user["id"], yes)
         if p:
             await self.settle(p)
+        self.guard.remember(key, (p, err), self.clock())
         return p, err
 
     async def settle(self, p: Proposal) -> None:
@@ -910,6 +941,7 @@ async def wall_websocket(ws: WebSocket) -> None:
     h = hub
     if user.get("guest"):
         if not (guest_joins.allow(user["id"], h.clock()) and guest_joins_ip.allow(client_ip(ws), h.clock())):
+            await h.strike("u:" + user["id"], "reconnect flood", client_ip(ws), user["name"])
             await ws.close(code=4429, reason="Too many connects — wait a minute")
             return
         others = {u["name"] for uid, u in h.presence.users.items() if uid != user["id"] and uid in h.presence.watching()}
@@ -929,6 +961,9 @@ async def wall_websocket(ws: WebSocket) -> None:
                       "proposals": [h.pub(p) for p in h.votes.open()], "wall": h.wall,
                       "cfg": {"delay": c["delay"], "vote_s": c["vote_s"], "sound_approvals": c["sound_approvals"],
                               "chat_max": CHAT_MAX}})
+    if h.is_admin(user["id"]):
+        for line in h.timeout_lines():
+            await h.alert(line)
     if new and c["notices"]:
         await h.say(f"{user['name']} joined.")
     await h.push_viewers(force=True)
@@ -951,6 +986,18 @@ async def wall_websocket(ws: WebSocket) -> None:
 
 async def handle(h: Hub, cid: int, ws: WebSocket, user: dict, msg: dict) -> None:
     t, now = msg.get("t"), h.clock()
+    ident, admin = "u:" + user["id"], h.is_admin(user["id"])
+    write = t not in ("ping", "hb")
+    if not admin:   # the owner and admins are never limited or timed out
+        if write and (left := h.guard.timed_out(ident, now)):
+            if h.guard.tell(cid, now):
+                await h.send(ws, {"t": "error", "text": f"You're in a short timeout ({math.ceil(left / 60)} min) — you can keep watching."})
+            return
+        if t != "chat" and (wait := h.guard.limit(ident, write, now)):   # chat has its own bucket (Chat.post)
+            await h.strike(ident, f"socket flood ({str(t)[:12]})", client_ip(ws), user.get("name", ""), user["id"])
+            if h.guard.tell(cid, now):
+                await h.send(ws, {"t": "error", "text": "Slow down a little.", "retry_after": math.ceil(wait)})
+            return
     if t == "ping":
         await h.send(ws, {"t": "pong", "c": msg.get("c"), "s": now * 1000, "pdt_off": h.edge.off})
         return
@@ -960,11 +1007,23 @@ async def handle(h: Hub, cid: int, ws: WebSocket, user: dict, msg: dict) -> None
         return
     h.presence.beat(cid, False, now)   # anything else they do means they're here
     if t == "chat":
-        m, err = h.chat.post(user, msg.get("text"), now)
+        text = msg.get("text")
+        if admin and isinstance(text, str) and text.strip().split(" ")[0] in ("/timeouts", "/lift"):
+            cmd, _, arg = text.strip().partition(" ")
+            if cmd == "/timeouts":
+                for line in h.timeout_lines() or ["Nobody's in a timeout."]:
+                    await h.alert(line)
+            else:
+                lifted = h.guard.lift(arg) if arg.strip() else []
+                await h.alert(f"Timeout lifted: {', '.join(lifted)}." if lifted else f"No timeout matches “{arg.strip()}”.")
+            return
+        m, err = h.chat.post(user, text, now)
         if m:
             await h.broadcast({"t": "chat", "msg": m})
         else:
-            await h.send(ws, {"t": "error", "text": err})
+            if err in ("Slow down a little.", "You just said that."):
+                await h.strike(ident, "chat flood", client_ip(ws), user.get("name", ""), user["id"])
+            await h.send(ws, {"t": "error", "text": err, "chat": True})
     elif t == "propose":
         _, err = await h.propose(user, msg.get("action"))
         if err:
@@ -982,12 +1041,40 @@ async def handle(h: Hub, cid: int, ws: WebSocket, user: dict, msg: dict) -> None
         elif t == "mute" and isinstance(msg.get("uid"), str):
             mins = msg.get("minutes", 10)
             h.chat.mute(msg["uid"], float(mins) if isinstance(mins, (int, float)) else 10, now)
+            if isinstance(mins, (int, float)) and mins <= 0:   # unmute also lifts an abuse timeout
+                h.guard.lift("u:" + msg["uid"])
             who = h.presence.users.get(msg["uid"], {}).get("name", "someone")
             await h.say(f"{who} was muted for {int(mins)} min." if mins and mins > 0 else f"{who} was unmuted.")
 
 
 # ---- HTTP ------------------------------------------------------------------------------------------------------------
-router = APIRouter(prefix="/api/v1/wall", tags=["wall"])
+async def http_guard(request: Request) -> None:
+    """Every /api/v1/wall* route (a router dependency): per-identity token buckets, reads loose, writes tight; a timed-out
+    identity may still read. The bot / wall service (X-API-Key or the wall token), the owner and admins are exempt."""
+    if check_api_key(request.headers.get("x-api-key") or ""):
+        return
+    tok = cfg()["token"]
+    if tok and secrets.compare_digest(request.headers.get("authorization", "").encode(), f"Bearer {tok}".encode()):
+        return
+    user = viewer(request)
+    if user and hub.is_admin(user["id"]):
+        return
+    ip, now = client_ip(request), hub.clock()
+    ident = f"u:{user['id']}" if user else f"ip:{ip}"
+    # /guest has its own limits (guest_names / guest_names_ip, and a rejoin under the held nickname is free): a read here
+    write = request.method not in ("GET", "HEAD", "OPTIONS") and request.url.path != "/api/v1/wall/guest"
+    if write and (left := hub.guard.timed_out(ident, now)):
+        raise HTTPException(429, "You're in a short timeout — you can keep watching.", headers={"Retry-After": str(math.ceil(left))})
+    if wait := hub.guard.limit(ident, write, now):
+        await hub.strike(ident, f"{'write' if write else 'read'} limit on {request.url.path[:60]}", ip,
+                         (user or {}).get("name", ""), (user or {}).get("id", ""))
+        raise HTTPException(429, "Slow down a little.", headers={"Retry-After": str(max(1, math.ceil(wait)))})
+
+
+guarded = [Depends(http_guard)]
+
+
+router = APIRouter(prefix="/api/v1/wall", tags=["wall"], dependencies=guarded)
 _cache: dict[str, tuple[float, bytes, str]] = {}
 _locks: dict[str, asyncio.Lock] = {}
 
@@ -1062,8 +1149,16 @@ async def guest(request: Request):
     gb = request.cookies.get(GUEST_BROWSER) or ""
     if not re.fullmatch(r"[0-9a-f]{32}", gb):
         gb = secrets.token_hex(16)
-    wait = max(guest_names.wait(gb, now), guest_names_ip.wait(ip, now))
+    if left := max(hub.guard.timed_out(f"gb:{gb}", hub.clock()), hub.guard.timed_out(f"ip:{ip}", hub.clock())):
+        return JSONResponse({"error": "Too many nicknames from this browser — try again later.", "retry_after": math.ceil(left)},
+                            status_code=429, headers={"Retry-After": str(math.ceil(left))})
+    w_gb, w_ip = guest_names.wait(gb, now), guest_names_ip.wait(ip, now)
+    wait = max(w_gb, w_ip)
     if wait:
+        if w_gb:   # one browser cycling nicknames
+            await hub.strike(f"gb:{gb}", "too many guest nicknames", ip)
+        else:      # a whole IP: only its unauthenticated writes (joining) are affected
+            await hub.strike(f"ip:{ip}", "too many guest nicknames from one IP", ip)
         return JSONResponse({"error": "Lots of people just joined from this network. Use Continue with Discord above, or wait a moment.",
                              "retry_after": wait}, status_code=429, headers={"Retry-After": str(wait)})
     guest_names.allow(gb, now)
@@ -1184,6 +1279,23 @@ async def bot_link(request: Request, x_api_key: str = Header("")):
     avatar = body.get("avatar")   # the Discord avatar hash, as the OAuth session stores it
     return {"url": mint_link(uid, clean_text(name, 40) or "Player", avatar if isinstance(avatar, str) and len(avatar) < 80 else None),
             "ttl": LINK_TTL}
+
+
+@router.get("/abuse")
+async def bot_abuse(x_api_key: str = Header("")):
+    """Who's in an abuse timeout now (also /timeouts in the page's chat, for the owner / admins)."""
+    _need_key(x_api_key)
+    now = hub.clock()
+    return {"timeouts": [{**t, "left": round(left)} for k, t in list(hub.guard.timeouts.items())
+                         if (left := hub.guard.timed_out(k, now))]}
+
+
+@router.post("/abuse/lift")
+async def bot_abuse_lift(request: Request, x_api_key: str = Header("")):
+    """{"who": "u:123" | "123" | a name}: lift that timeout now (also /lift in the page's chat)."""
+    _need_key(x_api_key)
+    body = await request.json()
+    return {"lifted": hub.guard.lift(str(body.get("who") or "")) if isinstance(body, dict) else []}
 
 
 @router.get("/chat")

@@ -149,15 +149,12 @@ def test_chat_limits():
     assert c.post(u, "", 0)[0] is None
     m, _ = c.post(u, "x" * 999, 0)
     assert len(m["text"]) == 300
-    assert c.post(u, "too soon", 1)[1] == "Slow down a little."
-    t = 2.0
-    for _ in range(7):
-        assert c.post(u, "ok", t)[0]
-        t += 2
-    assert c.post(u, "burst", t)[0] is None   # 8 in 30 s
-    assert c.post(u, "later", t + 31)[0]
-    c.mute("1", 1, t + 31)
-    assert c.post(u, "muted", t + 40)[1] == "You're muted for now."
+    for i in range(5):   # no gap between messages: a burst of 6 …
+        assert c.post(u, f"quick {i}", 0.1)[0]
+    assert c.post(u, "seventh", 0.1)[1] == "Slow down a little."   # … then one per 2 s
+    assert c.post(u, "later", 2.2)[0]
+    c.mute("1", 1, 10)
+    assert c.post(u, "muted", 20)[1] == "You're muted for now."
 
 
 def test_scrollback_keeps_last_200():
@@ -705,7 +702,9 @@ def test_chat_api_feed_after_viewers_and_post_as_owner(setup):
     assert r.status_code == 200 and r.json()["msg"]["name"] == "David"   # the name he watches under wins
     after = client.get(f"/api/v1/wall/chat?after={feed['last']}", headers=h).json()
     assert [m["text"] for m in after["messages"]] == ["from the couch"] and len(after["ids"]) == 2
-    # the owner's own rate limit applies (1 message / 1.5 s)
+    # the owner's own chat bucket applies (a burst of 6, then one per 2 s)
+    for i in range(5):
+        assert client.post("/api/v1/wall/chat", headers=h, json={"discord_id": OWNER, "text": f"again {i}"}).status_code == 200
     r = client.post("/api/v1/wall/chat", headers=h, json={"discord_id": OWNER, "text": "again"})
     assert r.status_code == 429
     assert client.post("/api/v1/wall/chat", headers=h, json={"discord_id": "x", "text": "hi"}).status_code == 422

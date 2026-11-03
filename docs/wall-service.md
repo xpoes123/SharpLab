@@ -249,9 +249,16 @@ hidden while the full / matchup board is up. Every 2 s it reads `GET /i/<name>/b
   0.95–1.05 proportional to the error. hls.js `liveSyncDuration` is set to the same delay so the first load lands
   near the target. The page shows "in sync ±0.3 s".
 * **Socket `/ws/wall`** (session cookie checked at the handshake, closed with 4401 otherwise): chat (≤ 300 chars,
-  plain text rendered with `textContent`, 1 msg / 1.5 s and 8 / 30 s per user, last 200 kept), presence (heartbeat
+  plain text rendered with `textContent`, a token bucket per sender: 6 in a burst then 1 / 2 s, the same text again
+  within 10 s dropped, last 200 kept), presence (heartbeat
   every 15 s with `hidden`; away = hidden or no heartbeat for 60 s), viewer list with names + avatars/initials, votes,
   moderation (owner + `WALL_ADMIN_IDS`: delete a message, mute a user for N minutes). Join/leave notices off by default.
+* **Abuse guard** (`web/wall_guard.py`, in memory, one worker): every `/api/v1/wall*` route and socket message goes
+  through per-identity token buckets (user / guest id, else IP; IP keys looser): reads 10/s burst 40, writes 1/s burst 8
+  (429 + Retry-After, or an `error` frame). The same proposal / vote from the same identity within 1.5 s counts once.
+  More than 20 refusals in 60 s = a 10-min timeout (writes + socket actions refused, watching still works), logged and
+  told to the owner + admins as a private chat line. Lift: `/lift <id or name>` in chat (`/timeouts` lists), unmute,
+  or `POST /api/v1/wall/abuse/lift {who}` (X-Api-Key; `GET /abuse` lists). Exempt: owner, admins, X-Api-Key, the wall token.
 * **Votes:** anyone proposes; screen changes (tile swap, layout, board, start, stop) pass on a strict majority of the
   *active* viewers (yes > active/2; ties fail), open 60 s, proposer counts yes. Moving the sound needs
   `WALL_SOUND_APPROVALS` (default 2) yes including the proposer, or 1 when only one viewer is active. The owner
