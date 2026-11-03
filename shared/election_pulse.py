@@ -91,6 +91,10 @@ def project(r: dict) -> dict | None:
     return {"proj": round(proj), "sd": round(max(proj * SPREAD * (1 - inn), r["votes"] * 0.005)), "inn": inn}
 
 
+def short(v: float) -> str:
+    return f"{v / 1e6:.2f}M" if v >= 1e6 else f"{round(v / 1e3)}K"
+
+
 def turnout_race_id(code: str) -> list[str]:
     m = _TURN.match(code)
     if not m:

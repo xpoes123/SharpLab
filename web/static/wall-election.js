@@ -83,6 +83,10 @@
       c.onclick = () => openControl(o);
       chips.append(c);
     }
+    const pulse = el("a", "el-chip", "Turnout & vote-share projector ↗");
+    pulse.href = "/pulse.html"; pulse.target = "_blank"; pulse.rel = "noopener";
+    pulse.title = "Votes ÷ % expected in → projected finals, against Kalshi's turnout and vote-share markets";
+    chips.append(pulse);
     const done = el("button", "btn ghost el-done", "Done"); done.type = "button";
     done.onclick = () => { root.classList.remove("as-sheet"); document.body.classList.remove("elec-on"); };
     head.append(tog, chips, done);

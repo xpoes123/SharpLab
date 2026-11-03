@@ -151,3 +151,4 @@
 @media (prefers-reduced-motion: reduce) {
   .es-sheet, .es-scrim, .el-map path, .el-bar i, .es-cbar i { transition: none; }
 }
+a.el-chip { text-decoration: none; display: inline-flex; align-items: center; }
