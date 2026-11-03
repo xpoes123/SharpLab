@@ -652,6 +652,34 @@ CLASSIFY_TIMEOUT_S = 8.0
 _cls: dict = {"cache": {}, "last": {}}   # cache: text hash → (t, answer); last: stream → (t, answer)
 
 
+JEV_URL = "https://api.typesafe.ai/v1/systemone"
+JEV_MIN = 0.75   # Jev's answer stands at this confidence; below it (or no answer) Haiku decides — accept when sure, escalate when not
+JEV_CRITERIA = {"coverage": "news anchors, reporters or guests on the election, politics or the news",
+                "ad": "a paid commercial for a product or service (drugs, insurance, cars, phone numbers, disclaimers)",
+                "break": "a station break: bumpers, \"we'll be right back\", station IDs, promos for the channel's own shows, music",
+                "offtopic": "regular programming unrelated to the news: weather, lifestyle, sports, entertainment"}
+
+
+async def _classify_jev(text: str) -> dict | None:
+    """TypeSafe's Jev decision model: one typed choice + its confidence in ~0.1 s. None without a key or on any failure."""
+    key = os.environ.get("JEV_API_KEY", "")
+    if not key:
+        return None
+    body = {"model": "jev-latest", "state": f"Transcript of the last ~45 s of a live US TV news stream on election night "
+            f"(speech-to-text, may be garbled):\n{text}",
+            "questions": {"segment": {"type": "choice", "question": "What is this stream airing right now?", "criteria": JEV_CRITERIA}}}
+    try:
+        async with httpx.AsyncClient(timeout=4) as c:
+            r = await c.post(JEV_URL, json=body, headers={"Authorization": f"Bearer {key}"})
+        a = r.json()["answers"]["segment"] if r.status_code == 200 else None
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
+        log.warning("jev: %s", type(e).__name__)
+        return None
+    if not isinstance(a, dict) or a.get("choice") not in JEV_CRITERIA:
+        return None
+    return {"label": a["choice"], "confidence": a.get("confidence")}
+
+
 async def _classify_llm(text: str) -> dict | None:
     from shared import llm
     return await llm.haiku_json(f"Transcript:\n{text}", api_key=os.environ.get("ANTHROPIC_API_KEY", ""), max_tokens=400,
@@ -671,14 +699,18 @@ async def classify(stream: str, text: str, now: float | None = None) -> dict:
     if last and now - last[0] < CLASSIFY_EVERY_S:
         return {**last[1], "src": "limited"}
     _cls["last"][stream] = (now, {"label": "unknown", "confidence": 0.0})   # holds the slot while the call runs
-    try:
-        got = await asyncio.wait_for(_classify_llm(text), CLASSIFY_TIMEOUT_S + 2)
-    except Exception as e:  # noqa: BLE001 — timeouts included: never fail the caller
-        log.warning("classify: %s", type(e).__name__)
-        got = None
+    src = "jev"
+    got = await _classify_jev(text)
+    if not got or not isinstance(got.get("confidence"), (int, float)) or got["confidence"] < JEV_MIN:
+        src = "llm"
+        try:
+            got = await asyncio.wait_for(_classify_llm(text), CLASSIFY_TIMEOUT_S + 2)
+        except Exception as e:  # noqa: BLE001 — timeouts included: never fail the caller
+            log.warning("classify: %s", type(e).__name__)
+            got = None
     label = got.get("label") if isinstance(got, dict) else None
     if label not in ("coverage", "ad", "break", "offtopic"):
-        return {"label": "unknown", "confidence": 0.0, "src": "llm"}
+        return {"label": "unknown", "confidence": 0.0, "src": src}
     conf = got.get("confidence")
     ans = {"label": label, "confidence": round(max(0.0, min(1.0, float(conf))), 2)
            if isinstance(conf, (int, float)) and not isinstance(conf, bool) else 0.6}
@@ -686,7 +718,7 @@ async def classify(stream: str, text: str, now: float | None = None) -> dict:
     if len(_cls["cache"]) > 2000:
         _cls["cache"].clear()
     _cls["cache"][key] = (now, ans)
-    return {**ans, "src": "llm"}
+    return {**ans, "src": src}
 
 
 @router.post("/classify")

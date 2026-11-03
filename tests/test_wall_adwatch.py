@@ -362,3 +362,26 @@ async def test_only_the_owner_and_admins_switch_ad_skip(monkeypatch):
     assert p is None and "owner" in err
     p, err = await hub.propose({"id": OWNER, "name": "David"}, {"op": "adwatch", "on": True})
     assert p and done == [{"op": "adwatch", "on": True}]
+
+
+def test_classify_jev_first_escalates_when_unsure(monkeypatch):
+    from web import wall_election as wel
+    llm_calls = []
+
+    async def llm(text):
+        llm_calls.append(text)
+        return {"label": "break", "confidence": 0.8}
+
+    answers = {"anchors": {"label": "coverage", "confidence": 0.97}, "mumble": {"label": "ad", "confidence": 0.4}}
+
+    async def jev(text):
+        return answers.get(text)
+
+    monkeypatch.setattr(wel, "_classify_llm", llm)
+    monkeypatch.setattr(wel, "_classify_jev", jev)
+    wel._cls["cache"].clear()
+    wel._cls["last"].clear()
+    assert asyncio.run(wel.classify(NBC, "anchors", now=0)) == {"label": "coverage", "confidence": 0.97, "src": "jev"}
+    assert asyncio.run(wel.classify(ABC, "mumble", now=0)) == {"label": "break", "confidence": 0.8, "src": "llm"}   # unsure → Haiku
+    assert asyncio.run(wel.classify(CBS, "no key", now=0))["src"] == "llm"                                          # no Jev answer → Haiku
+    assert len(llm_calls) == 2
