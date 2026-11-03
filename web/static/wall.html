@@ -6,6 +6,7 @@
 <title>SharpLab Wall</title>
 <link rel="stylesheet" href="/hqstyle.css" />
 <link rel="stylesheet" href="/wall.css" />
+<link rel="stylesheet" href="/wall-bets.css" />
 </head>
 <body>
 <header>
@@ -43,6 +44,7 @@
       </div>
       <div id="tiles" class="tiles"></div>
       <div id="props" class="props"></div>
+      <section id="betsPanel" class="card bets" hidden></section>
       <details class="card controls" open>
         <summary>Change the wall <span id="ownerNote" class="muted"></span></summary>
         <div class="row">
@@ -87,5 +89,6 @@
 </main>
 <script src="/vendor/hls.min.js"></script>
 <script src="/wall.js"></script>
+<script src="/wall-bets.js"></script>
 </body>
 </html>

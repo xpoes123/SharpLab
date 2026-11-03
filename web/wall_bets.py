@@ -194,7 +194,7 @@ async def panel(at_ms: float | None, state: dict | None, others: list[dict]) -> 
         d = float(t.get("delay") or sync["default"])
         seen.add(kw.game_key(g))
         games.append({"key": kw.game_key(g), "league": g.get("league"), "label": g.get("label") or f"{g.get('away')} @ {g.get('home')}",
-                      "tile": i, "delay": d, "src": t.get("src") or "default", "as_of": (picture - d) * 1000,
+                      "tile": i, "url": t.get("url") or "", "delay": d, "src": t.get("src") or "default", "as_of": (picture - d) * 1000,
                       "rows": bets.rows(g, picture - d)})
     d = sync["default"]
     for g in others:
