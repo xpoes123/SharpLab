@@ -273,6 +273,10 @@
         const p = el("button", null, "⬆ main"); p.title = "Make this the main (big) tile";
         p.onclick = () => propose({ op: "promote", i, label: name }); t.append(p);
       }
+      if (!ownPage(u) && elecMode) {   // "DJ Jev, put something else here"
+        const j = el("button", null, "🎧 swap"); j.title = "Ask DJ Jev for the best other stream on air";
+        j.onclick = () => propose({ op: "jevswap", i }); t.append(j);
+      }
       const live = (wall.streams || [])[i];   // a YouTube tile: is it on yet (wall/streams.py)
       if (live) t.append(el("span", "small " + (live.live ? "live-on" : "muted"), live.live ? "● live" : live.starts
         ? `starts ${new Date(live.starts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : live.live === false ? "not live" : ""));
@@ -394,7 +398,10 @@
   fetch("/spectrum.json").then((r) => r.json()).then((j) => { spectrumCat = j; if (!$("elecScreens").closest("[data-elec]").hidden) renderElec(); }).catch(() => {});
   const verifiedMe = () => !!me && (!me.guest || me.tier === "friend");
   function specBadge(st, s) {
-    if (st.label === "coverage") return ["● on air", "live-on"];
+    if (st.label === "coverage") {
+      const ck = st.clock || {};
+      return ["● on air" + ((st.soon || 0) >= 0.6 ? " · break soon" : ck.next_likely ? ` · break likely ${ck.next_likely}` : ""), "live-on"];
+    }
     if (st.label === "break" || st.label === "ad") return ["⏸ break", "muted"];
     if (st.label === "offtopic") return ["off-topic", "muted"];
     if (st.live === false && st.starts)
