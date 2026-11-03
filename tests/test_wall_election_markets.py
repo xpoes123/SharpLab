@@ -402,3 +402,19 @@ def test_pulse_mine_only_the_viewers_own_pulse_positions(eenv, monkeypatch):
     got = client.get("/api/v1/wall/election/pulse/mine").json()
     assert got["positions"] == {"KXMIDTERMVOTETURN-NJSEN-3000000": {"side": "NO", "qty": 40.0, "cost": 12.4}}
     assert asked == ["8", "7"]
+
+
+def test_pulse_feedback_members_post_key_replies(eenv, monkeypatch, tmp_path):
+    client = eenv[0]
+    monkeypatch.setattr(wel, "FEEDBACK", tmp_path / "fb.json")
+    monkeypatch.setattr(wel, "_fb_last", {})
+    client.cookies.clear()
+    assert client.post("/api/v1/wall/election/pulse/feedback", json={"text": "hi"}).status_code == 401
+    login(client, "7", "Hansen")
+    fid = client.post("/api/v1/wall/election/pulse/feedback", json={"text": "add NJ counties"}).json()["id"]
+    assert client.post("/api/v1/wall/election/pulse/feedback", json={"text": "again"}).status_code == 429
+    assert client.post(f"/api/v1/wall/election/pulse/feedback/{fid}/reply", json={"text": "on it"}).status_code == 401
+    assert client.post(f"/api/v1/wall/election/pulse/feedback/{fid}/reply", json={"text": "on it"},
+                       headers={"X-API-Key": "sekrit"}).json() == {"ok": True}
+    (it,) = client.get("/api/v1/wall/election/pulse/feedback").json()["items"]
+    assert (it["who"], it["text"], it["reply"]) == ("Hansen", "add NJ counties", "on it") and "uid" not in it
