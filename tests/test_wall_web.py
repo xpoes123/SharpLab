@@ -506,6 +506,17 @@ def test_me_without_session_points_to_login(setup):
     assert r.status_code == 401 and r.json()["login"].endswith("next=/wall.html")
 
 
+def test_me_logged_out_peek_is_only_name_and_count(setup):
+    client, hub, *_ = setup
+    client.cookies.clear()
+    assert client.get("/api/v1/wall/me").json()["peek"] == {"name": None, "watching": 0}
+    hub.wall = {"running": True, "name": "NFL Sunday", "urls": ["https://secret.example/stream"]}
+    hub.presence.join(1, {"id": "300", "name": "Kim"}, hub.clock())
+    assert client.get("/api/v1/wall/me").json()["peek"] == {"name": "NFL Sunday", "watching": 1}
+    hub.wall = {"running": False, "name": "NFL Sunday"}
+    assert client.get("/api/v1/wall/me").json()["peek"]["name"] is None
+
+
 def test_routes_are_wired_into_the_app():
     from web.api import app
     paths = {getattr(r, "path", "") for r in app.routes}

@@ -980,12 +980,18 @@ async def games(request: Request):
     return {"games": await live_games()}
 
 
+def peek() -> dict:
+    """What the join screen may show before anyone logs in: the wall's name while it runs, and a head count. Never names or media."""
+    w = hub.wall or {}
+    return {"name": (w.get("name") or None) if w.get("running") else None, "watching": len(hub.presence.watching())}
+
+
 @router.get("/me")
 async def me(request: Request, k: str = ""):
     user = viewer(request)
     if not user:
         return JSONResponse({"authenticated": False, "login": f"/api/v1/auth/discord/login?next={PAGE}",
-                             "guest_ok": key_ok(k)}, status_code=401)
+                             "guest_ok": key_ok(k), "peek": peek()}, status_code=401)
     return {"authenticated": True, **user}
 
 
