@@ -1,0 +1,35 @@
+/* The election data tiles (map + key races). Same look as the overlay (src/tv/static/design/tokens.css "Master Control"):
+   warm near-black, Archivo condensed + IBM Plex Mono, 1 rem = tile width / 60 (a tile is ~1/2 of the TV across, so type
+   is about the overlay's size at TV distance). Calm: nothing blinks or pulses; views change by a slow crossfade only. */
+:root {
+  --bg: #0E0F0C; --surface: #161714; --surface2: #1F201C; --rule: #3A3B34; --rule-strong: #5C5C51;
+  --ink: #ECE6D6; --muted: #B3AD9D; --accent: #FFB000;
+  /* parties: the standard blue / red, softened for a dark screen; leading = the same hue, dimmed */
+  --dem: #6C9BE0; --dem-lead: #3A5378; --rep: #E07A6E; --rep-lead: #7A3F39; --ind: #B39AD9; --ind-lead: #5E5277;
+  --none: #33342D; --off: #121310; --edge: #0E0F0C;
+  --f-display: "Archivo", "Archivo Narrow", "Arial Narrow", "DejaVu Sans Condensed", sans-serif;
+  --f-mono: "IBM Plex Mono", "DejaVu Sans Mono", monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: calc(100vw / 60); background: var(--bg); }
+body { background: var(--bg); color: var(--ink); font-family: var(--f-display); font-stretch: 84%; overflow: hidden;
+       width: 100vw; height: 100vh; -webkit-font-smoothing: antialiased; cursor: none; }
+.mono { font-family: var(--f-mono); font-stretch: 100%; }
+.caps { text-transform: uppercase; letter-spacing: 0.06em; font-stretch: 68%; }
+.num { font-variant-numeric: tabular-nums; font-stretch: 68%; font-weight: 800; }
+.muted { color: var(--muted); }
+.D { color: var(--dem); } .R { color: var(--rep); } .I { color: var(--ind); }
+
+/* header: title · source line · clock */
+.head { position: absolute; left: 1.2rem; right: 1.2rem; top: 0.9rem; display: flex; align-items: baseline; gap: 1rem; }
+.head .title { font-size: 2.1rem; font-weight: 800; color: var(--accent); }
+.head .sub { font-size: 0.85rem; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.head .clock { font-size: 1.6rem; }
+.foot { position: absolute; left: 1.2rem; right: 1.2rem; bottom: 0.7rem; font-size: 0.75rem; display: flex; gap: 1rem;
+        justify-content: space-between; white-space: nowrap; }
+.foot .unofficial { color: var(--accent); }
+.foot .err { color: #FF9580; }
+
+/* views crossfade (2 s) — never a cut, never a flash */
+.view { position: absolute; inset: 0; opacity: 0; transition: opacity 2s ease-in-out; }
+.view.on { opacity: 1; }

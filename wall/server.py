@@ -27,7 +27,8 @@ from pydantic import ValidationError
 from wall.bands import ScoreTape, build_view
 from wall.bets import POLL_S as BETS_POLL_S, BetsFeed, badge_rows
 from wall.chat import POLL_S, ChatFeed
-from wall.engine import Session
+from wall.election import Results, board as election_board, replay
+from wall.engine import Session, own_page
 from wall.headless import Headless
 from wall.instance import BOARDS, Instance, WallError
 from wall.llm import LLMGuard
@@ -40,6 +41,9 @@ TAILNET = ipaddress.ip_network("100.64.0.0/10")
 REMOTE_OK = re.compile(r"^/(healthz|teams|live/[a-z]+|presets|sync|i/discord(/.*)?|hls/discord/[A-Za-z0-9_.]+)$")
 HLS_FILE = re.compile(r"^(index\.m3u8|seg\d{6}\.ts)$")
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+PAGES = (Path(__file__).parent / "pages").resolve()
+PAGE_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
+              ".json": "application/json", ".svg": "image/svg+xml"}
 
 
 def resolve(host: str) -> list:
@@ -90,7 +94,9 @@ def browserish(request: Request) -> bool:
 def public_url(u: str) -> str:
     """The discord wall streams its tiles to every viewer: no loopback / LAN / tailnet pages (the TV's own UI, the router,
     CDP, Tailscale-only services). Resolves the host; a name that won't resolve is refused too."""
-    host = urlsplit(check_url(u)).hostname or ""
+    if own_page(check_url(u)):   # our own data pages (the election map…): served by this service, nothing private on them
+        return u
+    host = urlsplit(u).hostname or ""
     try:
         addrs = {a[4][0] for a in resolve(host)}
     except (OSError, UnicodeError):
@@ -130,13 +136,16 @@ class Cfg:
         self.owner_id = env.get("WALL_OWNER_ID", "")       # the TV's phones post as him
         self.owner_name = env.get("WALL_OWNER_NAME", "David")
         self.sync_default = float(env.get("WALL_BETS_DELAY_S", "45"))   # the spoiler delay until a tile is calibrated
+        self.election_replay = env.get("WALL_ELECTION_REPLAY", "")   # a dir of recorded CNN files (wall/election.replay)
         self.sync_ocr = env.get("WALL_SYNC_OCR", "1") not in ("0", "false", "")   # 0 = no scorebug OCR (manual + default only)
 
 
 def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, scores: Scores | None = None,
           store: PresetStore | None = None, guard: LLMGuard | None = None, chat: ChatFeed | None = None,
-          sync: SyncStore | None = None, bets: BetsFeed | None = None, runner: Runner | None = None) -> FastAPI:
+          sync: SyncStore | None = None, bets: BetsFeed | None = None, runner: Runner | None = None,
+          results: Results | None = None) -> FastAPI:
     cfg = cfg or Cfg()
+    results = results or Results(replay(cfg.election_replay) if cfg.election_replay else None, cfg.state)
     sync = sync or SyncStore(cfg.state / "sync.json", cfg.sync_default)
     bets = bets or BetsFeed(cfg.web_url, cfg.web_key)
     tape = ScoreTape()   # every scoreboard as first seen: the band headers' delayed scores
@@ -164,7 +173,12 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         disc.capture_output, disc.screen_sink = cfg.tv_output, cfg.tv_sink
     if tv is not None and tv.host_app is None:   # the TV's overlay only over the TV OS's wall app (never Dreamscape…)
         tv.host_app = lambda: tv_active(cfg.tv_overlay_api)
+    def election_feed() -> dict:
+        results.touch()
+        return election_board(results.snapshot())
+
     for i in instances.values():
+        i.feeds["election"] = election_feed
         if i.headless:
             i.before_start = guard.park   # the LLM's VRAM is free before the budget check
         i.sync = sync
@@ -242,7 +256,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         except ValueError:
             ip = None
         if ip is not None and ip.is_loopback:
-            if browserish(request):
+            if browserish(request) and not (request.method in ("GET", "HEAD") and request.url.path.startswith("/p/")):
                 return JSONResponse({"error": "forbidden"}, status_code=403)
             return await call_next(request)
         if ip is None or ip not in TAILNET:
@@ -540,6 +554,26 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         status, out = await asyncio.to_thread(chat.post, text[:300])
         return JSONResponse(out, status_code=status)
 
+    # ---- the wall's own pages (data tiles: /p/election/map …) + their data; GET only, also from the tiles themselves ----
+    @app.get("/p/election/data.json")
+    def election_data() -> Response:
+        results.touch()
+        return JSONResponse(results.snapshot(), headers={"Cache-Control": "no-store"})
+
+    @app.get("/p/election/board.json")
+    def election_board_json() -> dict:
+        """The Election board's data (the TV router's boards.py polls this for its overlay)."""
+        return election_feed()
+
+    @app.get("/p/{path:path}")
+    def page(path: str) -> Response:
+        f = (PAGES / path).resolve()
+        if f.is_dir() or not f.suffix:
+            f = f.with_suffix(".html") if not f.is_dir() else f / "index.html"
+        if not f.is_relative_to(PAGES) or not f.is_file() or f.suffix not in PAGE_TYPES:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return FileResponse(f, media_type=PAGE_TYPES[f.suffix], headers={"Cache-Control": "no-cache"})
+
     # ---- HLS ----
     @app.get("/hls/{name}/{file}")
     def hls(name: str, file: str) -> Response:
@@ -554,7 +588,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
             return FileResponse(path, media_type="application/vnd.apple.mpegurl", headers={"Cache-Control": "no-cache"})
         return FileResponse(path, media_type="video/mp2t", headers={"Cache-Control": "max-age=60"})
 
-    app.state.boards = BOARDS
+    app.state.boards, app.state.results = BOARDS, results
     return app
 
 

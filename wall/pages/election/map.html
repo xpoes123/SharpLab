@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Election map</title>
+<link rel="stylesheet" href="election.css">
+<style>
+  .bop { position: absolute; left: 1.2rem; right: 1.2rem; top: 4.2rem; }
+  .bop .nums { display: flex; justify-content: space-between; align-items: baseline; }
+  .bop .big { font-size: 3.2rem; line-height: 1; }
+  .bop .mid { font-size: 0.95rem; text-align: center; flex: 1; }
+  .bar { position: relative; height: 1.5rem; margin-top: 0.5rem; background: var(--none); display: flex; overflow: visible; }
+  .bar > i { display: block; height: 100%; transition: width 3s ease-in-out; }
+  .bar .tick { position: absolute; top: -0.35rem; bottom: -0.35rem; width: 0.12rem; background: var(--ink); }
+  .bar .tickl { position: absolute; top: 1.95rem; transform: translateX(-50%); font-size: 0.8rem; white-space: nowrap; }
+  .under { display: flex; justify-content: space-between; font-size: 0.9rem; margin-top: 1.4rem; }
+  .map { position: absolute; left: 4rem; right: 4rem; top: 12.4rem; bottom: 2.2rem; }
+  .map svg { width: 100%; height: 100%; }
+  .map path { stroke: #2A2B25; stroke-width: 0.9; transition: fill 3s ease-in-out; }
+  .legend { position: absolute; right: 1.2rem; bottom: 2.4rem; font-size: 0.75rem; display: grid; gap: 0.25rem; text-align: right; }
+  .legend b { display: inline-block; width: 0.8rem; height: 0.8rem; vertical-align: -0.1rem; margin-left: 0.3rem; }
+  .side { position: absolute; left: 1.2rem; bottom: 2.4rem; font-size: 0.8rem; display: grid; gap: 0.2rem; max-width: 15rem; }
+  .side .k { font-size: 0.75rem; color: var(--accent); }
+  .dots { display: flex; gap: 0.5rem; position: absolute; top: 1.35rem; right: 8.5rem; }
+  .dots i { width: 0.55rem; height: 0.55rem; border: 0.1rem solid var(--rule-strong); border-radius: 50%; transition: background 2s; }
+  .dots i.on { background: var(--muted); border-color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="views"></div>
+<div class="dots" id="dots"></div>
+<div class="foot" id="foot"></div>
+<script src="election.js"></script>
+<script>
+"use strict";
+// Rotating results map: Senate → House → Governors, one every 40 s (?every=s), a 2 s crossfade; data every 30 s, a state's
+// colour change fades over 3 s. Won = the party's colour, leading (not called) = the same hue dimmed, no votes yet = grey,
+// no race = darker. Nothing blinks. ?view=S|H|G pins one (renders, tests).
+const Q = new URLSearchParams(location.search);
+const ORDER = ["S", "H", "G"], EVERY = (+Q.get("every") || 40) * 1000;
+let shapes = null, data = null, cur = Q.get("view") && ORDER.includes(Q.get("view")) ? Q.get("view") : "S";
+const views = {};
+for (const o of ORDER) {
+  const v = document.createElement("div");
+  v.className = "view";
+  v.innerHTML = `<div class="head"><span class="title caps">${E.OFFICE[o] === "Governor" ? "Governors" : E.OFFICE[o]}</span>
+    <span class="sub mono muted"></span><span class="clock num"></span></div>
+    <div class="bop"><div class="nums"><span class="big num D"></span><span class="mid mono"></span><span class="big num R"></span></div>
+    <div class="bar"></div><div class="under mono"></div></div>
+    <div class="map"></div><div class="side"></div>
+    <div class="legend mono muted"><span>won<b style="background:var(--dem)"></b><b style="background:var(--rep)"></b></span>
+    <span>leading<b style="background:var(--dem-lead)"></b><b style="background:var(--rep-lead)"></b></span>
+    <span>no votes yet<b style="background:var(--none)"></b></span><span>no race<b style="background:var(--off);outline:0.08rem solid var(--rule)"></b></span></div>`;
+  document.getElementById("views").appendChild(v);
+  views[o] = v;
+  E.tickClock(v.querySelector(".clock"));
+  document.getElementById("dots").appendChild(document.createElement("i"));
+}
+
+function stateFill(o, races) {   // state → fill for this office
+  const out = {};
+  const by = {};
+  for (const r of races.filter((r) => r.office === o)) (by[r.state] = by[r.state] || []).push(r);
+  for (const [st, rs] of Object.entries(by)) {
+    if (o !== "H") {   // a state with two Senate races (a special): the regular one, unless only the special is decided
+      const r = rs.find((x) => x.called) || rs.find((x) => !x.special) || rs[0];
+      out[st] = r.called ? E.fill(r.called, true) : r.leader ? E.fill(r.leader, false) : "var(--none)";
+      continue;
+    }
+    // House: the party with more of the state's seats (won + leading); solid once every seat there is called
+    const n = { D: 0, R: 0 };
+    let called = 0;
+    for (const r of rs) {
+      const p = r.called || r.leader;
+      if (p === "D" || p === "R") n[p]++;
+      if (r.called) called++;
+    }
+    const p = n.D > n.R ? "D" : n.R > n.D ? "R" : "";
+    out[st] = !p ? "var(--none)" : E.fill(p, called === rs.length);
+  }
+  return out;
+}
+
+function draw(o) {
+  const v = views[o], b = data.offices[o];
+  const races = (data.races || []).filter((r) => r.office === o);
+  const counting = races.filter((r) => r.votes > 0).length;
+  v.querySelector(".sub").textContent = counting
+    ? `${b.up} races · ${b.called} called · ${counting} counting`
+    : `${b.up} races · ${E.nextClose(data) || "no votes counted yet"}`;
+  const s = b.seats, D = s.D.held + s.D.won, R = s.R.held + s.R.won;
+  v.querySelector(".big.D").textContent = `Dem ${D}`;
+  v.querySelector(".big.R").textContent = `${R} Rep`;
+  const ctl = b.control.D, total = b.total;
+  const nt = E.net(b.net);
+  v.querySelector(".mid").innerHTML = o === "G"
+    ? `${b.total} governors · ${b.up} up this year`
+    : `${ctl} for control${b.winner ? ` · <span class="${b.winner}">${E.PARTY[b.winner]} control</span>` : ""}`;
+  const seg = (w, c) => `<i style="width:${(100 * w / total).toFixed(3)}%;background:${c}"></i>`;
+  const ind = s.I.held + s.I.won;
+  const tickAt = o === "G" ? 0 : 100 * ctl / total;
+  v.querySelector(".bar").innerHTML = seg(D, "var(--dem)") + seg(s.D.lead, "var(--dem-lead)") + seg(ind, "var(--ind)") +
+    seg(s.I.lead, "var(--ind-lead)") + seg(b.out, "var(--none)") + seg(s.R.lead, "var(--rep-lead)") + seg(R, "var(--rep)") +
+    (tickAt ? `<span class="tick" style="left:${tickAt}%"></span>` : "");
+  v.querySelector(".under").innerHTML =
+    `<span class="D">${s.D.lead ? `+${s.D.lead} leading` : ""}${o !== "H" ? `${s.D.lead ? " · " : ""}${s.D.held} not up` : ""}</span>` +
+    `<span class="muted">${b.out} not yet counted${o !== "G" ? ` · <span class="${nt.p}">${nt.text}</span>` : ""}${ind ? ` · <span class="I">${ind} Ind</span>` : ""}</span>` +
+    `<span class="R">${o !== "H" ? `${s.R.held} not up` : ""}${s.R.lead ? `${o !== "H" ? " · " : ""}+${s.R.lead} leading` : ""}</span>`;
+  // the map
+  const fills = stateFill(o, data.races || []);
+  const map = v.querySelector(".map");
+  if (!map.firstChild && shapes) {
+    map.innerHTML = `<svg viewBox="0 0 975 610" preserveAspectRatio="xMidYMid meet">${Object.entries(shapes)
+      .map(([st, x]) => `<path data-st="${st}" d="${x.d}"></path>`).join("")}</svg>`;
+  }
+  for (const p of map.querySelectorAll("path")) p.style.fill = fills[p.dataset.st] || "var(--off)";
+  // flips called so far (Senate / Governors) — the story of the night, small
+  const flips = races.filter((r) => r.flip && r.called);
+  v.querySelector(".side").innerHTML = flips.length
+    ? `<span class="k caps">Flips</span>` + flips.slice(0, 5).map((r) => `<span class="${r.called}">${E.esc(r.label)} → ${E.PARTY[r.called]}</span>`).join("")
+    : "";
+}
+
+function show(o) {
+  cur = o;
+  ORDER.forEach((k, i) => {
+    views[k].classList.toggle("on", k === o);
+    document.getElementById("dots").children[i].classList.toggle("on", k === o);
+  });
+}
+
+function onData(d) {
+  data = d;
+  if (!d.offices) return;
+  for (const o of ORDER) draw(o);
+  document.getElementById("foot").innerHTML = E.footer(d);
+}
+
+fetch("../us-states.json").then((r) => r.json()).then((s) => { shapes = s; if (data) onData(data); });
+E.poll(onData);
+show(cur);
+if (!Q.get("view")) setInterval(() => show(ORDER[(ORDER.indexOf(cur) + 1) % ORDER.length]), EVERY);
+</script>
+</body>
+</html>

@@ -13,11 +13,22 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError, field_validator, model_validator
 
+from wall.engine import page_url
 from wall.live import LEAGUES
 
 SEED = [{"name": "Sample", "urls": ["https://www.youtube.com/watch?v=aqz-KE-bpKQ", "https://www.youtube.com/watch?v=4xDzrJKXOOY",
                                      "https://www.twitch.tv/lofigirl", "https://commons.wikimedia.org/wiki/File:Big_Buck_Bunny_4K.webm"]}]
 LIVE_SEED = [{"name": f"Live {LEAGUES[lg]}", "urls": [], "overlay": lg, "live": lg} for lg in LEAGUES]
+# Election night 2026-11-03: the service's own data pages (wall/election.py) + news streams. Added once to an existing
+# list (a marker file remembers it, so deleting them sticks). YouTube: the channels' /live URLs never end; PBS's main
+# election stream is a fixed id (its /live picks the ASL one), on from 6 pm ET.
+MAP, RACES = page_url("election/map"), page_url("election/races")
+NBC, PBS = "https://www.youtube.com/@NBCNews/live", "https://www.youtube.com/watch?v=QRK30J9ouaU"
+ELECTION_SEED = [
+    {"name": "Election Night", "urls": [MAP, RACES, NBC, PBS], "overlay": "election"},
+    {"name": "Election + NBA", "urls": [MAP, RACES], "overlay": "election", "live": "nba", "fixed": True},
+    {"name": "Election map + NBA", "urls": [MAP, NBC], "overlay": "election", "live": "nba", "fixed": True},
+]
 
 
 def check_url(u: str) -> str:
@@ -32,7 +43,8 @@ class Preset(BaseModel):
     urls: list[str] = Field(max_length=4)   # a live preset's are its fallback when no game is on (may be empty)
     overlay: str = Field(default="", pattern=r"^[a-z]{0,16}$")   # a board id that opens with this wall; "" = none
     live: Literal["", "nfl", "nba"] = ""
-    tiles: int = Field(default=4, ge=1, le=4)   # how many live games, at most
+    tiles: int = Field(default=4, ge=1, le=4)   # how many live games, at most (with fixed: how many tiles in all)
+    fixed: bool = False   # live + fixed: the URLs stay up as fixed tiles (first), live games fill the rest up to `tiles`
 
     @model_validator(mode="after")
     def _some_tile(self):
@@ -76,6 +88,17 @@ class PresetStore:
             self.presets = [*SEED, *LIVE_SEED]
         if src is not None and src != self.path and self.path:
             _write(self.path, self.presets)
+        self._seed(ELECTION_SEED, "election")
+
+    def _seed(self, seed: list[dict], tag: str) -> None:
+        """Add `seed` once (by name, at the end): the marker file keeps a deleted one deleted."""
+        mark = self.path.parent / f"wall-{tag}-seeded" if self.path else None
+        if mark is None or mark.exists():
+            return
+        names = {p["name"].lower() for p in self.presets}
+        self.presets = [*self.presets, *(p for p in seed if p["name"].lower() not in names)][:50]
+        _write(self.path, self.presets)
+        mark.touch()
 
     def put(self, data: object) -> list[dict]:
         """Replace the whole list. Raises ValidationError."""

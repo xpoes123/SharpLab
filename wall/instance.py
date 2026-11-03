@@ -11,7 +11,7 @@ import logging
 import threading
 import time
 
-from wall.engine import Driver, Session
+from wall.engine import Driver, Session, sound_tile
 from wall.headless import Headless, free_vram_mb
 from wall.live import LEAGUES, REFRESH_S, LiveRun, Scores, carries, matchup
 from wall.presets import PresetStore, check_url
@@ -19,7 +19,8 @@ from wall.presets import PresetStore, check_url
 log = logging.getLogger("wall.instance")
 APP_POLL_S = 2.0   # how often a TV wall asks the TV OS what it shows
 AWAY_S = 8.0       # in another app this long → a wall the TV OS didn't start stops
-BOARDS = {"nfl": "NFL", "nba": "NBA"}   # the boards a service-owned overlay can show (ESPN scoreboards)
+BOARDS = {"nfl": "NFL", "nba": "NBA", "election": "Election"}   # the boards a service-owned overlay can show (ESPN scoreboards;
+# election = wall/election.py's results, set by the server as feeds["election"])
 
 
 class WallError(Exception):
@@ -68,6 +69,7 @@ class Instance:
         self.screen_sink = ""                   # whose sound goes with it ("" = the TV's default sink)
         self.tv_on_wall = lambda: True          # is the TV showing its wall right now?
         self._tv_wall, self._wall_at, self._screen_retry = False, 0.0, 0.0
+        self.feeds: dict = {}                   # board id → () → its data, for boards that aren't ESPN scoreboards
         self.sync = None                        # wall/sync.SyncStore: the spoiler delay per tile page (set by the server)
         # the TV OS this wall's screen belongs to (tv only): host_app() → its active app ("wall", "dreamscape", … or
         # None = home / unreachable). The overlay draws only while it is "wall"; a wall the TV OS didn't start (the
@@ -118,14 +120,25 @@ class Instance:
         p = self.store.find(preset) if preset is not None else None
         if preset is not None and p is None:
             raise WallError(f"no preset {preset!r}")
+        fixed = False
         if p:
             urls, live, tiles = list(p["urls"]), p.get("live", ""), p.get("tiles", 4)
+            fixed = bool(live and p.get("fixed") and urls)
             board = board if board is not None else p.get("overlay") or p.get("live") or ""
         urls = [check_url(u) for u in (urls or [])][:4]
         if live and live not in LEAGUES:
             raise WallError("live is nfl or nba")
         run = None
-        if live:
+        if fixed:   # the preset's pages stay as tiles set by hand (never swapped); games fill the rest, now and later
+            urls = urls[:4]
+            run = LiveRun(live, max(tiles, len(urls)))
+            run.games = [None] * len(urls)
+            run.data = self.scores.get(live, True)
+            plan = [(g, u) for g, u in (run.make_plan(run.data) or [])[len(urls):] if g and u]
+            run.games += [g for g, _ in plan]
+            urls = urls + [u for _, u in plan]
+            run.due = self.clock() + 5
+        elif live:
             run = LiveRun(live, tiles)
             run.data = self.scores.get(live, True)
             plan = [(g, u) for g, u in run.make_plan(run.data) or [] if u]
@@ -161,7 +174,7 @@ class Instance:
             self._app_at, self._away_since, self.app = self.clock(), 0.0, app
             self.tv_owned = app == "wall"
             self.driver.start(urls)
-            self.driver.sound = max(0, min(sound, len(urls) - 1))
+            self.driver.sound = sound_tile(urls, max(0, min(sound, len(urls) - 1)))
             if self.headless:
                 try:
                     self.headless.begin_capture()
@@ -330,7 +343,7 @@ class Instance:
         b = board or self.board or "nfl"
         if b not in BOARDS:
             raise WallError("no such board")
-        data = self.scores.get(b)
+        data = self.feeds[b]() if b in self.feeds else self.scores.get(b)
         return {"board": self.board, "visible": self.visible, "layout": self.layout, "matchup": "", "view": self.view,
                 "rev": self.ov_rev, "boards": [{"id": k, "name": v} for k, v in BOARDS.items()], "shown": b,
                 "data": data, "updated": self.clock() if data else 0, "error": "" if data else "no scoreboard yet"}
