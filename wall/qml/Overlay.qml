@@ -9,8 +9,10 @@
 //            grid (wall.py's KWin script tiles with the same function). One poll: the band reads the sidebar's data.
 //   full:    the whole screen, per-pixel 90 % background.
 //   matchup: the whole screen, opaque: the league the phone opened.
-//   bets:    (with --bets <service>/i/<wall>) a transparent surface over the tiles' corner with members' Kalshi badges, and
-//            the spoiler delays the boards are held back by (each game as of now − its tile's delay; Board.qml)
+//   bets:    (with --bets <service>/i/<wall>) members' Kalshi positions — never over the video: the sidebar's Bets
+//            section, a bets line in the ticker (bets.ticker), the bands' header chips + detail; on 1 / 4 tiles with no
+//            L-bar the service brings the L-bar up for them (bets.auto_lbar). Also the spoiler delays the boards are held
+//            back by (each game as of now − its tile's delay; Board.qml).
 //   bands:   (any view but full / matchup; polls GET <bets>/bands every 2 s) one surface, opaque wherever the tiles leave
 //            room — the L-bar's corner while the L-bar is up, else the whole screen (lbar.js wallBands): BandLayer.qml.
 //            A header per tile (its game as of now − its delay; the board's own delayed copy wins when it has the game,
@@ -20,7 +22,6 @@ import QtQuick
 import QtQuick.Window
 import org.kde.layershell 1.0 as LayerShell
 import "lbar.js" as G
-import "board.js" as B
 
 Window {   // the root is the full / matchup surface (the qml tool needs a window or an item as its root)
     id: app
@@ -32,7 +33,7 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
     // what is drawn: the view, but nothing at all unless the service says the TV OS is on its wall app (bets "on"):
     // a wall left running under Dreamscape / YouTube / News never draws over them. No service (no --bets) = the view.
     readonly property bool hostOk: app.betsApi === "" || (app.bets !== null && app.bets.on !== false)
-    readonly property string layout: app.hostOk ? app.view : ""
+    readonly property string layout: !app.hostOk ? "" : app.view === "" && app.bets && app.bets.auto_lbar && app.bets.show ? "lbar" : app.view
     property int rev: -1
     readonly property string api: arg("--api", "http://127.0.0.1:7790")
     readonly property var geo: G.lbar(Screen.width, Screen.height)
@@ -150,7 +151,7 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
         // exclusiveEdge in QML). Shown first, so KWin gives it the full height and the band the width left of it.
         LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorRight
         LayerShell.Window.exclusionZone: app.geo.side
-        Board { anchors.fill: parent; unit: Screen.width; layout: "side"; polling: false; v: main.v; chat: app.chat }
+        Board { anchors.fill: parent; unit: Screen.width; layout: "side"; polling: false; v: main.v; chat: app.chat; bets: app.bets }
     }
 
     Window {   // lbar: the band (bottom edge, under the tiles only)
@@ -169,25 +170,7 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
         // bottom with the sidebar above it — still no video covered (the tiles are placed by wall.py), just a wider band
         LayerShell.Window.anchors: LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
         LayerShell.Window.exclusionZone: app.geo.band
-        Board { anchors.fill: parent; unit: Screen.width; layout: "band"; polling: false; v: main.v }
-    }
-
-    Window {   // bets: badges on the tiles (over the L-bar's corner, or the whole screen without one); not over a full board
-        transientParent: null
-        title: "TV overlay bets"
-        color: "transparent"
-        flags: Qt.FramelessWindowHint | Qt.WindowTransparentForInput | Qt.WindowDoesNotAcceptFocus
-        readonly property bool lb: app.layout === "lbar"
-        width: lb ? app.geo.gridW : Screen.width
-        height: lb ? app.geo.gridH : Screen.height
-        visible: app.hostOk && !!app.bets && app.bets.show && B.badges(app.bets, app.bets.n).length > 0 && (app.layout === "" || app.layout === "lbar")
-        LayerShell.Window.scope: "tv-overlay"
-        LayerShell.Window.layer: LayerShell.Window.LayerOverlay
-        LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
-        LayerShell.Window.activateOnShow: false
-        LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorLeft
-        LayerShell.Window.exclusionZone: -1   // ignore the sidebar's / band's zones: the tiles start at 0,0
-        Bets { anchors.fill: parent; unit: Screen.width; lbar: false; bets: app.bets }
+        Board { anchors.fill: parent; unit: Screen.width; layout: "band"; polling: false; v: main.v; bets: app.bets }
     }
 
     Window {   // bands: one surface over the region the band layer owns (the L-bar's corner, or the whole screen without
@@ -212,7 +195,7 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
             anchors.fill: parent
             active: bandWin.visible
             sourceComponent: BandLayer {
-                b: app.bands; geo: app.bandGeo; unit: Screen.width; lbarShown: app.layout === "lbar"
+                b: app.bands; geo: app.bandGeo; unit: Screen.width; lbarShown: app.layout === "lbar"; bets: app.bets
                 boardData: main.last ? main.last.data : null
             }
         }

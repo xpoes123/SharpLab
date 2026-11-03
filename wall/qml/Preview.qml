@@ -2,7 +2,7 @@
 // in a plain window — for lbar the four tiles (stand-ins, with their size) plus the sidebar and the band — and, with
 // --out, saves a PNG after a few seconds and quits.
 //   QT_QPA_PLATFORM=offscreen qml6 Preview.qml -- --layout lbar|full|matchup --board nfl --size 2560x1440 --out /tmp/ov.png
-//   --tiles a.png,b.png,c.png = real frames on the tiles (laid out like the wall); --bets <url> = the bets badges + delays
+//   --tiles a.png,b.png,c.png = real frames on the tiles (laid out like the wall); --bets <url> = the bets (sidebar, ticker, bands) + delays
 //   --n 2 = that many stand-in tiles (lbar.js); --bands <url> (default: --bets) = the band layer around them (BandLayer.qml);
 //   --layout none = no L-bar / board (the tiles over the whole screen)
 import QtQuick
@@ -18,7 +18,8 @@ Window {
     readonly property var size: arg("--size", "1920x1080").split("x").map(Number)
     readonly property string layout: arg("--layout", "lbar")
     readonly property var geo: G.lbar(size[0], size[1])
-    readonly property bool lbar: layout === "lbar"
+    // "none" + the service bringing the L-bar up for bets on 1 / 4 tiles (bets.auto_lbar) = the L-bar, like Overlay.qml
+    readonly property bool lbar: layout === "lbar" || (layout === "none" && !!bets && !!bets.auto_lbar && !!bets.show)
     width: size[0]
     height: size[1]
     color: w.layout === "full" || w.layout === "matchup" ? "#2a2f45" : "#000000"   // video under a full overlay; else the kiosk's black
@@ -53,7 +54,7 @@ Window {
         }
     }
     property var bets: null
-    Timer {   // the bets badges + delays, like Overlay.qml
+    Timer {   // the bets + delays, like Overlay.qml
         interval: 1000; running: w.arg("--bets", "") !== ""; repeat: true; triggeredOnStart: true
         onTriggered: {
             var x = new XMLHttpRequest()
@@ -81,10 +82,10 @@ Window {
     }
     readonly property var bandGeo: w.bands && w.bands.n > 0 ? G.wallBands(w.bands.n, size[0], size[1], w.bands.lbar, w.lbar) : null
     BandLayer {
-        visible: w.bandGeo !== null && w.layout !== "full" && w.layout !== "matchup"
+        visible: w.bandGeo !== null && w.layout !== "full" && w.layout !== "matchup" && (w.bands.n === 2 || w.bands.n === 3)
         x: w.bandGeo ? w.bandGeo.outer.x : 0; y: w.bandGeo ? w.bandGeo.outer.y : 0
         width: w.bandGeo ? w.bandGeo.outer.w : 0; height: w.bandGeo ? w.bandGeo.outer.h : 0
-        b: w.bands; geo: w.bandGeo; unit: w.width; lbarShown: w.lbar
+        b: w.bands; geo: w.bandGeo; unit: w.width; lbarShown: w.lbar; bets: w.bets
         boardData: (w.lbar ? side : whole).last ? (w.lbar ? side : whole).last.data : null
     }
     Board {
@@ -92,6 +93,7 @@ Window {
         x: w.geo.gridW; width: w.geo.side; height: w.height; unit: w.width
         layout: "side"; board: w.arg("--board", ""); api: w.arg("--api", "http://127.0.0.1:7790"); polling: w.lbar
         dflt: w.arg("--bets", "") === "" ? 0 : w.bets ? w.bets["default"] : 45; delays: (w.bets && w.bets.delays) || ({})
+        bets: w.bets
     }
     Timer {   // the watch party's chat, from the view poll like Overlay.qml
         interval: 500; running: w.lbar; repeat: true; triggeredOnStart: true
@@ -109,16 +111,12 @@ Window {
     Board {
         visible: w.lbar
         y: w.geo.gridH; width: w.geo.gridW; height: w.geo.band; unit: w.width
-        layout: "band"; polling: false; v: side.v
+        layout: "band"; polling: false; v: side.v; bets: w.bets
     }
     Board {
         id: whole; visible: w.layout === "full" || w.layout === "matchup"; anchors.fill: parent
         layout: w.layout === "none" ? "full" : w.layout; board: w.arg("--board", ""); api: w.arg("--api", "http://127.0.0.1:7790"); polling: !w.lbar
         dflt: w.arg("--bets", "") === "" ? 0 : w.bets ? w.bets["default"] : 45; delays: (w.bets && w.bets.delays) || ({})
-    }
-    Bets {
-        visible: !!w.bets && (w.layout === "lbar" || w.layout === "")
-        width: w.lbar ? w.geo.gridW : w.width; height: w.lbar ? w.geo.gridH : w.height; unit: w.width; lbar: false; bets: w.bets
     }
     Timer {
         interval: Number(w.arg("--wait", "4000")); running: w.arg("--out", "") !== ""
