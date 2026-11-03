@@ -5687,11 +5687,15 @@ async def record_daily_result(game_id: str, day: str, discord_user: str, *, solv
         return cur.rowcount > 0
 
 
-async def get_daily_results(game_id: str, day: str) -> list[dict]:
+_NO_GUESTS = " AND discord_user NOT LIKE 'guest:%'"  # web guests show on today's board only, never ranked/paid
+
+
+async def get_daily_results(game_id: str, day: str, include_guests: bool = False) -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT * FROM daily_results WHERE game_id = ? AND puzzle_date = ?", (game_id, day))
+            "SELECT * FROM daily_results WHERE game_id = ? AND puzzle_date = ?"
+            + ("" if include_guests else _NO_GUESTS), (game_id, day))
         return [dict(r) for r in await cur.fetchall()]
 
 
@@ -5700,7 +5704,7 @@ async def get_daily_results_range(start_day: str, end_day: str) -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT * FROM daily_results WHERE puzzle_date >= ? AND puzzle_date <= ?",
+            "SELECT * FROM daily_results WHERE puzzle_date >= ? AND puzzle_date <= ?" + _NO_GUESTS,
             (start_day, end_day))
         return [dict(r) for r in await cur.fetchall()]
 
@@ -5775,8 +5779,8 @@ async def get_unposted_daily_results(day: str) -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT * FROM daily_results WHERE puzzle_date = ? AND COALESCE(posted, 0) = 0 "
-            "ORDER BY submitted_at", (day,))
+            "SELECT * FROM daily_results WHERE puzzle_date = ? AND COALESCE(posted, 0) = 0" + _NO_GUESTS
+            + " ORDER BY submitted_at", (day,))
         return [dict(r) for r in await cur.fetchall()]
 
 

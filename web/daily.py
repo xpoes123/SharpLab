@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from db import queries
 from shared import daily
 from web import auth, gameround
+from web import g_pokehoops as ph  # shared web-guest identity (ph_guest cookie)
 
 router = APIRouter(prefix="/api/v1/daily")
 
@@ -32,8 +33,10 @@ _start_signer = URLSafeTimedSerializer(auth.SESSION_SECRET, salt="daily-start")
 
 
 def _uid(request: Request) -> str | None:
+    """Discord member, else a web guest (the pokehoops `ph_guest` name cookie) — guests can play and
+    show on today's board, but never rank, earn, streak, or count toward the season."""
     sess = auth.read_session(request)
-    return sess["id"] if sess else None
+    return sess["id"] if sess else ph._guest(request)
 
 
 def _meta(game_id: str) -> dict:
@@ -52,7 +55,14 @@ async def today(request: Request):
         "played": False, "signed_in": False,
     }
     uid = _uid(request)
-    if uid:
+    if uid and ph.is_guest(uid):
+        out["guest"] = uid.split(":", 2)[2]
+        prior = await queries.get_daily_result(puz["game_id"], day, uid)
+        if prior:
+            out["played"] = True
+            out["your_result"] = {"solved": bool(prior["solved"]), "primary": prior["primary_score"],
+                                  "secondary": prior["secondary_score"]}
+    elif uid:
         out["signed_in"] = True
         out["streak"] = (await queries.get_daily_streak(uid, "__overall__"))["current"]
         out["balance"] = await queries.get_casino_balance(uid) or 0
@@ -143,18 +153,28 @@ async def submit(request: Request, body: SubmitBody):
     if not recorded:
         return JSONResponse({"error": "you already played today's daily"}, status_code=409)
 
+    share = game.share_grid(result, {"difficulty": puz["difficulty"], "par": puz["par"],
+                                     "number": daily.puzzle_number(day)})
+    members = await queries.get_daily_results(puz["game_id"], day)
+    if ph.is_guest(uid):  # where they'd have placed among members — nothing more
+        me = {"discord_user": uid, "solved": result["solved"], "primary_score": result["primary"],
+              "secondary_score": result["secondary"]}
+        ranked = daily.rank_results(members + [me], puz["game_id"])
+        rank = next(r["rank"] for r in ranked if r["discord_user"] == uid)
+        return {"result": result, "par": puz["par"], "rank": rank, "field": len(ranked), "guest": True,
+                "share": share}
+
     coins = await queries.grant_activity_reward(uid, "daily_play", day)
     await queries.update_daily_streak(uid, puz["game_id"], day)
     streak = await queries.update_daily_streak(uid, "__overall__", day)
 
-    ranked = daily.rank_results(await queries.get_daily_results(puz["game_id"], day), puz["game_id"])
+    ranked = daily.rank_results(members, puz["game_id"])
     rank = next((r["rank"] for r in ranked if r["discord_user"] == uid), len(ranked))
     balance = await queries.get_casino_balance(uid) or 0
     return {
         "result": result, "par": puz["par"], "rank": rank, "field": len(ranked),
         "coins": coins, "streak": streak, "balance": balance,
-        "share": game.share_grid(result, {"difficulty": puz["difficulty"], "par": puz["par"],
-                                           "number": daily.puzzle_number(day)}),
+        "share": share,
     }
 
 
@@ -276,7 +296,15 @@ async def leaderboard(request: Request):
     puz = await queries.get_or_create_daily_puzzle(day)
     game_id = puz["game_id"]
 
-    ranked = daily.rank_results(await queries.get_daily_results(game_id, day), game_id)
+    # Members rank + score points; guests are slotted in by score for show, unranked and pointless.
+    ranked = daily.rank_results(await queries.get_daily_results(game_id, day, include_guests=True), game_id)
+    n = 0
+    for r in ranked:
+        if ph.is_guest(r["discord_user"]):
+            r["rank"], r["points"] = None, 0
+        else:
+            n += 1
+            r["rank"], r["points"] = n, daily.placement_points(n, bool(r["solved"]))
     # season = calendar month of `day`
     d = date.fromisoformat(day)
     start = d.replace(day=1).isoformat()
@@ -288,12 +316,13 @@ async def leaderboard(request: Request):
         [r["discord_user"] for r in ranked] + [s["discord_user"] for s in season])
 
     def nm(uid):
-        return names.get(uid) or f"user-{uid[-4:]}"
+        return ph.is_guest(uid) and uid.split(":", 2)[2] or names.get(uid) or f"user-{uid[-4:]}"
 
     return {
         "day": day, "number": daily.puzzle_number(day), "game": _meta(game_id),
         "difficulty": puz["difficulty"], "par": puz["par"],
-        "today": [{"rank": r["rank"], "name": nm(r["discord_user"]), "solved": bool(r["solved"]),
+        "today": [{"rank": r["rank"], "name": nm(r["discord_user"]), "guest": ph.is_guest(r["discord_user"]),
+                   "solved": bool(r["solved"]),
                    "primary": r["primary_score"], "secondary": r["secondary_score"],
                    "points": r["points"]} for r in ranked[:50]],
         "season": [{"rank": i + 1, "name": nm(s["discord_user"]), "points": s["points"],
