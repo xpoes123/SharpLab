@@ -18,6 +18,11 @@
     <h2>Watch the wall</h2>
     <p class="muted">The wall is for SharpLab members. Log in with Discord (you need to be in the SharpLab server).</p>
     <a id="loginBtn" class="btn primary" href="/api/v1/auth/discord/login?next=/wall.html">Log in with Discord</a>
+    <form id="guestForm" class="row" hidden>
+      <span class="muted">…or just pick a nickname:</span>
+      <input id="nick" minlength="2" maxlength="24" autocomplete="nickname" placeholder="Nickname" required />
+      <button class="btn">Watch</button>
+    </form>
     <p id="gateErr" class="muted"></p>
   </section>
 
@@ -40,8 +45,8 @@
         <summary>Change the wall <span id="ownerNote" class="muted"></span></summary>
         <div class="row">
           <label>Preset <select id="preset"></select></label>
-          <button data-act="start" class="btn">Start</button>
-          <button data-act="stop" class="btn">Stop</button>
+          <button data-act="start" class="btn" data-member>Start</button>
+          <button data-act="stop" class="btn" data-member>Stop</button>
           <button data-act="follow" id="followBtn" class="btn" hidden>📺 Follow the TV</button>
         </div>
         <div class="row">
@@ -56,7 +61,7 @@
         <div class="row">
           <label>Tile <select id="tileI"><option value="0">1</option><option value="1">2</option><option value="2">3</option><option value="3">4</option></select></label>
           <input id="tileUrl" type="url" placeholder="https://… (a stream page)" maxlength="500" />
-          <button data-act="tile" class="btn">Put on tile</button>
+          <button data-act="tile" class="btn" data-member>Put on tile</button>
         </div>
         <p class="muted small">Screen changes pass on a majority of active viewers within 60 s; moving the sound needs 2 approvals (1 if you're alone).</p>
       </details>

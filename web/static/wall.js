@@ -116,7 +116,8 @@
         me = m.me; cfg = { ...cfg, ...m.cfg };
         offset = m.now - Date.now();
         if (m.pdt_off != null) pdtOff = m.pdt_off;
-        $("ownerNote").textContent = me.owner ? "· you're the owner: changes apply at once" : "";
+        $("ownerNote").textContent = me.owner ? "· you're the owner: changes apply at once" : me.guest ? "· as a guest you can vote, and change sound / layout / board" : "";
+        document.querySelectorAll("[data-member]").forEach((x) => (x.hidden = !!me.guest));
         $("msgs").replaceChildren(); m.history.forEach(addMsg);
         renderViewers(m.viewers);
         props.clear(); m.proposals.forEach((p) => props.set(p.id, p)); renderProps();
@@ -169,6 +170,7 @@
     list.forEach((v) => {
       const li = el("li", v.away ? "away" : "");
       li.append(avatar(v), el("span", null, v.name));
+      if (v.guest) li.append(el("span", "tag", "guest"));
       if (v.away) li.append(el("span", "tag", "away"));
       ul.append(li);
     });
@@ -182,7 +184,9 @@
     if (m.kind === "system") li.append(el("span", null, m.text));
     else {
       li.append(avatar({ avatar: m.avatar, initials: (m.name || "?").slice(0, 1).toUpperCase() }));
-      const body = el("span"); body.append(el("span", "who", m.name), document.createTextNode(m.text)); li.append(body);
+      const body = el("span"); body.append(el("span", "who", m.name));
+      if (m.guest) body.append(el("span", "tag", "guest"));
+      body.append(document.createTextNode(m.text)); li.append(body);
       if (me && me.admin) {
         const d = el("button", "mod", "✕"); d.title = "Delete"; d.onclick = () => send({ t: "del", id: m.id });
         li.append(d);
@@ -243,11 +247,28 @@
     $("room").hidden = true; $("gate").hidden = false;
     if (msg) $("gateErr").textContent = msg;
   }
-  const err = new URLSearchParams(location.search).get("error");
-  fetch("/api/v1/wall/me", { credentials: "same-origin" }).then((r) => r.json().then((j) => ({ ok: r.ok, j }))).then(({ ok, j }) => {
-    if (!ok) { if (j.login) $("loginBtn").href = j.login; showGate(err === "link_expired" ? "That link expired — use Get my link again, or log in." : ""); return; }
-    $("navRight").textContent = j.name;
-    $("room").hidden = false;
-    connect();
-  }).catch(() => showGate("Couldn't reach SharpLab."));
+  const qs = new URLSearchParams(location.search), err = qs.get("error"), key = qs.get("k") || "";
+  function boot() {
+    fetch("/api/v1/wall/me?k=" + encodeURIComponent(key), { credentials: "same-origin" }).then((r) => r.json().then((j) => ({ ok: r.ok, j }))).then(({ ok, j }) => {
+      if (!ok) {
+        if (j.login) $("loginBtn").href = j.login;
+        $("guestForm").hidden = !j.guest_ok;   // demo mode with the keyed link: a nickname is enough
+        showGate(err === "link_expired" ? "That link expired — use Get my link again, or log in." : "");
+        return;
+      }
+      $("navRight").textContent = j.name + (j.guest ? " (guest)" : "");
+      $("gate").hidden = true;
+      $("room").hidden = false;
+      connect();
+    }).catch(() => showGate("Couldn't reach SharpLab."));
+  }
+  $("guestForm").onsubmit = (e) => {
+    e.preventDefault();
+    fetch("/api/v1/wall/guest", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" },
+                                  body: JSON.stringify({ k: key, name: $("nick").value.trim() }) })
+      .then((r) => r.json().then((j) => ({ ok: r.ok, j })))
+      .then(({ ok, j }) => { if (ok) boot(); else $("gateErr").textContent = j.error || "Couldn't join."; })
+      .catch(() => ($("gateErr").textContent = "Couldn't reach SharpLab."));
+  };
+  boot();
 })();

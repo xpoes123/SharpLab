@@ -248,6 +248,11 @@ class WallCog(commands.Cog):
         self.target: dict[str, int] = {}                # user id → the tile the panel acts on (0-based)
         self._presets: list[dict] = []
 
+    def watch_url(self, web: dict | None) -> str:
+        """The link to post: sharplab-web's (keyed in demo mode, so guests can join with a nickname), else the plain page."""
+        u = (web or {}).get("watch_url")
+        return u if isinstance(u, str) and u.startswith("https://") else self.web.watch_url
+
     def save(self) -> None:
         save_state(self.state_path, self.embeds, self.last, self.announced)
 
@@ -326,7 +331,7 @@ class WallCog(commands.Cog):
             return
         st, web, err = await self.snapshot()
         try:
-            await ch.get_partial_message(msg_id).edit(embed=build_embed(st, web, self.web.watch_url, err))
+            await ch.get_partial_message(msg_id).edit(embed=build_embed(st, web, self.watch_url(web), err))
         except discord.NotFound:
             self.embeds.pop(guild_id, None)
             self.save()
@@ -365,7 +370,7 @@ class WallCog(commands.Cog):
             return False
         _, web, err = await self.snapshot()
         try:
-            m = await ch.send(embed=build_embed(st, web, self.web.watch_url, err),
+            m = await ch.send(embed=build_embed(st, web, self.watch_url(web), err),
                               view=PanelView(self, await self._preset_list(), await self._games()))
         except discord.HTTPException as e:
             log.warning("wall start post failed: %s", e)
@@ -389,7 +394,7 @@ class WallCog(commands.Cog):
 
     async def post_embed(self, interaction: discord.Interaction) -> None:
         st, web, err = await self.snapshot()
-        m = await interaction.followup.send(embed=build_embed(st, web, self.web.watch_url, err),
+        m = await interaction.followup.send(embed=build_embed(st, web, self.watch_url(web), err),
                                             view=PanelView(self, await self._preset_list(), await self._games()), wait=True)
         await self._place(interaction.guild_id, m)
 

@@ -510,3 +510,130 @@ def test_routes_are_wired_into_the_app():
     from web.api import app
     paths = {getattr(r, "path", "") for r in app.routes}
     assert {"/ws/wall", "/api/v1/wall/hls/{name}", "/api/v1/wall/state"} <= paths
+
+
+# ---- demo mode: guests with the keyed link ----
+KEY = "k" * 8 + "EY-demo-0123456789"
+
+
+@pytest.fixture
+def demo(monkeypatch, setup):
+    monkeypatch.setenv("WALL_DEMO", "1")
+    monkeypatch.setenv("WALL_DEMO_KEY", KEY)
+    wall.guest_joins.hits.clear()
+    wall.guest_names.hits.clear()
+    return setup
+
+
+def join_as_guest(client, name, k=KEY):
+    client.cookies.clear()
+    r = client.post("/api/v1/wall/guest", json={"k": k, "name": name})
+    if r.status_code == 200:   # the cookie is Secure; the test client talks http, so carry it by hand
+        raw = r.headers["set-cookie"].split(";")[0].split("=", 1)[1]
+        client.cookies.set(wall.GUEST_COOKIE, raw)
+    return r
+
+
+def test_demo_off_means_login_required(setup, monkeypatch):
+    client, *_ = setup
+    monkeypatch.setenv("WALL_DEMO_KEY", KEY)   # a key alone doesn't open anything
+    r = client.get(f"/api/v1/wall/me?k={KEY}")
+    assert r.status_code == 401 and r.json()["guest_ok"] is False
+    assert client.post("/api/v1/wall/guest", json={"k": KEY, "name": "Kim"}).status_code == 403
+    monkeypatch.setenv("WALL_DEMO", "1")
+    monkeypatch.setenv("WALL_DEMO_KEY", "short")              # too short a key: demo stays off
+    assert client.get("/api/v1/wall/me?k=short").json()["guest_ok"] is False
+
+
+def test_demo_needs_the_key(demo):
+    client, *_ = demo
+    assert client.get("/api/v1/wall/me").json()["guest_ok"] is False
+    assert client.get("/api/v1/wall/me?k=nope").json()["guest_ok"] is False
+    assert client.get(f"/api/v1/wall/me?k={KEY}").json()["guest_ok"] is True
+    assert join_as_guest(client, "Kim", k="nope").status_code == 403
+    assert client.get("/api/v1/wall/hls/index.m3u8").status_code == 401
+
+
+def test_nicknames():
+    assert wall.clean_nick("  Kim  ") == "Kim" and wall.clean_nick("Mr. O'Neil-2") == "Mr. O'Neil-2"
+    assert wall.clean_nick("a\u202eb") == "ab"   # bidi / control characters are stripped
+    for bad in ("K", "x" * 25, "<script>", "..", "", None, "a\u202e"):
+        with pytest.raises(ValueError):
+            wall.clean_nick(bad)
+    assert wall.unique_name("Kim", {"Steph"}) == "Kim"
+    assert wall.unique_name("kim", {"Kim"}) == "kim (guest)"
+    assert wall.unique_name("Kim", {"Kim", "Kim (guest)"}) == "Kim (guest 2)"
+
+
+def test_guest_watches_chats_and_votes_but_cant_start_or_put_pages_up(demo, monkeypatch):
+    client, hub, clock, done = demo
+    assert join_as_guest(client, "<b>").status_code == 422
+    r = join_as_guest(client, "Kim")
+    assert r.status_code == 200 and r.json()["guest"]
+    me = client.get("/api/v1/wall/me").json()
+    assert me["authenticated"] and me["guest"] and me["id"].startswith("g-") and me["name"] == "Kim"
+
+    async def upstream(name):
+        return 200, b"#EXTM3U\n", "application/vnd.apple.mpegurl"
+    monkeypatch.setattr(wall, "fetch_upstream", upstream)
+    wall._cache.clear()
+    assert client.get("/api/v1/wall/hls/index.m3u8").status_code == 200   # guests watch
+
+    with client.websocket_connect("/ws/wall") as ws:
+        hello = ws.receive_json()
+        assert hello["me"]["guest"] and not hello["me"]["admin"] and not hello["me"]["owner"]
+        assert until(ws, "viewers")["list"][0]["guest"] is True
+        ws.send_json({"t": "chat", "text": "hi"})
+        assert until(ws, "chat")["msg"]["guest"] is True
+        for a in ({"op": "start", "mirror": True}, {"op": "stop"}, {"op": "tile", "i": 0, "url": "https://evil.example"}):
+            ws.send_json({"t": "propose", "action": a})
+            assert "Guests can" in until(ws, "error")["text"]
+        ws.send_json({"t": "del", "id": 1})
+        assert "moderate" in until(ws, "error")["text"]
+
+
+@pytest.mark.anyio
+async def test_guest_votes_count():
+    done = []
+
+    async def execute(a):
+        done.append(a)
+        return True, ""
+
+    async def fetch_state():
+        return {}
+
+    hub = wall.Hub(clock=Clock(), execute=execute, fetch_state=fetch_state)
+    guest = {"id": "g-abc", "name": "Kim", "guest": True}
+    for cid, u in ((1, {"id": "300", "name": "Steph"}), (2, guest), (3, {"id": "g-def", "name": "Lu", "guest": True})):
+        hub.presence.join(cid, u, 1000)
+    p, _ = await hub.propose({"id": "300", "name": "Steph"}, {"op": "stop"})
+    assert p.status == "open"
+    await hub.vote(guest, p.id, True)
+    assert p.status == "passed" and done == [{"op": "stop"}]
+    q, err = await hub.propose(guest, {"op": "sound", "i": 1})   # sound / layout / board: fine for guests
+    assert q and not err
+
+
+def test_guest_names_are_unique_and_connects_are_rate_limited(demo):
+    client, hub, *_ = demo
+    hub.presence.join(99, {"id": "300", "name": "Kim"}, hub.clock())   # a member called Kim is watching
+    assert join_as_guest(client, "kim").json()["name"] == "kim (guest)"
+    for _ in range(10):
+        with client.websocket_connect("/ws/wall") as ws:
+            ws.receive_json()
+    with pytest.raises(WebSocketDisconnect) as e:
+        with client.websocket_connect("/ws/wall") as ws:
+            ws.receive_json()
+    assert e.value.code == 4429
+
+
+def test_rotating_the_key_ends_guest_sessions_and_the_link_is_keyed(demo, monkeypatch):
+    client, hub, *_ = demo
+    join_as_guest(client, "Kim")
+    assert client.get("/api/v1/wall/me").status_code == 200
+    assert hub.state()["watch_url"].endswith(f"/wall.html?k={KEY}")
+    monkeypatch.setenv("WALL_DEMO_KEY", "another-long-demo-key-xyz")
+    assert client.get("/api/v1/wall/me").status_code == 401
+    monkeypatch.setenv("WALL_DEMO", "0")
+    assert hub.state()["watch_url"].endswith("/wall.html")

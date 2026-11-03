@@ -330,3 +330,8 @@ async def test_service_follow_path():
     seen, t = _recorder()
     await WallService("http://h", "t", transport=t).apply({"op": "follow"})
     assert seen[0][:2] == ("POST", "http://h/i/discord/follow")
+
+
+def test_the_posted_link_is_sharplab_webs_keyed_one_in_demo_mode(scog):
+    assert scog.watch_url({"watch_url": "https://s/wall.html?k=abc"}) == "https://s/wall.html?k=abc"
+    assert scog.watch_url({"watch_url": "javascript:x"}) == "https://x/wall" and scog.watch_url(None) == "https://x/wall"
