@@ -97,6 +97,13 @@
 .live-games { display: flex; flex-wrap: wrap; gap: 6px; }
 .live-games .btn { font-size: 0.9em; }
 .live-games .btn:disabled { opacity: .45; cursor: default; }
+/* election night: the Spectrum lineup, one row per leaning */
+.spectrum { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.spectrum .spec-grp { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.spectrum .spec-grp > b { min-width: 6.5em; font-size: 13px; color: var(--muted); font-weight: 600; }
+.spectrum .btn { font-size: 0.9em; }
+.spectrum .btn:disabled { opacity: .5; cursor: default; }
+.spectrum .btn .small { margin-left: 6px; }
 
 /* the chat toggle + unread badge only show in phone landscape (below) */
 .chat-toggle { display: none; }

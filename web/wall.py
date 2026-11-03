@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from web import auth
+from wall import spectrum
 from web._apisec import check_api_key
 from web.wall_guard import Guard
 
@@ -219,7 +220,10 @@ def noop(a: dict, wall: dict | None) -> str:
     if op == "tile":
         if a["i"] < len(urls) and urls[a["i"]] == a["url"]:
             return "That's already on that tile."
-        return "That's already on the wall." if a["url"] in urls else ""
+        if a["url"] in urls:
+            return "That's already on the wall."
+        # a Spectrum stream only while it's on air (election mode: the state lists the lineup with its labels)
+        return spectrum.gate(a["url"], w["spectrum"].get(a["url"])) if isinstance(w.get("spectrum"), dict) else ""
     if op == "rotate":
         return "" if any(r.get("i") == a["i"] for r in w.get("rotate") or []) else "That tile doesn't rotate."
     if op == "adwatch":
@@ -548,6 +552,11 @@ def read_guest(conn) -> dict | None:
     return {"id": g["id"], "name": g.get("name") or "Guest", "avatar": None, "guest": True}
 
 
+def verified(user: dict) -> bool:
+    """A Discord member, or a friend-tier guest (a link the owner handed out) — never a public / nickname-only viewer."""
+    return not user.get("guest") or user.get("tier") == "friend"
+
+
 def viewer(conn) -> dict | None:
     """A logged-in member (SharpLab session), else in demo mode a guest with a nickname cookie."""
     return session_user(auth.read_session(conn)) or read_guest(conn)
@@ -812,12 +821,15 @@ class Hub:
         return res
 
     async def _propose(self, user: dict, a: dict) -> tuple[Proposal | None, str]:
+        if a["op"] == "tile" and spectrum.find(a["url"]) and not verified(user):
+            return None, "The Spectrum streams are for verified viewers — log in with Discord."
         if self.wall and "running" in self.wall and (why := noop(a, self.wall)):   # no votes on changes that change nothing (state unknown: let it through)
             return None, why
         now = self.clock()
         if self.chat.is_muted(user["id"], now):
             return None, "You're muted for now."
-        live_tile = a["op"] == "tile" and a["url"] in {g["url"] for g in _live["games"]}
+        # a live game or a Spectrum stream (verified above) is a curated tile, not an arbitrary page
+        live_tile = a["op"] == "tile" and (a["url"] in {g["url"] for g in _live["games"]} or bool(spectrum.find(a["url"])))
         if user.get("guest") and a["op"] in GUEST_OPS and not live_tile:
             return None, "Guests can vote, chat and change the sound / layout / board — starting, stopping and new pages need a SharpLab login."
         if a["op"] == "adwatch" and not self.is_admin(user["id"]):

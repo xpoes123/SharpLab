@@ -42,7 +42,7 @@ from wall.exitpoll import ExitPoll
 from wall.turnout import Turnout
 from wall.events import Events
 from wall.director import Director, summary as night_summary
-from wall import onair, streams
+from wall import onair, spectrum, streams
 
 log = logging.getLogger("wall.server")
 TAILNET = ipaddress.ip_network("100.64.0.0/10")
@@ -208,9 +208,18 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         src = i.source if i.follow and i.source is not None else i   # a mirror shows the TV's policy
         pol = policies.get(src.name)
         on_wall = set(i.urls)
-        return {"onair": [airs.view(u) for u in i.urls], "favorites": list(favs.urls),
-                "adwatch": {**(pol.view() if pol else {"on": False, "orig": {}}),
-                            "pool": [{"url": u, **airs.view(u)} for u in airs.fresh() if u not in on_wall][:12]}}
+        out = {"onair": [airs.view(u) for u in i.urls], "favorites": list(favs.urls),
+               "adwatch": {**(pol.view() if pol else {"on": False, "orig": {}}),
+                           "pool": [{"url": u, **airs.view(u)} for u in airs.fresh() if u not in on_wall][:12]}}
+        if onair.election_mode(i):   # the Spectrum lineup: labels for the watch page + the web's gate; adwatch listens to it
+            out["spectrum"] = spectrum_view()
+        return out
+
+    def spectrum_view() -> dict:
+        """{url: {label, live, starts}} for each Spectrum stream: its fresh ad-skip label (None = none / stale) and
+        whether it's live yet (wall/streams.py)."""
+        return {u: {"label": (airs.get(u) or {}).get("label"), **{k: (streams.peek(u) or {}).get(k) for k in ("live", "starts")}}
+                for u in spectrum.urls()}
 
     for i in instances.values():
         i.feeds["election"] = election_feed
@@ -314,6 +323,8 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
             while True:
                 await asyncio.sleep(15)
                 urls = [u for i in instances.values() for u in i.urls]
+                if any(i.urls and onair.election_mode(i) for i in instances.values()):
+                    urls += spectrum.urls()   # the Spectrum buttons: live now / starts at
                 if urls:
                     await asyncio.to_thread(streams.refresh, urls)
 
@@ -496,10 +507,12 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         d = await body(request)
         if not isinstance(d.get("url"), str):
             raise ValueError("url is a string")
-        i = inst(name)
+        i, t = inst(name), target(name)
+        if onair.election_mode(t) and (why := spectrum.gate(d["url"], spectrum_view().get(d["url"]))):
+            raise WallError(why)   # a Spectrum stream goes on a tile only while it's on air (wall/spectrum.py)
         if i.headless:   # streamed either way (its own tile or the TV it mirrors)
             await asyncio.to_thread(public_url, d["url"])
-        await asyncio.to_thread(target(name).set_tile, num(d, "i"), d["url"])
+        await asyncio.to_thread(t.set_tile, num(d, "i"), d["url"])
         return i.state()
 
     @app.delete("/i/{name}/tile/{i}")

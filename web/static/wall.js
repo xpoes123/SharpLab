@@ -356,6 +356,42 @@
       sel.onchange = () => { try { localStorage.setItem("wall.newsSt", sel.value); } catch (e) { /* not remembered */ } renderElec(); };
     }
     $("newsBtns").replaceChildren(...((localNews && localNews[sel.value]) || []).map((n) => pick(n.url, n.name)));
+    renderSpectrum(onWall);
+  }
+  // Election night "Spectrum" (wall/spectrum.py): streams from hard left to hard right, verified viewers only, and only
+  // while ad-skip hears coverage (the server refuses a break too)
+  let spectrumCat = null;
+  fetch("/spectrum.json").then((r) => r.json()).then((j) => { spectrumCat = j; if (!$("elecScreens").closest("[data-elec]").hidden) renderElec(); }).catch(() => {});
+  const verifiedMe = () => !!me && (!me.guest || me.tier === "friend");
+  function specBadge(st, s) {
+    if (st.label === "coverage") return ["● on air", "live-on"];
+    if (st.label === "break" || st.label === "ad") return ["⏸ break", "muted"];
+    if (st.label === "offtopic") return ["off-topic", "muted"];
+    if (st.live === false && st.starts)
+      return [`starts ${new Date(st.starts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`, "muted"];
+    if (st.live === false) return [s.note || "not live yet", "muted"];
+    if (st.live) return ["listening…", "muted"];
+    return [s.note || "", "muted"];
+  }
+  function renderSpectrum(onWall) {
+    const row = $("spectrum").closest("[data-spectrum]");
+    const states = (wall && wall.spectrum) || null;
+    row.hidden = !(spectrumCat && states && verifiedMe());   // only called in election mode (renderElec)
+    if (row.hidden) return;
+    $("spectrum").replaceChildren(...(spectrumCat.groups || []).map((g) => {
+      const grp = el("div", "spec-grp"); grp.append(el("b", null, g.label));
+      (g.streams || []).forEach((s) => {
+        const st = states[s.url] || {}, on = onWall.has(s.url), [txt, cls] = specBadge(st, s);
+        const b = el("button", "btn", s.name);
+        if (on) b.append(el("span", "small muted", "on the wall"));
+        else if (txt) b.append(el("span", "small " + cls, txt));
+        b.disabled = on || st.label !== "coverage";
+        b.title = on ? "Already on the wall" : st.label === "coverage" ? `Put ${s.name} on a stream tile (3–4)` : "Pickable while it's on air (not at a break)";
+        b.onclick = () => propose({ op: "tile", i: pickTile(true), url: s.url, label: `${g.label} · ${s.name}` });
+        grp.append(b);
+      });
+      return grp;
+    }));
   }
   const shortUrl = (u) => { try { const x = new URL(u); return (x.hostname.replace(/^www\./, "") + x.pathname).replace(/\/$/, ""); } catch { return u; } };
 
