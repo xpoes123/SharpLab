@@ -373,4 +373,4 @@ body.public .controls, body.public .viewers, body.public #props { display: none 
 
 /* DJ Jev in the viewer list and the chat */
 .jev .who, #viewers li.jev > span:nth-child(2) { color: #BB9AF7; font-weight: 700; }
-.tag.jev-tag { background: linear-gradient(90deg, #7AA2F7, #BB9AF7); color: #111; }
+.viewers li .tag.jev-tag { background: linear-gradient(90deg, #7AA2F7, #BB9AF7); color: #15161E; font-weight: 700; padding: 1px 7px; border-radius: 999px; }

@@ -931,19 +931,21 @@ class Hub:
     def jev_command(self, user: dict, text: object) -> str:
         """Fire a "jev …" chat line in the background (after the line itself is posted; never delays chat). "" = fired, or
         not a Jev command; else why not (for the sender only)."""
-        if not wall_jev.is_command(text) or user.get("public") or not user.get("id") or not verified(user):
+        explicit = wall_jev.is_command(text)
+        if not (explicit or wall_jev.is_implicit(text)) or user.get("public") or not user.get("id") or not verified(user):
             return ""
         now = self.clock()
         if not self.jev_user.allow(user["id"], now):
-            return "One Jev command every 10 s."
+            return "One Jev command every 10 s." if explicit else ""
         if not self.jev_all.allow("*", now):
-            return "Jev is busy — try again in a minute."
-        t = asyncio.create_task(self._jev_command(user, str(text)))
+            return "Jev is busy — try again in a minute." if explicit else ""
+        t = asyncio.create_task(self._jev_command(user, str(text), explicit))
         self._jev_tasks.add(t)
         t.add_done_callback(self._jev_tasks.discard)
         return ""
 
-    async def _jev_command(self, user: dict, text: str) -> None:
+    async def _jev_command(self, user: dict, text: str, explicit: bool = True) -> None:
+        """explicit ("jev …"): act at MIN_CONF and always answer; any other line: act only at IMPLICIT_CONF, silent otherwise."""
         try:
             try:
                 a = await asyncio.wait_for(self.ask_jev(wall_jev.state(text), wall_jev.questions()), wall_jev.TIMEOUT_S)
@@ -951,15 +953,18 @@ class Hub:
                 log.warning("jev command: %s", type(e).__name__)
                 a = None
             if a is None:
-                await self.say(wall_jev.UNREACHABLE)
+                if explicit:
+                    await self.say(wall_jev.UNREACHABLE)
                 return
             choice, conf = wall_jev.answer(a)
-            if choice == "none" or conf < wall_jev.MIN_CONF:
-                await self.say(wall_jev.HELP)
+            if choice == "none" or conf < (wall_jev.MIN_CONF if explicit else wall_jev.IMPLICIT_CONF):
+                if explicit:
+                    await self.say(wall_jev.HELP)
                 return
             action, name, msg = wall_jev.plan(choice, text, self.wall)
             if not action:
-                await self.say(msg)
+                if explicit:
+                    await self.say(msg)
                 return
             p, err = await self.propose(user, action)
             await self.say(wall_jev.reply(p, err, action, name, conf))
