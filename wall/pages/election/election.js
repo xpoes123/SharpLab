@@ -35,9 +35,9 @@ const E = (() => {
       `<span class="muted mono">calls: ${esc(by)} decision desk · data: ${esc(data.source || "—")} · ${upd}</span>` +
       (data.error ? `<span class="err mono">${esc(data.error)}</span>` : "");
   };
-  function poll(onData, every = 30000) {   // until the service has its first results: every 3 s
+  function poll(onData, every = 30000) {   // until the service has fresh results (it was idle): every 3 s
     const go = () => fetch("data.json", { cache: "no-store" }).then((r) => r.json())
-      .then((d) => { onData(d); return d.updated ? every : 3000; }, () => 5000)
+      .then((d) => { onData(d); return d.updated && (d.now || 0) - d.updated < 90 ? every : 3000; }, () => 5000)
       .then((ms) => setTimeout(go, ms));
     go();
   }
