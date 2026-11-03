@@ -826,6 +826,15 @@
   try { const n = localStorage.getItem("wall.nick"); if (n) $("nick").value = n; } catch (e) { /* storage blocked: start empty */ }
   function boot() {
     fetch("/api/v1/wall/me?k=" + encodeURIComponent(key), { credentials: "same-origin" }).then((r) => r.json().then((j) => ({ ok: r.ok, j }))).then(({ ok, j }) => {
+      // another of our hosts (live.djiang.xyz): a SharpLab member is signed in on sharplab.djiang.xyz — hop there once and
+      // come back signed in (anyone else comes straight back, never to a Discord prompt)
+      const home = "sharplab.djiang.xyz", away = location.host !== home && !/localhost|127\.0\.0\.1/.test(location.host);
+      const handoff = (login) => `https://${home}/api/v1/wall/handoff?to=${encodeURIComponent(location.host)}&back=${encodeURIComponent(location.pathname + location.search.replace(/[?&]nohandoff=1/, ""))}${login ? "&login=1" : ""}`;
+      if (away && j.tier !== "member" && !/[?&]nohandoff=1/.test(location.search)) {
+        let tried = false; try { tried = sessionStorage.getItem("wall.handoff") === "1"; sessionStorage.setItem("wall.handoff", "1"); } catch (e) { tried = false; }
+        if (!tried) { location.replace(handoff(false)); return; }
+      }
+      if (away && j.login) j.login = handoff(true);
       if (!ok) {
         if (j.login) $("loginBtn").href = j.login;
         $("guestForm").hidden = $("gateRoles").hidden = !j.guest_ok;   // demo mode with the keyed link: a nickname is enough
