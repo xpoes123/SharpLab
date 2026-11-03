@@ -131,6 +131,9 @@
     grid-template-areas: "player player" "bar bar" "viewers ctl" "props props" "chat chat"; }
   .stage, .side { display: contents; }
   .player { grid-area: player; border-radius: 0; }
+  /* the phone grid is fixed-height (player · bar · strip · chat): panels without an area pushed the player to 0 px.
+     Bets and the live feed live in the Election sheet on phones instead (wall-election.js moves them there). */
+  #room > .stage > #betsPanel, #room > .stage > .lv-feed { display: none; }
   .unmute { left: 8px; bottom: 8px; }
 
   .bar { grid-area: bar; margin: 0; padding: 4px max(8px, env(safe-area-inset-left)); gap: 4px; flex-wrap: nowrap; min-width: 0;
