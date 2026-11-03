@@ -97,3 +97,10 @@ def test_election_presets_are_seeded_once(tmp_path):
 @pytest.mark.parametrize("seed", ELECTION_SEED)
 def test_election_presets_validate(tmp_path, seed):
     assert PresetStore(str(tmp_path)).put([seed])[0]["name"] == seed["name"]
+
+
+def test_fixed_over_the_api_too(api):
+    """The TV router starts presets by their contents (urls + live + tiles + fixed), not by index."""
+    app, _ = api
+    st = client(app).post("/i/tv/start", json={"urls": [MAP], "live": "nfl", "tiles": 3, "fixed": True}).json()
+    assert st["urls"][0] == MAP and len(st["urls"]) == 3 and st["live"]["games"][0] is None and st["sound"] == 1

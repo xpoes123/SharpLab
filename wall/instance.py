@@ -116,16 +116,15 @@ class Instance:
     # ---- start / stop --------------------------------------------------------------------------------------------------
     def start(self, preset: int | str | None = None, urls: list[str] | None = None, live: str = "", tiles: int = 4,
               board: str | None = None, layout: str | None = None, sound: int = 0, follow: bool = False,
-              origin: dict | None = None) -> dict:
+              origin: dict | None = None, fixed: bool = False) -> dict:
         p = self.store.find(preset) if preset is not None else None
         if preset is not None and p is None:
             raise WallError(f"no preset {preset!r}")
-        fixed = False
         if p:
-            urls, live, tiles = list(p["urls"]), p.get("live", ""), p.get("tiles", 4)
-            fixed = bool(live and p.get("fixed") and urls)
+            urls, live, tiles, fixed = list(p["urls"]), p.get("live", ""), p.get("tiles", 4), bool(p.get("fixed"))
             board = board if board is not None else p.get("overlay") or p.get("live") or ""
         urls = [check_url(u) for u in (urls or [])][:4]
+        fixed = bool(fixed and live and urls)
         if live and live not in LEAGUES:
             raise WallError("live is nfl or nba")
         run = None
