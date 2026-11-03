@@ -166,3 +166,20 @@ def test_today_pnl_counts_sales_on_unsettled_markets():
     assert t["settled"] == pytest.approx(-24.54 - 21.11, abs=0.01)  # SJ's realized not double-counted
     assert t["total"] == pytest.approx(-24.54 - 21.11 - 1.28, abs=0.01)
     assert ka.resolutions({"u": [dict(sj, settled_time="2026-11-03T04:43:07Z")]}, {"u": 0})["SJ"]["holders"][0][1] == "SOLD"
+
+
+def test_board_ranks_window_and_picks_best_worst():
+    st = lambda t, when, rev, cost: {"ticker": t, "settled_time": when, "revenue": rev * 100,
+                                     "yes_count_fp": "1", "yes_total_cost_dollars": str(cost)}
+    ts = lambda iso: ka._iso_ts(iso)
+    by_user = {
+        "a": [st("W", "2026-11-01T00:00:00Z", 10, 4), st("L", "2026-11-01T01:00:00Z", 0, 5),
+              st("OLD", "2026-10-01T00:00:00Z", 100, 1)],      # outside the window
+        "b": [st("X", "2026-11-01T00:00:00Z", 10, 2)],
+        "c": [],                                                # nothing settled -> off the board
+    }
+    b = ka.board(by_user, ts("2026-10-27T00:00:00Z"), ts("2026-11-03T00:00:00Z"))
+    assert [r["uid"] for r in b] == ["b", "a"]
+    a = b[1]
+    assert (a["pnl"], a["cost"], a["n"], a["won"]) == (pytest.approx(1.0), 9.0, 2, 1)
+    assert a["best"] == ("W", pytest.approx(6.0)) and a["worst"] == ("L", pytest.approx(-5.0))

@@ -94,6 +94,11 @@ function ruleText() {
 
 // ── Nav (mirrors threecardpoker.js) ──
 function renderNav(user) {
+  if (!user && D.today && D.today.guest) {
+    navRight.innerHTML = `<div class="userbar"><span>${esc(D.today.guest)} <small class="muted">guest</small></span>
+      <a class="btn" href="/api/v1/auth/discord/login">Sign in with Discord</a></div>`;
+    return;
+  }
   if (!user) {
     navRight.innerHTML = `<a class="btn" href="/api/v1/auth/discord/login">Sign in with Discord</a>`;
     return;
@@ -110,7 +115,7 @@ function applyBalance(bal) {
   state.balance = bal;
   renderNav(state.me && state.me.user);
 }
-const myName = () => (state.me && state.me.user && state.me.user.username) || null;
+const myName = () => (state.me && state.me.user && state.me.user.username) || (D.today && D.today.guest) || null;
 
 // ── Header (shown in every mode; carries the puzzle number) ──
 function headerHTML() {
@@ -364,7 +369,7 @@ function renderResult(payload, opts) {
   const metrics = [];
   if (rank != null) {
     const fieldStr = field != null ? ` of ${num(field)}` : "";
-    metrics.push(`<div class="metric"><div class="k">Rank</div><div class="v">#${num(rank)}${fieldStr}</div></div>`);
+    metrics.push(`<div class="metric"><div class="k">${payload.guest ? "Would rank" : "Rank"}</div><div class="v">#${num(rank)}${fieldStr}</div></div>`);
   }
   if (coins != null) {
     metrics.push(`<div class="metric"><div class="k">Coins</div><div class="v" style="color:var(--gold)">🪙 ${num(coins)}</div></div>`);
@@ -385,6 +390,7 @@ function renderResult(payload, opts) {
     <p class="sub">${esc(solvedVerb())} in <b>${esc(primary)}</b> ${esc(unitWord())}${parStr} · ${esc(fmtTime(secondary))}</p>
     <div class="grid2">${grid}</div>
     ${metrics.length ? `<div class="metrics">${metrics.join("")}</div>` : ""}
+    ${payload.guest || (D.today && D.today.guest) ? `<p class="muted"><a href="/api/v1/auth/discord/login">Sign in with Discord</a> to actually rank, earn coins, and keep a streak.</p>` : ""}
     ${shareBox}
   </div>`;
 
@@ -453,12 +459,12 @@ function renderLeaderboard(data) {
     const rows = today
       .map((r) => {
         const mine = me && r.name === me ? " me" : "";
-        return `<tr class="${mine.trim()}">
-          <td class="lb-rank">${num(r.rank)}</td>
-          <td>${esc(r.name)}</td>
+        return `<tr class="${mine.trim()}${r.guest ? " guest" : ""}">
+          <td class="lb-rank">${r.guest ? "–" : num(r.rank)}</td>
+          <td>${esc(r.name)}${r.guest ? ` <small class="muted">guest</small>` : ""}</td>
           <td class="num">${esc(r.primary)} ${esc(unitWord())}</td>
           <td class="num">${esc(fmtTime(r.secondary))}</td>
-          <td class="num">+${num(r.points)} pts</td>
+          <td class="num">${r.guest ? "—" : `+${num(r.points)} pts`}</td>
         </tr>`;
       })
       .join("");
@@ -521,8 +527,25 @@ function renderTutorial() {
 function renderSignedOut() {
   buildInfoShell();
   $("body").innerHTML = tutorialCardHTML(
-    `<div class="signin"><a class="btn" href="/api/v1/auth/discord/login">Sign in with Discord to play &amp; rank</a></div>`
+    `<div class="signin"><a class="btn" href="/api/v1/auth/discord/login">Sign in with Discord to play &amp; rank</a></div>
+     <div class="signin guestplay">
+       <input id="guestName" maxlength="20" placeholder="or just a name" autocomplete="nickname">
+       <button class="btn ghost" id="guestBtn">Play as guest</button>
+     </div>
+     <p class="muted">Guests show on today's board but don't rank, earn coins, or keep streaks.</p>`
   );
+  const go = async () => {
+    const name = ($("guestName").value || "").trim();
+    if (!name) return $("guestName").focus();
+    const r = await fetch("/api/v1/arcade/pokehoops/guest", {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }),
+    }).catch(() => null);
+    if (!r || !r.ok) return showNotice("error", "Couldn't save that name — try another.");
+    main();
+  };
+  $("guestBtn").onclick = go;
+  $("guestName").onkeydown = (e) => e.key === "Enter" && go();
   loadLeaderboard();
 }
 
@@ -557,6 +580,10 @@ async function main() {
   }
   D.today = today;
 
+  if (today.guest && !loggedIn) {
+    renderNav(null);
+    return today.played ? renderAlreadyPlayed() : renderTutorial();
+  }
   if (today.signed_in === false || !loggedIn) return renderSignedOut();
   if (today.played) return renderAlreadyPlayed();
   return renderTutorial();

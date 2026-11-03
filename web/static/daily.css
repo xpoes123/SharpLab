@@ -136,3 +136,7 @@
 .lb-card tr.me { background: rgba(122, 162, 247, .1); }
 .lb-card tr.me td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .lb-rank { color: var(--muted); width: 34px; }
+.guestplay { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.guestplay input { flex: 1; min-width: 140px; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--panel2); color: inherit; font: inherit; }
+tr.guest td { opacity: .7; }
