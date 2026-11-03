@@ -100,6 +100,8 @@ def plan(choice: str, text: str, wall: dict | None) -> tuple[dict | None, str, s
     if not s:
         return None, "", HELP
     name = s["name"]
+    if spectrum.held(s["url"]):
+        return None, name, f"🎧 DJ Jev: sticking to network coverage for the first few hours — {name} later tonight"
     sound, want = w.get("sound"), bool(SOUND.search(text))
     if s["url"] in urls:   # already up: "turn on kornacki's audio" = the sound to that tile
         k = urls.index(s["url"])

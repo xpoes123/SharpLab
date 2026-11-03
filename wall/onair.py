@@ -23,6 +23,7 @@ import logging
 import time
 from pathlib import Path
 
+from wall import spectrum
 from wall.breaks import BreakLog
 from wall.engine import own_page
 
@@ -227,7 +228,7 @@ class Policy:
         target = None
         silent = getattr(inst.driver, "silent_tiles", lambda: set())()
         if s in silent or board.is_(urls[s], AWAY, SOUND_AD_S, now):
-            target = self._on_air(urls, video, s, board, favs, now)
+            target = self._on_air(urls, video, s, board, favs, now, silent)
         elif self.auto_sound:
             back = [k for k in video if board.is_(urls[k], "coverage", SOUND_BACK_S, now)]
             fav = [k for k in back if urls[k] in favs]
@@ -235,7 +236,7 @@ class Policy:
             if target is None:
                 target = next((k for k in back if urls[k] == self.pref), None)
         if target is None and not board.is_(urls[s], AWAY, 0, now) and self._pre_due(urls[s], board, now):
-            target = self._on_air(urls, video, s, board, favs, now)
+            target = self._on_air(urls, video, s, board, favs, now, silent)
             if target is not None and self._calm(urls[s], board, now):
                 self.pre = {"from": urls[s], "at": now}
                 inst.sound(target)
@@ -249,7 +250,8 @@ class Policy:
         self.auto_sound = urls[target] != self.pref   # at the manual pick: nothing left to undo
         return [f"sound {s + 1}→{target + 1}"]
 
-    def _on_air(self, urls: list[str], video: list[int], s: int, board: Board, favs: list[str], now: float) -> int | None:
+    def _on_air(self, urls: list[str], video: list[int], s: int, board: Board, favs: list[str], now: float,
+                silent: set = frozenset()) -> int | None:
         """Where the sound goes off a break: a favorite on air, else the manual pick, else the surest."""
         on_air = [k for k in video if k != s and k not in silent and board.is_(urls[k], "coverage", 0, now)]
         target = next((k for k in on_air if urls[k] in favs), None)
@@ -320,7 +322,7 @@ class Policy:
                 continue
             if i in self.orig:
                 home = self._home(i, favs, on_wall)
-                if home and home != u and home not in on_wall and \
+                if home and home != u and home not in on_wall and not spectrum.held(home, now) and \
                         board.is_(home, "coverage", FAV_BACK_S if home in favs else BACK_S, now):
                     self._swap(inst, i, home, now)
                     self.orig.pop(i, None)
@@ -331,13 +333,16 @@ class Policy:
             from wall import streams as _streams
             dead = (_streams.peek(u) or {}).get("live") is False   # a stream that hasn't started / has ended: real content now
             dead = dead or i in getattr(inst.driver, "silent_tiles", lambda: set())()   # its audio decodes to silence
+            dead = dead or spectrum.held(u, now)   # a polarizing stream during the neutral hours: off it
             if dead or board.is_(u, SWAP_AWAY, SWAP_SOUND_S if stuck else SWAP_AFTER_S, now):
                 cands = [c for c in board.fresh() if c not in on_wall and board.is_(c, "coverage", FRESH_S, now)
-                         and (board.get(c).get("soon") or 0) < 0.6]   # not one that's about to break itself
+                         and (board.get(c).get("soon") or 0) < 0.6   # not one that's about to break itself
+                         and not spectrum.held(c, now)]
                 if not cands:
                     continue
                 best = max(cands, key=lambda c: (c in favs, board.get(c)["confidence"], -board.get(c)["since"]))
-                self.orig.setdefault(i, u)
+                if not spectrum.held(u, now):   # never "home" to a held stream
+                    self.orig.setdefault(i, u)
                 self._swap(inst, i, best, now)
                 acts.append(f"tile {i + 1} {'not live' if dead else board.get(u)['label']} → {best}")
         return acts

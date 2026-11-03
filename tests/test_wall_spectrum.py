@@ -22,7 +22,7 @@ def test_catalog_shape():
     assert len(urls) == len(set(urls)) and all(g["streams"] for g in j["groups"])
     for g in j["groups"]:
         for s in g["streams"]:
-            assert set(s) <= {"name", "url", "note"} and s["name"] and isinstance(s.get("note", ""), str)
+            assert set(s) <= {"name", "url", "note", "hosts"} and s["name"] and isinstance(s.get("note", ""), str)
             assert s["url"].startswith("https://www.youtube.com/@") and s["url"].endswith("/live")
     assert len(urls) + 2 <= adwatch.MAX   # the whole lineup + a couple of other wall streams fit ad-skip's listening budget
     assert spectrum.find(NBC)["group"] == "Center" and spectrum.find("https://x.example/") is None

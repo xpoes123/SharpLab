@@ -6,6 +6,8 @@ vote and the wall service refuses the tile otherwise."""
 from __future__ import annotations
 
 import json
+import os
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -22,6 +24,18 @@ def load(path: Path = PATH) -> tuple[dict, ...]:
     return tuple({"group": g["label"], "name": s["name"], "url": s["url"], "note": s.get("note", ""),
                   "hosts": s.get("hosts", "")}
                  for g in groups for s in g.get("streams") or [])
+
+
+# the first hours (until WALL_NEUTRAL_UNTIL, epoch s): network coverage only, so the stream doesn't read as partisan
+NEUTRAL_GROUP = "Center"
+HELD_EXTRA = {"https://www.youtube.com/@LiveNOWFOX/live"}   # an ad-skip pool stream with the Fox name on it
+
+
+def held(url: str, now: float | None = None) -> bool:
+    """A polarizing stream (any Spectrum group but Center) while the neutral hours last: no autopilot or Jev puts it up."""
+    if (time.time() if now is None else now) >= float(os.environ.get("WALL_NEUTRAL_UNTIL") or 0):
+        return False
+    return url in HELD_EXTRA or any(s["url"] == url and s["group"] != NEUTRAL_GROUP for s in load())
 
 
 def urls(path: Path = PATH) -> list[str]:

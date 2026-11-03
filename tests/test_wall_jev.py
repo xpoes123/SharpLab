@@ -215,3 +215,15 @@ async def test_audio_request_for_a_stream_already_up_moves_the_sound():
     h, done = make(Jev(sid("NBC News"), 0.9))          # NBC is on tile 4, the sound is on tile 3 (ABC)
     out = await run(h, DAVID, "turn on kornacki's audio, i don't care about this guy")
     assert done and done[-1]["op"] == "sound" and done[-1]["i"] == 3 and out == ["🎧 DJ Jev: sound to NBC News (tile 4) (90%)"]
+
+
+def test_neutral_hours_hold_polarizing_streams(monkeypatch):
+    from wall import spectrum
+    fox = next(s["url"] for s in wall_jev.streams().values() if s["name"] == "Fox News")
+    nbc = next(s["url"] for s in wall_jev.streams().values() if s["name"] == "NBC News")
+    monkeypatch.setenv("WALL_NEUTRAL_UNTIL", "2000")
+    assert spectrum.held(fox, 1000) and not spectrum.held(nbc, 1000) and not spectrum.held(fox, 2000)
+    assert not spectrum.held("http://127.0.0.1:7795/p/election/races", 1000)
+    monkeypatch.setenv("WALL_NEUTRAL_UNTIL", "9999999999")
+    act, _, msg = wall_jev.plan(sid("Fox News"), "put fox on", {"urls": ["a", "b", nbc, "c"], "sound": 2})
+    assert act is None and "network coverage" in msg
