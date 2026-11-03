@@ -721,6 +721,36 @@ async def classify(stream: str, text: str, now: float | None = None) -> dict:
     return {**ans, "src": src}
 
 
+@router.post("/direct")
+async def post_direct(request: Request, x_api_key: str = Header("")):
+    """The wall service's director (wall/director.py): {state, options: {screen: when to show it}} → Jev's
+    {choice, probabilities} over those screens. {} without a Jev key or on any failure (the wall then rotates in order)."""
+    wall._need_key(x_api_key)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    state, options = (body.get("state"), body.get("options")) if isinstance(body, dict) else (None, None)
+    if not isinstance(state, str) or not isinstance(options, dict) or not 2 <= len(options) <= 12 or \
+            not all(isinstance(k, str) and isinstance(v, str) for k, v in options.items()):
+        return JSONResponse({"error": "state is a string, options {screen: description}"}, status_code=422)
+    key = os.environ.get("JEV_API_KEY", "")
+    if not key:
+        return {}
+    req = {"model": "jev-latest", "state": "An election-night TV wall has two dashboard tiles next to live news streams. "
+           "What is happening right now:\n" + state[:4000],
+           "questions": {"screen": {"type": "choice", "question": "Which dashboard is the most useful to show right now?",
+                                    "criteria": {k[:60]: v[:300] for k, v in options.items()}}}}
+    try:
+        async with httpx.AsyncClient(timeout=4) as c:
+            r = await c.post(JEV_URL, json=req, headers={"Authorization": f"Bearer {key}"})
+        a = r.json()["answers"]["screen"] if r.status_code == 200 else None
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
+        log.warning("direct: %s", type(e).__name__)
+        return {}
+    return {"choice": a.get("choice"), "probabilities": a.get("probabilities") or {}} if isinstance(a, dict) else {}
+
+
 @router.post("/classify")
 async def post_classify(request: Request, x_api_key: str = Header("")):
     """{stream, text} → {label: coverage|ad|break|offtopic|unknown, confidence, src}. The wall service's key only."""
