@@ -21,7 +21,8 @@
 .el-chip:hover, .el-segbtn:hover { color: var(--fg); }
 .el-bal { margin: 10px 0 4px; }
 .el-nums { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-.el-nums b { font-size: 18px; font-variant-numeric: tabular-nums; }
+.el-nums b { font-size: 18px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+@media (max-width: 700px) { .el-nums b { font-size: 15px; } .el-nums .muted { font-size: 12px; } }
 .el-nums .muted { text-align: center; }
 .D { color: var(--e-dem); } .R { color: var(--e-rep); } .I { color: var(--e-ind); }
 .el-bar { position: relative; display: flex; height: 10px; border-radius: 3px; overflow: visible; background: var(--e-none); margin-top: 6px; }
