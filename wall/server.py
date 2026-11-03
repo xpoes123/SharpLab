@@ -27,7 +27,9 @@ from pydantic import ValidationError
 from wall.bands import ScoreTape, build_view
 from wall.bets import POLL_S as BETS_POLL_S, BetsFeed, badge_rows
 from wall.chat import POLL_S, ChatFeed
-from wall.election import Results, board as election_board, replay
+from shared import kalshi_election as ke
+from wall.election import IDLE_S as ELECTION_IDLE_S, Results, board as election_board, holders as election_holders, \
+    replay, trades as election_trades
 from wall.engine import Session, own_page
 from wall.headless import Headless
 from wall.instance import BOARDS, Instance, WallError
@@ -175,7 +177,14 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         tv.host_app = lambda: tv_active(cfg.tv_overlay_api)
     def election_feed() -> dict:
         results.touch()
-        return election_board(results.snapshot())
+        return election_board(results.snapshot(), bets.election if sync.show else None)
+
+    def election_wanted() -> dict | None:
+        """While an election board / page was looked at lately: the results the web needs for the members' rows."""
+        if time.time() - results.seen > ELECTION_IDLE_S or not results.races:
+            return None
+        snap = results.snapshot()
+        return {"races": ke.compact_races(snap["races"], set(bets.need)), "offices": snap["offices"]}
 
     for i in instances.values():
         i.feeds["election"] = election_feed
@@ -229,8 +238,9 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
             while True:
                 await asyncio.sleep(BETS_POLL_S)
                 try:
-                    if bets.configured and sync.show and any(i.urls for i in instances.values()):
-                        await asyncio.to_thread(bets.poll, tile_feed())
+                    elec = election_wanted() if bets.configured and sync.show else None
+                    if bets.configured and sync.show and (elec is not None or any(i.urls for i in instances.values())):
+                        await asyncio.to_thread(bets.poll, tile_feed(), elec)
                     else:
                         bets.idle()
                 except Exception as e:  # noqa: BLE001
@@ -558,7 +568,9 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
     @app.get("/p/election/data.json")
     def election_data() -> Response:
         results.touch()
-        return JSONResponse(results.snapshot(), headers={"Cache-Control": "no-store"})
+        snap = results.snapshot()
+        snap["holders"] = election_holders(election_trades(bets.election, snap)) if sync.show else {}   # the key-races chips
+        return JSONResponse(snap, headers={"Cache-Control": "no-store"})
 
     @app.get("/p/election/board.json")
     def election_board_json() -> dict:
