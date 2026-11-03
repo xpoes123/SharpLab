@@ -217,7 +217,7 @@ Found missing (not needed, so nothing to install): gst `pulsesrc`/`mp4mux` (gst-
   (`WALL_OWNER_ID`, David) applies instantly. One open proposal per user, 1 proposal / 20 s per user. Proposals are
   posted into chat. Discord `/wall` changes by non-owners become proposals on the same table.
 * **Bot API:** `GET /api/v1/wall/state` (viewers, open proposals), `POST /api/v1/wall/propose`, `POST /api/v1/wall/vote`,
-  `POST /api/v1/wall/link` (login link for a Discord member).
+  `POST /api/v1/wall/link` (login link for a Discord member), `GET`/`POST /api/v1/wall/chat` (the TV wall's chat, below).
 * **Demo mode** (`WALL_DEMO=1` + `WALL_DEMO_KEY`, ≥ 16 random chars, on sharplab-web; off by default). The watch link
   becomes `/wall.html?k=<key>` (the bot posts that one: it takes `watch_url` from `GET /api/v1/wall/state`). With the
   key and no SharpLab login, the page asks for a nickname (2–24 letters / digits / space . ' - _, made unique among
@@ -229,6 +229,18 @@ Found missing (not needed, so nothing to install): gst `pulsesrc`/`mp4mux` (gst-
   page is the normal login gate. Proxy cost stays bounded: every viewer, guest or not, shares the same 0.5 s playlist /
   60 s segment cache (≈ 60 segments × ~0.6 MB), so N guests cost one upstream fetch — only the VPS's egress grows
   (~4.5 Mb/s per viewer).
+* **Chat on the TV wall.** While the discord wall runs, the service polls `GET /api/v1/wall/chat?after=<id>` (bot API,
+  `X-Api-Key`) every 1.5 s → `{messages (after id), ids (still in the window: a moderator's delete drops out), last,
+  viewers [{name, guest, away}], watching, active}`; a muted user's messages are left out while the mute lasts. It keeps
+  the last 20 (`wall/chat.py`) and serves them on loopback only: `GET /chat` → `{on, rev, messages, viewers, watching,
+  …}`, `POST /chat {"text"}` → `POST /api/v1/wall/chat {discord_id: WALL_OWNER_ID, text}` (the socket's limits: 429 too
+  fast, 403 muted, 422 empty). The TV router reads `/chat` every second: the wall overlay gets a drawn-ready model in
+  `GET /api/overlay/view` → `"chat": {count, who, lines: [{id, name, guest, text, sys, fresh}]}` (the L-bar sidebar's
+  lower half; lines dim after 20 s, no animation beyond a 2 s fade), and the phone's **💬 Chat** page posts through
+  `POST /chat` as David (TV phones have no linked accounts). Config on the homelab: `WALL_WEB_URL`, `WALL_WEB_KEY`
+  (= `WEB_API_SECRET`), `WALL_OWNER_ID`, `WALL_OWNER_NAME`; unset = no chat. The web app listens on the VPS's loopback
+  only, so the private path is the tailnet-only Caddy listener in `deploy/caddy-wall.snippet`
+  (`http://100.81.31.34:8796`, only `/api/v1/wall/chat`); `https://sharplab.djiang.xyz` works too.
 * Discord ↔ web chat mirroring: **not built** (it would need the bot to relay both ways and map identities; easy to add
   later with the same bot API).
 

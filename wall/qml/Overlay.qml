@@ -26,6 +26,7 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
     readonly property string api: arg("--api", "http://127.0.0.1:7790")
     readonly property var geo: G.lbar(Screen.width, Screen.height)
     property bool bandReady: false
+    property var chat: null               // the watch party's chat, from the same view poll (the sidebar's lower part)
     // the band maps 400 ms after the sidebar, every time the L-bar comes back (see the sidebar's anchors)
     onLayoutChanged: { bandReady = false; if (layout === "lbar") bandTimer.restart() }
     Timer { id: bandTimer; interval: 400; onTriggered: app.bandReady = app.layout === "lbar" }
@@ -38,6 +39,8 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
             try { s = JSON.parse(x.responseText) } catch (e) { return }
             if (s.rev !== app.rev) { app.rev = s.rev; main.tick() }   // new board / matchup: its data now, not in ≤ 5 s
             if (["", "lbar", "full", "matchup"].indexOf(s.view) >= 0) app.layout = s.view
+            var c = s.chat || null   // only on a change: the sidebar keeps its lines (and their fades) across polls
+            if (JSON.stringify(c) !== JSON.stringify(app.chat)) app.chat = c
         }
         x.open("GET", app.api + "/api/overlay/view")
         x.send()
@@ -95,7 +98,7 @@ Window {   // the root is the full / matchup surface (the qml tool needs a windo
         // exclusiveEdge in QML). Shown first, so KWin gives it the full height and the band the width left of it.
         LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorRight
         LayerShell.Window.exclusionZone: app.geo.side
-        Board { anchors.fill: parent; unit: Screen.width; layout: "side"; polling: false; v: main.v }
+        Board { anchors.fill: parent; unit: Screen.width; layout: "side"; polling: false; v: main.v; chat: app.chat }
     }
 
     Window {   // lbar: the band (bottom edge, under the tiles only)

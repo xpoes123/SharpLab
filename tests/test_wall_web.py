@@ -645,6 +645,60 @@ def test_rotating_the_key_ends_guest_sessions_and_the_link_is_keyed(demo, monkey
     assert hub.state()["watch_url"].endswith("/wall.html")
 
 
+# ---- the TV wall's chat (bot API: the homelab wall service polls it, the TV's phones post through it) -----------------
+def test_chat_api_requires_key(setup):
+    client, *_ = setup
+    assert client.get("/api/v1/wall/chat").status_code == 401
+    assert client.get("/api/v1/wall/chat", headers={"X-Api-Key": "nope"}).status_code == 401
+    assert client.post("/api/v1/wall/chat", json={"discord_id": OWNER, "text": "hi"}).status_code == 401
+    assert client.post("/api/v1/wall/chat", headers={"X-Api-Key": "nope"}, json={"discord_id": OWNER, "text": "hi"}).status_code == 401
+    r = client.get("/api/v1/wall/chat", headers={"X-Api-Key": "sekrit"})
+    assert r.status_code == 200 and r.json()["messages"] == [] and r.json()["last"] == 0
+
+
+def test_chat_api_feed_after_viewers_and_post_as_owner(setup):
+    client, hub, clock, _ = setup
+    h = {"X-Api-Key": "sekrit"}
+    hub.presence.join(1, {"id": OWNER, "name": "David"}, clock.t)
+    hub.presence.join(2, {"id": "g-1", "name": "Kim (guest)", "guest": True}, clock.t)
+    hub.chat.post({"id": "g-1", "name": "Kim (guest)", "guest": True}, "hello", clock.t)
+    feed = client.get("/api/v1/wall/chat", headers=h).json()
+    assert [m["text"] for m in feed["messages"]] == ["hello"] and feed["messages"][0]["guest"] is True
+    assert "uid" not in feed["messages"][0] and "avatar" not in feed["messages"][0]
+    assert feed["watching"] == 2 and {v["name"] for v in feed["viewers"]} == {"David", "Kim (guest)"}
+    clock.t += 2
+    r = client.post("/api/v1/wall/chat", headers=h, json={"discord_id": OWNER, "name": "Dave (TV)", "text": "from the couch"})
+    assert r.status_code == 200 and r.json()["msg"]["name"] == "David"   # the name he watches under wins
+    after = client.get(f"/api/v1/wall/chat?after={feed['last']}", headers=h).json()
+    assert [m["text"] for m in after["messages"]] == ["from the couch"] and len(after["ids"]) == 2
+    # the owner's own rate limit applies (1 message / 1.5 s)
+    r = client.post("/api/v1/wall/chat", headers=h, json={"discord_id": OWNER, "text": "again"})
+    assert r.status_code == 429
+    assert client.post("/api/v1/wall/chat", headers=h, json={"discord_id": "x", "text": "hi"}).status_code == 422
+    clock.t += 2
+    assert client.post("/api/v1/wall/chat", headers=h, json={"discord_id": OWNER, "text": "  "}).status_code == 422
+
+
+def test_chat_api_post_reaches_the_page(setup):
+    client, hub, clock, _ = setup
+    with connect(client, "1", "One") as ws:
+        until(ws, "hello")
+        client.post("/api/v1/wall/chat", headers={"X-Api-Key": "sekrit"}, json={"discord_id": OWNER, "name": "David", "text": "yo"})
+        assert until(ws, "chat")["msg"]["text"] == "yo"
+
+
+def test_chat_api_respects_deletes_and_mutes(setup):
+    client, hub, clock, _ = setup
+    h = {"X-Api-Key": "sekrit"}
+    a = hub.chat.post({"id": "1", "name": "One"}, "keep", clock.t)[0]
+    b = hub.chat.post({"id": "2", "name": "Two"}, "delete me", clock.t)[0]
+    hub.chat.post({"id": "3", "name": "Three"}, "muted soon", clock.t)
+    hub.chat.delete(b["id"])
+    hub.chat.mute("3", 10, clock.t)
+    feed = client.get("/api/v1/wall/chat", headers=h).json()
+    assert [m["text"] for m in feed["messages"]] == ["keep"] and feed["ids"] == [a["id"]]
+    r = client.post("/api/v1/wall/chat", headers=h, json={"discord_id": "3", "text": "still here?"})
+    assert r.status_code == 403
 def test_noop_proposals_are_refused():
     from web.wall import noop
     w = {"running": True, "mirror": False, "urls": ["https://a.tv", "https://b.tv"], "sound": 1,

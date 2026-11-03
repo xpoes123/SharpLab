@@ -24,6 +24,23 @@ Item {
     property var v: B.view(null, 0)
     property var m: null                 // B.matchup(...) while a matchup is open
     property int pageNo: 0
+    // the watch party's chat while the discord wall runs (the TV router's /api/overlay/view "chat"; null = none):
+    // {count, who, lines: [{id, name, guest, text, sys, fresh}]} — the sidebar gives it its lower half. A line kept in
+    // chatLines by id, so an old one (fresh false, ~20 s) dims slowly instead of being redrawn. Nothing blinks or pulses.
+    property var chat: null
+    ListModel { id: chatLines }
+    onChatChanged: {
+        var ls = (chat && chat.lines) || [], want = {}
+        for (var i = 0; i < ls.length; i++) want[ls[i].id] = true
+        for (var j = chatLines.count - 1; j >= 0; j--) if (!want[chatLines.get(j).mid]) chatLines.remove(j)
+        for (var k = 0; k < ls.length; k++) {
+            var l = ls[k], row = { mid: l.id, who: String(l.name || ""), guest: !!l.guest, body: String(l.text || ""), sys: !!l.sys, fresh: !!l.fresh }
+            var at = -1
+            for (var n = 0; n < chatLines.count; n++) if (chatLines.get(n).mid === l.id) { at = n; break }
+            if (at < 0) chatLines.append(row)
+            else chatLines.set(at, row)
+        }
+    }
     property string now: ""
 
     // tokens.css
@@ -324,7 +341,7 @@ Item {
                 Item {
                     id: cells
                     anchors.top: shead.bottom; anchors.topMargin: root.gap
-                    anchors.bottom: parent.bottom
+                    anchors.bottom: chatBox.top; anchors.bottomMargin: chatBox.on ? root.gap : 0
                     width: parent.width
                     clip: true
                     visible: !fan
@@ -356,7 +373,7 @@ Item {
 
                 Item {
                     anchors.top: shead.bottom; anchors.topMargin: root.gap
-                    anchors.bottom: parent.bottom
+                    anchors.bottom: chatBox.top; anchors.bottomMargin: chatBox.on ? root.gap : 0
                     width: parent.width
                     clip: true
                     visible: fan
@@ -369,6 +386,85 @@ Item {
                             delegate: FeedPlay { required property var modelData; required property int index; p: modelData; opacity: Math.max(0.45, 1 - index * 0.05) }
                         }
                         Caps { visible: root.v.plays.length === 0; width: parent.width; text: root.v.empty || "No plays yet"; size: root.tLabel; color: root.cMuted }
+                    }
+                }
+
+                // the watch party's chat: the lower half while the discord wall runs, newest at the bottom; what doesn't
+                // fit scrolls off the top. Lines older than ~20 s dim (a slow 2 s fade) so the new ones stand out.
+                Item {
+                    id: chatBox
+                    readonly property bool on: !!root.chat
+                    visible: on
+                    anchors.bottom: parent.bottom
+                    width: parent.width
+                    height: on ? Math.round(parent.height * 0.5) : 0
+                    Rectangle { id: crule; width: parent.width; height: root.hair; color: root.cRule }
+                    Item {
+                        id: chead
+                        y: crule.height + 0.8 * root.rem
+                        width: parent.width; height: ctitle.implicitHeight
+                        Mono { id: ctitle; text: "CHAT"; weight: 600; color: root.cAccent; width: parent.width - ccount.implicitWidth - root.rem }
+                        Mono { id: ccount; anchors.right: parent.right; text: root.chat ? root.chat.count + " watching" : ""; color: root.cInk }
+                    }
+                    Mono {
+                        id: cwho
+                        anchors.top: chead.bottom; anchors.topMargin: 0.2 * root.rem
+                        width: parent.width; size: 1.5 * root.rem
+                        text: root.chat ? root.chat.who : ""; visible: text !== ""
+                        wrapMode: Text.Wrap; maximumLineCount: 2
+                    }
+                    Item {
+                        anchors.top: cwho.visible ? cwho.bottom : chead.bottom; anchors.topMargin: 0.8 * root.rem
+                        anchors.bottom: parent.bottom
+                        width: parent.width
+                        clip: true
+                        Caps { visible: chatLines.count === 0; width: parent.width; text: "No messages yet"; size: root.tLabel; color: root.cMuted }
+                        Column {
+                            id: ccol
+                            anchors.bottom: parent.bottom
+                            width: parent.width
+                            spacing: 0.7 * root.rem
+                            Repeater {
+                                model: chatLines
+                                delegate: Item {
+                                    id: cl
+                                    required property string who
+                                    required property bool guest
+                                    required property string body
+                                    required property bool sys
+                                    required property bool fresh
+                                    width: ccol.width
+                                    height: cbody.y + cbody.implicitHeight
+                                    opacity: fresh ? 1 : 0.5
+                                    visible: y + ccol.y >= 0   // a line cut off at the top isn't drawn half
+                                    Behavior on opacity { NumberAnimation { duration: 2000; easing.type: Easing.InOutQuad } }
+                                    Rectangle { width: root.tally * 0.6; height: parent.height; color: cl.sys ? root.cRuleStrong : cl.guest ? root.cMuted : root.cAccent }
+                                    T {
+                                        id: cname
+                                        x: root.tally * 0.6 + 0.8 * root.rem
+                                        visible: !cl.sys
+                                        width: Math.min(implicitWidth, cl.width - x - (gtag.visible ? gtag.width + 0.5 * root.rem : 0))
+                                        text: cl.who; size: 1.6 * root.rem; weight: 700; wdth: 68; color: cl.guest ? root.cInk : root.cAccent
+                                    }
+                                    Rectangle {   // the guest marker
+                                        id: gtag
+                                        visible: cl.guest && !cl.sys
+                                        x: cname.x + cname.width + 0.5 * root.rem; anchors.verticalCenter: cname.verticalCenter
+                                        width: gtt.implicitWidth + 0.6 * root.rem; height: gtt.implicitHeight
+                                        color: "transparent"; border.color: root.cRuleStrong; border.width: root.hair
+                                        Mono { id: gtt; anchors.centerIn: parent; text: "GUEST"; size: 1.25 * root.rem }
+                                    }
+                                    T {
+                                        id: cbody
+                                        x: cname.x; y: cl.sys ? 0 : cname.height + 0.1 * root.rem
+                                        width: cl.width - x
+                                        text: cl.body; size: root.tMeta; weight: 500
+                                        color: cl.sys ? root.cMuted : root.cInk
+                                        wrapMode: Text.Wrap; maximumLineCount: 3
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

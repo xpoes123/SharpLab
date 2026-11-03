@@ -42,6 +42,19 @@ Window {
         x: w.geo.gridW; width: w.geo.side; height: w.height; unit: w.width
         layout: "side"; board: w.arg("--board", ""); api: w.arg("--api", "http://127.0.0.1:7790"); polling: w.lbar
     }
+    Timer {   // the watch party's chat, from the view poll like Overlay.qml
+        interval: 500; running: w.lbar; repeat: true; triggeredOnStart: true
+        onTriggered: {
+            var x = new XMLHttpRequest()
+            x.onreadystatechange = function () {
+                if (x.readyState !== XMLHttpRequest.DONE || x.status !== 200) return
+                try { var c = JSON.parse(x.responseText).chat || null } catch (e) { return }
+                if (JSON.stringify(c) !== JSON.stringify(side.chat)) side.chat = c
+            }
+            x.open("GET", w.arg("--api", "http://127.0.0.1:7790") + "/api/overlay/view")
+            x.send()
+        }
+    }
     Board {
         visible: w.lbar
         y: w.geo.gridH; width: w.geo.gridW; height: w.geo.band; unit: w.width
