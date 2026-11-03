@@ -128,6 +128,7 @@ class Cfg:
         self.owner_id = env.get("WALL_OWNER_ID", "")       # the TV's phones post as him
         self.owner_name = env.get("WALL_OWNER_NAME", "David")
         self.sync_default = float(env.get("WALL_BETS_DELAY_S", "45"))   # the spoiler delay until a tile is calibrated
+        self.sync_ocr = env.get("WALL_SYNC_OCR", "1") not in ("0", "false", "")   # 0 = no scorebug OCR (manual + default only)
 
 
 def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, scores: Scores | None = None,
@@ -163,6 +164,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
             i.before_start = guard.park   # the LLM's VRAM is free before the budget check
         i.sync = sync
     runner = runner or Runner(sync, instances, scores)
+    runner.enabled = runner.enabled and cfg.sync_ocr
 
     def tile_feed() -> list[dict]:
         """Every tile's game (both walls, each once) with its delay: what the web is asked for."""
