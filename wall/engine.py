@@ -132,6 +132,14 @@ FADE_S = 0.45
 # own black first frame), so a swap reads as a cut through black instead of a page tearing
 FADE_OUT_JS = """(() => { const r = document.documentElement; r.style.background = '#000';
   r.style.transition = 'opacity 0.4s ease-in'; r.style.opacity = '0'; })()"""
+# a stream page loading in a tile is never seen: from its first paint everything is invisible on black (TV_HIDE_JS, run at
+# document start) until its video is fullscreen in the tile, then it fades in (TV_REVEAL_JS). REVEAL_WAIT_S at most.
+REVEAL_WAIT_S = 15.0
+TV_HIDE_JS = """(() => { const s = document.createElement('style'); s.id = 'tv-hide';
+  s.textContent = 'html{background:#000!important} html *{visibility:hidden!important}';
+  (document.head || document.documentElement).appendChild(s); })()"""
+TV_REVEAL_JS = """(() => { const s = document.getElementById('tv-hide'); if (!s) return; const r = document.documentElement;
+  r.style.opacity = '0'; s.remove(); requestAnimationFrame(() => { r.style.transition = 'opacity 0.5s ease-out'; r.style.opacity = '1'; }); })()"""
 ARTIFACT = re.compile(r"^https://claude\.ai/(code/)?artifact/[\w-]+")
 ARTIFACT_RELOAD_S = 300.0
 # a claude.ai artifact (a community dashboard): its frame over the whole tile (covers claude.ai's bar), zoomed to 80 % so
@@ -418,15 +426,40 @@ class Driver:
         closing and opening (KWin re-tiling it is what showed as a shrink / grow). False = relaunch instead."""
         if p is None or p.poll() is not None:
             return False
-        try:
+        try:   # reachable at all? (else relaunch now, the old way)
             with cdp_page(self.s.cdp_base + slot) as call:
                 call("Runtime.evaluate", {"expression": FADE_OUT_JS})
-                time.sleep(FADE_S)
-                call("Page.navigate", {"url": resolve_live(url)})
-            return True
-        except Exception as e:  # noqa: BLE001 — a stuck page: relaunch it
+        except Exception as e:  # noqa: BLE001
             log.info("%s tile slot %d: in-place swap failed (%s), relaunching", self.s.name, slot, e)
             return False
+        threading.Thread(target=self._swap_hidden, args=(slot, url), name=f"wall-{self.s.name}-swap{slot}", daemon=True).start()
+        return True
+
+    def _swap_hidden(self, slot: int, url: str) -> None:
+        """Off the caller's lock: load the page with it hidden from its first paint, wait for its video to be fullscreen,
+        then fade it in. Our own data pages fade in by themselves (election.css), so they just load."""
+        stream = not own_page(url)
+        try:
+            with cdp_page(self.s.cdp_base + slot) as call:
+                time.sleep(FADE_S)
+                if stream:   # this session's script runs at the start of every document it loads, while it's open
+                    call("Page.addScriptToEvaluateOnNewDocument", {"source": TV_HIDE_JS})
+                call("Page.navigate", {"url": resolve_live(url)})
+                if not stream:
+                    return
+                end = time.monotonic() + REVEAL_WAIT_S
+                while time.monotonic() < end:
+                    time.sleep(0.5)
+                    try:
+                        r = call("Runtime.evaluate", {"expression": FULLSCREEN_JS, "userGesture": True, "awaitPromise": True,
+                                                      "returnByValue": True})
+                    except Exception:  # noqa: BLE001 — still loading
+                        continue
+                    if (r.get("result") or {}).get("value") is True:
+                        break
+                call("Runtime.evaluate", {"expression": TV_REVEAL_JS})   # fullscreen, or out of patience: show it anyway
+        except Exception as e:  # noqa: BLE001 — the tend loop keeps fullscreening it; the next swap relaunches if it's stuck
+            log.info("%s tile slot %d: hidden swap: %s", self.s.name, slot, e)
 
     def _launch(self, url: str, slot: int) -> subprocess.Popen | None:
         self._mark(url, slot)
