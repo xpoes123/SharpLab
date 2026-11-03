@@ -83,10 +83,10 @@ async def test_owner_dashboard_applies_on_the_other_tile():
 
 
 @pytest.mark.anyio
-async def test_dashboard_avoids_the_tile_holding_the_same_kind():
+async def test_dashboard_replaces_the_tile_holding_the_same_kind():
     h, done = make(Jev("d_mapH", 0.9))
-    await run(h, DAVID, "jev house map")   # tile 2 holds the Senate map: the House map goes on tile 1
-    assert done[0]["i"] == 0 and done[0]["url"] == OWN + "map?view=H"
+    await run(h, DAVID, "jev house map")   # tile 2 holds the Senate map: the House map replaces it (never two maps)
+    assert done[0]["i"] == 1 and done[0]["url"] == OWN + "map?view=H"
 
 
 @pytest.mark.anyio

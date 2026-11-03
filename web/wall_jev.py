@@ -83,7 +83,7 @@ def plan(choice: str, text: str, wall: dict | None) -> tuple[dict | None, str, s
         if url in urls:
             return None, name, f"🤖 Jev: {name} is already on tile {urls.index(url) + 1}"
         same = {i for i in (0, 1) if i < len(urls) and _kind(urls[i]) == _kind(url)}
-        i = next((i for i in (1, 0) if i not in same), 1)
+        i = next(iter(sorted(same)), 1)   # a map replaces the map: the dashboards never show two of a kind
         return {"op": "tile", "i": i, "url": url, "label": name}, name, ""
     s = streams().get(choice)
     if not s:
