@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="election.css">
 <style>
   .rows { position: absolute; left: 1.2rem; right: 1.2rem; top: 4.6rem; bottom: 2.3rem; display: grid; grid-auto-rows: 1fr; gap: 0.55rem; }
-  .row { display: grid; grid-template-columns: 13.5rem 1fr 8.6rem; gap: 1rem; align-items: center; background: var(--surface);
+  .row { display: grid; grid-template-columns: 12rem 1fr 10rem 8.2rem; gap: 1rem; align-items: center; background: var(--surface);
          border-left: 0.3rem solid var(--rule-strong); padding: 0 0.9rem 0 0.8rem; min-height: 0; }
   .row.cD { border-left-color: var(--dem); } .row.cR { border-left-color: var(--rep); } .row.cI { border-left-color: var(--ind); }
   .row.lD { border-left-color: var(--dem-lead); } .row.lR { border-left-color: var(--rep-lead); }
@@ -34,6 +34,13 @@
   .chip b { font-weight: 800; color: var(--accent); }
   .chip.won { border-color: var(--ok, #8ED07A); color: var(--ok, #8ED07A); }
   .chip.lost { color: var(--muted); }
+  /* Kalshi's favourite (live, no spoiler delay): "Ossoff 97%" in the party's colour, the 24 h move under it */
+  .odds { display: grid; gap: 0.15rem; border-left: 1px solid var(--rule); padding-left: 0.7rem; min-width: 0; }
+  .odds .ol { display: flex; align-items: baseline; gap: 0.4rem; min-width: 0; }
+  .odds .ow { font-size: 1rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+  .odds .op { font-size: 1.35rem; }
+  .odds .oc { font-size: 0.72rem; white-space: nowrap; }
+  .odds .oc b { font-weight: 700; color: var(--ink); }
   .empty { position: absolute; inset: 0; display: grid; place-items: center; font-size: 1.6rem; color: var(--muted); }
 </style>
 </head>
@@ -47,11 +54,12 @@
 // Key races: CNN's races to watch (Senate + Governors), then the closest House ones once votes are in. PER rows a page,
 // a new page every 12 s (?every=s): the old one fades out, then the new one in (0.6 s each); the data every 30 s (bars ease over 3 s). Uncalled races first,
 // closest margin on top; a called race shows ✓ and whose call it is. ?page=n pins a page (renders, tests).
+// Each row's Kalshi favourite + its 24 h move (data.odds; odds.json re-read every 10 s and patched in place, no fade).
 // A race an opted-in member holds a Kalshi position in gets a small chip under its name ("Hansen YES D"; data.holders).
 const Q = new URLSearchParams(location.search);
 const PER = 5, EVERY = (+Q.get("every") || 12) * 1000, TAG = { S: "Senate", G: "Governor", H: "House" };
 E.tickClock(document.getElementById("clock"));
-let pageNo = +Q.get("page") || 0, groups = [], shown = "";
+let pageNo = +Q.get("page") || 0, groups = [], shown = "", odds = null, byId = {};
 
 function pick(races) {
   const close = (a, b) => (a.called ? 1 : 0) - (b.called ? 1 : 0) || (a.margin ?? 99) - (b.margin ?? 99) || a.label.localeCompare(b.label);
@@ -72,6 +80,15 @@ function chips(r, holders) {
   return `<div class="chips">${hs.slice(0, 3).map((h) => `<span class="chip${h.won === true ? " won" : h.won === false ? " lost" : ""}">${h.won === true ? "✓ " : ""}<b>${E.esc(h.who)}</b> ${E.esc(h.chip)}</span>`).join("")}${hs.length > 3 ? `<span class="chip">+${hs.length - 3}</span>` : ""}</div>`;
 }
 
+function oddsHtml(r, o) {   // always the same three spans (so patch() keeps the elements); empty when Kalshi has none
+  if (!o || o.prob == null) return `<div class="ol"><span class="ow"></span><span class="op num"></span></div><span class="oc mono muted caps">Kalshi –</span>`;
+  const c = (r.cands || []).find((c) => c.full === o.who || c.name === o.who);
+  const who = c ? c.name : String(o.who || "").split(" ").pop();
+  const ch = o.chg24, a = Math.abs(ch ?? 0);
+  const mv = ch == null ? "" : a < 0.5 ? " · <b>±0</b>" : ` · <b>${ch > 0 ? "▲" : "▼"}${a < 10 ? a.toFixed(1) : Math.round(a)}</b> 24h`;
+  return `<div class="ol"><span class="ow ${o.party || ""}">${E.esc(who)}</span><span class="op num ${o.party || ""}">${Math.round(o.prob)}%</span></div><span class="oc mono muted caps">Kalshi${mv}</span>`;
+}
+
 function row(r, now, holders) {
   const cs = r.cands.slice(0, 2), top = Math.max(1, ...cs.map((c) => c.pct));
   const status = r.called
@@ -87,11 +104,14 @@ function row(r, now, holders) {
       <span class="pc num ${c.party}">${r.votes > 0 ? c.pct.toFixed(1) + "%" : "–"}</span>
       <span class="tr"><i style="width:${r.votes > 0 ? (100 * c.pct / top).toFixed(1) : 0}%;background:var(--${{ D: "dem", R: "rep" }[c.party] || "ind"})"></i></span>
     </div>`).join("")}</div>
+    <div class="odds" data-rid="${E.esc(r.id)}">${oddsHtml(r, (odds || {})[r.id])}</div>
     <div class="st2">${status}<span class="in mono">${r.votes > 0 ? Math.round(r.pct) + "% in" : ""}</span></div>
   </div>`;
 }
 
 function render(data) {
+  if (data.odds && !odds) odds = data.odds;
+  byId = Object.fromEntries((data.races || []).map((r) => [r.id, r]));
   groups = pick(data.races || []);
   document.getElementById("foot").innerHTML = E.footer(data);
   paint(data);
@@ -152,11 +172,27 @@ function patch(view, html) {   // keep the elements (so widths transition), copy
     const mixed = n.children.length && [...n.childNodes].some((x) => x.nodeType === 3 && x.textContent.trim());
     if (mixed) { if (el.innerHTML !== n.innerHTML) el.innerHTML = n.innerHTML; }
     else if (!n.children.length && el.textContent !== n.textContent) el.textContent = n.textContent;
+    if (n.dataset.rid !== undefined && n.dataset.rid !== el.dataset.rid) el.dataset.rid = n.dataset.rid;
     if (n.getAttribute("style") !== el.getAttribute("style")) el.setAttribute("style", n.getAttribute("style") || "");
   });
 }
 
+function setOdds(o) {   // just the odds cells, in place: the rest of the page doesn't move
+  odds = o || {};
+  document.querySelectorAll(".odds[data-rid]").forEach((el) => {
+    const r = byId[el.dataset.rid];
+    if (!r) return;
+    const h = oddsHtml(r, odds[r.id]);
+    if (el.innerHTML !== h) el.innerHTML = h;
+  });
+}
+function pollOdds() {
+  fetch("odds.json", { cache: "no-store" }).then((r) => r.json()).then((d) => setOdds(d.odds), () => {})
+    .finally(() => setTimeout(pollOdds, 10000));
+}
+
 E.poll(render);
+setTimeout(pollOdds, 10000);
 if (!Q.has("page")) setInterval(() => { pageNo++; paint(); }, EVERY);
 </script>
 </body>

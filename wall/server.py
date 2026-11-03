@@ -36,7 +36,7 @@ from wall.instance import BOARDS, Instance, WallError
 from wall.llm import LLMGuard
 from wall.live import LEAGUES, STREAM, TEAMS, Scores, live_games
 from wall.presets import PresetStore, check_url, errors
-from wall.spotlight import Spotlight, state_list
+from wall.spotlight import Odds, Spotlight, state_list
 from wall.sync import STEP_S, Runner, SyncStore, tile_games
 from wall.exitpoll import ExitPoll
 from wall.turnout import Turnout
@@ -149,7 +149,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
           store: PresetStore | None = None, guard: LLMGuard | None = None, chat: ChatFeed | None = None,
           sync: SyncStore | None = None, bets: BetsFeed | None = None, runner: Runner | None = None,
           results: Results | None = None, spot: Spotlight | None = None, turnout: Turnout | None = None,
-          exitpoll: ExitPoll | None = None) -> FastAPI:
+          exitpoll: ExitPoll | None = None, odds: Odds | None = None) -> FastAPI:
     cfg = cfg or Cfg()
     results = results or Results(replay(cfg.election_replay) if cfg.election_replay else None, cfg.state)
     sync = sync or SyncStore(cfg.state / "sync.json", cfg.sync_default)
@@ -157,6 +157,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
     exitpoll = exitpoll or ExitPoll()
     bets = bets or BetsFeed(cfg.web_url, cfg.web_key)
     spot = spot or Spotlight(urllib_http(cfg.web_url, cfg.web_key, timeout=8) if cfg.web_url and cfg.web_key else None)
+    odds = odds or Odds(urllib_http(cfg.web_url, cfg.web_key, timeout=6) if cfg.web_url and cfg.web_key else None, idle_s=ELECTION_IDLE_S)
     tape = ScoreTape()   # every scoreboard as first seen: the band headers' delayed scores
     chat = chat or ChatFeed(cfg.web_url, cfg.web_key, cfg.owner_id, cfg.owner_name)
     guard = guard or LLMGuard(cfg.ollama, cfg.llm_guard)
@@ -260,9 +261,17 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
                         await asyncio.to_thread(spot.refresh)
                     except Exception as e:  # noqa: BLE001
                         log.warning("spotlight: %s", e)
+        async def odds_ticker():   # election night: the races tile's Kalshi odds from the web, every 10 s while looked at
+            while True:
+                await asyncio.sleep(1)
+                if odds.due(results.seen):
+                    try:
+                        await asyncio.to_thread(odds.refresh)
+                    except Exception as e:  # noqa: BLE001
+                        log.warning("odds: %s", e)
         runner.start()
         tasks = [asyncio.create_task(ticker()), asyncio.create_task(chat_ticker()), asyncio.create_task(bets_ticker()),
-                 asyncio.create_task(spot_ticker())]
+                 asyncio.create_task(spot_ticker()), asyncio.create_task(odds_ticker())]
         yield
         for task in tasks:
             task.cancel()
@@ -274,6 +283,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
     app.state.sync, app.state.bets, app.state.runner = sync, bets, runner
     app.state.tape = tape
     app.state.spot = spot
+    app.state.odds = odds
 
     @app.middleware("http")
     async def gate(request: Request, call_next):
@@ -630,7 +640,14 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         results.touch()
         snap = results.snapshot()
         snap["holders"] = election_holders(election_trades(bets.election, snap)) if sync.show else {}   # the key-races chips
+        snap["odds"] = odds.view()   # the key races' Kalshi favourites (live, no spoiler delay; wall/spotlight.py Odds)
         return JSONResponse(snap, headers={"Cache-Control": "no-store"})
+
+    @app.get("/p/election/odds.json")
+    def election_odds() -> Response:
+        """Just the odds: the races tile re-reads these every 10 s without re-reading (or re-drawing) the whole page."""
+        results.touch()
+        return JSONResponse({"odds": odds.view()}, headers={"Cache-Control": "no-store"})
 
     @app.get("/p/election/turnout.json")
     def turnout_json() -> Response:

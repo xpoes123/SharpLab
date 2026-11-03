@@ -13,7 +13,7 @@ import pytest
 
 from test_wall_bets import Clock
 from wall.election import Results, replay
-from wall.spotlight import Spotlight, state_list
+from wall.spotlight import ODDS_S, ODDS_STALE_S, Odds, Spotlight, state_list
 
 FX = Path(__file__).parent / "fixtures" / "wall" / "election"
 CARD = {"state": "GA", "name": "Georgia", "more": 13, "error": "", "races": [
@@ -111,7 +111,7 @@ def test_state_list_puts_key_races_first():
     assert len({s["st"] for s in sts}) == len(sts) == 50
 
 
-def _service(tmp_path, web):
+def _service(tmp_path, web, odds=None):
     from test_wall_service import FakeDriver, FakeScores
     from wall.engine import Session
     from wall.instance import Instance
@@ -125,7 +125,7 @@ def _service(tmp_path, web):
     store = PresetStore(str(tmp_path))
     inst = {k: Instance(k, Session(k), store, FakeScores({}), driver=FakeDriver(), run=lambda f: None) for k in ("tv", "discord")}
     sp = Spotlight(web, spawn=lambda f: f())
-    return build(cfg, inst, FakeScores({}), store, guard=LLMGuard(mode="off"), results=res, spot=sp), sp
+    return build(cfg, inst, FakeScores({}), store, guard=LLMGuard(mode="off"), results=res, spot=sp, odds=odds), sp
 
 
 def test_service_endpoints_phone_overlay_and_watch_page(tmp_path, monkeypatch):
@@ -149,6 +149,58 @@ def test_service_endpoints_phone_overlay_and_watch_page(tmp_path, monkeypatch):
     assert web.post("/i/tv/spotlight", json={"state": "GA"}, headers={"Authorization": "Bearer tok"}).status_code == 403
     tv.post("/i/tv/spotlight", json={"state": ""})
     assert tv.get("/i/tv/api/overlay/spot").json()["spot"] is None
+
+
+# ---- the races tile's Kalshi odds (from the web, every 10 s while the pages are looked at) ----------------------------------
+ODDS = {"S-GA": {"who": "Jon Ossoff", "party": "D", "prob": 97.0, "chg24": 0.2},
+        "H-WI-3": {"who": "Derrick Van Orden", "party": "R", "prob": 58.0, "chg24": -4.0},
+        "bad": {"who": "x", "prob": None}}
+
+
+class OddsWeb:
+    def __init__(self, answer=(200, ODDS)):
+        self.calls, self.answer = [], answer
+
+    def __call__(self, method, path, body):
+        self.calls.append((method, path))
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+
+def test_odds_poll_only_while_looked_at_and_drop_when_stale():
+    clock, web = Clock(1000.0), OddsWeb()
+    o = Odds(web, clock=clock, idle_s=180)
+    assert not o.due(seen=0) and o.view() == {}                                  # nobody looking: no asks
+    assert o.due(seen=999)
+    o.refresh()
+    assert web.calls == [("GET", "/api/v1/wall/election/odds")]
+    assert o.view() == {k: v for k, v in ODDS.items() if k != "bad"}           # unpriced rows dropped
+    clock.t += ODDS_S - 1
+    assert not o.due(seen=clock.t)
+    clock.t += 1
+    assert o.due(seen=clock.t)
+    web.answer = OSError("down")
+    o.refresh()                                                                  # web down: keep the last odds a while
+    assert o.view()["S-GA"]["prob"] == 97.0 and not o.due(seen=clock.t)
+    web.answer = (502, {"error": "Kalshi didn't answer"})
+    o.refresh()
+    assert o.view()["S-GA"]["prob"] == 97.0
+    clock.t += ODDS_STALE_S
+    assert o.view() == {}                                                        # too old to show
+    assert not Odds(None).due(seen=time.time())                                  # not configured: never
+
+
+def test_service_merges_odds_into_data_json_and_odds_json(tmp_path):
+    from starlette.testclient import TestClient
+    o = Odds(OddsWeb())
+    o.refresh()
+    app, sp = _service(tmp_path, Web(), odds=o)
+    tv = TestClient(app, base_url="http://127.0.0.1:7795", client=("127.0.0.1", 5555))
+    assert tv.get("/p/election/data.json").json()["odds"]["S-GA"]["who"] == "Jon Ossoff"
+    assert tv.get("/p/election/odds.json").json() == {"odds": o.view()}
+    app2, _ = _service(tmp_path / "x", Web())
+    assert TestClient(app2, base_url="http://127.0.0.1:7795", client=("127.0.0.1", 5555)).get("/p/election/data.json").json()["odds"] == {}
 
 
 # ---- the card in the overlay (qml6 offscreen): renders without a QML error -------------------------------------------------

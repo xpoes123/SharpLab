@@ -433,6 +433,10 @@ House ones on "Show price chart". On phones the panel itself is a sheet opened f
 * API (`/api/v1/wall/election/…`): `map`, `shapes`, `state/{ST}`, `control/{S|H}`, `chart/{race id | CTRL-S | CTRL-H}`
   (only that race's own markets) — any viewer, guests included (public data); `positions` only in a member's answer.
   `POST spotlight {state}` (members) and `GET spot/{ST}` (the wall service, `X-Api-Key`) are the TV spotlight's.
+  `GET odds` (the wall service, `X-Api-Key`) → `{race id: {who, party, prob, chg24}}`: every race to watch's Kalshi
+  favourite, live (no spoiler delay) — one batched `/markets?tickers=…` per 5 s (100 tickers a call), the race → tickers
+  map from the series walk every 5 min. The wall service asks every 10 s while an election page is looked at and serves
+  it in `/p/election/data.json` (`odds`) and `/p/election/odds.json` (the races tile re-reads that every 10 s in place).
 
 **Vote updates + race detail** (`wall/election_feed.py`, `wall/election_counties.py`, `web/wall_election_live.py`,
 `web/static/wall-election-live.*`).

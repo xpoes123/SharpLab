@@ -132,3 +132,43 @@ def state_list(snap: dict) -> list[dict]:
             s["rank"] = min(s["rank"], 0 if r.get("watch") else 1)
     return [{k: v for k, v in s.items() if k != "rank"} | {"key": s["rank"] == 0}
             for s in sorted(by.values(), key=lambda s: (s["rank"], s["name"]))]
+
+
+ODDS_S = 10.0       # the races tile's Kalshi odds: asked for this often while the election pages are looked at (no delay)
+ODDS_STALE_S = 120.0
+
+
+class Odds:
+    """The key races' Kalshi favourites for the races tile: {race id: {who, party, prob, chg24}} from sharplab-web
+    (GET /api/v1/wall/election/odds, X-Api-Key; it owns the Kalshi rate limit + caches). Fetched every ODDS_S while an
+    election page / board was looked at lately (Results.seen); odds older than ODDS_STALE_S are dropped, not shown."""
+
+    def __init__(self, http: Callable[[str, str, dict | None], tuple[int, object]] | None = None, clock=time.time,
+                 idle_s: float = 180.0) -> None:
+        self.http, self.clock, self.idle_s = http, clock, idle_s
+        self.data: dict[str, dict] = {}
+        self.at = 0.0        # when data last came
+        self.fetched = 0.0   # when it was last asked for (ok or not)
+
+    def due(self, seen: float) -> bool:
+        now = self.clock()
+        return self.http is not None and now - seen < self.idle_s and now - self.fetched >= ODDS_S
+
+    def refresh(self) -> None:
+        if not self.http:
+            return
+        self.fetched = self.clock()
+        try:
+            status, data = self.http("GET", "/api/v1/wall/election/odds", None)
+        except (OSError, ValueError) as e:
+            log.warning("odds: web unreachable: %s", e)
+            return
+        if status != 200 or not isinstance(data, dict):
+            log.warning("odds: web answered %s", status)
+            return
+        self.data = {k: {f: v.get(f) for f in ("who", "party", "prob", "chg24")} for k, v in data.items()
+                     if isinstance(k, str) and isinstance(v, dict) and isinstance(v.get("prob"), (int, float))}
+        self.at = self.clock()
+
+    def view(self) -> dict[str, dict]:
+        return self.data if self.clock() - self.at < ODDS_STALE_S else {}

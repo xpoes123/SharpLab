@@ -36,6 +36,9 @@ class FakeKalshi:
             raise OSError("kalshi down")
         if path == "/series":
             return SERIES
+        if path == "/markets" and "tickers" in params:
+            want = params["tickers"].split(",")
+            return {"markets": [m for ms in MKTS.values() for m in ms if m["ticker"] in want]}
         if path == "/markets":
             return {"markets": MKTS.get(params["series_ticker"], [])}
         if path.endswith("/candlesticks"):
@@ -418,3 +421,40 @@ def test_pulse_feedback_members_post_key_replies(eenv, monkeypatch, tmp_path):
                        headers={"X-API-Key": "sekrit"}).json() == {"ok": True}
     (it,) = client.get("/api/v1/wall/election/pulse/feedback").json()["items"]
     assert (it["who"], it["text"], it["reply"]) == ("Hansen", "add NJ counties", "on it") and "uid" not in it
+
+
+# ---- the races tile's odds (the wall service asks with the key) ----------------------------------------------------------
+def test_odds_for_the_wall_need_the_key_favourites_only_and_are_cached(eenv):
+    client, b, clock, k, optin, fk, cc = eenv
+    opted_in_hansen(b, k, optin)
+    poll(b)
+    wel.results().races = [{**r, "watch": True} if r["id"] == "H-GA-6" else r for r in wel.results().races]
+    assert client.get("/api/v1/wall/election/odds").status_code == 401
+    d = client.get("/api/v1/wall/election/odds", headers={"X-Api-Key": "sekrit"}).json()
+    assert d["S-GA"]["who"] == "Jon Ossoff" and d["S-GA"]["party"] == "D" and d["S-GA"]["prob"] > 50
+    assert set(d["S-GA"]) == {"who", "party", "prob", "chg24"}
+    assert set(d) == {"S-GA", "G-GA", "H-GA-6"}                                  # races to watch only (H-GA-5 isn't one)
+    watch = {r["id"] for r in wel.results().snapshot()["races"] if r["watch"]}
+    assert set(d) <= watch
+    assert "Hansen" not in json.dumps(d)
+    series = {c[1].get("series_ticker") for c in fk.calls if c[0] == "/markets"}
+    assert {"SENATEGA", "GOVPARTYGA", "KXHOUSERACE"} <= series and "CONTROLS" not in series
+    batch = [c for c in fk.calls if "tickers" in c[1]]
+    assert len(batch) == 1 and len(batch[0][1]["tickers"].split(",")) == 6     # 3 races x top 2 picks, one call
+    n = len(fk.calls)
+    client.get("/api/v1/wall/election/odds", headers={"X-Api-Key": "sekrit"})
+    assert len(fk.calls) == n                                                    # cached for every caller
+    cc.t += wel.ODDS_TTL + 1
+    client.get("/api/v1/wall/election/odds", headers={"X-Api-Key": "sekrit"})
+    assert [c for c in fk.calls[n:]] == [batch[0]]                               # fresh prices: just the one batched call
+    cc.t += wel.ODDS_TTL + 1
+    fk.fail = True
+    assert client.get("/api/v1/wall/election/odds", headers={"X-Api-Key": "sekrit"}).json() == d   # Kalshi down: the last odds
+
+
+def test_favourite_is_the_busiest_events_likeliest_priced_pick():
+    rows = [{"event": "A", "who": "x", "party": "D", "prob": None, "chg24": None},
+            {"event": "A", "who": "y", "party": "R", "prob": 40.0, "chg24": -2.0},
+            {"event": "B", "who": "z", "party": "D", "prob": 90.0, "chg24": 1.0}]
+    assert wel.favourite(rows) == {"who": "y", "party": "R", "prob": 40.0, "chg24": -2.0}
+    assert wel.favourite([]) is None and wel.favourite(rows[:1]) is None
