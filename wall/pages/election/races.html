@@ -109,7 +109,7 @@ function paint(data) {
   const g = groups[pageNo % groups.length], now = d.now || Date.now() / 1000;
   const heads = () => {
     document.getElementById("title").textContent = `Key races · ${TAG[g.o] === "Governor" ? "Governors" : TAG[g.o]}`;
-    document.getElementById("sub").textContent = (g.n > 1 ? `${g.i + 1}/${g.n} · ` : "") +
+    document.getElementById("sub").textContent = (g.n > 1 ? `page ${g.i + 1}/${g.n} · ` : "") +
       (g.rows.some((r) => r.votes > 0) ? "closest first" : E.nextClose(d) || "no votes counted yet");
   };
   const html = `<div class="rows">${g.rows.map((r) => row(r, now, d.holders)).join("")}${"<div></div>".repeat(PER - g.rows.length)}</div>`;

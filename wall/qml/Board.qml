@@ -795,7 +795,7 @@ Item {
                     width: parent.width
                     spacing: 0.3 * root.rem
                     Caps { text: root.v.kicker || root.v.name; size: root.tTitle; weight: 800; color: root.cAccent; width: parent.width; fontSizeMode: Text.HorizontalFit; minimumPixelSize: root.tLabel }
-                    Caps { text: root.v.name; size: root.tMeta; color: root.cMuted; width: parent.width; visible: root.v.kicker !== "" }
+                    Caps { text: root.v.name; size: root.tMeta; color: root.cMuted; width: parent.width; visible: root.v.kicker !== "" && root.v.kicker.toLowerCase() !== String(root.v.name).toLowerCase() }
                     T { text: root.now; size: root.tLabel; weight: 700; wdth: 68; font.features: { "tnum": 1 } }
                 }
             }
