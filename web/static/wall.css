@@ -1,0 +1,63 @@
+#wall { max-width: 1500px; margin: 0 auto; padding: 16px; }
+#gate { max-width: 460px; margin: 60px auto; text-align: center; }
+#room { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
+@media (max-width: 900px) { #room { grid-template-columns: minmax(0, 1fr); } }
+
+.player { position: relative; background: #000; border-radius: var(--r-lg); overflow: hidden; aspect-ratio: 16 / 9; }
+.player video { width: 100%; height: 100%; display: block; background: #000; }
+.offline { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; background: var(--panel); }
+.unmute { position: absolute; left: 12px; bottom: 12px; border: 0; border-radius: var(--r-pill); padding: 8px 14px;
+  background: rgba(17,18,26,.8); color: var(--fg); font: inherit; cursor: pointer; }
+.unmute[hidden] { display: none; }
+
+.bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
+.bar .pill { font-size: 12px; padding: 3px 10px; }
+#sync.ok { color: var(--green); background: var(--green-soft); }
+#sync.meh { color: var(--gold); }
+#sync.bad { color: var(--red); background: var(--red-soft); }
+
+.tiles { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 6px 10px; font-size: 13px;
+  display: flex; gap: 8px; align-items: center; max-width: 100%; }
+.tile .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+.tile.sound { border-color: var(--accent); }
+.tile button { border: 1px solid var(--line); background: var(--panel2); color: var(--fg); border-radius: var(--r-sm);
+  font: inherit; font-size: 12px; padding: 2px 8px; cursor: pointer; }
+
+.props { display: grid; gap: 8px; margin-bottom: 10px; }
+.prop { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; background: var(--panel2); border: 1px solid var(--line-strong);
+  border-radius: var(--r); padding: 10px 12px; }
+.prop .what { flex: 1 1 220px; }
+.prop .tally { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
+.prop button { border: 1px solid var(--line); background: var(--panel); color: var(--fg); border-radius: var(--r-sm);
+  font: inherit; padding: 4px 12px; cursor: pointer; }
+.prop button.mine { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.prop .left { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--gold); min-width: 34px; text-align: right; }
+
+.controls summary { cursor: pointer; font-weight: 600; }
+.controls .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+.controls select, .controls input, .chat input { background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+  border-radius: var(--r-sm); padding: 6px 8px; font: inherit; }
+.controls input { flex: 1 1 220px; min-width: 0; }
+.controls .btn { padding: 6px 12px; }
+.small { font-size: 12px; }
+
+.side { display: grid; gap: 16px; }
+.side h3 { margin: 0 0 10px; font-size: 14px; }
+.viewers ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.viewers li { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+.viewers li.away { opacity: .45; }
+.viewers li .tag { font-size: 11px; color: var(--muted); }
+.av { width: 26px; height: 26px; border-radius: 50%; flex: none; display: grid; place-items: center; font-size: 11px; font-weight: 700;
+  background: var(--accent-soft); color: var(--accent); object-fit: cover; }
+
+.chat { display: flex; flex-direction: column; height: min(70vh, 640px); }
+@media (max-width: 900px) { .chat { height: 60vh; } }
+#msgs { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 6px; }
+#msgs li { display: flex; gap: 8px; font-size: 14px; line-height: 1.35; word-break: break-word; }
+#msgs li .who { font-weight: 600; color: var(--accent2); margin-right: 4px; }
+#msgs li.sys { color: var(--muted); font-style: italic; font-size: 13px; }
+#msgs li .mod { margin-left: auto; opacity: 0; border: 0; background: none; color: var(--muted); cursor: pointer; font: inherit; font-size: 12px; }
+#msgs li:hover .mod { opacity: 1; }
+#chatForm { display: flex; gap: 8px; margin-top: 10px; }
+#chatForm input { flex: 1; min-width: 0; }
