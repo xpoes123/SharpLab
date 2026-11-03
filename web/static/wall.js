@@ -199,7 +199,6 @@
     else {
       li.append(avatar({ avatar: m.avatar, initials: (m.name || "?").slice(0, 1).toUpperCase() }));
       const body = el("span"); body.append(el("span", "who", m.name));
-      if (m.guest) body.append(el("span", "tag", "guest"));
       body.append(document.createTextNode(m.text)); li.append(body);
       if (me && me.admin) {
         const d = el("button", "mod", "✕"); d.title = "Delete"; d.onclick = () => send({ t: "del", id: m.id });
