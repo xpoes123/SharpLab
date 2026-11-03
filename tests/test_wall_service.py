@@ -495,3 +495,37 @@ def test_discord_wall_mirrors_the_tv_wall_when_the_tv_is_on_it(api, monkeypatch)
     remote.post("/i/discord/stop")
     monkeypatch.setattr("wall.server.tv_active", lambda api: "casino")
     assert remote.post("/i/discord/start", json={"urls": ["https://a.tv"]}).status_code == 409
+
+
+# ---- crash-storm guards ------------------------------------------------------------------------------------------------------
+class FakeProc:
+    def __init__(self, exits_on_close=True):
+        self.code, self.exits_on_close, self.signals, self.pid = None, exits_on_close, [], 4242
+    def poll(self): return self.code
+    def wait(self, timeout=None):
+        if self.code is None:
+            raise subprocess.TimeoutExpired("chromium", timeout)
+        return self.code
+    def terminate(self): self.signals.append("TERM"); self.code = -15
+    def kill(self): self.signals.append("KILL"); self.code = -9
+
+
+def test_tiles_close_through_cdp_before_any_signal(monkeypatch):
+    polite, stuck = FakeProc(), FakeProc(exits_on_close=False)
+    closed = []
+    def close(port):
+        closed.append(port)
+        if port == 9241:
+            polite.code = 0
+        return True
+    monkeypatch.setattr(engine, "cdp_close", close)
+    engine.close_tiles([(polite, 0), (stuck, 2), (None, 3)], 9241, grace=0.05)
+    assert closed == [9241, 9243] and polite.signals == [] and stuck.signals == ["TERM"]
+
+
+def test_nested_session_bus_activates_nothing():
+    conf = (Path(engine.__file__).parent / "nested-bus.conf").read_text()
+    assert "<servicedir" not in conf and "standard_session_servicedirs" not in conf and "<type>session</type>" in conf
+    import wall.headless as hl
+    assert hl.QUIET_ENV["GTK_USE_PORTAL"] == "0" and "--password-store=basic" in engine.QUIET_FLAGS
+    assert "VaapiOnNvidiaGPUs" in engine.GPU_FLAGS[0] and "VaapiVideoDecoder" in engine.GPU_FLAGS[0]

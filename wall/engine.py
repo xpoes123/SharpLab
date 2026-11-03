@@ -29,7 +29,12 @@ LAYOUTS = ("lbar", "full", "matchup")
 
 # `env` execs chromium in place, so the pid (and window matching) is unchanged
 GPU_ENV = ["env", "LIBVA_DRIVER_NAME=nvidia", "NVD_BACKEND=direct"]
-GPU_FLAGS = ["--enable-features=AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL,VaapiIgnoreDriverChecks",
+# no KWallet / Secret Service: a headless session has none, and each try crash-looped ksecretd
+QUIET_FLAGS = ["--password-store=basic"]
+# VaapiOnNvidiaGPUs + VaapiVideoDecoder: without them Chromium 154 never uses nvidia-vaapi-driver and decodes in software
+# (CDP Media: FFmpegVideoDecoder; a 1080p30 h264 tile's renderer 31 % CPU → 1.7 % with VaapiVideoDecoder, measured 2026-11-02)
+GPU_FLAGS = ["--enable-features=AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL,VaapiIgnoreDriverChecks,"
+             "VaapiOnNvidiaGPUs,VaapiVideoDecoder",
              "--ignore-gpu-blocklist"]
 
 FULLSCREEN_JS = """(async () => {
@@ -145,6 +150,45 @@ def _end(p: subprocess.Popen | None) -> None:
             p.kill()
 
 
+def cdp_close(port: int) -> bool:
+    """Ask a tile's browser to quit by itself (CDP Browser.close): its renderers then exit cleanly instead of dying with
+    SIGILL when the browser process is signalled, and every such crash costs a systemd-coredump run."""
+    from websockets.sync.client import connect
+    import urllib.request
+    try:
+        ws_url = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1))["webSocketDebuggerUrl"]
+        with connect(ws_url, open_timeout=1, close_timeout=1) as ws:
+            ws.send(json.dumps({"id": 1, "method": "Browser.close"}))
+        return True
+    except Exception:  # noqa: BLE001 — not answering: the signals below do it
+        return False
+
+
+def close_tiles(tiles: list[tuple[subprocess.Popen | None, int]], cdp_base: int, grace: float = 4) -> None:
+    """Browser.close each, wait up to `grace` s for all, then SIGTERM (3 s), then SIGKILL."""
+    live = [(p, slot) for p, slot in tiles if p and p.poll() is None]
+    for p, slot in live:
+        cdp_close(cdp_base + slot)
+    end = time.monotonic() + grace
+    for p, _ in live:
+        try:
+            p.wait(timeout=max(0.05, end - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            pass
+    for p, _ in live:
+        if p.poll() is None:
+            p.terminate()
+    for p, _ in live:
+        _end(p)
+
+
+def no_core() -> None:
+    """preexec_fn for the wall's children: no core dumps (a crashing Chromium would otherwise keep systemd-coredump
+    compressing 15 MB dumps at full CPU)."""
+    import resource
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+
+
 def sink_inputs(env: dict) -> list[dict]:
     try:
         return json.loads(subprocess.run(["pactl", "-f", "json", "list", "sink-inputs"], capture_output=True, text=True,
@@ -188,10 +232,11 @@ class Driver:
         try:
             return subprocess.Popen(
                 [*GPU_ENV, "chromium", f"--user-data-dir={Path(self.s.profiles) / f'chromium-wall-{self.s.prefix}{slot}'}",
-                 "--profile-directory=Wall", "--no-first-run", *GPU_FLAGS, *self.s.extra_flags, "--noerrdialogs",
+                 "--profile-directory=Wall", "--no-first-run", *GPU_FLAGS, *self.s.extra_flags, *QUIET_FLAGS, "--noerrdialogs",
                  "--disable-session-crashed-bubble", "--autoplay-policy=no-user-gesture-required",
                  f"--remote-debugging-port={self.s.cdp_base + slot}", f"--app={url}"],
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=self.s.child_env())
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=self.s.child_env(),
+                preexec_fn=no_core)
         except OSError as e:
             log.warning("%s tile (slot %d) failed to start: %s", self.s.name, slot, e)
             return None
@@ -209,7 +254,7 @@ class Driver:
     def set_tile(self, i: int, url: str) -> None:
         if 0 <= i < len(self.tiles):
             p, slot = self.tiles[i]
-            _end(p)
+            close_tiles([(p, slot)], self.s.cdp_base)
             tiles = list(self.tiles)
             tiles[i] = (self._launch(url, slot), slot)
             self.tiles = tiles
@@ -223,7 +268,7 @@ class Driver:
 
     def remove_tile(self, i: int) -> None:
         if 0 <= i < len(self.tiles) and len(self.tiles) > 1:
-            _end(self.tiles[i][0])
+            close_tiles([self.tiles[i]], self.s.cdp_base)
             self.tiles = self.tiles[:i] + self.tiles[i + 1:]
             self.sound = min(self.sound - (self.sound > i), len(self.tiles) - 1)
             self._layout_until = time.monotonic() + 10
@@ -257,11 +302,7 @@ class Driver:
     def stop(self) -> None:
         had = bool(self.tiles)
         self._stop.set()
-        for p in self.procs:
-            if p.poll() is None:
-                p.terminate()
-        for p in self.procs:
-            _end(p)
+        close_tiles(self.tiles, self.s.cdp_base)
         self.tiles = []
         _end(self.ov)
         self.ov = None

@@ -21,10 +21,13 @@ import subprocess
 import time
 from pathlib import Path
 
-from wall.engine import QML_DIR, _ppid
+from wall.engine import QML_DIR, _ppid, no_core
 
 log = logging.getLogger("wall.headless")
 HOLD = Path(__file__).parent / "hold.sh"
+BUS_CONF = Path(__file__).parent / "nested-bus.conf"
+# the nested session's clients: no portal, no keyring (the private bus activates nothing anyway, see nested-bus.conf)
+QUIET_ENV = {"GTK_USE_PORTAL": "0", "QT_NO_XDG_DESKTOP_PORTAL": "1", "NO_AT_BRIDGE": "1", "KDE_FORK_SLAVES": "1"}
 OUTPUT = "Virtual-0"
 
 
@@ -126,10 +129,11 @@ class Headless:
         self.module = r.stdout.strip()
         socket = f"wall-{self.name}"
         self.kwin = _spawn(
-            ["dbus-run-session", "--", "kwin_wayland", "--virtual", "--width", str(self.width), "--height", str(self.height),
+            ["dbus-run-session", f"--config-file={BUS_CONF}", "--", "kwin_wayland", "--virtual", "--width", str(self.width), "--height", str(self.height),
              "--socket", socket, "--no-lockscreen", "--no-global-shortcuts", f"--exit-with-session={HOLD}"],
             self.dir / "kwin.log", both=True,
-            env={**base, "KWIN_WAYLAND_NO_PERMISSION_CHECKS": "1", "WALL_ENV_OUT": str(envf)}, start_new_session=True)
+            env={**base, **QUIET_ENV, "KWIN_WAYLAND_NO_PERMISSION_CHECKS": "1", "WALL_ENV_OUT": str(envf)}, start_new_session=True,
+            preexec_fn=no_core)
         end = time.monotonic() + timeout
         while not envf.exists():
             if time.monotonic() > end or self.kwin.poll() is not None:
@@ -138,7 +142,7 @@ class Headless:
                 raise RuntimeError(self.error)
             time.sleep(0.2)
         got = dict(line.split("=", 1) for line in envf.read_text().splitlines() if "=" in line)
-        self.env = {**got, "XDG_RUNTIME_DIR": base["XDG_RUNTIME_DIR"], "PULSE_SINK": self.sink, "DISPLAY": ""}
+        self.env = {**got, **QUIET_ENV, "XDG_RUNTIME_DIR": base["XDG_RUNTIME_DIR"], "PULSE_SINK": self.sink, "DISPLAY": ""}
         return self.env
 
     def begin_capture(self, timeout: float = 10) -> None:
