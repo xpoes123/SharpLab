@@ -39,6 +39,10 @@ SERIES_TTL = 6 * 3600
 MARKETS_TTL = 45
 TODAY_TTL = 45
 OLDER_TTL = 15 * 60
+ODDS_TTL = 5          # the races tile's prices: as fresh as Kalshi's book (the wall asks every 10 s)
+ODDS_MAP_TTL = 300    # which markets those are (the series walk) changes slowly
+ODDS_PICKS = 2        # per race: its busiest event's top picks (the favourite + the runner-up)
+ODDS_BATCH = 100      # tickers per /markets call (as the bets poller does)
 CONCURRENCY = 3
 SHAPES = Path(__file__).resolve().parent.parent / "wall" / "pages" / "us-states.json"
 _ST = re.compile(r"^[A-Z]{2}$")
@@ -290,6 +294,71 @@ async def spot_payload(state: str, snap: dict, race: str = "") -> dict:
     return {"state": state, "name": full["name"], "races": cards, "more": max(0, len(rs) - len(pick)), "error": full["error"]}
 
 
+def favourite(rows: list[dict]) -> dict | None:
+    """A race's Kalshi favourite: the likeliest priced pick of its busiest event (race_markets' order)."""
+    ev = [r for r in rows if r["event"] == rows[0]["event"] and r["prob"] is not None] if rows else []
+    if not ev:
+        return None
+    f = max(ev, key=lambda r: r["prob"])
+    return {"who": f["who"], "party": f["party"], "prob": f["prob"], "chg24": f["chg24"]}
+
+
+async def odds_map(snap: dict) -> dict[str, list[str]]:
+    """{race id: the tickers of its busiest event's top ODDS_PICKS picks} for every race to watch — which markets the
+    odds read, found through the series (slow: ODDS_MAP_TTL). The House ones all come from KXHOUSERACE; a state's own
+    series are fetched only when it has a Senate / Governor race to watch."""
+    races = snap.get("races") or []
+    want = {r["id"]: r for r in races if r.get("watch")}
+
+    async def go():
+        by_id = {r["id"]: r for r in races}
+        sg = sorted({r["state"] for r in want.values() if r["office"] in ("S", "G")})
+        houses = sorted({r["state"] for r in want.values() if r["office"] == "H"})
+        try:
+            per_state = await markets.series()
+        except Exception as e:  # noqa: BLE001 — the House ones still work without the list
+            log.warning("odds series: %s", type(e).__name__)
+            per_state = {}
+        names = sorted({s for st in sg for s in per_state.get(st, [])}) + ([em.HOUSERACE] if houses or sg else [])
+        got = await asyncio.gather(*(markets.series_markets(s) for s in names), return_exceptions=True)
+        mk = {}
+        for name, g in zip(names, got):
+            if isinstance(g, Exception):
+                log.warning("odds kalshi %s: %s", name, type(g).__name__)
+            else:
+                mk[name] = g
+        out = {}
+        for st in sorted(set(sg) | set(houses)):
+            own = per_state.get(st, []) if st in sg else []
+            ms = [m for s in own for m in mk.get(s, [])] + mk.get(em.HOUSERACE, [])
+            for rid, rows in em.race_markets(ms, by_id, st).items():
+                if rid in want and rows:
+                    out[rid] = [r["ticker"] for r in rows if r["event"] == rows[0]["event"]][:ODDS_PICKS]
+        return out
+    return await markets.cache.get(("odds-map", frozenset(want)), ODDS_MAP_TTL, go)
+
+
+async def odds_payload(snap: dict) -> dict[str, dict]:
+    """The races tile's odds, as fresh as Kalshi's book (no spoiler delay): {race id: favourite} for every race to watch.
+    The prices are one batched public GET /markets?tickers=… (ODDS_BATCH tickers a call), cached ODDS_TTL for every caller."""
+    m = await odds_map(snap)
+    tickers = sorted({t for ts in m.values() for t in ts})
+
+    async def go():
+        got = []
+        for i in range(0, len(tickers), ODDS_BATCH):
+            chunk = tickers[i:i + ODDS_BATCH]
+            got += (await markets._get("/markets", {"tickers": ",".join(chunk), "limit": 1000})).get("markets") or []
+        return {x["ticker"]: em.market_row(x) for x in got if x.get("ticker")}
+    rows = await markets.cache.get(("odds", tuple(tickers)), ODDS_TTL, go) if tickers else {}
+    out = {}
+    for rid, ts in m.items():
+        f = favourite([rows[t] for t in ts if t in rows])
+        if f:
+            out[rid] = f
+    return out
+
+
 # ---- HTTP ------------------------------------------------------------------------------------------------------------
 router = APIRouter(prefix="/api/v1/wall/election", tags=["wall"])
 
@@ -529,6 +598,18 @@ async def get_spot(st: str, x_api_key: str = Header(""), race: str = ""):
     if st not in we.STATES:
         return JSONResponse({"error": "no such state"}, status_code=404)
     return await spot_payload(st, await snapshot(), race if re.match(r"^[SGH]-[A-Z]{2}(-\d{1,2})?(-special)?$", race) else "")
+
+
+@router.get("/odds")
+async def get_odds(x_api_key: str = Header("")):
+    """The wall service (homelab) asks for the key races' Kalshi favourites: {race id: {who, party, prob, chg24}}. Never
+    positions."""
+    wall._need_key(x_api_key)
+    try:
+        return await odds_payload(await snapshot())
+    except Exception as e:  # noqa: BLE001
+        log.warning("odds: %s", type(e).__name__)
+        return JSONResponse({"error": "Kalshi didn't answer"}, status_code=502)
 
 
 @router.post("/spotlight")
