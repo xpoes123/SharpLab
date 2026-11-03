@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -605,8 +605,14 @@ wheels = [
 
 [[package]]
 name = "djtoolkit"
-version = "0.1.0"
-source = { git = "https://github.com/xpoes123/toolkit.git#d6b094daacdfed28ee3f4ab026a600feaf2a3e54" }
+version = "0.2.0"
+source = { git = "https://github.com/xpoes123/toolkit.git?rev=v0.2.0#20a704e3fe47a61ec18db901b52f292216392776" }
+
+[package.optional-dependencies]
+kalshi = [
+    { name = "cryptography" },
+    { name = "httpx" },
+]
 
 [[package]]
 name = "docstring-parser"
@@ -1829,7 +1835,7 @@ dependencies = [
     { name = "chess" },
     { name = "cryptography" },
     { name = "discord-py" },
-    { name = "djtoolkit" },
+    { name = "djtoolkit", extra = ["kalshi"] },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "itsdangerous" },
@@ -1857,7 +1863,7 @@ requires-dist = [
     { name = "chess", specifier = ">=1.11.2" },
     { name = "cryptography", specifier = ">=50.0.1" },
     { name = "discord-py", specifier = ">=2.7.1" },
-    { name = "djtoolkit", git = "https://github.com/xpoes123/toolkit.git" },
+    { name = "djtoolkit", extras = ["kalshi"], git = "https://github.com/xpoes123/toolkit.git?rev=v0.2.0" },
     { name = "fastapi", specifier = ">=0.136.1" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "itsdangerous", specifier = ">=2.2.0" },
