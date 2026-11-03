@@ -730,7 +730,7 @@ Item {
                         width: parent.width
                         spacing: 0.7 * root.rem
                         Rectangle { width: parent.width; height: root.hair; color: root.cRule }
-                        Mono { text: e && e.calls.length ? "LATEST CALLS" : "NO CALLS YET"; weight: 600; color: root.cAccent }
+                        Mono { text: e && e.calls.length ? (e.latest ? "LATEST" : "LATEST CALLS") : "NO CALLS YET"; weight: 600; color: root.cAccent }
                         Mono { visible: !!e && e.calls.length === 0 && e.next !== ""; width: parent.width; text: e ? e.next : ""; color: root.cInk; wrapMode: Text.Wrap; maximumLineCount: 2 }
                         Repeater {
                             model: e ? e.calls : []

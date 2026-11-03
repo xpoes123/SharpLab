@@ -434,6 +434,28 @@ House ones on "Show price chart". On phones the panel itself is a sheet opened f
   (only that race's own markets) — any viewer, guests included (public data); `positions` only in a member's answer.
   `POST spotlight {state}` (members) and `GET spot/{ST}` (the wall service, `X-Api-Key`) are the TV spotlight's.
 
+**Vote updates + race detail** (`wall/election_feed.py`, `wall/election_counties.py`, `web/wall_election_live.py`,
+`web/static/wall-election-live.*`).
+* Every poll is diffed per race into updates: a drop ("+12,400 votes · Talarico +1.2 → +0.8"), a lead change, a call, poll
+  closings (from CNN's `assignedPollsClose`). Ranked: lead change > big drop (≥ 25 K or 5 %) in a close race (< 5 pts) > call
+  / polls closing > routine drop. History: `$WALL_STATE_DIR/election-history.json` (web: `data/`), rolling (200 updates a
+  Senate / Governor race, 30 a House race), with each race's last state so a restart resumes the diff.
+* The watch page: a "Live updates" stream under the map (key races / all, newest first, tap → the state sheet; before
+  polls close it lists the next closings). In the state sheet each Senate / Governor race (House on "Vote details") shows
+  votes, the margin in votes, % of the expected vote in, votes left, its counties (closest / most vote out / swing /
+  biggest) and its timeline with the Kalshi price at each update (from the markets cache only — no extra Kalshi call).
+* Per race, CNN has county votes + `percentReporting` + `voteTimestamp` (`results/county-races/<key>.json`; no expected
+  vote, no history; swing = against the same file for the last presidential race). NYT/AP's race page
+  (`results-<state>-us-senate.json`) adds the expected vote (`eevp`, `total_expected_vote`) per state and county and their
+  own 2024/2020 comparisons — used when it answers.
+* Fast lane: a race open in a sheet is polled every 10 s from CNN's one-race file (`results/race/<key>.json`, ~700 B)
+  while it's open; the national poll stays 30 s.
+* TV: the Election board's sidebar says **LATEST** (the most significant updates of the last 45 min); lead changes and
+  big drops lead the ticker.
+* `WALL_ELECTION_REPLAY=tests/fixtures/wall/election:sim=900` replays 2024's night from 5 pm to 2 am ET in 900 s (county
+  files for PA, AZ, MI, WI, NV, OH, MT, TX Senate + NC Governor), poll closings and all.
+* API: `GET live?scope=key|all`, `GET race/{race id}`.
+
 **Presets** (seeded once, `wall-election-seeded` marker): "Election Night" (map, key races, NBC News NOW, PBS News), "Election +
 NBA" and "Election map + NBA" (`fixed: true`: the preset's URLs stay as fixed tiles, live NBA games fill the rest).
 

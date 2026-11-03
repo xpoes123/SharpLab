@@ -36,6 +36,7 @@ from web.contraband import router as contraband_router, contraband_websocket, cl
 from web.wall import router as wall_router, wall_websocket
 from web.wall_bets import router as wall_bets_router
 from web.wall_election import router as wall_election_router
+from web.wall_election_live import router as wall_election_live_router
 from web.wallstreet import router as wallstreet_router, wallstreet_websocket, cleanup_stale_wallstreet_rooms, refund_all_wallstreet_rooms
 from web.hq import router as hq_router, quote_refresh_loop
 from web.cards import router as cards_router
@@ -240,6 +241,7 @@ app.include_router(wallstreet_router)
 app.include_router(wall_router)
 app.include_router(wall_bets_router)
 app.include_router(wall_election_router)
+app.include_router(wall_election_live_router)
 
 
 # WebSocket endpoint (not on the API router — different path pattern)
