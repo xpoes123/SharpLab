@@ -630,18 +630,18 @@ def test_mirror_follows_the_tv_live(api, monkeypatch):
     assert st["running"] and st["urls"] == ["https://a.tv/1", "https://b.tv/3"] and st["mirror"]
 
 
-def test_a_change_on_the_stream_breaks_the_mirror_and_follow_restores_it(api, monkeypatch):
+def test_a_change_on_the_stream_changes_the_tv_and_stays_in_sync(api, monkeypatch):
     local, remote, tv, disc, _ = _mirror(api, monkeypatch)
     st = remote.post("/i/discord/tile", json={"i": 0, "url": "https://b.tv/9"}).json()   # a vote that passed
-    assert not st["mirror"] and "No longer mirroring" in st["notice"]["text"]
-    local.post("/i/tv/tile", json={"i": 1, "url": "https://a.tv/7"})
+    assert st["mirror"] and tv.urls == ["https://b.tv/9", "https://b.tv/2"]              # the TV changed; still mirroring
+    remote.post("/i/discord/sound", json={"i": 1})
+    remote.post("/i/discord/board", json={"board": "nba", "visible": True})
+    assert tv.driver.sound == 1 and tv.board == "nba"
     disc.tick()
-    assert remote.get("/i/discord").json()["urls"] == ["https://b.tv/9", "https://b.tv/2"]   # not following
-    st = remote.post("/i/discord/follow").json()
-    assert st["mirror"] and st["urls"] == ["https://a.tv/1", "https://a.tv/7"]
-    st = remote.post("/i/discord/start", json={"mirror": True}).json()   # "same as the TV" while on = follow again too
-    assert st["mirror"] and st["running"]
-
+    st = remote.get("/i/discord").json()
+    assert st["mirror"] and st["urls"] == ["https://b.tv/9", "https://b.tv/2"] and st["sound"] == 1
+    assert remote.post("/i/discord/tile", json={"i": 0, "url": "http://192.168.1.1/cam"}).status_code == 422   # still no LAN pages
+    assert tv.urls[0] == "https://b.tv/9"
 
 def test_mirror_skips_tiles_that_may_not_be_streamed(api, monkeypatch):
     local, remote, tv, disc, _ = _mirror(api, monkeypatch)
@@ -700,12 +700,10 @@ def test_screen_mirror_stops_when_the_tv_leaves_and_nobody_watches(api, monkeypa
     assert not st["running"] and "left the wall" in st["stopped"]
 
 
-def test_a_vote_on_the_screen_mirror_turns_it_into_tiles(api, monkeypatch):
+def test_a_vote_on_the_screen_mirror_changes_the_tv_and_keeps_capturing_it(api, monkeypatch):
     local, remote, tv, disc, _ = _mirror(api, monkeypatch, screen=True)
     st = remote.post("/i/discord/sound", json={"i": 1}).json()
-    assert st["capture"] == "tiles" and not st["mirror"] and st["sound"] == 1 and disc.driver.started[-1] == ["https://a.tv/1", "https://b.tv/2"]
-    st = remote.post("/i/discord/follow").json()
-    assert st["mirror"] and st["capture"] == "screen"
+    assert st["capture"] == "screen" and st["mirror"] and tv.driver.sound == 1
 
 
 def test_resource_guard(tmp_path):
