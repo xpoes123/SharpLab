@@ -33,7 +33,7 @@ SWAP_AWAY = AWAY | {"offtopic"}   # a tile leaves these
 STALE_S = 90.0
 SOUND_AD_S, SOUND_BACK_S = 10.0, 10.0
 SWAP_AFTER_S, BACK_S, FAV_BACK_S, FRESH_S = 60.0, 30.0, 20.0, 10.0
-SWAP_SOUND_S = 15.0   # the tile with the sound on a break and no other tile on air to take the sound: swap it this soon
+SWAP_SOUND_S = 8.0   # the tile with the sound on a break and no other tile on air to take the sound: swap it this soon
 SWAP_GAP_S, HAND_PAUSE_S = 120.0, 600.0
 MAX_FAVS = 2
 # preemptive sound move (never tiles): the sound stream's transcript model says a break is coming ("soon", Jev on the last
@@ -327,7 +327,9 @@ class Policy:
                     continue
             stuck = i == inst.driver.sound and not any(board.is_(urls[k], "coverage", 0, now) for k in range(len(urls))
                                                          if k != i and not own_page(urls[k]))
-            if board.is_(u, SWAP_AWAY, SWAP_SOUND_S if stuck else SWAP_AFTER_S, now):
+            from wall import streams as _streams
+            dead = (_streams.peek(u) or {}).get("live") is False   # a stream that hasn't started / has ended: real content now
+            if dead or board.is_(u, SWAP_AWAY, SWAP_SOUND_S if stuck else SWAP_AFTER_S, now):
                 cands = [c for c in board.fresh() if c not in on_wall and board.is_(c, "coverage", FRESH_S, now)
                          and (board.get(c).get("soon") or 0) < 0.6]   # not one that's about to break itself
                 if not cands:
@@ -335,7 +337,7 @@ class Policy:
                 best = max(cands, key=lambda c: (c in favs, board.get(c)["confidence"], -board.get(c)["since"]))
                 self.orig.setdefault(i, u)
                 self._swap(inst, i, best, now)
-                acts.append(f"tile {i + 1} {board.get(u)['label']} → {best}")
+                acts.append(f"tile {i + 1} {'not live' if dead else board.get(u)['label']} → {best}")
         return acts
 
     def _swap(self, inst, i: int, url: str, now: float) -> None:
