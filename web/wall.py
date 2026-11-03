@@ -57,6 +57,7 @@ def cfg() -> dict:
         "vote_s": float(e("WALL_VOTE_S", "60")),
         "notices": e("WALL_JOIN_NOTICES", "0") == "1",
         # demo mode: anyone with the keyed link (/wall.html?k=WALL_DEMO_KEY) may watch under a nickname
+        "guest_open": e("WALL_GUEST_OPEN", "0") == "1",   # with demo mode on: the plain page offers guest join too
         "demo_key": e("WALL_DEMO_KEY", "") if e("WALL_DEMO", "0") == "1" and len(e("WALL_DEMO_KEY", "")) >= 16 else "",
     }
 
@@ -481,7 +482,10 @@ _NICK = re.compile(r"^[\w .'-]{2,24}$")
 
 
 def key_ok(k: object) -> bool:
+    """Guests may join: the keyed link, or anyone on the plain page while WALL_GUEST_OPEN=1 (a watch-party night)."""
     dk = cfg()["demo_key"]
+    if dk and cfg()["guest_open"]:
+        return True
     return bool(dk) and isinstance(k, str) and secrets.compare_digest(k.encode(), dk.encode())
 
 

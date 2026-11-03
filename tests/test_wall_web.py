@@ -775,3 +775,15 @@ def test_election_default_and_dashboard_tiles_guard():
     assert "dashboards" in noop(stream, w)
     assert noop(check_action({"op": "tile", "i": 3, "url": "https://www.youtube.com/@WCVB/live"}), w) == ""
     assert noop(check_action({"op": "tile", "i": 0, "url": "http://127.0.0.1:7795/p/election/turnout"}), w) == ""
+
+
+def test_open_guests_on_the_plain_page(monkeypatch):
+    from web.wall import key_ok
+    monkeypatch.setenv("WALL_DEMO", "1")
+    monkeypatch.setenv("WALL_DEMO_KEY", "k" * 20)
+    monkeypatch.delenv("WALL_GUEST_OPEN", raising=False)
+    assert key_ok("k" * 20) and not key_ok("") and not key_ok(None)
+    monkeypatch.setenv("WALL_GUEST_OPEN", "1")
+    assert key_ok("") and key_ok(None)
+    monkeypatch.setenv("WALL_DEMO", "0")
+    assert not key_ok("")                                        # never without demo mode

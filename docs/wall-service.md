@@ -270,6 +270,7 @@ hidden while the full / matchup board is up. Every 2 s it reads `GET /i/<name>/b
   page is the normal login gate. Proxy cost stays bounded: every viewer, guest or not, shares the same 0.5 s playlist /
   60 s segment cache (≈ 60 segments × ~0.6 MB), so N guests cost one upstream fetch — only the VPS's egress grows
   (~4.5 Mb/s per viewer).
+* **Open guests** (`WALL_GUEST_OPEN=1`, with demo mode on): the plain watch page offers guest join too (nickname required) — for a watch-party night; unset it to go back to keyed links only.
 * **Chat on the TV wall.** While the discord wall runs, the service polls `GET /api/v1/wall/chat?after=<id>` (bot API,
   `X-Api-Key`) every 1.5 s → `{messages (after id), ids (still in the window: a moderator's delete drops out), last,
   viewers [{name, guest, away}], watching, active}`; a muted user's messages are left out while the mute lasts. It keeps
