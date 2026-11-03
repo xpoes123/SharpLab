@@ -1,9 +1,9 @@
 /* The watch page's Election panel + state sheet (wall-election.js). Colours come from the shared toolkit theme (ui.css):
-   the parties are --party-d / --party-r / --party-i when the theme has them, else its accent / bad / purple; "leading" is
+   the parties are --party-d / --party-r / --party-i when the theme has them, else its info (blue) / bad / purple; "leading" is
    the same hue mixed into the surface (the TV map's won / leading / no votes / no race scheme). Calm: fills fade over 2 s,
    nothing blinks; the sheet slides once (in from the right on desktop, up from the bottom on phones). */
 :root {
-  --e-dem: var(--party-d, var(--accent)); --e-rep: var(--party-r, var(--bad)); --e-ind: var(--party-i, var(--purple, var(--info)));
+  --e-dem: var(--party-d, var(--info)); --e-rep: var(--party-r, var(--bad)); --e-ind: var(--party-i, var(--purple, var(--info)));
   --e-dem-lead: color-mix(in srgb, var(--e-dem) 40%, var(--surface-2)); --e-rep-lead: color-mix(in srgb, var(--e-rep) 40%, var(--surface-2));
   --e-ind-lead: color-mix(in srgb, var(--e-ind) 40%, var(--surface-2));
   --e-none: var(--line-2); --e-off: var(--bg);
