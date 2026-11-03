@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse
 
 from db import queries
 from shared import kalshi_account as ka
+from shared import kalshi_election as ke
 from shared import kalshi_wall as kw
 from web import wall
 
@@ -35,7 +36,7 @@ SPORTS = tuple(kw.LEAGUE_PREFIX.values())
 
 
 async def kalshi_positions(uid: str) -> dict[str, tuple[str, float, float]] | None:
-    """{ticker: (side, qty, cost $)} of this member's open NBA/NFL positions; None = no key / Kalshi refused it."""
+    """{ticker: (side, qty, cost $)} of this member's open NBA/NFL + midterm positions; None = no key / Kalshi refused it."""
     row = await queries.get_kalshi_account(uid)
     if not row:
         return None
@@ -46,7 +47,7 @@ async def kalshi_positions(uid: str) -> dict[str, tuple[str, float, float]] | No
     for p in mps:
         q = ka._f(p.get("position_fp") or p.get("position"))
         t = p.get("ticker") or ""
-        if q and t.startswith(SPORTS):
+        if q and (t.startswith(SPORTS) or ke.is_election(t)):
             out[t] = ("YES" if q > 0 else "NO", abs(q), ka._f(p.get("market_exposure_dollars")))
     return out
 
@@ -70,6 +71,10 @@ class Bets:
         self.polled = 0.0
         self.calls = 0
         self.error = ""
+        # the election results the wall service last sent with its feed call (POST /feed "election"): the races our
+        # sharers hold + the balance per office, for the rows' status line. Empty until a wall asks for election rows.
+        self.races: dict[str, dict] = {}
+        self.offices: dict[str, dict] = {}
         self._task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
 
@@ -116,6 +121,7 @@ class Bets:
                 now = self.clock()
                 for mk in got:
                     self.book.see_market(now, mk)
+                    ke.see(self.book, mk)
             self.polled = self.clock()
 
     def want(self) -> None:
@@ -134,6 +140,19 @@ class Bets:
 
     def rows(self, game: dict, as_of: float) -> list[dict]:
         return kw.game_rows(self.book, game, as_of, self.sharers)
+
+    def election_rows(self) -> list[dict]:
+        # midterm positions as of now: results aren't a picture, so no spoiler delay
+        return ke.enrich(ke.election_rows(self.book, self.clock(), self.sharers), self.races, self.offices)
+
+    def election_need(self) -> list[str]:
+        # the race ids our sharers' election markets may be (what the wall service should send results for)
+        out = set()
+        for mk in self.book.markets.values():
+            c = (mk.get("election") or {}).get("class")
+            if c and c["type"] == "race":
+                out.update(ke.race_ids(c))
+        return sorted(out)
 
     def opt_out(self, uid: str) -> None:
         self.sharers.discard(uid)
@@ -204,8 +223,8 @@ async def panel(at_ms: float | None, state: dict | None, others: list[dict]) -> 
         if rows:
             games.append({"key": kw.game_key(g), "league": g["league"], "label": f"{g['away']} @ {g['home']}", "tile": None,
                           "delay": d, "src": "default", "as_of": (picture - d) * 1000, "rows": rows})
-    return {"games": games, "show": sync["show"], "default": d, "picture": picture * 1000, "now": now * 1000,
-            "polled": bets.polled * 1000, "error": bets.error}
+    return {"games": games, "election": bets.election_rows(), "show": sync["show"], "default": d, "picture": picture * 1000,
+            "now": now * 1000, "polled": bets.polled * 1000, "error": bets.error}
 
 
 # ---- HTTP ------------------------------------------------------------------------------------------------------------
@@ -301,13 +320,16 @@ async def set_sync(request: Request):
 @router.post("/feed")
 async def tv_feed(request: Request, x_api_key: str = Header("")):
     """The wall service (homelab) asks for its tiles' games, each delayed by that tile's D:
-    {"games": [{league, id, away, home, start, delay}]} → {"games": {key: [rows]}}. Same opt-in as the page."""
+    {"games": [{league, id, away, home, start, delay}]} → {"games": {key: [rows]}}. Same opt-in as the page.
+    With "election": {races, offices} (sent while an election board / page is up: the results for the races we named in
+    "need" last time) the answer also has "election": [rows] (never delayed) and "need": [race ids]."""
     wall._need_key(x_api_key)
     try:
         body = await request.json()
     except ValueError:
         body = None
     games = body.get("games") if isinstance(body, dict) else None
+    elec = body.get("election") if isinstance(body, dict) else None
     if not isinstance(games, list):
         return JSONResponse({"error": "games is a list"}, status_code=422)
     bets.want()
@@ -319,4 +341,12 @@ async def tv_feed(request: Request, x_api_key: str = Header("")):
         d = g.get("delay")
         d = max(0.0, float(d)) if isinstance(d, (int, float)) else DEFAULT_DELAY
         out[kw.game_key(g)] = [{k: v for k, v in r.items() if k != "uid"} for r in bets.rows(g, now - d)]
-    return {"games": out, "now": now * 1000}
+    res = {"games": out, "now": now * 1000}
+    if isinstance(elec, dict):
+        if isinstance(elec.get("races"), dict):
+            bets.races = {k: v for k, v in elec["races"].items() if isinstance(v, dict)}
+        if isinstance(elec.get("offices"), dict):
+            bets.offices = {k: v for k, v in elec["offices"].items() if isinstance(v, dict)}
+        res["election"] = [{k: v for k, v in r.items() if k != "uid"} for r in bets.election_rows()]
+        res["need"] = bets.election_need()
+    return res
