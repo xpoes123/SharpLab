@@ -160,7 +160,8 @@ class Nyt:
             full = " ".join(x for x in (m.get("first_name"), m.get("last_name")) if x)
             cs.append(cand(m.get("last_name") or c.get("nyt_id", ""), full, (m.get("party") or {}).get("nyt_id"),
                            (c.get("votes") or {}).get("total"), 0, c.get("nyt_id") in won, m.get("incumbent")))
-        by = [str(x).upper() for x in (r.get("outcome") or {}).get("called_by") or []]
+        by = [str(x.get("name") or x.get("id") or "" if isinstance(x, dict) else x).upper()
+              for x in (r.get("outcome") or {}).get("called_by") or []]
         called = next((c["party"] for c in cs if c["winner"]), "")
         seat = r.get("seat") or ""
         dist = int(seat.split()[-1]) if o == "H" and seat.split() and seat.split()[-1].isdigit() else None
