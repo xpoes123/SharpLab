@@ -430,8 +430,16 @@
     if (v.avatar) { const i = el("img", "av"); i.src = v.avatar; i.alt = ""; i.referrerPolicy = "no-referrer"; return i; }
     return el("span", "av", v.initials || "?");
   }
+  // DJ Jev: the wall's decision model, shown as a member of the party (it runs the dashboards, the streams, the sound)
+  const JEV_AV = "/dj-jev.svg";
+  const JEV_LINE = /^(?:🤖|🎧|🎬|🔊|📊)\s*(?:DJ )?Jev:\s*/u;
   function renderViewers(list) {
     const ul = $("viewers"); ul.replaceChildren();
+    if (wall && wall.running) {
+      const j = el("li", "jev");
+      j.append(avatar({ avatar: JEV_AV }), el("span", null, "DJ Jev"), el("span", "tag jev-tag", "on the decks"));
+      ul.append(j);
+    }
     list.forEach((v) => {
       const li = el("li", v.away ? "away" : "");
       li.append(avatar(v), el("span", null, v.name));
@@ -457,7 +465,13 @@
   // ---- chat ----
   function addMsg(m) {
     const li = el("li", m.kind === "system" ? "sys" : ""); li.dataset.id = m.id;
-    if (m.kind === "system") li.append(el("span", null, m.text));
+    if (m.kind === "system" && JEV_LINE.test(m.text)) {   // Jev's lines read as DJ Jev talking, with its avatar
+      li.className = "jev";
+      li.append(avatar({ avatar: JEV_AV }));
+      const body = el("span"); body.append(el("span", "who", "DJ Jev"));
+      const icon = (m.text.match(/^(🎬|🔊|📊)/u) || [""])[0];
+      body.append(document.createTextNode((icon ? icon + " " : "") + m.text.replace(JEV_LINE, ""))); li.append(body);
+    } else if (m.kind === "system") li.append(el("span", null, m.text));
     else {
       li.append(avatar({ avatar: m.avatar, initials: (m.name || "?").slice(0, 1).toUpperCase() }));
       const body = el("span"); body.append(el("span", "who", m.name));

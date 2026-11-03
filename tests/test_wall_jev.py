@@ -59,7 +59,7 @@ async def run(h, user, text):
     m, err = await h.post_chat(user, text)
     assert m, err
     await asyncio.gather(*list(h._jev_tasks))
-    return [x["text"] for x in h.chat.log if x["kind"] == "system" and x["text"].startswith("🤖")]
+    return [x["text"] for x in h.chat.log if x["kind"] == "system" and x["text"].startswith("🎧")]
 
 
 def test_question_shape():
@@ -77,7 +77,7 @@ async def test_owner_dashboard_applies_on_the_other_tile():
     jev = Jev("d_swing", 0.91)
     h, done = make(jev)
     out = await run(h, DAVID, "jev can you show the 2024 dashboards?")
-    assert out == ["🤖 Jev: putting vs 2024 on tile 2 (91%)"]
+    assert out == ["🎧 DJ Jev: putting vs 2024 on tile 2 (91%)"]
     assert done == [{"op": "tile", "i": 1, "url": OWN + "swing", "label": "vs 2024"}]
     assert "2024 dashboards" in jev.calls[0][0]
 
@@ -92,7 +92,7 @@ async def test_dashboard_replaces_the_tile_holding_the_same_kind():
 @pytest.mark.anyio
 async def test_dashboard_already_up():
     h, done = make(Jev("d_mapS", 0.95))
-    assert await run(h, MEMBER, "jev senate map pls") == ["🤖 Jev: Senate map is already on tile 2"]
+    assert await run(h, MEMBER, "jev senate map pls") == ["🎧 DJ Jev: Senate map is already on tile 2"]
     assert not done and not h.votes.props
 
 
@@ -100,7 +100,7 @@ async def test_dashboard_already_up():
 async def test_friend_stream_opens_a_vote_on_the_silent_tile():
     h, done = make(Jev(sid("Fox News"), 0.87))
     out = await run(h, FRIEND, "Jev put fox on")
-    assert out == ["🤖 Jev: vote open — Fox News on tile 4 (87%)"]
+    assert out == ["🎧 DJ Jev: vote open — Fox News on tile 4 (87%)"]
     p = h.votes.open()[0]
     assert p.uid == FRIEND["id"] and p.action == {"op": "tile", "i": 3, "url": FOX, "label": "Right · Fox News"} and not done
 
@@ -115,14 +115,14 @@ async def test_stream_with_sound_goes_on_the_sound_tile():
 @pytest.mark.anyio
 async def test_stream_on_a_break_is_refused():
     h, done = make(Jev(sid("Fox News"), 0.9), elec(label="break"))
-    assert await run(h, DAVID, "jev fox") == ["🤖 Jev: Fox News is on a break — try again in a minute."]
+    assert await run(h, DAVID, "jev fox") == ["🎧 DJ Jev: Fox News is on a break — try again in a minute."]
     assert not done
 
 
 @pytest.mark.anyio
 async def test_stream_already_on_the_wall():
     h, done = make(Jev(sid("ABC News"), 0.9))
-    assert await run(h, DAVID, "jev put abc on") == ["🤖 Jev: ABC News is already on tile 3"]
+    assert await run(h, DAVID, "jev put abc on") == ["🎧 DJ Jev: ABC News is already on tile 3"]
 
 
 @pytest.mark.anyio
@@ -183,7 +183,7 @@ async def test_socket_chat_posts_first_then_jev_answers():
     await wall.handle(h, 2, ws, MEMBER, {"t": "chat", "text": "jev turnout"})
     assert ws.sent[0]["msg"]["text"] == "jev turnout"   # the chat line goes out before Jev is asked
     await asyncio.gather(*list(h._jev_tasks))
-    assert any(m["t"] == "chat" and m["msg"]["text"] == "🤖 Jev: vote open — Turnout on tile 2 (80%)" for m in ws.sent)
+    assert any(m["t"] == "chat" and m["msg"]["text"] == "🎧 DJ Jev: vote open — Turnout on tile 2 (80%)" for m in ws.sent)
     h.clock.t += 2
     await wall.handle(h, 2, ws, MEMBER, {"t": "chat", "text": "jev again"})
     assert ws.sent[-1] == {"t": "error", "text": "One Jev command every 10 s.", "chat": True}

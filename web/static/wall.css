@@ -372,3 +372,7 @@ body.public #sync, body.public #wallName, body.public #mirror, body.public #unmu
   body.public .chat #msgs { max-height: 40vh; }
   body.public .public-note { margin: 0; border-radius: 0; border-width: 0 0 1px; padding: 6px 12px; font-size: 12px; }
 }
+
+/* DJ Jev in the viewer list and the chat */
+.jev .who, #viewers li.jev > span:nth-child(2) { color: #BB9AF7; font-weight: 700; }
+.tag.jev-tag { background: linear-gradient(90deg, #7AA2F7, #BB9AF7); color: #111; }

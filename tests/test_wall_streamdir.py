@@ -174,7 +174,7 @@ def test_jump_to_an_important_moment_and_its_limits(tmp_path):
     put(b, NEWSMAX, important=0.9, recent="we can now project that the Republican candidate has won the Senate race in Ohio")
     acts, note = d.tick(i, p, b, [], lambda: "")   # within dwell: a jump ignores it
     assert acts == ["director: jump tile 4 ABC News→Newsmax (important 0.90)"]   # the lower-rated tile
-    assert i.urls[3] == NEWSMAX and i.driver.sound == 3 and note.startswith("🎬 Switching to Newsmax — “") and "Ohio" in note
+    assert i.urls[3] == NEWSMAX and i.driver.sound == 3 and note.startswith("🎬 DJ Jev: switching to Newsmax — “") and "Ohio" in note
     put(b, FOX, important=0.95)
     later(clock, b, 60, streams=(NBC, ABC, CBS, FOX, NEWSMAX))
     assert d.tick(i, p, b, [], lambda: "")[1] == ""   # ≤ 1 jump per 3 min (and NEWSMAX on tile 4 is now "important")

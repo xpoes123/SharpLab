@@ -11,13 +11,13 @@ from wall import spectrum
 OWN = "http://127.0.0.1:7795/p/election/"
 TRIGGER = re.compile(r"^\s*jev\b", re.I)
 SOUND = re.compile(r"\b(sound|audio|listen|hear|volume|unmute|loud)\b", re.I)
-MIN_CONF = 0.7
+MIN_CONF = 0.55   # live Jev: right picks land 0.59–1.0; unclear ones ≤ 0.3
 TIMEOUT_S = 3.0
 STATE_MAX = 300
 QID = "want"
 QUESTION = "What does this viewer want the election wall to show?"
-HELP = "🤖 Jev: didn't catch that — try 'jev show the senate map' or 'jev put abc on'"
-UNREACHABLE = "🤖 Jev: couldn't reach Jev"
+HELP = "🎧 DJ Jev: didn't catch that — try 'jev show the senate map' or 'jev put abc on'"
+UNREACHABLE = "🎧 DJ Jev: couldn't reach Jev"
 
 # id → (screen, label, description for Jev); labels match the panel's (web/static/wall.js ELEC_SCREENS)
 DASHBOARDS = {
@@ -81,7 +81,7 @@ def plan(choice: str, text: str, wall: dict | None) -> tuple[dict | None, str, s
         scr, name, _ = DASHBOARDS[choice]
         url = OWN + scr
         if url in urls:
-            return None, name, f"🤖 Jev: {name} is already on tile {urls.index(url) + 1}"
+            return None, name, f"🎧 DJ Jev: {name} is already on tile {urls.index(url) + 1}"
         same = {i for i in (0, 1) if i < len(urls) and _kind(urls[i]) == _kind(url)}
         i = next(iter(sorted(same)), 1)   # a map replaces the map: the dashboards never show two of a kind
         return {"op": "tile", "i": i, "url": url, "label": name}, name, ""
@@ -90,7 +90,7 @@ def plan(choice: str, text: str, wall: dict | None) -> tuple[dict | None, str, s
         return None, "", HELP
     name = s["name"]
     if s["url"] in urls:
-        return None, name, f"🤖 Jev: {name} is already on tile {urls.index(s['url']) + 1}"
+        return None, name, f"🎧 DJ Jev: {name} is already on tile {urls.index(s['url']) + 1}"
     sound, want = w.get("sound"), bool(SOUND.search(text))
     ok = [i for i in (3, 2) if i <= max(len(urls), 2)]
     i = next((i for i in ok if (i == sound) == want), ok[0])
@@ -100,12 +100,12 @@ def plan(choice: str, text: str, wall: dict | None) -> tuple[dict | None, str, s
 def reply(p, err: str, action: dict, name: str, conf: float) -> str:
     """The system line after hub.propose(…) returned (p, err)."""
     if err or not p:
-        return f"🤖 Jev: {err or 'that didn’t work'}"
+        return f"🎧 DJ Jev: {err or 'that didn’t work'}"
     where, pct = f"{name} on tile {action['i'] + 1}", f"({round(conf * 100)}%)"
     if p.status in ("override", "passed"):
-        return f"🤖 Jev: putting {where} {pct}"
+        return f"🎧 DJ Jev: putting {where} {pct}"
     if p.status == "open":
-        return f"🤖 Jev: vote open — {where} {pct}"
+        return f"🎧 DJ Jev: vote open — {where} {pct}"
     if p.status == "error":
-        return f"🤖 Jev: couldn't put {where}"
-    return f"🤖 Jev: {where} didn't pass"
+        return f"🎧 DJ Jev: couldn't put {where}"
+    return f"🎧 DJ Jev: {where} didn't pass"
