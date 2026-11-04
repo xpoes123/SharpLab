@@ -30,7 +30,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from web import auth
-from wall import spectrum
+from wall import modes, spectrum
 from web._apisec import check_api_key
 from web import wall_jev
 from web.wall_guard import Guard
@@ -38,6 +38,7 @@ from web.wall_guard import Guard
 log = logging.getLogger(__name__)
 
 PAGE = "/wall.html"
+PUBLIC_STATE_S = 8     # a public viewer's stream needs a wall state at most this old
 AWAY_S = 60            # no heartbeat for this long (or a hidden tab) = away
 CHAT_MAX = 300
 SCROLLBACK = 200
@@ -263,8 +264,7 @@ def noop(a: dict, wall: dict | None) -> str:
         return "There's no such tile." if a["i"] >= len(urls) else ""
     if op == "promote":
         return "That's already the main tile." if a["i"] == 0 else "There's no such tile." if a["i"] >= len(urls) else ""
-    if op == "tile" and a["i"] < 2 and "/p/election/" not in a["url"] and \
-            ((ov.get("board") == "election") or any("/p/election/" in u for u in urls)):
+    if op == "tile" and a["i"] < modes.of(ov.get("board") or "", urls).locked_tiles and modes.ELECTION_PAGES not in a["url"]:
         return "Tiles 1–2 are the election dashboards — put streams on tiles 3–4."
     if op == "tile":
         if a["i"] < len(urls) and urls[a["i"]] == a["url"]:
@@ -840,6 +840,7 @@ class Hub:
         self._count_sig: tuple = ()
         self.cids = itertools.count(1)
         self.wall: dict | None = None
+        self.wall_at = -1e9   # when the wall service last answered
         self._viewers_sig: tuple = ()
         self._seen_notice = False
         self.edge = EdgeClock()
@@ -1080,6 +1081,9 @@ class Hub:
 
     async def refresh_wall(self) -> None:
         st = await self.fetch_state()
+        if st is not None:
+            self.wall_at = self.clock()
+            st = modes.annotate(st)
         if st is not None and st != self.wall:
             old = (self.wall or {}).get("notice") or {}
             note = st.get("notice") or {}
@@ -1091,6 +1095,13 @@ class Hub:
                     text = text.split(" — ", 1)[0]
                 await self.say(text)   # "No longer mirroring the TV", "Skipped on the stream: …"
             self._seen_notice = True   # the first state we see: its old notice isn't news
+
+    async def public_stream_open(self) -> bool:
+        """May a public viewer fetch the stream? Asks the service when nobody's socket kept the state fresh, and refuses when
+        it can't tell (the wall may have moved from the election to a league game)."""
+        if self.clock() - self.wall_at > PUBLIC_STATE_S:
+            await self.refresh_wall()
+        return self.clock() - self.wall_at <= PUBLIC_STATE_S and modes.public_stream(self.wall)
 
     # -- periodic: expiry, away, wall state
     async def tick(self) -> None:
@@ -1434,7 +1445,8 @@ async def games(request: Request):
 def peek() -> dict:
     """What the join screen may show before anyone logs in: the wall's name while it runs, and a head count. Never names or media."""
     w = hub.wall or {}
-    return {"name": (w.get("name") or None) if w.get("running") else None, "watching": len(hub.presence.watching())}
+    return {"name": (w.get("name") or None) if w.get("running") else None, "watching": len(hub.presence.watching()),
+            "label": w.get("mode_label") or modes.MODES["none"].label}
 
 
 @router.get("/me")
@@ -1582,7 +1594,7 @@ async def hls_get(name: str) -> tuple | None:
 
 @router.get("/hls/{name}")
 async def hls(name: str, request: Request):
-    if not viewer(request) and not public_mode():   # public mode: the plain link watches the stream too (David, 2026-11-03)
+    if not viewer(request) and not (public_mode() and await hub.public_stream_open()):   # public: only what modes.public_stream allows
         return JSONResponse({"error": "log in"}, status_code=401)
     if not _HLS_NAME.match(name):
         return JSONResponse({"error": "no such file"}, status_code=404)

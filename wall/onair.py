@@ -23,7 +23,7 @@ import logging
 import time
 from pathlib import Path
 
-from wall import spectrum
+from wall import modes, spectrum
 from wall.breaks import BreakLog
 from wall.engine import own_page
 
@@ -128,7 +128,7 @@ class Favorites:
 
 
 def election_mode(inst) -> bool:
-    return inst.board == "election" or any(own_page(u) for u in inst.urls)
+    return modes.of(inst.board, inst.urls).id == "election"
 
 
 def stream_tiles(urls: list[str], elec: bool) -> list[int]:

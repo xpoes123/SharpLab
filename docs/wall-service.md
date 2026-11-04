@@ -279,10 +279,14 @@ hidden while the full / matchup board is up. Every 2 s it reads `GET /i/<name>/b
   page is the normal login gate. Proxy cost stays bounded: every viewer, guest or not, shares the same 0.5 s playlist /
   60 s segment cache (≈ 60 segments × ~0.6 MB), so N guests cost one upstream fetch — only the VPS's egress grows
   (~4.5 Mb/s per viewer).
+* **Modes** (`wall/modes.py`): one table says what a wall is (`election`, `nba`, `nfl`, `none`), its brand, its locked
+  tiles and whether the public may watch. sharplab-web adds `mode`, `mode_label` and `public_stream` to the wall state it
+  keeps. Bringing an election back: `docs/election-runbook.md`.
 * **Public mode** (`WALL_PUBLIC=1`; the old `WALL_GUEST_OPEN=1` means the same): the plain `/wall.html` (no key, no
   login, no cookie) is a read-only data page — the election map, state sheets, Kalshi markets / charts / Pulse, opted-in
   members' positions and the Bets panel, the live updates feed, and the chat **read-only** over the socket (no Discord
-  ids or avatars in it). No stream (`/hls` 401s), no live-games list, no viewer list (a head count only, and public
+  ids or avatars in it). The stream only when `modes.public_stream` allows it: an election wall with every tile on our own
+  pages or YouTube, and a wall state under 8 s old; otherwise `/hls` 401s, so sports walls are never public. No live-games list, no viewer list (a head count only, and public
   viewers are never in the list or the TV's count), no votes / proposals / spotlight: a public socket's every message
   but a ping is refused, `POST /election/spotlight` and `POST /bets/me|sync` 403. The page says "Live election data ·
   watch party is invite-only". Off: the plain page is the Discord login gate, as before. The keyed link is unaffected.
