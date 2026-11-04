@@ -97,7 +97,23 @@ YT_CANON = re.compile(rb'<link rel="canonical" href="https://www\.youtube\.com/w
 _yt_cache: dict[str, tuple[float, str]] = {}
 
 
-def resolve_live(url: str, fetch=None, ttl: float = 600) -> str:
+def ytdlp_live_id(url: str, timeout: float = 20) -> str | None:
+    """A channel's live video id via yt-dlp (YouTube's channel /live page stopped naming it on 2026-11-03: canonical
+    "undefined"); None when it isn't live, yt-dlp is missing, or YouTube refused."""
+    import shutil
+    exe = shutil.which("yt-dlp")
+    if not exe:
+        return None
+    try:
+        r = subprocess.run([exe, "--no-warnings", "--print", "%(id)s %(is_live)s", url],
+                           capture_output=True, text=True, timeout=timeout)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    vid, _, live = (r.stdout.strip().splitlines() or [""])[0].partition(" ")
+    return vid if live == "True" and re.fullmatch(r"[\w-]{11}", vid) else None
+
+
+def resolve_live(url: str, fetch=None, ttl: float = 600, ytdlp=None) -> str:
     """A YouTube channel's /live page (youtube.com/@NBCNews/live) → its current stream's watch?v= page. The /live page
     renders the watch UI inside the channel shell, where requestFullscreen never resolves and the CSS pin sits under the
     masthead and sidebar; a watch?v= page fullscreens like every other YouTube tile. Anything else, or no answer, = as is."""
@@ -119,7 +135,8 @@ def resolve_live(url: str, fetch=None, ttl: float = 600) -> str:
     except Exception as e:  # noqa: BLE001 — the channel page as it is beats no tile
         log.info("youtube live %s: %s", url, e)
         return url
-    out = f"https://www.youtube.com/watch?v={m.group(1).decode()}" if m else url
+    vid = m.group(1).decode() if m else (ytdlp or ytdlp_live_id)(url)   # the page didn't say: ask yt-dlp (one call / ttl)
+    out = f"https://www.youtube.com/watch?v={vid}" if vid else url
     _yt_cache[url] = (time.monotonic(), out)
     return out
 
