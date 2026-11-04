@@ -107,6 +107,10 @@ class WallWeb:
     async def vote(self, discord_id: str, proposal_id: str, yes: bool) -> dict:
         return await self._call("POST", "/vote", {"discord_id": discord_id, "proposal_id": proposal_id, "yes": yes})
 
+    async def chat(self, user: dict, text: str) -> dict:
+        return await self._call("POST", "/chat", {"discord_id": user["id"], "name": user["name"],
+                                                  "avatar_url": user.get("avatar_url"), "text": text})
+
     async def link(self, user: dict) -> str:
         data = await self._call("POST", "/link", {"discord_id": user["id"], "username": user["name"],
                                                   "avatar": user.get("avatar")})

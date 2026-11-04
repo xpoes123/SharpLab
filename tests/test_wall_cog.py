@@ -356,3 +356,18 @@ async def test_restarts_update_the_embed_instead_of_posting_again(cog):
     assert not await cog.announce({"running": True, "started": 10})                                       # a redeploy/restore
     assert not await cog.announce({"running": True, "started": 11, "origin": {"guild": "1", "channel": "22"}})   # same channel
     assert sent == [] and refreshed == [1, 1]
+
+
+async def test_relay_channel_messages_go_to_the_watch_chat(cog, monkeypatch):
+    sent = []
+    async def chat(user, text): sent.append((user["id"], user["name"], text))
+    cog.web.chat = chat
+    monkeypatch.setattr(w, "RELAY_CHANNEL_ID", "42")
+    author = SimpleNamespace(id=5, display_name="Kim", name="kim", avatar=None, bot=False,
+                             display_avatar=SimpleNamespace(url="https://cdn/a.png"))
+    msg = lambda ch, text, a=author: SimpleNamespace(channel=SimpleNamespace(id=ch), author=a, clean_content=text)
+    await cog.on_message(msg(42, "  NC   called!  "))
+    await cog.on_message(msg(43, "other channel"))
+    await cog.on_message(msg(42, "a bot", SimpleNamespace(**{**vars(author), "bot": True})))
+    await cog.on_message(msg(42, "   "))
+    assert sent == [("5", "Kim", "NC called!")]
