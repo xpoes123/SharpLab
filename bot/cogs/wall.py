@@ -176,6 +176,14 @@ def build_embed(state: dict | None, web: dict | None, watch_url: str, error: str
     return e
 
 
+def relay_line(m: dict) -> str:
+    """A watch-chat message as a Discord line: people's chat, and the trade feed; Jev's notes and other notices stay on the page."""
+    text = discord.utils.escape_markdown(str(m.get("text") or ""))
+    if m.get("kind") == "chat":
+        return f"**{discord.utils.escape_markdown(str(m.get('name') or 'Guest'))}**: {text}"
+    return text if str(m.get("text") or "").startswith("Trade:") else ""
+
+
 def user_dict(user: discord.abc.User) -> dict:
     return {"id": str(user.id), "name": getattr(user, "display_name", None) or user.name,
             "avatar": user.avatar.key if getattr(user, "avatar", None) else None}
@@ -241,6 +249,8 @@ class WallCog(commands.Cog):
         self.bot = bot
         self.svc = service or WallService()
         self.web = web or WallWeb()
+        self.relayed: set[int] = set()        # watch-chat ids that came from the relay channel
+        self.relay_after: int | None = None   # the newest watch-chat id seen (None: not yet)
         self.state_path = STATE_PATH
         saved = load_state(self.state_path)
         self.embeds: dict[int, tuple[int, int]] = saved["embeds"]   # guild id → (channel id, message id)
@@ -266,11 +276,41 @@ class WallCog(commands.Cog):
         text = " ".join(message.clean_content.split())[:300]
         if not text:
             return
-        user = {**user_dict(message.author), "avatar_url": str(message.author.display_avatar.url)}
+        user = user_dict(message.author)
+        user = {**user, "name": f"{user['name'][:30]} (Discord)", "avatar_url": str(message.author.display_avatar.url)}
         try:
-            await self.web.chat(user, text)
+            r = await self.web.chat(user, text)
         except Exception as e:  # noqa: BLE001 — a rate limit / web hiccup drops that one line, never the bot
             log.info("wall relay: %s", e)
+            return
+        mid = ((r or {}).get("msg") or {}).get("id")
+        if mid is not None:
+            self.relayed.add(mid)   # never echoed back into the channel
+
+    @tasks.loop(seconds=2)
+    async def relay_out(self) -> None:
+        """The other way: the watch-party chat (people + trade lines) → WALL_RELAY_CHANNEL_ID. Starts at the newest line:
+        a bot restart never replays the night."""
+        if not RELAY_CHANNEL_ID:
+            return
+        try:
+            feed = await self.web.chat_feed(self.relay_after or 0)
+        except Exception as e:  # noqa: BLE001
+            log.debug("wall relay out: %s", e)
+            return
+        if self.relay_after is None:
+            self.relay_after = int(feed.get("last") or 0)
+            return
+        ch = self.bot.get_channel(int(RELAY_CHANNEL_ID))
+        for m in feed.get("messages") or []:
+            self.relay_after = max(self.relay_after, int(m["id"]))
+            line = relay_line(m)
+            if ch is None or m["id"] in self.relayed or not line:
+                continue
+            try:
+                await ch.send(line, allowed_mentions=discord.AllowedMentions.none())
+            except discord.HTTPException as e:
+                log.info("wall relay out: %s", e)
 
     async def cog_load(self) -> None:
         try:
@@ -279,10 +319,12 @@ class WallCog(commands.Cog):
             log.warning("wall panel view: %s", e)
         self.refresh_loop.start()
         self.watch_loop.start()
+        self.relay_out.start()
 
     async def cog_unload(self) -> None:
         self.refresh_loop.cancel()
         self.watch_loop.cancel()
+        self.relay_out.cancel()
 
     # ---- doing things ----
     async def act(self, interaction: discord.Interaction, action: dict) -> str:
