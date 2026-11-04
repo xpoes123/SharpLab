@@ -303,7 +303,7 @@ def test_members_friends_and_public_all_see_markets_and_positions(eenv, monkeypa
     g = client.get("/api/v1/wall/election/state/GA")
     assert g.status_code == 200 and g.json()["positions"]                                # a friend: markets + positions
     assert next(r for r in g.json()["races"] if r["id"] == "S-GA")["markets"]
-    assert "positions" not in client.get("/api/v1/wall/election/control/S").json()
+    assert "positions" in client.get("/api/v1/wall/election/control/S").json()   # friends: positions too
     m = client.get("/api/v1/wall/election/map").json()
     assert m["member"] is True and m["public"] is False and m["races"] and "cands" not in m["races"][0]
     assert client.get("/api/v1/wall/election/chart/S-GA").status_code == 200
