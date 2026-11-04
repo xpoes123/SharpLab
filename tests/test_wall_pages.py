@@ -118,7 +118,11 @@ def test_youtube_channel_live_pages_open_as_their_stream():
     assert resolve_live("https://www.youtube.com/@NBCNews/live", f) == "https://www.youtube.com/watch?v=R6khjqIPmVA"
     assert resolve_live("https://www.youtube.com/@NBCNews/live", f) == "https://www.youtube.com/watch?v=R6khjqIPmVA" and len(calls) == 1
     assert resolve_live("https://www.youtube.com/watch?v=QRK30J9ouaU", f) == "https://www.youtube.com/watch?v=QRK30J9ouaU"
-    assert resolve_live("https://www.youtube.com/@CBSNews/live", lambda u: b"<html>no canonical</html>") == "https://www.youtube.com/@CBSNews/live"
+    assert resolve_live("https://www.youtube.com/@CBSNews/live", lambda u: b"<html>no canonical</html>",
+                        ytdlp=lambda u: None) == "https://www.youtube.com/@CBSNews/live"
+    # 2026-11-03: the /live page's canonical turned "undefined" — yt-dlp names the live video instead
+    assert resolve_live("https://www.youtube.com/@msnow/live", lambda u: b'<link rel="canonical" href="undefined">',
+                        ytdlp=lambda u: "GvWSyescLv8") == "https://www.youtube.com/watch?v=GvWSyescLv8"
 
     def down(u):
         raise OSError("timed out")
