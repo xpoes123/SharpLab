@@ -1033,6 +1033,9 @@ class Hub:
                 if explicit:
                     await self.say(wall_jev.HELP)
                 return
+            if choice == "q_ask":   # a question about the night: Haiku answers from our results + odds
+                await self.say(await self._jev_answer(text))
+                return
             action, name, msg = wall_jev.plan(choice, text, self.wall)
             if not action:
                 if explicit:
@@ -1042,6 +1045,22 @@ class Hub:
             await self.say(wall_jev.reply(p, err, action, name, conf))
         except Exception as e:  # noqa: BLE001 — a background task: log, never raise into the loop
             log.warning("jev command failed: %s", e)
+
+    async def _jev_answer(self, text: str) -> str:
+        from web import wall_ask, wall_election   # they import this module
+        snap = await wall_election.snapshot()
+        try:
+            odds = await wall_election.odds_payload(snap)
+        except Exception:  # noqa: BLE001 — answer from the results alone
+            odds = {}
+        control = []
+        for office in ("S", "H"):
+            try:
+                control += (await wall_election.control_payload(office, snap, None)).get("markets") or []
+            except Exception:  # noqa: BLE001
+                pass
+        got = await wall_ask.answer(wall_jev.TRIGGER.sub("", text).strip(" ,:"), snap, odds, control)
+        return f"🎧 DJ Jev: {got}" if got else "🎧 DJ Jev: couldn't look that up right now"
 
     async def say(self, text: str, **extra) -> None:
         m = self.chat.system(text, self.clock())
