@@ -73,6 +73,20 @@
     if (video.src) { video.removeAttribute("src"); video.load(); }
   }
 
+  // watchdog: a player whose picture hasn't moved for 10 s while it should be playing gets rebuilt (iPhone's native
+  // player gives up silently after a network blip; a backgrounded tab is left alone until it's visible again)
+  let wdTime = -1, wdAt = Date.now();
+  setInterval(() => {
+    const now = Date.now();
+    if (document.hidden || !(hls || video.src) || video.paused || video.currentTime !== wdTime) {
+      wdTime = video.currentTime; wdAt = now; return;
+    }
+    if (now - wdAt > 10000 && wall && wall.running) {
+      wdAt = now;
+      stopPlayer(); startPlayer();
+    }
+  }, 2000);
+
   // Every viewer aims at the same instant: target = server now − delay. Big error → seek; small → nudge the rate.
   video.preservesPitch = video.mozPreservesPitch = video.webkitPreservesPitch = true;   // any rate change never deepens voices
   function syncTick() {
