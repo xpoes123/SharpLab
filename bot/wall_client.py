@@ -111,6 +111,9 @@ class WallWeb:
         return await self._call("POST", "/chat", {"discord_id": user["id"], "name": user["name"],
                                                   "avatar_url": user.get("avatar_url"), "text": text})
 
+    async def chat_feed(self, after: int) -> dict:
+        return await self._call("GET", f"/chat?after={int(after)}&limit=50")
+
     async def link(self, user: dict) -> str:
         data = await self._call("POST", "/link", {"discord_id": user["id"], "username": user["name"],
                                                   "avatar": user.get("avatar")})

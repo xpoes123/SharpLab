@@ -370,4 +370,25 @@ async def test_relay_channel_messages_go_to_the_watch_chat(cog, monkeypatch):
     await cog.on_message(msg(43, "other channel"))
     await cog.on_message(msg(42, "a bot", SimpleNamespace(**{**vars(author), "bot": True})))
     await cog.on_message(msg(42, "   "))
-    assert sent == [("5", "Kim", "NC called!")]
+    assert sent == [("5", "Kim (Discord)", "NC called!")]
+
+
+def test_relay_line_people_and_trades_only():
+    assert w.relay_line({"kind": "chat", "name": "Kim", "text": "go *NC*"}) == "**Kim**: go \\*NC\\*"
+    assert w.relay_line({"kind": "system", "text": "Trade: Hansen bought YES Ossoff @ 98¢"}).startswith("Trade: Hansen")
+    assert w.relay_line({"kind": "system", "text": "DJ Jev: sound to NBC"}) == ""
+
+
+async def test_relay_out_skips_its_own_lines_and_never_replays(cog, monkeypatch):
+    monkeypatch.setattr(w, "RELAY_CHANNEL_ID", "42")
+    sent, feeds = [], [{"last": 7, "messages": []},
+                       {"last": 9, "messages": [{"id": 8, "kind": "chat", "name": "Kim", "text": "hi"},
+                                                {"id": 9, "kind": "chat", "name": "Bo", "text": "from discord"}]}]
+    async def chat_feed(after): return feeds.pop(0)
+    cog.web.chat_feed = chat_feed
+    async def send(line, **kw): sent.append(line)
+    cog.bot = SimpleNamespace(get_channel=lambda i: SimpleNamespace(send=send))
+    cog.relayed.add(9)
+    await cog.relay_out.coro(cog)   # the first look: the baseline
+    await cog.relay_out.coro(cog)
+    assert sent == ["**Kim**: hi"] and cog.relay_after == 9
