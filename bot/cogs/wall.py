@@ -32,6 +32,8 @@ OWNER_ID = os.environ.get("WALL_OWNER_ID", "")
 PERMISSION = os.environ.get("WALL_PERMISSION", "anyone")   # anyone | roles
 ROLE_IDS = {r.strip() for r in os.environ.get("WALL_ROLE_IDS", "").split(",") if r.strip()}
 CHANNEL_ID = os.environ.get("WALL_CHANNEL_ID", "")
+# a Discord channel whose messages also go to the watch-party chat (so the TV's chat dock / the stream): one id or none
+RELAY_CHANNEL_ID = os.environ.get("WALL_RELAY_CHANNEL_ID", "")
 STATE_PATH = os.environ.get("WALL_BOT_STATE", "data/wall_bot.json")
 TV_CHOICE = "__tv__"   # the panel's "Same as the TV" start
 MAX_TILES = 4
@@ -255,6 +257,20 @@ class WallCog(commands.Cog):
 
     def save(self) -> None:
         save_state(self.state_path, self.embeds, self.last, self.announced)
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        """WALL_RELAY_CHANNEL_ID: a person's message there → the watch-party chat under their name (same limits as the page)."""
+        if not RELAY_CHANNEL_ID or str(message.channel.id) != RELAY_CHANNEL_ID or message.author.bot:
+            return
+        text = " ".join(message.clean_content.split())[:300]
+        if not text:
+            return
+        user = {**user_dict(message.author), "avatar_url": str(message.author.display_avatar.url)}
+        try:
+            await self.web.chat(user, text)
+        except Exception as e:  # noqa: BLE001 — a rate limit / web hiccup drops that one line, never the bot
+            log.info("wall relay: %s", e)
 
     async def cog_load(self) -> None:
         try:
