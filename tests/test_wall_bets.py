@@ -240,3 +240,17 @@ def test_kalshi_auth_error_drops_member(env):
     poll(b)
     clock.t += 100
     assert b.rows(LAL, clock.t) == []
+
+
+def test_trade_lines_buy_sell_flip_and_sizes():
+    from shared import kalshi_wall as kw
+    from web.wall_bets import trade_lines
+    tk = "SENATEGA-26-D"
+    tape = kw.Tape(); tape.add(0, (97, 98, 98))
+    mk, px = {tk: {"label": "Ossoff"}}, {tk: tape}
+    assert trade_lines("Hansen", True, {}, {tk: ("YES", 50, 49.0)}, mk, px, 10) == ["Trade: Hansen bought YES Ossoff · 50 @ 98¢"]
+    assert trade_lines("Hansen", False, {tk: ("YES", 50, 49.0)}, {tk: ("YES", 20, 19.0)}, mk, px, 10) == ["Trade: Hansen sold YES Ossoff @ 98¢"]
+    assert trade_lines("Hansen", True, {tk: ("YES", 5, 4.0)}, {tk: ("NO", 3, 1.0)}, mk, px, 10) == \
+        ["Trade: Hansen sold YES Ossoff · 5 @ 98¢", "Trade: Hansen bought NO Ossoff · 3 @ 98¢"]
+    assert trade_lines("Hansen", True, {tk: ("YES", 5, 4.0)}, {tk: ("YES", 5, 4.5)}, mk, px, 10) == []
+    assert trade_lines("Hansen", True, {}, {"KXNBAGAME-26-LAL": ("YES", 5, 4.0)}, mk, px, 10) == []   # sports: not tonight's feed
