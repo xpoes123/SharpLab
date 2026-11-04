@@ -1030,11 +1030,11 @@ class Hub:
                 return
             choice, conf = wall_jev.answer(a)
             if choice == "none" or conf < (wall_jev.MIN_CONF if explicit else wall_jev.IMPLICIT_CONF):
-                if explicit:
-                    await self.say(wall_jev.HELP)
+                if explicit:   # said to Jev but no screen in it: answer it as a question (Haiku says when the data can't)
+                    await self.say(await self._jev_answer(text) or wall_jev.HELP)
                 return
             if choice == "q_ask":   # a question about the night: Haiku answers from our results + odds
-                await self.say(await self._jev_answer(text))
+                await self.say(await self._jev_answer(text) or "🎧 DJ Jev: couldn't look that up right now")
                 return
             action, name, msg = wall_jev.plan(choice, text, self.wall)
             if not action:
@@ -1046,21 +1046,25 @@ class Hub:
         except Exception as e:  # noqa: BLE001 — a background task: log, never raise into the loop
             log.warning("jev command failed: %s", e)
 
-    async def _jev_answer(self, text: str) -> str:
+    async def _jev_answer(self, text: str) -> str | None:
         from web import wall_ask, wall_election   # they import this module
-        snap = await wall_election.snapshot()
         try:
-            odds = await wall_election.odds_payload(snap)
-        except Exception:  # noqa: BLE001 — answer from the results alone
+            snap = await wall_election.snapshot()
+        except Exception:  # noqa: BLE001 — no results to answer from
+            return None
+        try:   # a slow / throttled Kalshi (27 s on election night) never holds the answer: results alone after 3 s
+            odds = await asyncio.wait_for(asyncio.shield(wall_election.odds_payload(snap)), 3.0)
+        except Exception:  # noqa: BLE001
             odds = {}
         control = []
         for office in ("S", "H"):
             try:
-                control += (await wall_election.control_payload(office, snap, None)).get("markets") or []
+                pay = await asyncio.wait_for(asyncio.shield(wall_election.control_payload(office, snap, None)), 2.0)
+                control += pay.get("markets") or []
             except Exception:  # noqa: BLE001
                 pass
         got = await wall_ask.answer(wall_jev.TRIGGER.sub("", text).strip(" ,:"), snap, odds, control)
-        return f"🎧 DJ Jev: {got}" if got else "🎧 DJ Jev: couldn't look that up right now"
+        return f"🎧 DJ Jev: {got}" if got else None
 
     async def say(self, text: str, **extra) -> None:
         m = self.chat.system(text, self.clock())
