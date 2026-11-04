@@ -32,7 +32,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from web import auth
 from wall import modes, spectrum
 from web._apisec import check_api_key
-from web import wall_jev
+from web import wall_commands, wall_jev
 from web.wall_guard import Guard
 
 log = logging.getLogger(__name__)
@@ -826,6 +826,7 @@ class Hub:
         self.clock = clock
         self.ask_jev = ask_jev or _ask_jev   # chat commands to Jev ("jev show the senate map"); tests stub it
         self.jev_user, self.jev_all = RateLimit(1, 10), RateLimit(6, 60)
+        self.cmd_user = RateLimit(6, 30)
         self._jev_tasks: set[asyncio.Task] = set()
         self.execute = execute or service_execute
         self.fetch_state = fetch_state or service_state
@@ -1005,17 +1006,39 @@ class Hub:
         """Fire a "jev …" chat line in the background (after the line itself is posted; never delays chat). "" = fired, or
         not a Jev command; else why not (for the sender only)."""
         explicit = wall_jev.is_command(text)
-        if not (explicit or wall_jev.is_implicit(text)) or user.get("public") or not user.get("id") or not verified(user):
+        agent = modes.of_state(self.wall).jev_agent
+        if not (explicit or (wall_jev.is_implicit(text) and not agent)) or user.get("public") or not user.get("id") or not verified(user):
             return ""
         now = self.clock()
         if not self.jev_user.allow(user["id"], now):
             return "One Jev command every 10 s." if explicit else ""
         if not self.jev_all.allow("*", now):
             return "Jev is busy — try again in a minute." if explicit else ""
-        t = asyncio.create_task(self._jev_command(user, str(text), explicit))
+        t = asyncio.create_task(self._jev_agent(user, str(text)) if agent else self._jev_command(user, str(text), explicit))
         self._jev_tasks.add(t)
         t.add_done_callback(self._jev_tasks.discard)
         return ""
+
+    async def command(self, user: dict, line: str) -> str:
+        """A slash command (web/wall_commands.py) as this user. "" = done (the change posts its own chat line); else for the sender."""
+        gs = await wall_commands.games(modes.of_state(self.wall).id)
+        r = wall_commands.run(line, self.wall, gs)
+        if not r.action:
+            return r.reply
+        p, err = await self.propose(user, r.action, via_jev=True)
+        return err or ("" if p and p.status != "error" else "That didn't work.")
+
+    async def _jev_agent(self, user: dict, text: str) -> None:
+        """"jev …" where the agent runs: its one command line goes through command(), like anyone's."""
+        try:
+            gs = await wall_commands.games(modes.of_state(self.wall).id)
+            line = await wall_commands.translate(wall_jev.TRIGGER.sub("", text).strip(" ,:"), gs)
+            if not line:
+                await self.say("🎧 DJ Jev: didn't catch that — /help lists what I can do")
+            elif reply := await self.command(user, line):
+                await self.say(f"🎧 DJ Jev: {reply}")
+        except Exception as e:  # noqa: BLE001 — a background task: log, never raise into the loop
+            log.warning("jev agent failed: %s", e)
 
     async def _jev_command(self, user: dict, text: str, explicit: bool = True) -> None:
         """explicit ("jev …"): act at MIN_CONF and always answer; any other line: act only at IMPLICIT_CONF, silent otherwise."""
@@ -1327,6 +1350,12 @@ async def handle(h: Hub, cid: int, ws: WebSocket, user: dict, msg: dict) -> None
             else:
                 lifted = h.guard.lift(arg) if arg.strip() else []
                 await h.alert(f"Timeout lifted: {', '.join(lifted)}." if lifted else f"No timeout matches “{arg.strip()}”.")
+            return
+        if wall_commands.is_command(text):   # never posted: the change (if any) announces itself
+            reply = "Slow down a little." if not h.cmd_user.allow(user["id"], now) else await h.command(user, text[:200])
+            if reply:
+                await h.send(ws, {"t": "chat", "msg": {"id": -int(now * 1000), "kind": "system", "uid": "", "name": "", "avatar": None,
+                                                       "text": reply, "ts": now}})
             return
         m, err = h.chat.post(user, text, now)
         if m:
@@ -1749,6 +1778,27 @@ async def bot_chat(after: int = 0, limit: int = 30, x_api_key: str = Header(""))
     """The TV wall's chat poll (the homelab wall service, every ~1.5 s while the discord wall runs)."""
     _need_key(x_api_key)
     return hub.chat_feed(after, limit)
+
+
+@router.get("/commands")
+async def commands_docs():
+    """What the wall can be told to do: chat, agents and scripts all use these."""
+    return {"commands": wall_commands.docs(), "run": "POST /api/v1/wall/command {\"text\": \"/put knicks\"} with X-Api-Key"}
+
+
+@router.post("/command")
+async def command_run(request: Request, x_api_key: str = Header("")):
+    """A script or agent runs one command as the owner."""
+    _need_key(x_api_key)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    text = body.get("text") if isinstance(body, dict) else None
+    if not wall_commands.is_command(text):
+        return JSONResponse({"error": "text must be a command, e.g. /games"}, status_code=422)
+    await hub.refresh_wall()
+    return {"reply": await hub.command({"id": cfg()["owner"], "name": "wallctl", "avatar": None}, text[:200])}
 
 
 @router.post("/chat")

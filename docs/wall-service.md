@@ -282,6 +282,11 @@ hidden while the full / matchup board is up. Every 2 s it reads `GET /i/<name>/b
 * **Modes** (`wall/modes.py`): one table says what a wall is (`election`, `nba`, `nfl`, `none`), its brand, its locked
   tiles and whether the public may watch. sharplab-web adds `mode`, `mode_label` and `public_stream` to the wall state it
   keeps. Bringing an election back: `docs/election-runbook.md`.
+* **Commands** (`web/wall_commands.py`): one table behind the chat's slash commands (`/help`, `/games`, `/put <team> [tile]`,
+  `/sound <team or tile>`), `GET /api/v1/wall/commands` (the docs, for agents) and `POST /api/v1/wall/command {"text"}`
+  (X-Api-Key, runs as the owner). Slash commands aren't posted to chat, and replies go only to the sender. On every wall but an
+  election's, "jev …" is an agent (Haiku) that turns the sentence into one command line, which then takes the same path as a
+  typed one; plain chat never reaches it. Nothing here carries a score. Election walls still use Jev's choice model.
 * **Public mode** (`WALL_PUBLIC=1`; the old `WALL_GUEST_OPEN=1` means the same): the plain `/wall.html` (no key, no
   login, no cookie) is a read-only data page — the election map, state sheets, Kalshi markets / charts / Pulse, opted-in
   members' positions and the Bets panel, the live updates feed, and the chat **read-only** over the socket (no Discord

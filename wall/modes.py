@@ -16,11 +16,12 @@ class Mode:
     label: str                    # the watch page's brand
     locked_tiles: int = 0         # the first n tiles are dashboards: streams can't go there
     public_stream: bool = False   # may the plain link watch the stream? (see public_stream(): the tiles must qualify too)
+    jev_agent: bool = True        # "jev …" = the command agent (web/wall_commands.py); False = Jev's choice model (web/wall_jev.py)
 
 
 MODES = {m.id: m for m in (
     Mode("none", "The Wall"),
-    Mode("election", "Live Election", locked_tiles=2, public_stream=True),
+    Mode("election", "Live Election", locked_tiles=2, public_stream=True, jev_agent=False),
     Mode("nba", "Live NBA"),
     Mode("nfl", "Live NFL"),
 )}
