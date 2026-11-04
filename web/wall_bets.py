@@ -59,6 +59,30 @@ async def kalshi_markets(tickers: list[str]) -> list[dict]:
         return r.json().get("markets") or []
 
 
+def trade_lines(name: str, exact: bool, old: dict, new: dict, markets: dict, prices: dict, now: float) -> list[str]:
+    """A member's election trades between two polls ({ticker: (side, qty, cost)} each): more of a side = bought, less =
+    sold (a flip is both). Sizes only for members who share them exactly."""
+    out = []
+    for tk in sorted(set(old) | set(new)):
+        if not ke.is_election(tk):
+            continue
+        o, n = old.get(tk), new.get(tk)
+        legs = {}   # side → qty change
+        if o:
+            legs[o[0]] = -o[1]
+        if n:
+            legs[n[0]] = legs.get(n[0], 0.0) + n[1]
+        label = (markets.get(tk) or {}).get("label") or tk
+        px = prices[tk].at(now) if tk in prices else None   # (bid, ask, last) cents
+        last = px[2] if px else None
+        for side, dq in sorted(legs.items(), key=lambda x: x[1]):   # the sell first on a flip
+            if not dq:
+                continue
+            out.append(f"Trade: {name} {'bought' if dq > 0 else 'sold'} {side} {label}"
+                       + (f" · {abs(dq):g}" if exact else "") + (f" @ {last:g}¢" if last is not None else ""))
+    return out
+
+
 class Bets:
     def __init__(self, clock=time.time, positions=kalshi_positions, markets=kalshi_markets, sharers=None,
                  limiter: kw.RateLimit | None = None, sleep=asyncio.sleep) -> None:
@@ -77,6 +101,8 @@ class Bets:
         self.offices: dict[str, dict] = {}
         self._task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
+        self.traded_base: set[str] = set()   # members whose positions we've seen once (their trades show from then on)
+        self.announce = lambda line: wall.hub.say(line)   # a trade → the watch-party chat (+ the TV's chat dock)
 
     async def _call(self, fn, *a):
         wait = self.limiter.take()
@@ -93,6 +119,7 @@ class Bets:
             for uid in [u for u in self.book.members if u not in self.sharers]:
                 self.book.forget(uid)
             held: set[str] = set()
+            moves: list[tuple[dict, dict, dict]] = []
             for m in members:
                 self.book.members[m["uid"]] = {"name": m["name"], "exact": m["exact"]}
                 try:
@@ -107,6 +134,10 @@ class Bets:
                 if rows is None:
                     self.book.forget(m["uid"])
                     continue
+                prev = self.book.positions.get(m["uid"])
+                if m["uid"] in self.traded_base:   # the first look at a member is the baseline, never "trades"
+                    moves.append((m, (prev.at(self.clock()) if prev else None) or {}, rows))
+                self.traded_base.add(m["uid"])
                 self.book.see_positions(self.clock(), m["uid"], rows)
                 held |= set(rows)
             tickers = sorted(held)
@@ -123,6 +154,12 @@ class Bets:
                     self.book.see_market(now, mk)
                     ke.see(self.book, mk)
             self.polled = self.clock()
+            for m, old, new in moves:   # after the prices: the line carries the label and the price
+                for line in trade_lines(m["name"], m["exact"], old, new, self.book.markets, self.book.prices, self.clock()):
+                    try:
+                        await self.announce(line)
+                    except Exception as e:  # noqa: BLE001 — a chat hiccup never stops the poller
+                        log.warning("wall bets: trade line: %s", type(e).__name__)
 
     def want(self) -> None:
         """Someone is looking: keep the poller going (and start it)."""
