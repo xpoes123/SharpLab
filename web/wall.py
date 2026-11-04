@@ -1063,7 +1063,14 @@ class Hub:
                 control += pay.get("markets") or []
             except Exception:  # noqa: BLE001
                 pass
-        got = await wall_ask.answer(wall_jev.TRIGGER.sub("", text).strip(" ,:"), snap, odds, control)
+        try:   # members' shared positions (the same opt-in rows the bets panel shows)
+            from web import wall_bets
+            from shared import kalshi_election as ke
+            wall_bets.bets.want()
+            positions = ke.election_rows(wall_bets.bets.book, wall_bets.bets.clock(), wall_bets.bets.sharers)
+        except Exception:  # noqa: BLE001
+            positions = []
+        got = await wall_ask.answer(wall_jev.TRIGGER.sub("", text).strip(" ,:"), snap, odds, control, positions)
         return f"🎧 DJ Jev: {got}" if got else None
 
     async def say(self, text: str, **extra) -> None:
