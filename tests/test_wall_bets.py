@@ -134,7 +134,7 @@ def test_opt_out_is_immediate(env):
     assert [x["who"] for x in r.json()["games"]["nba:401909921"]] == ["David"]
 
 
-def test_members_bets_are_for_members_only(env, monkeypatch):
+def test_friends_read_members_bets_the_public_never_does(env, monkeypatch):
     client, b, clock, k, optin = env
     poll(b)
     monkeypatch.setenv("WALL_DEMO", "1")
@@ -144,8 +144,8 @@ def test_members_bets_are_for_members_only(env, monkeypatch):
     client.cookies.set(wall.GUEST_COOKIE, r.headers["set-cookie"].split(";")[0].split("=", 1)[1])
     assert client.get("/api/v1/wall/me").json()["tier"] == "friend"   # a friend of the watch page …
     clock.t += 100
-    assert client.get("/api/v1/wall/bets").status_code == 403          # … never sees members' bets (shared widely tonight)
-    assert client.get("/api/v1/wall/bets/me").status_code == 403
+    assert client.get("/api/v1/wall/bets").status_code == 200          # … reads the bets panel (election night: friends too)
+    assert client.get("/api/v1/wall/bets/me").json()["guest"] is True  # no Kalshi key of their own to share
     assert client.post("/api/v1/wall/bets/me", json={"share": True}).status_code == 403
     assert client.post("/api/v1/wall/bets/sync", json={"show": False}).status_code == 403
     client.cookies.clear()

@@ -235,7 +235,9 @@ def member(request: Request, read: bool = False) -> tuple[dict | None, JSONRespo
     """Members and friends (the keyed link's guests). A public viewer (public mode) may read the panel (wall.PUBLIC),
     never change anything (403); nobody else gets a 401."""
     user = wall.viewer(request)
-    if user and not user.get("guest"):   # SharpLab members only: friends' links and the public don't see members' bets
+    if user and not user.get("guest"):   # members read and change
+        return user, None
+    if user and read and wall.verified(user):   # friends' links read (election night); the public never sees bets
         return user, None
     if user or wall.public_mode():
         return None, JSONResponse({"error": "Bets are for SharpLab members."}, status_code=403)
