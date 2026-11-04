@@ -283,8 +283,8 @@
   function setMedia() {
     if (!media || !window.MediaMetadata) return;
     try {
-      media.metadata = new MediaMetadata({ title: (wall && wall.running && wall.name) || "The wall", artist: "Live Election",
-                                           album: "Live Election", artwork: [{ src: "/wall-art.png", sizes: "512x512", type: "image/png" }] });
+      media.metadata = new MediaMetadata({ title: (wall && wall.running && wall.name) || "The wall", artist: brand(),
+                                           album: brand(), artwork: [{ src: "/wall-art.png", sizes: "512x512", type: "image/png" }] });
     } catch (e) { /* older browsers: no metadata */ }
   }
   if (media) {
@@ -344,11 +344,20 @@
   }
 
   // ---- wall state ----
+  const brand = () => (wall && wall.mode_label) || "The Wall";
+  function setBrand() {
+    document.title = brand();
+    document.querySelector(".brand a").textContent = brand();
+  }
   function setWall(st) {
     wall = st || null;
     const on = !!(wall && wall.running);
+    const pub = !!(window.__wallMe && window.__wallMe.public);
+    const canPlay = on && !(pub && !wall.public_stream);   // the server refuses a public viewer this stream anyway (modes.public_stream)
     $("offline").hidden = on || !wall;
-    video.closest(".player").classList.toggle("off", !on);
+    video.closest(".player").classList.toggle("off", !canPlay);
+    setBrand();
+    if (pub) $("publicNote").textContent = on && !canPlay ? "The stream is for members. Chat is for the watch party." : "Live coverage. Chat is for the watch party.";
     showMute(); wake();
     $("wallName").textContent = on ? wall.name || "" : "";
     $("mirror").hidden = !(on && wall.mirror) || /mirroring the tv/i.test((wall && wall.name) || "");
@@ -356,7 +365,7 @@
     setMedia();
     if (on && runId !== null && wall.started !== runId) stopPlayer();   // the wall restarted: new segment numbers
     runId = on ? wall.started : null;
-    if (on) startPlayer(); else if (wall) stopPlayer();
+    if (canPlay) startPlayer(); else if (wall) stopPlayer();
     const sel = $("preset"), cur = sel.value;
     const tv = el("option", null, "Same as the TV"); tv.value = "";
     sel.replaceChildren(tv, ...((wall && wall.presets) || []).map((n) => { const o = el("option", null, n); o.value = n; return o; }));
@@ -844,16 +853,17 @@
     if (name) parts.push("Live: " + name);
     if (n) parts.push(n + (n === 1 ? " person" : " people") + " watching");
     $("peekText").textContent = parts.join(", ");
+    if (p && p.label) $("gateKicker").textContent = p.label;
+    if (p && p.label === "Live Election") {   // an election wall is up: say so on the join card
+      $("gateTitle").textContent = "Election Night";
+      $("gateLede").textContent = "Live map, news streams, Kalshi odds and chat.";
+    }
     $("gatePeek").classList.toggle("on", !!name);
     $("gatePeek").classList.toggle("empty", !parts.length);   // keeps its space either way: nothing below it jumps
   }
   function nickError(msg) {
     $("nickErr").textContent = msg || "";
     if (msg) $("nick").setAttribute("aria-invalid", "true"); else $("nick").removeAttribute("aria-invalid");
-  }
-  if (Date.now() < Date.UTC(2026, 10, 5, 12)) {   // US midterms, 3 Nov 2026: say so on the join card
-    $("gateTitle").textContent = "Election Night";
-    $("gateLede").textContent = "Live map, news streams, Kalshi odds and chat. Results from 6 PM ET.";
   }
   const qs = new URLSearchParams(location.search), err = qs.get("error"), key = qs.get("k") || "";
   try { const n = localStorage.getItem("wall.nick"); if (n) $("nick").value = n; } catch (e) { /* storage blocked: start empty */ }

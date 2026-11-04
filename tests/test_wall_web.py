@@ -22,6 +22,10 @@ def env(monkeypatch):
     monkeypatch.setattr(wall, "check_api_key", lambda k: k == "sekrit")
 
 
+ELECTION_WALL = {"running": True, "urls": ["http://127.0.0.1:7795/p/election/map", "https://www.youtube.com/@NBCNews/live"],
+                 "overlay": {"board": "election"}}
+
+
 class Clock:
     def __init__(self, t=1000.0):
         self.t = t
@@ -508,10 +512,10 @@ def test_me_without_session_points_to_login(setup):
 def test_me_logged_out_peek_is_only_name_and_count(setup):
     client, hub, *_ = setup
     client.cookies.clear()
-    assert client.get("/api/v1/wall/me").json()["peek"] == {"name": None, "watching": 0}
+    assert client.get("/api/v1/wall/me").json()["peek"] == {"name": None, "watching": 0, "label": "The Wall"}
     hub.wall = {"running": True, "name": "NFL Sunday", "urls": ["https://secret.example/stream"]}
     hub.presence.join(1, {"id": "300", "name": "Kim"}, hub.clock())
-    assert client.get("/api/v1/wall/me").json()["peek"] == {"name": "NFL Sunday", "watching": 1}
+    assert client.get("/api/v1/wall/me").json()["peek"] == {"name": "NFL Sunday", "watching": 1, "label": "The Wall"}
     hub.wall = {"running": False, "name": "NFL Sunday"}
     assert client.get("/api/v1/wall/me").json()["peek"]["name"] is None
 
@@ -552,8 +556,8 @@ def test_demo_off_means_login_required(setup, monkeypatch):
     assert r.status_code == 401 and r.json()["guest_ok"] is False
     assert client.post("/api/v1/wall/guest", json={"k": KEY, "name": "Kim"}).status_code == 403
     monkeypatch.setenv("WALL_DEMO", "1")
-    monkeypatch.setenv("WALL_DEMO_KEY", "short")              # too short a key: demo stays off
-    assert client.get("/api/v1/wall/me?k=short").json()["guest_ok"] is False
+    monkeypatch.setenv("WALL_DEMO_KEY", "abc")                # too short a key (under 4): demo stays off
+    assert client.get("/api/v1/wall/me?k=abc").json()["guest_ok"] is False
 
 
 def test_demo_needs_the_key(demo):
@@ -796,6 +800,10 @@ def test_only_the_keyed_link_joins_public_mode_never_does(monkeypatch):
 @pytest.fixture
 def public(demo, monkeypatch):
     monkeypatch.setenv("WALL_GUEST_OPEN", "1")   # what the VPS has set
+
+    async def election_state():
+        return ELECTION_WALL
+    monkeypatch.setattr(demo[1], "fetch_state", election_state)
     return demo
 
 
@@ -988,7 +996,7 @@ def test_wall_page_nav_is_hidden_until_a_member_and_has_no_discord_invite():
     from pathlib import Path
     static = Path(__file__).resolve().parents[1] / "web" / "static"
     html = (static / "wall.html").read_text()
-    assert '<nav class="nav" id="topNav" hidden>' in html and "Live election results. Chat is for the watch party." in html
+    assert '<nav class="nav" id="topNav" hidden>' in html and "Live coverage. Chat is for the watch party." in html
     assert '$("topNav").hidden = false' not in (static / "wall.js").read_text()   # never the site nav (standalone Live Election)
     assert 'class="nav" id="topNav" hidden' in (static / "pulse.html").read_text()
     for f in static.glob("*.html"):
@@ -1025,3 +1033,41 @@ def test_tvchat_op_routes_and_is_admin_only(monkeypatch):
         p, err = await hub.propose({"id": OWNER, "name": "David"}, {"op": "tvchat", "on": False})
         assert p and done and done[-1] == {"op": "tvchat", "on": False}
     asyncio.run(go())
+
+
+# ---- the public link's stream follows the wall's mode (wall/modes.py) ---------------------------------------------------
+def public_hls_status(public, monkeypatch, state):
+    client, hub, *_ = public
+
+    async def fetch_state():
+        return state
+
+    async def upstream(name):
+        return 200, b"#EXTM3U\n", "application/vnd.apple.mpegurl"
+    monkeypatch.setattr(hub, "fetch_state", fetch_state)
+    monkeypatch.setattr(hub, "wall_at", -1e9)
+    monkeypatch.setattr(wall, "fetch_upstream", upstream)
+    wall._cache.clear()
+    client.cookies.clear()
+    return client.get("/api/v1/wall/hls/index.m3u8").status_code
+
+
+def test_public_stream_open_for_election_closed_for_sports(public, monkeypatch):
+    nba = {"running": True, "urls": ["https://topstreamer.site/nba/knicks"], "overlay": {"board": "nba"}, "live": {"league": "nba"}}
+    assert public_hls_status(public, monkeypatch, ELECTION_WALL) == 200
+    assert public_hls_status(public, monkeypatch, nba) == 401
+
+
+def test_public_stream_refused_when_the_wall_cant_be_asked(public, monkeypatch):
+    assert public_hls_status(public, monkeypatch, None) == 401
+
+
+def test_a_member_still_gets_a_sports_stream(setup, monkeypatch):
+    client, hub, *_ = setup
+
+    async def upstream(name):
+        return 200, b"#EXTM3U\n", "application/vnd.apple.mpegurl"
+    monkeypatch.setattr(wall, "fetch_upstream", upstream)
+    monkeypatch.setattr(wall, "viewer", lambda conn: {"id": "300", "name": "Kim"})
+    wall._cache.clear()
+    assert client.get("/api/v1/wall/hls/index.m3u8").status_code == 200
