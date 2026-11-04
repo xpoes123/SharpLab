@@ -58,6 +58,9 @@ def criteria() -> dict[str, str]:
         out[k] = f"the {s['name']} live stream ({s['group']}), e.g. " + ", ".join(f"'{e}'" for e in ex)
     out["x_sound"] = ("move the sound to the other stream that's already up, without naming a new one, e.g. 'switch audio', "
                       "'this one is on break, switch the sound', 'other audio', 'swap sound'")
+    out["q_ask"] = ("a question about the election itself (who's winning, what got called, the odds, how many seats, "
+                    "what happened in a race), not a request to change the screen, e.g. 'who's winning georgia?', "
+                    "'what are the odds dems take the house', 'has ohio been called'")
     out["none"] = "not a request to change what the wall shows, or unclear which screen or stream they mean"
     return out
 
