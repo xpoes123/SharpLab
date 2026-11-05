@@ -16,7 +16,6 @@ export const TIERS = {
   medium: { grass: 140000, particles: 12000, pixels: 2.6e6, taps: 8, weather: 2800 },
   low: { grass: 50000, particles: 5000, pixels: 1.2e6, taps: 5, weather: 1200 },
 };
-const SPRITE_ROOT = "/pokehoops/sprites/";
 
 const hex = (h, k = 1) => [((h >> 16) & 255) / 255 * k, ((h >> 8) & 255) / 255 * k, (h & 255) / 255 * k];
 export const TYPE_COLOR = {
@@ -89,7 +88,8 @@ function outside(x, z) {
 }
 
 class Atlas {
-  constructor() {
+  constructor(root) {
+    this.root = root;
     this.canvas = document.createElement("canvas");
     this.canvas.width = this.canvas.height = 2048;
     this.ctx = this.canvas.getContext("2d");
@@ -110,7 +110,7 @@ class Atlas {
       const img = new Image();
       img.onload = () => { this.add(num, img); done(); };
       img.onerror = () => done();
-      img.src = `${SPRITE_ROOT}${num}.png`;
+      img.src = `${this.root}${num}.png`;
     });
     this.loading.set(num, p);
     return p;
@@ -143,7 +143,10 @@ export class Stage {
     this.tier = TIERS[this.quality];
     this.maxPixelRatio = opts.maxPixelRatio ?? 1.5;
     this.resScale = 1; this.grassFrac = 1; this.needResize = true;
-    this.reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    // calm: no strobing or fast luminance swings, for screens where that matters (the TV cartridge)
+    this.calm = !!opts.calm;
+    this.reduced = this.calm || matchMedia("(prefers-reduced-motion: reduce)").matches;
+    this.size = opts.size ?? null;
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: "high-performance", stencil: false });
     renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
     renderer.toneMapping = THREE.NoToneMapping;
@@ -164,7 +167,7 @@ export class Stage {
     this.controls.addEventListener("start", () => { if (this.camMode === "director") this.setCamMode("free"); });
     this.camMode = "director";
     this.onCamMode = () => {};
-    this.atlas = new Atlas();
+    this.atlas = new Atlas(opts.spriteRoot ?? "/pokehoops/sprites/");
     this.clock = 0; this.real = 0; this.timeScale = 1; this.slowUntil = 0;
     this.queue = []; this.vis = []; this.world = null; this.floats = [];
     this.actionX = 0; this.actionZ = 0; this.actionWeight = 0;
@@ -852,7 +855,7 @@ export class Stage {
         float fbm(vec2 p){ return n(p)*.5+n(p*2.1+3.)*.3+n(p*4.3+7.)*.2; }
         void main(){ vec2 p=vW.xz*.09; float c=fbm(p+vec2(uTime*.07,uTime*.03)); c=c*.6+fbm(p*1.7-vec2(uTime*.05,0.))*.4;
           // distance into enemy ground: the front edge billows instead of being a straight line
-          float into=(uSide>.5?vW.x:-vW.x)+(c-.5)*9.;
+          float into=uSide<-.5?9.:(uSide>.5?vW.x:-vW.x)+(c-.5)*9.;
           float a=smoothstep(-3.,3.,into)*uAmount; a*=smoothstep(uAmount-.75,uAmount+.25,c+uAmount*.75);
           vec3 col=mix(vec3(.05,.055,.075),vec3(.2,.21,.25),c);
           gl_FragColor=vec4(col,clamp(a,0.,1.)*.985); }`,
@@ -862,10 +865,10 @@ export class Stage {
     this.fogMesh = m;
     this.fogTarget = 0;
   }
-  // side: whose half is hidden. amount jumps on at once and lifts slowly.
+  // side: whose half is hidden, or -1 for the whole field. amount jumps on at once and lifts slowly.
   setFog(side, on) {
     this.uFogSide.value = side;
-    this.fogMesh.position.x = (side === 1 ? 1 : -1) * (FW * 0.25 + 30 - 2);
+    this.fogMesh.position.x = side < 0 ? 0 : (side === 1 ? 1 : -1) * (FW * 0.25 + 30 - 2);
     this.fogTarget = on ? 1 : 0;
     if (on) { this.uFogAmount.value = 1; this.fogMesh.visible = true; }
   }
@@ -882,6 +885,7 @@ export class Stage {
     this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.34, 0.65, 1.55);
     const bloomSize = this.bloom.setSize.bind(this.bloom);
     this.bloom.setSize = (w, h) => bloomSize(Math.max(64, w >> 1), Math.max(64, h >> 1)); // glow is soft anyway: half resolution costs a quarter
+    if (this.calm) this.bloom.strength = 0.16;
     composer.addPass(this.bloom);
     this.finalPass = new ShaderPass(new THREE.ShaderMaterial({
       uniforms: {
@@ -916,7 +920,7 @@ export class Stage {
   requestResize() { this.needResize = true; }
   applySize() {
     this.needResize = false;
-    const w = innerWidth, h = innerHeight;
+    const [w, h] = this.size ?? [innerWidth, innerHeight];
     const fit = Math.sqrt(this.tier.pixels / Math.max(1, w * h));
     this.pixelRatio = Math.max(0.5, Math.min(devicePixelRatio || 1, this.maxPixelRatio, fit) * this.resScale);
     this.renderer.setPixelRatio(this.pixelRatio);
@@ -946,7 +950,7 @@ export class Stage {
   chest(v) { return [v.x, v.h * 0.55 + (v.fly ? 0.55 + v.h * 0.32 : 0), v.z]; }
 
   pulseLight(x, y, z, r, c, k, life) {
-    this.lightPool.push({ x, y, z, r, c, k, life, t0: this.real });
+    this.lightPool.push({ x, y, z, r, c, k: this.calm ? k * 0.35 : k, life, t0: this.real });
     if (this.lightPool.length > 16) this.lightPool.splice(0, this.lightPool.length - 16);
   }
   quake(x, z, amp) {
@@ -1138,7 +1142,7 @@ export class Stage {
       this.shock(sx, sy, sz, 1);
       this.scar(v.x, v.z, 2.8 * k, 1, 0.9);
       this.flashCam(0xffc070, 0.035 * k);
-      this.chroma = Math.max(this.chroma, 0.0035);
+      if (!this.reduced) this.chroma = Math.max(this.chroma, 0.0035);
       this.sfx("boom");
       return;
     }
@@ -1215,7 +1219,7 @@ export class Stage {
     const D = this.data.moves[e.m] ?? { type: null };
     const c = hex(TYPE_COLOR[D.type] ?? 0xe8e4d8, 1.8);
     o.hp = Math.max(0, o.hp - e.d);
-    o.flash = 1;
+    o.flash = this.calm ? 0.3 : 1;
     const dx = u ? o.x - u.x : 1, dz = u ? o.z - u.z : 0, l = Math.hypot(dx, dz) || 1;
     o.knock = 0.2; o.knockT = this.clock;
     const push = Math.min(0.55, 0.08 + (e.d / Math.max(o.maxHp, 1)) * 0.9) * (e.eff > 1 ? 1.5 : 1);
@@ -1282,8 +1286,8 @@ export class Stage {
       this.sfx("evolved");
       return;
     }
-    const pulse = 0.5 + 0.5 * Math.sin(p * p * 46);
-    v.flash = 0.45 + pulse * 0.55;
+    const pulse = this.calm ? p : 0.5 + 0.5 * Math.sin(p * p * 46); // calm: a steady glow-up instead of a strobe
+    v.flash = this.calm ? p * 0.7 : 0.45 + pulse * 0.55;
     v.scale = 1 + pulse * 0.16 * p;
     if (Math.random() < 0.5) {
       const [x, y, z] = this.chest(v);
@@ -1314,7 +1318,7 @@ export class Stage {
       else if (b.air === "embers") { if (Math.random() < 0.6) this.particle(x, 0.2, z, 0.3, 1.3 + Math.random(), 0.2, 3.3, 0.07, 0.02, -0.1, 3, 0.9, 0.2); }
       else if (b.air === "spray") this.particle(x, 0.4 + Math.random() * 2, z, 1.1, 0.14, 0.2, 3.2, 0.05, 0.03, 0, 1, 1, 1);
     }
-    if (this.weather === "rain" && this.real > this.lightningAt) {
+    if (this.weather === "rain" && !this.calm && this.real > this.lightningAt) {
       this.lightningAt = this.real + 5 + Math.random() * 9;
       const x = this.controls.target.x + (Math.random() - 0.5) * 120;
       const zz = -60 - Math.random() * 90;
