@@ -306,6 +306,12 @@ def test_members_friends_and_public_all_see_markets_and_positions(eenv, monkeypa
     assert "positions" in client.get("/api/v1/wall/election/control/S").json()   # friends: positions too
     m = client.get("/api/v1/wall/election/map").json()
     assert m["member"] is True and m["public"] is False and m["races"] and "cands" not in m["races"][0]
+    from web import wall as web_wall   # the watch page shows its election panel only on an election wall
+    for st, on_air in (({"running": True, "live": {"league": "nba"}, "overlay": {"board": "nba"}, "urls": ["https://a.tv"]}, False), (None, False),
+                       ({"running": True, "overlay": {"board": "election"}, "urls": []}, True),
+                       ({"running": True, "overlay": {}, "urls": ["http://127.0.0.1:7795/p/election/map"]}, True)):
+        monkeypatch.setattr(web_wall.hub, "wall", st)
+        assert client.get("/api/v1/wall/election/map").json()["on_air"] is on_air
     assert client.get("/api/v1/wall/election/chart/S-GA").status_code == 200
     client.cookies.clear()
     for path in ("/map", "/state/GA", "/control/S", "/chart/S-GA", "/shapes"):           # public mode off: nothing

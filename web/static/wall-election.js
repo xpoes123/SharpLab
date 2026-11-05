@@ -340,8 +340,10 @@
     const r = await get("/map");
     if (!r.ok) return r.status;
     data = r.j;
-    root.hidden = false;
-    document.getElementById("elecBtn")?.removeAttribute("hidden");
+    const btn = document.getElementById("elecBtn");
+    root.hidden = !data.on_air;   // only an election wall shows the map (keeps polling, so it appears when one starts)
+    if (btn) btn.hidden = !data.on_air;
+    if (!data.on_air) return 200;
     if (!root.querySelector(":scope > .el-head")) buildPanel();
     drawMap();
     return 200;
