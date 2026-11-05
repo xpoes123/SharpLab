@@ -13,7 +13,7 @@ const BASE_TURN = 0.82;
 
 const G = {
   mode: "title", squads: [], biome: "meadow", world: null, seed: 1, speed: 1, nextTurnAt: 0, endAt: 0, demoIndex: 0,
-  history: [], dragging: null, nextSquadId: 1000, lastPreset: null, stats: null,
+  history: [], dragging: null, nextSquadId: 1000, lastPreset: null, stats: null, cleared: [null, null],
 };
 
 let data, stage;
@@ -469,15 +469,39 @@ function renderRoom() {
   if (G.duel) return renderDuelRoom();
   renderSide(0, $("sideA"), "Blue");
   renderSide(1, $("sideB"), "Red");
-  $("btnBegin").disabled = !(G.squads.some((s) => s.side === 0) && G.squads.some((s) => s.side === 1));
+  const ready = G.squads.some((s) => s.side === 0) && G.squads.some((s) => s.side === 1);
+  $("btnBegin").disabled = !ready;
+  $("btnForecast").disabled = !ready;
+}
+
+// Wipes one side. Undo stays offered until that side gets a new squad.
+function clearArmy(side) {
+  if (G.duel?.locked) return;
+  const saved = G.cleared[side];
+  if (saved) {
+    G.squads.push(...saved);
+    G.cleared[side] = null;
+  } else {
+    G.cleared[side] = G.squads.filter((s) => s.side === side);
+    G.squads = G.squads.filter((s) => s.side !== side);
+  }
+  closeInspect();
+  changed();
 }
 
 function renderSide(side, box, title) {
   box.replaceChildren();
   const mine = G.squads.filter((s) => s.side === side);
   const total = mine.reduce((t, s) => t + s.count, 0);
+  if (mine.length) G.cleared[side] = null;
   const h = el("h3", null, title);
   h.append(el("small", null, `${total.toLocaleString()} ${total === 1 ? "unit" : "units"}`));
+  if (mine.length || G.cleared[side]) {
+    const clear = el("button", "r-clear", mine.length ? "Clear army" : "Undo");
+    clear.type = "button";
+    clear.addEventListener("click", () => clearArmy(side));
+    h.append(clear);
+  }
   const list = el("div", "r-list");
   for (const s of mine) list.append(squadRow(s));
   if (!mine.length) list.append(el("p", "i-sub", "No one here yet. Add a species below."));
@@ -608,6 +632,7 @@ async function openRoom() {
   G.demo = false;
   show("room");
   stage.paused = false;
+  G.cleared = [null, null];
   G.squads = G.squads.map((s) => ({ ...s }));
   if (!G.squads.length) G.squads = resolveSquads(PRESETS[0], data);
   G.squads.forEach((s, i) => { if (s.id == null) s.id = G.nextSquadId + i; });
@@ -1025,6 +1050,7 @@ async function openDuelRoom(v) {
   const prev = v.army ?? v.last?.[v.seat] ?? [];
   G.squads = prev.map((s, i) => ({ ...s, id: G.nextSquadId + i }));
   G.nextSquadId += prev.length;
+  G.cleared = [null, null];
   d.locked = !!v.army;
   show("room");
   stage.paused = false;
@@ -1057,6 +1083,7 @@ function renderDuelRoom() {
   const v = G.duel.view, seat = v.seat;
   const own = seat === 0 ? $("sideA") : $("sideB"), other = seat === 0 ? $("sideB") : $("sideA");
   renderSide(seat, own, v.names[seat]);
+  $("btnForecast").disabled = !G.squads.length;
   own.classList.toggle("is-locked", G.duel.locked);
   other.classList.remove("is-locked");
   other.replaceChildren();

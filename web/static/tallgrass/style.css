@@ -39,7 +39,10 @@ body:not(.is-loading) #loading { opacity: 0; }
 .r-a { left: 12px; border-top: 3px solid var(--info); }
 .r-b { right: 12px; border-top: 3px solid var(--bad); }
 .r-side h3 { margin: 0; padding: 10px 12px 6px; display: flex; justify-content: space-between; align-items: baseline; font-family: var(--font-serif); font-style: italic; font-weight: 500; font-size: 20px; }
-.r-side h3 small { font-family: var(--font-mono); font-style: normal; font-size: var(--text-xs); color: var(--text-2); }
+.r-side h3 small { font-family: var(--font-mono); font-style: normal; font-size: var(--text-xs); color: var(--text-2); margin-left: auto; }
+.r-clear { all: unset; cursor: pointer; margin-left: 8px; padding: 1px 7px; border: 1px solid var(--line-2); border-radius: 99px; font-family: var(--font-sans); font-style: normal; font-weight: 400; font-size: var(--text-xs); color: var(--text-2); white-space: nowrap; }
+.r-clear:hover, .r-clear:focus-visible { border-color: var(--bad); color: var(--text); }
+.r-side.is-locked .r-clear { opacity: .45; pointer-events: none; }
 .r-list { flex: 1; overflow-y: auto; padding: 0 8px 6px; display: flex; flex-direction: column; gap: 5px; }
 .sq { display: grid; grid-template-columns: 40px 1fr auto; gap: 2px 8px; align-items: center; padding: 5px 7px; background: var(--glass-2); border: 1px solid var(--line); border-radius: var(--radius-sm, 6px); }
 .sq img { grid-row: span 2; width: 40px; height: 40px; image-rendering: pixelated; cursor: pointer; }
