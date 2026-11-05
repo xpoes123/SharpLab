@@ -10,8 +10,9 @@ ROOT = Path(__file__).resolve().parent.parent
 CHECK = r"""
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { createWorld, damage, defaultLevel, footprint, gainXp, legalMoves, outcome, run, step, typeEff, useData, wildMoves } from "./web/static/tallgrass/sim.js";
+import { createWorld, damage, defaultLevel, footprint, gainXp, legalMoves, levelRange, outcome, run, step, typeEff, useData, wildMoves } from "./web/static/tallgrass/sim.js";
 import { PRESETS, WILDS, resolveSquads, wildHorde } from "./web/static/tallgrass/presets.js";
+import { unitPrice, usePrices } from "./web/static/tallgrass/price.js";
 const data = JSON.parse(readFileSync("web/static/tallgrass/data.json"));
 useData(data);
 const num = (n) => Object.values(data.species).find((s) => s.name === n).num;
@@ -142,6 +143,18 @@ for (const wild of WILDS) {
   const horde = wildHorde(wild, 20, data, 1, fake);
   assert.equal(horde.reduce((t, x) => t + x.count, 0), 20, wild.name);
 }
+// Prices: money buys real power, and the fitted table covers every species at every level it can be bought.
+usePrices(data, JSON.parse(readFileSync("web/static/tallgrass/prices.json")));
+assert.equal(unitPrice(num("Rattata"), 19), 300);
+for (const sp of Object.values(data.species)) {
+  const [lo, hi] = levelRange(sp);
+  for (const lv of [lo, Math.floor((lo + hi) / 2), hi]) {
+    const p = unitPrice(sp.num, lv);
+    assert.ok(Number.isFinite(p) && p >= 10, `${sp.name} L${lv} costs ${p}`);
+  }
+  if (hi > lo + 10) assert.ok(unitPrice(sp.num, hi) >= unitPrice(sp.num, lo), `${sp.name} gets cheaper with level`);
+}
+assert.ok(unitPrice(num("Mewtwo"), 70) > unitPrice(num("Rattata"), 19) * 5);
 console.log("ok");
 """
 
