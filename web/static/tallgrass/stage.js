@@ -185,6 +185,7 @@ export class Stage {
     this.buildRings();
     this.buildWeather();
     this.buildZones();
+    this.buildFog();
     this.buildPost();
     this.look = { fog: new THREE.Color(), sun: 1, amb: 1, fogK: 1, wet: 0, rate: 0 };
     this.perf = { times: [], skipUntil: 3 };
@@ -526,11 +527,11 @@ export class Stage {
     }), 2);
   }
 
-  async setWorld(world, { preview = false } = {}) {
+  async setWorld(world, { preview = false, zones = [true, true] } = {}) {
     this.world = world;
     this.queue.length = 0; this.floats.length = 0; this.shot = null; this.selected = null; this.follow = null;
     this.previewZones = preview ? 1 : 0;
-    this.zoneMesh.forEach((m) => { m.visible = preview; });
+    this.zoneMesh.forEach((m, i) => { m.visible = preview && zones[i]; });
     const nums = new Set();
     for (const u of world.units) {
       let n = u.num;
@@ -547,8 +548,8 @@ export class Stage {
     return {
       id: u.id, side: u.side, num: u.tf?.num ?? u.num, size: u.size, x, z, fx: x, fz: z, tx: x, tz: z, t0: 0, t1: 0,
       h: Math.max(sp.heightm, MIN_BODY), fly: sp.types.includes("flying") || u.ability === "levitate", dir: u.side === 0 ? 1 : -1, dz: 0,
-      phase: (u.id * 2.399) % 6.283, alive: true, hp: u.hp, maxHp: u.maxHp, flash: 0, dissolve: 0, tilt: 0, lunge: 0, lungeT: 0, lx: 0, lz: 0, knock: 0, kx: 0, kz: 0, shake: 0,
-      status: u.status, evo: null, gone: false, scale: 1,
+      phase: (u.id * 2.399) % 6.283, alive: u.alive, gone: !u.alive, hp: u.hp, maxHp: u.maxHp, flash: 0, dissolve: 0, tilt: 0, lunge: 0, lungeT: 0, lx: 0, lz: 0, knock: 0, kx: 0, kz: 0, shake: 0,
+      status: u.status, evo: null, scale: 1,
     };
   }
 
@@ -833,6 +834,40 @@ export class Stage {
       this.scene.add(m);
       return m;
     });
+  }
+
+  // Fog of war over the enemy's half during a blind build. Lifts to reveal them.
+  buildFog() {
+    const g = new THREE.PlaneGeometry(FW * 0.5 + 60, FH + 90); g.rotateX(-Math.PI / 2);
+    this.uFogAmount = { value: 0 };
+    this.uFogSide = { value: 1 };
+    const m = new THREE.Mesh(g, new THREE.ShaderMaterial({
+      transparent: true, depthTest: false, depthWrite: false,
+      uniforms: { uTime: this.U.uTime, uAmount: this.uFogAmount, uSide: this.uFogSide },
+      vertexShader: `varying vec3 vW; void main(){ vec4 w=modelMatrix*vec4(position,1.); vW=w.xyz; gl_Position=projectionMatrix*viewMatrix*w; }`,
+      fragmentShader: /* glsl */`
+        varying vec3 vW; uniform float uTime,uAmount,uSide;
+        float h(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
+        float n(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.-2.*f); return mix(mix(h(i),h(i+vec2(1,0)),f.x),mix(h(i+vec2(0,1)),h(i+vec2(1,1)),f.x),f.y); }
+        float fbm(vec2 p){ return n(p)*.5+n(p*2.1+3.)*.3+n(p*4.3+7.)*.2; }
+        void main(){ vec2 p=vW.xz*.09; float c=fbm(p+vec2(uTime*.07,uTime*.03)); c=c*.6+fbm(p*1.7-vec2(uTime*.05,0.))*.4;
+          // distance into enemy ground: the front edge billows instead of being a straight line
+          float into=(uSide>.5?vW.x:-vW.x)+(c-.5)*9.;
+          float a=smoothstep(-3.,3.,into)*uAmount; a*=smoothstep(uAmount-.75,uAmount+.25,c+uAmount*.75);
+          vec3 col=mix(vec3(.05,.055,.075),vec3(.2,.21,.25),c);
+          gl_FragColor=vec4(col,clamp(a,0.,1.)*.985); }`,
+    }));
+    m.renderOrder = 3.5; m.visible = false; m.frustumCulled = false;
+    this.scene.add(m);
+    this.fogMesh = m;
+    this.fogTarget = 0;
+  }
+  // side: whose half is hidden. amount jumps on at once and lifts slowly.
+  setFog(side, on) {
+    this.uFogSide.value = side;
+    this.fogMesh.position.x = (side === 1 ? 1 : -1) * (FW * 0.25 + 30 - 2);
+    this.fogTarget = on ? 1 : 0;
+    if (on) { this.uFogAmount.value = 1; this.fogMesh.visible = true; }
   }
 
   buildPost() {
@@ -1360,6 +1395,10 @@ export class Stage {
 
     while (this.queue.length && this.queue[0].at <= this.clock) this.handle(this.queue.shift().e);
 
+    if (this.fogMesh.visible && this.fogTarget === 0) {
+      this.uFogAmount.value = Math.max(0, this.uFogAmount.value - dt / 1.8);
+      if (this.uFogAmount.value <= 0) this.fogMesh.visible = false;
+    }
     this.lookAtWeather(dt);
     this.updateLights();
     this.writeUnits();

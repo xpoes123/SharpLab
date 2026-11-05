@@ -27,6 +27,7 @@
     <p>A Pokémon war, to scale. Real stats, real moves, real rules, one battlefield.</p>
     <div class="t-actions">
       <button class="ui-btn ui-btn--primary" id="btnBuild">Build your own war</button>
+      <button class="ui-btn ui-btn--primary" id="btnDuel">Duel a friend</button>
       <button class="ui-btn ui-btn--ghost" id="btnReal">What's real?</button>
     </div>
   </header>
@@ -40,6 +41,7 @@
     <div class="r-forecast" id="forecast" aria-live="polite"></div>
     <button class="ui-btn" id="btnForecast">Simulate 200 wars</button>
     <button class="ui-btn ui-btn--primary" id="btnBegin">Begin war</button>
+    <button class="ui-btn ui-btn--primary" id="btnLock" hidden>Lock in army</button>
   </div>
   <div class="r-side r-a" id="sideA"></div>
   <div class="r-side r-b" id="sideB"></div>
@@ -75,6 +77,7 @@
       <button class="ui-btn" id="btnReplay">Replay this war</button>
       <button class="ui-btn" id="btnEdit">Edit armies</button>
       <button class="ui-btn ui-btn--ghost" id="btnEndHome">Title</button>
+      <button class="ui-btn ui-btn--ghost" id="btnDuelLeave" hidden>Leave duel</button>
     </div>
   </div>
 </section>
@@ -85,6 +88,37 @@
   <button id="btnMute" class="ui-btn ui-btn--sm" aria-pressed="false">Sound on</button>
 </div>
 
+<dialog id="duelDialog" class="ui-card">
+  <h2 id="duelTitle">Duel a friend</h2>
+  <p id="duelBlurb">Same money, same field. You each build an army in secret. Nobody sees anything until both lock in.</p>
+  <form id="duelForm" method="dialog">
+    <label class="d-field"><span>Your name</span><input id="duelName" maxlength="20" autocomplete="nickname" required></label>
+    <div id="duelSetup">
+      <label class="d-field"><span>Money</span><select id="duelBudget"></select></label>
+      <label class="d-field"><span>Battlefield</span><select id="duelBiome"></select></label>
+    </div>
+    <p id="duelError" class="d-error" role="alert"></p>
+    <div class="e-actions">
+      <button class="ui-btn ui-btn--primary" id="duelGo" value="go">Create room</button>
+      <button class="ui-btn ui-btn--ghost" id="duelCancel" value="cancel" formnovalidate>Cancel</button>
+    </div>
+  </form>
+  <form id="duelJoinForm" class="d-join">
+    <label class="d-field"><span>Have a code?</span><input id="duelCode" maxlength="5" autocapitalize="characters" autocomplete="off" placeholder="ABCDE"></label>
+    <button class="ui-btn" id="duelJoinBtn">Join</button>
+  </form>
+</dialog>
+
+<section id="lobby" class="screen" hidden>
+  <div class="e-card ui-card">
+    <p class="e-eyebrow">Room <span id="lobbyCode"></span></p>
+    <h2>Waiting for your opponent</h2>
+    <p class="d-share"><input id="lobbyLink" readonly aria-label="Invite link"><button class="ui-btn ui-btn--primary" id="lobbyCopy">Copy link</button></p>
+    <p id="lobbyInfo" class="i-sub"></p>
+    <div class="e-actions"><button class="ui-btn ui-btn--ghost" id="lobbyLeave">Cancel</button></div>
+  </div>
+</section>
+
 <dialog id="realDialog" class="ui-card">
   <h2>What's real</h2>
   <ul>
@@ -92,6 +126,7 @@
     <li><b>Wild armies:</b> Red, Blue and Yellow encounter tables. Default moves follow the wild rule: the last four learned by level, from Crystal's learnsets.</li>
     <li><b>Modern values:</b> stats, moves, types, and abilities use current-generation numbers, so Clefairy is a Fairy type.</li>
     <li><b>To scale:</b> sprites and footprints use real Pokédex heights, so 44 Rattata can bite an Onix at once and only 8 can reach another Rattata. The smallest bodies are drawn at 0.42 m so you can still see them.</li>
+    <li><b>Duel prices:</b> a formula from stats, level and moves, then corrected per species by simulating thousands of wars until no pure army dominates at equal money.</li>
     <li><b>Invented for the map:</b> tiles, walking speed, and move ranges. Everyone acts each turn in priority and Speed order.</li>
     <li><b>Team tactics:</b> Gen 1 and 2 have almost no way to help an ally, so Helping Hand, Follow Me, Rage Powder, Howl, Tailwind, Heal Pulse, Life Dew and Coaching come from each species' modern learnset. "Nearby" means within 3 metres.</li>
     <li><b>Not simulated yet:</b> Protect, Substitute, Encore, Counter, Future Sight, entry hazards, held items, and about half of all abilities. The inspect card says when an ability has no effect.</li>

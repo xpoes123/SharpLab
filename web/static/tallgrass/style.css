@@ -83,6 +83,7 @@ body:not(.is-loading) #loading { opacity: 0; }
 .seg .is-on, .ui-btn.is-on { border-color: var(--accent); color: var(--accent); }
 .h-controls .ui-btn { background: var(--glass); backdrop-filter: blur(8px); }
 #settings { position: fixed; top: 12px; right: 12px; z-index: 3; display: flex; align-items: center; gap: 6px; font-size: var(--text-xs); color: var(--text); }
+body.mode-war #settings { top: auto; bottom: 46px; }
 #settings #fps { font-family: var(--font-mono); color: var(--text-2); text-shadow: 0 1px 4px var(--bg); }
 #settings label { display: flex; align-items: center; gap: 4px; padding: 2px 6px; background: var(--glass); border-radius: var(--radius-sm, 6px); }
 #settings select { font: inherit; color: var(--text); background: transparent; border: 0; }
@@ -120,6 +121,32 @@ body.mode-room #inspect { left: 292px; bottom: 44px; }
 .e-stats .mvp img { width: 44px; height: 44px; image-rendering: pixelated; }
 .e-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 
+dialog#duelDialog { background: var(--surface); color: var(--text); border: 1px solid var(--line-2); width: min(440px, calc(100vw - 32px)); padding: 20px 24px; }
+dialog#duelDialog::backdrop { background: color-mix(in srgb, var(--bg) 60%, transparent); }
+dialog#duelDialog h2 { margin: 0 0 4px; font-family: var(--font-serif); font-style: italic; font-weight: 400; font-size: 30px; }
+dialog#duelDialog p { margin: 0 0 12px; color: var(--text-2); font-size: var(--text-md); line-height: 1.4; }
+.d-field { display: flex; flex-direction: column; gap: 3px; margin-bottom: 9px; font-size: var(--text-xs); color: var(--text-2); }
+.d-field input, .d-field select, .d-share input { font: inherit; font-size: var(--text-md); color: var(--text); background: var(--surface-2); border: 1px solid var(--line-2); border-radius: var(--radius-sm, 6px); padding: 6px 8px; min-width: 0; }
+dialog#duelDialog p.d-error { color: var(--bad); min-height: 1em; margin: 2px 0 8px; font-size: var(--text-sm); }
+.d-join { display: flex; align-items: flex-end; gap: 6px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.d-join .d-field { flex: 1; margin: 0; }
+.d-share { display: flex; gap: 6px; margin: 4px 0 8px; }
+.d-share input { flex: 1; font-family: var(--font-mono); font-size: var(--text-sm); }
+#lobby { display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 36%, transparent); }
+.d-money { padding: 0 12px 8px; }
+.d-money .row { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: var(--text-sm); }
+.d-money .row b { font-weight: 700; }
+.d-money.over .row b { color: var(--bad); }
+.d-money i { display: block; height: 5px; margin-top: 3px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+.d-money i em { display: block; height: 100%; background: var(--accent); }
+.d-money.over i em { background: var(--bad); }
+.sq .cost { font-family: var(--font-mono); color: var(--accent); margin-left: auto; }
+.d-status { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 8px; padding: 18px; text-align: center; }
+.d-status h3 { justify-content: center; padding: 0; }
+.d-status .state { font-size: var(--text-md); color: var(--text-2); }
+.d-status .state.ready { color: var(--ok); }
+.r-side.is-locked .r-list, .r-side.is-locked .r-add { opacity: .45; pointer-events: none; }
+.i-best { margin-top: 6px; }
 dialog#realDialog { background: var(--surface); color: var(--text); border: 1px solid var(--line-2); max-width: 620px; width: calc(100vw - 32px); padding: 20px 24px; }
 dialog#realDialog::backdrop { background: color-mix(in srgb, var(--bg) 60%, transparent); }
 dialog#realDialog h2 { margin: 0 0 8px; font-family: var(--font-serif); font-style: italic; font-weight: 400; }

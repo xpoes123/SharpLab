@@ -49,6 +49,7 @@ from web.g_mastermind import router as mastermind_router
 from web.g_mathsprint import router as mathsprint_router
 from web.g_zetamac import router as zetamac_router
 from web.g_pokehoops import router as pokehoops_router
+from web.g_tallgrass import router as tallgrass_router
 from web.vid import router as vid_router
 from web.g_math24 import router as math24_router
 from web.g_countdown import router as countdown_router
@@ -205,6 +206,7 @@ app.include_router(mastermind_router)
 app.include_router(mathsprint_router)
 app.include_router(zetamac_router)
 app.include_router(pokehoops_router)
+app.include_router(tallgrass_router)
 app.include_router(vid_router)
 app.include_router(math24_router)
 app.include_router(countdown_router)

@@ -1,7 +1,8 @@
 // Tall Grass: title, army builder, and war playback. Rules live in sim.js, drawing in stage.js.
-import { ABILITIES, createWorld, defaultLevel, footprint, legalMoves, outcome, step, useData, W, wildMoves, xpAt, zoneOf } from "./sim.js";
+import { ABILITIES, createWorld, defaultLevel, footprint, legalMoves, levelRange, outcome, step, useData, W, wildMoves, xpAt, zoneOf } from "./sim.js";
 import { BIOMES, Stage } from "./stage.js";
 import { PRESETS, WILDS, resolveSquads, wildHorde } from "./presets.js";
+import { BUDGETS, armyPrice, bestMoves, squadPrice, unitPrice, usePrices, validateArmy } from "./price.js";
 import { Sfx } from "./sfx.js";
 
 const $ = (id) => document.getElementById(id);
@@ -46,6 +47,7 @@ async function boot() {
     return;
   }
   useData(data);
+  usePrices(data, await fetch("./prices.json").then((r) => r.json()).catch(() => ({})));
   const test = document.createElement("canvas").getContext("webgl2");
   if (!test) { $("loading").textContent = "Tall Grass needs WebGL2, which this browser doesn't have."; return; }
   stage = new Stage($("gl"), $("overlay"), data, { quality: quality(), maxPixelRatio: +(params.get("dpr") ?? 1.5) });
@@ -72,6 +74,7 @@ async function boot() {
   const preset = PRESETS.find((p) => p.id === war);
   if (preset) await startPreset(preset, +(params.get("seed") ?? 1));
   else await showTitle();
+  if (params.get("duel")) openJoin(params.get("duel"));
   document.body.classList.remove("is-loading");
   let last = performance.now();
   const loop = (now) => {
@@ -95,6 +98,7 @@ function show(mode) {
   G.mode = mode;
   document.body.className = `mode-${mode}`;
   $("title").hidden = mode !== "title";
+  $("lobby").hidden = mode !== "lobby";
   $("room").hidden = mode !== "room";
   $("hud").hidden = mode !== "war";
   $("end").hidden = mode !== "end";
@@ -158,7 +162,7 @@ async function launch(seed, { demo = false } = {}) {
   G.history = [hpShare(w)];
   G.moments = {};
   G.tickerLast = {};
-  G.names = sideNames(squads);
+  G.names = G.duel ? G.duel.view.names : sideNames(squads);
   G.nextTurnAt = stage.clock + 1.1;
   G.endAt = 0;
   G.demo = demo;
@@ -175,7 +179,7 @@ async function launch(seed, { demo = false } = {}) {
     updateHud();
     setPaused(false);
     sfx.setWeather(null);
-    banner(`${G.names[0]} vs. ${G.names[1]}`, 2000);
+    banner(G.duel ? "The fog lifts" : `${G.names[0]} vs. ${G.names[1]}`, 2000);
   }
 }
 
@@ -415,7 +419,30 @@ function finishWar() {
     stat(`Top unit, ${names[0]}`, mvpBox(mvp(0))),
     stat(`Top unit, ${names[1]}`, mvpBox(mvp(1))),
   );
+  const duel = G.duel;
+  for (const id of ["btnReplay", "btnEdit", "btnEndHome"]) $(id).hidden = !!duel;
+  $("btnRematch").textContent = duel ? "Next round" : "New war, same armies";
+  $("btnRematch").disabled = false;
+  $("btnDuelLeave").hidden = !duel;
+  if (duel) {
+    const v = duel.view;
+    $("endTitle").textContent = o.winner === null ? "Nobody won." : `${names[o.winner]} wins.`;
+    $("endEyebrow").textContent = `Round ${v.round}, turn ${o.turns} · ${names[0]} ${v.wins[0]}, ${names[1]} ${v.wins[1]}`;
+    s.prepend(stat("Armies", `${armyLine(v.armies[0])} vs. ${armyLine(v.armies[1])}`));
+    s.firstChild.style.gridColumn = "1 / -1";
+    // Both browsers replay the same seed. The server sims it too, so a mismatch is a real bug worth seeing.
+    if (v.result && (v.result.winner !== o.winner || v.result.turns !== o.turns)) {
+      console.warn("Tall Grass duel desync", v.result, o);
+      s.append(stat("Heads up", "This screen disagrees with the server's result. Trust the server's score."));
+    }
+  }
   show("end");
+}
+
+function armyLine(squads) {
+  const mine = [...squads].sort((a, b) => squadPrice(b) - squadPrice(a));
+  const words = mine.slice(0, 3).map((s) => `${s.count} ${data.species[s.num].name}`);
+  return words.join(", ") + (mine.length > 3 ? ` +${mine.length - 3} more` : "");
 }
 
 // ---------- preset ----------
@@ -438,6 +465,8 @@ function buildRoomChrome() {
 
 function renderRoom() {
   $("biome").value = G.biome;
+  syncDuelButtons();
+  if (G.duel) return renderDuelRoom();
   renderSide(0, $("sideA"), "Blue");
   renderSide(1, $("sideB"), "Red");
   $("btnBegin").disabled = !(G.squads.some((s) => s.side === 0) && G.squads.some((s) => s.side === 1));
@@ -452,7 +481,9 @@ function renderSide(side, box, title) {
   const list = el("div", "r-list");
   for (const s of mine) list.append(squadRow(s));
   if (!mine.length) list.append(el("p", "i-sub", "No one here yet. Add a species below."));
-  box.append(h, list, addForm(side));
+  box.append(h);
+  if (G.duel) box.append(moneyBar());
+  box.append(list, addForm(side));
 }
 
 function squadRow(s) {
@@ -475,9 +506,10 @@ function squadRow(s) {
     lab.append(inp);
     return lab;
   };
+  const [minLv, maxLv] = G.duel ? levelRange(sp) : [1, 100];
   ctl.append(
     num("×", s.count, 1, 2000, (v) => { s.count = v; }),
-    num("Lv", s.level ?? defaultLevel(sp), 1, 100, (v) => { s.level = v; }),
+    num("Lv", s.level ?? defaultLevel(sp), minLv, maxLv, (v) => { s.level = v; if (s.moves && G.duel) s.moves = s.moves.filter((m) => legalMoves(sp, v).includes(m)); }),
   );
   const spacing = el("button", null, (s.spacing ?? 1) > 1 ? "Loose" : "Tight");
   spacing.type = "button"; spacing.title = "Loose formations take less splash damage";
@@ -486,6 +518,16 @@ function squadRow(s) {
   teach.type = "button";
   teach.addEventListener("click", () => inspectSpec(s, true));
   ctl.append(spacing, teach);
+  if (G.duel) {
+    const fill = el("button", null, "Max");
+    fill.type = "button"; fill.title = "As many as the money left allows";
+    fill.addEventListener("click", () => {
+      const left = G.duel.view.budget - armyPrice(G.squads) + squadPrice(s);
+      s.count = Math.max(1, Math.min(1500, Math.floor(left / unitPrice(s.num, s.level, s.moves))));
+      changed();
+    });
+    ctl.append(fill, el("span", "cost", `₽${squadPrice(s).toLocaleString()}`));
+  }
   row.append(img, nm, x, ctl);
   return row;
 }
@@ -499,6 +541,20 @@ function addForm(side) {
   count.type = "number"; count.min = 1; count.max = 2000; count.value = 30; count.setAttribute("aria-label", "Count");
   const go = el("button", "ui-btn ui-btn--sm", "Add");
   row.append(inp, count, go);
+  if (G.duel) {
+    count.value = 10;
+    box.append(row);
+    box.addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      const q = inp.value.trim().toLowerCase();
+      const sp = Object.values(data.species).find((x) => x.name.toLowerCase() === q) ?? Object.values(data.species).find((x) => q && x.name.toLowerCase().startsWith(q));
+      if (!sp) { inp.setCustomValidity("No Pokémon by that name"); inp.reportValidity(); setTimeout(() => inp.setCustomValidity(""), 1500); return; }
+      const [lo, hi] = levelRange(sp);
+      addSquad({ side, num: sp.num, level: Math.max(lo, Math.min(hi, defaultLevel(sp))), count: Math.max(1, Math.min(1500, +count.value || 1)) });
+      changed();
+    });
+    return box;
+  }
   const row2 = el("div", "row");
   const wild = el("select");
   wild.setAttribute("aria-label", "Wild horde location");
@@ -542,7 +598,9 @@ function queuePreview() {
 }
 async function preview() {
   G.world = createWorld(G.squads, 1);
-  await stage.setWorld(G.world, { preview: true });
+  if (G.duel) renderDuelStatus(); // placing the squads is what makes a new army valid to lock in
+  const seat = G.duel?.view.seat;
+  await stage.setWorld(G.world, { preview: true, zones: G.duel ? [seat === 0, seat === 1] : [true, true] });
 }
 
 async function openRoom() {
@@ -689,10 +747,17 @@ function inspectSpec(s, teach = false) {
         changed();
         inspectSpec(s, true);
       });
+      sel.disabled = !!G.duel?.locked;
       grid.append(sel);
       return sel;
     });
     box.append(grid);
+    if (G.duel) {
+      const best = el("button", "ui-btn ui-btn--sm i-best", "Strongest moves");
+      best.type = "button";
+      best.addEventListener("click", () => { s.moves = bestMoves(sp, level); changed(); inspectSpec(s, true); });
+      box.append(best, el("div", "i-sub", `₽${unitPrice(s.num, level, s.moves).toLocaleString()} each with these moves`));
+    }
     if (s.moves) {
       const wildBtn = el("button", "ui-btn ui-btn--sm", "Back to wild moves");
       wildBtn.type = "button"; wildBtn.style.marginTop = "6px";
@@ -706,6 +771,8 @@ function inspectSpec(s, teach = false) {
 // ---------- forecast ----------
 let forecastWorker = null, forecastId = 0;
 function runForecast() {
+  // In a duel you can only test against what you've already seen: their army from the last round.
+  const squads = G.duel ? [...G.squads, ...G.duel.view.last[1 - G.duel.view.seat]] : G.squads;
   forecastWorker ??= new Worker(new URL("./forecast.worker.js", import.meta.url), { type: "module" });
   const id = ++forecastId, games = 200;
   const box = $("forecast");
@@ -714,16 +781,19 @@ function runForecast() {
     if (t.id !== forecastId) return;
     const pct = (x) => Math.round((100 * x) / t.n);
     box.replaceChildren();
-    box.append("Blue ", el("b", null, `${pct(t.wins[0])}%`), " · Red ", el("b", null, `${pct(t.wins[1])}%`), ` · ~${Math.round(t.turns / t.n)} turns${t.n < t.games ? ` (${t.n}/${t.games})` : ""}`);
+    const seat = G.duel?.view.seat;
+    if (G.duel) box.append("You ", el("b", null, `${pct(t.wins[seat])}%`), " vs. their last army", t.n < t.games ? ` (${t.n}/${t.games})` : "");
+    else box.append("Blue ", el("b", null, `${pct(t.wins[0])}%`), " · Red ", el("b", null, `${pct(t.wins[1])}%`), ` · ~${Math.round(t.turns / t.n)} turns${t.n < t.games ? ` (${t.n}/${t.games})` : ""}`);
   };
-  forecastWorker.postMessage({ id, squads: G.squads, games });
+  forecastWorker.postMessage({ id, squads, games });
 }
 
 // ---------- input ----------
 function wire() {
   $("btnBuild").addEventListener("click", () => { sfx.unlock(); openRoom(); });
   $("btnReal").addEventListener("click", () => $("realDialog").showModal());
-  $("roomBack").addEventListener("click", () => { G.squads = []; showTitle(); });
+  $("roomBack").addEventListener("click", () => { if (G.duel) return leaveDuel(); G.squads = []; showTitle(); });
+  wireDuel();
   $("biome").addEventListener("change", () => { G.biome = $("biome").value; resetBiome(G.biome); queuePreview(); });
   $("btnBegin").addEventListener("click", () => { sfx.unlock(); launch(Math.floor(Math.random() * 1e6)); });
   $("btnForecast").addEventListener("click", runForecast);
@@ -731,8 +801,9 @@ function wire() {
   $("speeds").addEventListener("click", (e) => { const n = +e.target.dataset?.speed; if (n) setSpeed(n); });
   $("btnSkip").addEventListener("click", skipToEnd);
   $("btnCam").addEventListener("click", cycleCam);
-  $("btnQuit").addEventListener("click", () => { G.endAt = 0; G.world = null; setPaused(false); show("title"); showTitle(); });
-  $("btnRematch").addEventListener("click", () => launch(Math.floor(Math.random() * 1e6)));
+  $("btnQuit").addEventListener("click", () => { if (G.duel) return leaveDuel(); G.endAt = 0; G.world = null; setPaused(false); show("title"); showTitle(); });
+  $("btnRematch").addEventListener("click", () => { if (G.duel) return nextRound(); launch(Math.floor(Math.random() * 1e6)); });
+  $("btnDuelLeave").addEventListener("click", leaveDuel);
   $("btnReplay").addEventListener("click", () => launch(G.seed));
   $("btnEdit").addEventListener("click", openRoom);
   $("btnEndHome").addEventListener("click", showTitle);
@@ -801,6 +872,285 @@ function wire() {
   setInterval(() => { if (G.mode === "war" && stage?.selected && !$("inspect").hidden) renderInspect(stage.selected); }, 700);
 }
 
+// ---------- duels ----------
+const API = "/api/v1/arcade/tallgrass";
+const duelStore = {
+  get() { try { return JSON.parse(localStorage.getItem("tg-duel") ?? "null"); } catch { return null; } },
+  set(v) { try { if (v) localStorage.setItem("tg-duel", JSON.stringify(v)); else localStorage.removeItem("tg-duel"); } catch { /* private window */ } },
+  name() { try { return localStorage.getItem("tg-name") ?? ""; } catch { return ""; } },
+  saveName(n) { try { localStorage.setItem("tg-name", n); } catch { /* private window */ } },
+};
+
+async function api(path, { method = "GET", body, key } = {}) {
+  const headers = { "Content-Type": "application/json" };
+  if (key) headers["X-Duel-Key"] = key;
+  const r = await fetch(API + path, { method, credentials: "include", headers, body: body ? JSON.stringify(body) : undefined });
+  const json = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(json.error ?? "Couldn't reach the server. Try again.");
+  return json;
+}
+const call = (path, body) => api(`/duel/${G.duel.code}/${path}`, { method: "POST", body: body ?? {}, key: G.duel.key });
+
+function wireDuel() {
+  for (const [label, amount] of BUDGETS) {
+    const o = el("option", null, `${label}: ₽${amount.toLocaleString()}`);
+    o.value = amount;
+    $("duelBudget").append(o);
+  }
+  $("duelBudget").value = BUDGETS[1][1];
+  for (const [id, b] of Object.entries(BIOMES)) { const o = el("option", null, b.name); o.value = id; $("duelBiome").append(o); }
+  $("btnDuel").addEventListener("click", () => { sfx.unlock(); openCreate(); });
+  $("duelCancel").addEventListener("click", () => $("duelDialog").close());
+  $("duelForm").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const name = $("duelName").value.trim();
+    duelStore.saveName(name);
+    $("duelError").textContent = "";
+    try {
+      const code = G.joinCode;
+      const res = code ? await api(`/duel/${code}/join`, { method: "POST", body: { name } })
+        : await api("/duel", { method: "POST", body: { name, budget: +$("duelBudget").value, biome: $("duelBiome").value } });
+      $("duelDialog").close();
+      await enterDuel(res.code, res.key);
+    } catch (e) { $("duelError").textContent = e.message; }
+  });
+  $("duelJoinForm").addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    const code = $("duelCode").value.trim().toUpperCase();
+    if (code) openJoin(code);
+  });
+  $("lobbyCopy").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText($("lobbyLink").value); $("lobbyCopy").textContent = "Copied"; }
+    catch { $("lobbyLink").select(); }
+  });
+  $("lobbyLeave").addEventListener("click", leaveDuel);
+  $("btnLock").addEventListener("click", toggleLock);
+}
+
+function openCreate() {
+  G.joinCode = null;
+  $("duelTitle").textContent = "Duel a friend";
+  $("duelBlurb").textContent = "Same money, same field. You each build an army in secret. Nobody sees anything until both lock in.";
+  $("duelSetup").hidden = false; $("duelJoinForm").hidden = false;
+  $("duelGo").textContent = "Create room";
+  $("duelName").value = duelStore.name();
+  $("duelError").textContent = "";
+  $("duelDialog").showModal();
+}
+
+async function openJoin(raw) {
+  const code = raw.trim().toUpperCase();
+  const saved = duelStore.get();
+  try {
+    // Coming back to a room we're already seated in (a refresh, say) needs no questions.
+    if (saved?.code === code) {
+      try { return await enterDuel(saved.code, saved.key); } catch { duelStore.set(null); }
+    }
+    const peek = await api(`/duel/${code}/peek`);
+    if (!peek.open) throw new Error("That room is full.");
+    G.joinCode = code;
+    $("duelTitle").textContent = `${peek.host} challenges you`;
+    $("duelBlurb").textContent = `₽${peek.budget.toLocaleString()} each on ${BIOMES[peek.biome].name}. You each build an army in secret. Nobody sees anything until both lock in.`;
+    $("duelSetup").hidden = true; $("duelJoinForm").hidden = true;
+    $("duelGo").textContent = "Join the war";
+    $("duelName").value = duelStore.name();
+    $("duelError").textContent = "";
+    if (!$("duelDialog").open) $("duelDialog").showModal();
+  } catch (e) {
+    $("duelTitle").textContent = "Can't join";
+    $("duelBlurb").textContent = e.message;
+    $("duelSetup").hidden = true; $("duelJoinForm").hidden = false;
+    $("duelName").closest("label").hidden = true;
+    $("duelGo").hidden = true;
+    if (!$("duelDialog").open) $("duelDialog").showModal();
+    $("duelDialog").addEventListener("close", () => { $("duelName").closest("label").hidden = false; $("duelGo").hidden = false; }, { once: true });
+  }
+}
+
+async function enterDuel(code, key) {
+  clearTimeout(G.demoTimer);
+  G.demo = false;
+  const view = await api(`/duel/${code}`, { key });
+  G.duel = { code, key, view, locked: !!view.army, warStarted: false, round: view.round };
+  duelStore.set({ code, key });
+  history.replaceState(null, "", `?duel=${code}`);
+  G.biome = view.biome;
+  await applyDuelView(view);
+  clearInterval(G.duelPoll);
+  G.duelPoll = setInterval(pollDuel, 1500);
+}
+
+let polling = false;
+async function pollDuel() {
+  if (!G.duel || polling) return;
+  polling = true;
+  try { await applyDuelView(await api(`/duel/${G.duel.code}`, { key: G.duel.key })); }
+  catch (e) { if (/closed|not in this room/.test(e.message)) endDuel("That room has closed."); }
+  finally { polling = false; }
+}
+
+async function applyDuelView(v) {
+  const d = G.duel;
+  if (!d) return;
+  d.view = v;
+  if (v.phase === "left") return endDuel(v.left === v.seat ? null : `${v.names[v.left]} left the war.`);
+  if (v.phase === "lobby") return showLobby(v);
+  if (v.phase === "build") {
+    d.warStarted = false;
+    if (G.mode !== "room" || d.round !== v.round) { d.round = v.round; return openDuelRoom(v); }
+    d.locked = !!v.army;
+    return renderDuelStatus();
+  }
+  if (v.phase === "war" && !d.warStarted) return startDuelWar(v);
+  if (v.phase === "war" && G.mode === "end") {
+    const waiting = v.rematch[v.seat] && !v.rematch[1 - v.seat];
+    if (waiting) { $("btnRematch").textContent = `Waiting for ${v.names[1 - v.seat]}…`; $("btnRematch").disabled = true; }
+    else if (v.rematch[1 - v.seat]) $("btnRematch").textContent = `${v.names[1 - v.seat]} is ready. Next round`;
+  }
+}
+
+function showLobby(v) {
+  if (G.mode === "lobby") return;
+  show("lobby");
+  const link = `${location.origin}${location.pathname}?duel=${v.code}`;
+  $("lobbyCode").textContent = v.code;
+  $("lobbyLink").value = link;
+  $("lobbyCopy").textContent = "Copy link";
+  $("lobbyInfo").textContent = `₽${v.budget.toLocaleString()} each on ${BIOMES[v.biome].name}`;
+}
+
+async function openDuelRoom(v) {
+  const d = G.duel;
+  // Start each round from your last army: you've seen theirs now, so the interesting move is adjusting.
+  const prev = v.army ?? v.last?.[v.seat] ?? [];
+  G.squads = prev.map((s, i) => ({ ...s, id: G.nextSquadId + i }));
+  G.nextSquadId += prev.length;
+  d.locked = !!v.army;
+  show("room");
+  stage.paused = false;
+  resetBiome(v.biome);
+  stage.setFog(1 - v.seat, true);
+  stage.setCamMode("free");
+  // stand behind your own half so the fog looms ahead of you
+  const dir = v.seat === 0 ? -1 : 1, narrow = innerWidth < 760;
+  stage.camera.position.set(dir * (narrow ? 12 : 16), narrow ? 74 : 40, narrow ? 80 : 46);
+  stage.controls.target.set(dir * 15, 0, narrow ? 10 : 2);
+  stage.controls.update();
+  $("biome").disabled = true;
+  renderRoom();
+  await preview();
+}
+
+function moneyBar() {
+  const budget = G.duel.view.budget, spent = armyPrice(G.squads);
+  const box = el("div", `d-money${spent > budget ? " over" : ""}`);
+  const row = el("div", "row");
+  row.append(el("span", null, spent > budget ? "Over budget" : "Money left"), el("b", null, `₽${(budget - spent).toLocaleString()}`));
+  const bar = el("i"), fill = el("em");
+  fill.style.width = `${Math.min(100, (spent / budget) * 100)}%`;
+  bar.append(fill);
+  box.append(row, bar);
+  return box;
+}
+
+function renderDuelRoom() {
+  const v = G.duel.view, seat = v.seat;
+  const own = seat === 0 ? $("sideA") : $("sideB"), other = seat === 0 ? $("sideB") : $("sideA");
+  renderSide(seat, own, v.names[seat]);
+  own.classList.toggle("is-locked", G.duel.locked);
+  other.classList.remove("is-locked");
+  other.replaceChildren();
+  const status = el("div", "d-status");
+  const h = el("h3", null, v.names[1 - seat]);
+  G.duel.statusEl = el("p", "state");
+  status.append(h, G.duel.statusEl);
+  if (v.round > 1) status.append(el("p", "i-sub", `Score: ${v.names[0]} ${v.wins[0]}, ${v.names[1]} ${v.wins[1]}`));
+  if (v.last) {
+    status.append(el("p", "i-sub", `Last round they fielded ${armyLine(v.last[1 - seat])}.`));
+  }
+  other.append(status);
+  renderDuelStatus();
+}
+
+function renderDuelStatus() {
+  const d = G.duel, v = d.view;
+  if (d.statusEl) {
+    d.statusEl.textContent = v.opp_locked ? "Locked in. Waiting on you." : "Building in secret…";
+    d.statusEl.classList.toggle("ready", v.opp_locked);
+    if (d.locked) d.statusEl.textContent = v.opp_locked ? "Locked in." : "Building in secret… You're locked in.";
+  }
+  const own = (v.seat === 0 ? $("sideA") : $("sideB"));
+  own.classList.toggle("is-locked", d.locked);
+  const check = G.squads.length ? validateArmy(G.squads, v.seat, v.budget) : { error: "Add at least one Pokémon." };
+  const lock = $("btnLock");
+  lock.textContent = d.locked ? "Unlock" : "Lock in army";
+  lock.disabled = !d.locked && !!check.error;
+  lock.title = check.error ?? "";
+}
+
+async function toggleLock() {
+  const d = G.duel, btn = $("btnLock");
+  btn.disabled = true;
+  try {
+    const v = d.locked ? await call("unlock") : await call("lock", { squads: G.squads.map(({ num, count, level, moves, spacing, x, y }) => ({ num, count, level, moves, spacing, x, y })) });
+    d.locked = !d.locked;
+    await applyDuelView(v);
+    if (G.mode === "room") closeInspect();
+  } catch (e) {
+    $("forecast").textContent = e.message;
+    renderDuelStatus();
+  }
+}
+
+async function startDuelWar(v) {
+  const d = G.duel;
+  d.warStarted = true;
+  closeInspect();
+  // Every browser builds the world from the same server-sent list, in the same order, with the same seed.
+  G.squads = [...v.armies[0], ...v.armies[1]];
+  G.biome = v.biome;
+  await launch(v.seed);
+  stage.setFog(1 - v.seat, false);
+}
+
+async function nextRound() {
+  $("btnRematch").disabled = true;
+  try { await applyDuelView(await call("rematch")); }
+  catch (e) { $("btnRematch").disabled = false; $("endStats").append(el("p", "d-error", e.message)); }
+}
+
+async function leaveDuel() {
+  const d = G.duel;
+  if (d) { try { await call("leave"); } catch { /* the room may already be gone */ } }
+  endDuel(null);
+}
+
+function endDuel(message) {
+  clearInterval(G.duelPoll);
+  G.duel = null;
+  duelStore.set(null);
+  history.replaceState(null, "", location.pathname);
+  $("biome").disabled = false;
+  stage.fogMesh.visible = false;
+  stage.setFog(1, false);
+  G.endAt = 0;
+  setPaused(false);
+  for (const id of ["btnReplay", "btnEdit", "btnEndHome"]) $(id).hidden = false;
+  $("btnDuelLeave").hidden = true;
+  $("btnRematch").disabled = false;
+  syncDuelButtons();
+  G.squads = [];
+  showTitle().then(() => { if (message) { $("duelTitle").textContent = "War over"; $("duelBlurb").textContent = message; $("duelSetup").hidden = true; $("duelJoinForm").hidden = false; $("duelName").closest("label").hidden = true; $("duelGo").hidden = true; $("duelDialog").showModal(); $("duelDialog").addEventListener("close", () => { $("duelName").closest("label").hidden = false; $("duelGo").hidden = false; }, { once: true }); } });
+}
+
+function syncDuelButtons() {
+  const duel = !!G.duel;
+  $("btnBegin").hidden = duel;
+  $("btnLock").hidden = !duel;
+  $("btnForecast").hidden = duel && !G.duel?.view.last;
+  $("btnForecast").textContent = duel ? "Test vs. their last army" : "Simulate 200 wars";
+}
+
 function cycleCam() {
   stage.setCamMode(stage.camMode === "director" ? "free" : "director");
 }
@@ -810,6 +1160,7 @@ function skipToEnd() {
   while (!w.over) step(w);
   G.endAt = 0;
   stage.queue.length = 0;
+  stage.setWorld(w); // the survivors, where they actually ended up
   finishWar();
 }
 
