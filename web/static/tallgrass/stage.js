@@ -11,6 +11,11 @@ import { H, TILE_M, W, ZONE, zoneOf } from "./sim.js";
 const FW = W * TILE_M, FH = H * TILE_M; // field size in metres
 const MIN_BODY = 0.42; // ponytail: the smallest bodies are drawn at 0.42 m or a 0.3 m Rattata is one pixel at wide shot; everything else is true height
 const MAX_UNITS = 6000, MAX_PARTICLES = 24000, MAX_BEAMS = 900, MAX_RINGS = 96;
+export const TIERS = {
+  high: { grass: 340000, particles: 24000, pixels: 5e6, taps: 14, weather: 5000 },
+  medium: { grass: 140000, particles: 12000, pixels: 2.6e6, taps: 8, weather: 2800 },
+  low: { grass: 50000, particles: 5000, pixels: 1.2e6, taps: 5, weather: 1200 },
+};
 const SPRITE_ROOT = "/pokehoops/sprites/";
 
 const hex = (h, k = 1) => [((h >> 16) & 255) / 255 * k, ((h >> 8) & 255) / 255 * k, (h & 255) / 255 * k];
@@ -64,7 +69,7 @@ const V_COMMON = /* glsl */`
 const F_COMMON = /* glsl */`
   uniform vec3 uSunDir,uSunColor,uAmbient,uFogColor; uniform float uFogDensity; uniform vec4 uLP[8]; uniform vec4 uLC[8];
   vec3 dyn(vec3 p,vec3 n){ vec3 s=vec3(0.); for(int i=0;i<8;i++){ if(uLC[i].a<=0.) continue; vec3 d=uLP[i].xyz-p; float r=uLP[i].w; float a=max(0.,1.-dot(d,d)/(r*r));
-    s+=uLC[i].rgb*uLC[i].a*a*a*(.35+.65*max(dot(normalize(d),n),0.)); } return s; }
+    s+=uLC[i].rgb*uLC[i].a*a*a*(.35+.65*max(dot(d/max(length(d),.001),n),0.)); } return s; }
   vec3 fogged(vec3 c,vec3 p){ float d=length(p-cameraPosition); float f=1.-exp(-pow(d*uFogDensity,1.5)); f*=mix(1.,.6,smoothstep(0.,50.,p.y)); return mix(c,uFogColor,f); }`;
 
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -134,14 +139,15 @@ class Atlas {
 export class Stage {
   constructor(canvas, overlay, data, opts = {}) {
     this.canvas = canvas; this.overlay = overlay; this.octx = overlay.getContext("2d"); this.data = data;
-    this.quality = opts.quality ?? "high";
+    this.quality = TIERS[opts.quality] ? opts.quality : "high";
+    this.tier = TIERS[this.quality];
+    this.maxPixelRatio = opts.maxPixelRatio ?? 1.5;
+    this.resScale = 1; this.grassFrac = 1; this.needResize = true;
     this.reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: "high-performance", stencil: false });
     renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
     renderer.toneMapping = THREE.NoToneMapping;
     this.renderer = renderer;
-    this.pixelRatio = Math.min(devicePixelRatio || 1, opts.maxPixelRatio ?? 1.5);
-    renderer.setPixelRatio(this.pixelRatio);
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(30, 1, 0.3, 2400);
     this.camera.position.set(0, 34, 58);
@@ -181,16 +187,17 @@ export class Stage {
     this.buildZones();
     this.buildPost();
     this.look = { fog: new THREE.Color(), sun: 1, amb: 1, fogK: 1, wet: 0, rate: 0 };
+    this.perf = { times: [], skipUntil: 3 };
     this.setBiome("meadow");
-    this.resize();
-    addEventListener("resize", () => this.resize());
-    this.perf = { t: 0, n: 0 };
+    this.applySize();
+    addEventListener("resize", () => this.requestResize());
+    this.renderer.getContext().canvas.addEventListener("webglcontextlost", (e) => { e.preventDefault(); this.onContextLost?.(); });
   }
 
   // ---------- environment ----------
   buildScars() {
     const c = document.createElement("canvas");
-    c.width = 1024; c.height = Math.round((1024 * FH) / FW);
+    c.width = 512; c.height = Math.round((512 * FH) / FW);
     this.scarCtx = c.getContext("2d");
     this.scarCanvas = c;
     this.scarTex = new THREE.CanvasTexture(c);
@@ -227,9 +234,21 @@ export class Stage {
     this.baseFog = new THREE.Color(...hex(b.fog));
     this.U.uFogColor.value.copy(this.baseFog);
     this.look.fog.copy(this.baseFog);
-    for (const m of this.envMeshes ?? []) { this.scene.remove(m); m.geometry.dispose(); m.material.dispose?.(); }
-    this.envMeshes = [];
-    this.buildSky(b); this.buildTerrain(b); this.buildGrass(b); this.buildProps(b); if (b.liquid) this.buildLiquid(b);
+    this.envCache ??= new Map();
+    for (const m of this.envMeshes ?? []) m.visible = false;
+    const cached = this.envCache.get(id);
+    if (cached) {
+      this.envMeshes = cached.meshes;
+      this.grassMesh = cached.grass;
+      this.grassCount = cached.count;
+      for (const m of this.envMeshes) m.visible = true;
+      this.grassMesh.geometry.instanceCount = Math.floor(this.grassCount * this.grassFrac);
+    } else {
+      this.envMeshes = [];
+      this.buildSky(b); this.buildTerrain(b); this.buildGrass(b); this.buildProps(b); if (b.liquid) this.buildLiquid(b);
+      this.envCache.set(id, { meshes: this.envMeshes, grass: this.grassMesh, count: this.grassCount });
+    }
+    if (this.perf) this.perf.skipUntil = (this.real ?? 0) + 2;
     const el = Math.max(sun.y, 0.08);
     const len = Math.min(1.35, 0.42 / el);
     this.uShadowDir.value.set((-sun.x / Math.hypot(sun.x, sun.z)) * len, (-sun.z / Math.hypot(sun.x, sun.z)) * len);
@@ -254,7 +273,7 @@ export class Stage {
           if(uCloud>0.&&d.y>.005){ vec2 p=d.xz/(d.y+.12)*1.5; p.x+=uTime*.012; float f=fbm(p); float k=smoothstep(.48,.78,f)*uCloud*smoothstep(0.,.14,d.y);
             vec3 lit=mix(uHor*1.1,uSunColor*.55,pow(s,3.)); c=mix(c,lit,k*.78); }
           if(uStars>0.&&d.y>0.){ vec2 g=floor(d.xz/(d.y+.3)*260.); float st=step(.9975,h(g)); c+=st*uStars*vec3(.9,.95,1.)*(1.+.6*sin(uTime*2.+h(g+3.)*40.)); }
-          c=mix(c,uFogColor,smoothstep(.18,0.,d.y)*.86);
+          c=mix(c,uFogColor,(1.-smoothstep(0.,.18,d.y))*.86);
           gl_FragColor=vec4(c*uDim,1.); }`,
     });
     const m = this.env(new THREE.Mesh(new THREE.SphereGeometry(1000, 32, 20), mat));
@@ -263,6 +282,7 @@ export class Stage {
 
   heightOf(b, x, z) {
     const d = outside(x, z);
+    if (d <= 0) return 0; // the field itself is flat
     return (fbm(x * 0.011 + 3, z * 0.011) * 1.4 - 0.2) * b.hill * smooth(0, 90, d) ** 1.4 + (fbm(x * 0.06, z * 0.06) - 0.5) * b.bump * smooth(0, 16, d);
   }
 
@@ -283,7 +303,7 @@ export class Stage {
           vec3 c=mix(uA,uB,a); float far=smoothstep(40.,190.,length(p)); c=mix(c,mix(uA,uTip,.5+.4*a),far*(uHill>0.?.85:.2));
           c=mix(c,uA*.7+vec3(.14),smoothstep(30.,uHill>0.?uHill*2.2:60.,vP.y)*.6);
           vec2 uv=p/uField+.5; if(uv.x>0.&&uv.x<1.&&uv.y>0.&&uv.y<1.){ vec4 s=texture2D(uScars,uv); c=mix(c,c*.55+vec3(.04,.03,.02),clamp(s.r*.7,0.,.7)); c=mix(c,vec3(.018,.015,.014),clamp(s.g,0.,.92)); c*=1.-clamp(s.b,0.,1.)*.32; }
-          vec3 nrm=normalize(cross(dFdx(vP),dFdy(vP))); if(nrm.y<0.) nrm=-nrm;
+          vec3 nrm=cross(dFdx(vP),dFdy(vP)); nrm=nrm/max(length(nrm),1e-7); if(nrm.y<0.) nrm=-nrm;
           vec3 l=uAmbient*(.55+.45*nrm.y)+uSunColor*max(dot(nrm,uSunDir),0.)*.82+dyn(vP,nrm)*1.2;
           gl_FragColor=vec4(fogged(c*l,vP),1.); }`,
     });
@@ -292,8 +312,7 @@ export class Stage {
   }
 
   buildGrass(b) {
-    const scale = { low: 0.22, medium: 0.55, high: 1 }[this.quality] ?? 1;
-    const count = Math.floor(340000 * b.density * scale);
+    const count = Math.floor(this.tier.grass * b.density);
     const blade = new THREE.BufferGeometry();
     // tapered strip: x is -1..1 across the blade, y is 0..1 along it
     blade.setAttribute("position", new THREE.BufferAttribute(new Float32Array([-1, 0, 0, 1, 0, 0, -0.8, 0.33, 0, 0.8, 0.33, 0, -0.5, 0.66, 0, 0.5, 0.66, 0, 0, 1, 0]), 3));
@@ -310,7 +329,7 @@ export class Stage {
         // feather the edge of the field so the meadow never reads as a carpet
         do { x = (r() - 0.5) * (FW + 44); z = (r() - 0.5) * (FH + 44); } while (r() < smooth(0, 22, outside(x, z)));
       } else { const a = r() * 6.283, d = 18 + r() ** 1.6 * 150; x = Math.cos(a) * d * 1.35; z = Math.sin(a) * d; }
-      const patch = fbm(x * 0.09 + 9, z * 0.09);
+      const patch = vnoise(x * 0.09 + 9, z * 0.09) * 0.72 + 0.14;
       aBase[i * 4] = x; aBase[i * 4 + 1] = z; aBase[i * 4 + 2] = this.heightOf(b, x, z);
       aBase[i * 4 + 3] = lerp(b.grassH[0], b.grassH[1], smooth(0.3, 0.72, patch)) * (0.72 + r() * 0.5);
       aShape[i * 4] = r() * 6.283; aShape[i * 4 + 1] = r() * 0.35 + 0.1; aShape[i * 4 + 2] = r(); aShape[i * 4 + 3] = 0.012 + r() * 0.016;
@@ -343,7 +362,7 @@ export class Stage {
       fragmentShader: /* glsl */`
         ${F_COMMON}
         uniform vec3 uRoot,uTip; varying float vT; varying float vTint; varying vec3 vP; varying vec3 vS;
-        void main(){ vec3 c=mix(uRoot,uTip,pow(vT,1.25)); c*=.78+vTint*.44; c=mix(c,vec3(.62,.54,.28)*(uTip.r+uTip.g),smoothstep(.72,1.,vTint)*.28);
+        void main(){ vec3 c=mix(uRoot,uTip,pow(max(vT,0.),1.25)); c*=.78+vTint*.44; c=mix(c,vec3(.62,.54,.28)*(uTip.r+uTip.g),smoothstep(.72,1.,vTint)*.28);
           float burn=clamp(vS.g*1.6,0.,1.); c=mix(c,vec3(.016,.014,.012)+vec3(.35,.08,.0)*step(.97,fract(vP.x*9.+vP.z*7.))*burn,burn);
           c*=1.-clamp(vS.b,0.,1.)*.25;
           float sunSide=max(uSunDir.y,0.)*.55+.34;
@@ -352,7 +371,7 @@ export class Stage {
     });
     const m = this.env(new THREE.Mesh(geo, mat));
     m.frustumCulled = false;
-    if (this.grassMesh && this.grassCount) geo.instanceCount = Math.floor(count * Math.min(1, this.grassMesh.geometry.instanceCount / this.grassCount));
+    geo.instanceCount = Math.floor(count * this.grassFrac);
     this.grassMesh = m;
     this.grassCount = count;
   }
@@ -363,7 +382,7 @@ export class Stage {
       vertexShader: /* glsl */`${V_COMMON} varying vec3 vP; varying vec3 vC; uniform float uSway;
         void main(){ vec4 w=instanceMatrix*vec4(position,1.); vec2 base=instanceMatrix[3].xz; float k=position.y; w.x+=sin(uTime*.9+base.x)*uSway*k*k; w.y+=quakeAt(base)*.7; vP=w.xyz; vC=instanceColor; gl_Position=projectionMatrix*viewMatrix*w; }`,
       fragmentShader: /* glsl */`${F_COMMON} varying vec3 vP; varying vec3 vC; uniform vec3 uC; uniform float uE;
-        void main(){ vec3 n=normalize(cross(dFdx(vP),dFdy(vP))); vec3 c=uC*vC; vec3 l=uAmbient*(.55+.45*max(n.y,0.))+uSunColor*max(dot(n,uSunDir),0.)*.92+dyn(vP,n);
+        void main(){ vec3 n=cross(dFdx(vP),dFdy(vP)); n=n/max(length(n),1e-7); vec3 c=uC*vC; vec3 l=uAmbient*(.55+.45*max(n.y,0.))+uSunColor*max(dot(n,uSunDir),0.)*.92+dyn(vP,n);
           gl_FragColor=vec4(fogged(c*l+c*uE,vP),1.); }`,
     });
     const place = (geo, mat, n, minD, maxD, sMin, sMax, yMul = 1, tint = 0.25, seed = 77) => {
@@ -485,7 +504,7 @@ export class Stage {
       vertexShader: /* glsl */`${V_COMMON} attribute vec3 iPos; attribute vec2 iSize; attribute vec4 iSide; attribute vec4 iFx; varying vec2 vL; varying vec4 vS; varying float vD;
         void main(){ float r=iSide.y; vec2 xz=iPos.xz+vec2(position.x*2.,(position.y-.5)*2.)*r; vL=vec2(position.x*2.,(position.y-.5)*2.); vS=iSide; vD=iFx.y; gl_Position=projectionMatrix*viewMatrix*vec4(xz.x,.03+quakeAt(xz),xz.y,1.); }`,
       fragmentShader: /* glsl */`uniform vec3 uA,uB; uniform float uGlow; varying vec2 vL; varying vec4 vS; varying float vD;
-        void main(){ float d=length(vL); if(d>1.) discard; float k=smoothstep(1.,.82,d)*smoothstep(.4,.82,d)+.14*smoothstep(1.,.2,d); vec3 c=mix(uA,uB,vS.x);
+        void main(){ float d=length(vL); if(d>1.) discard; float k=(1.-smoothstep(.82,1.,d))*smoothstep(.4,.82,d)+.14*(1.-smoothstep(.2,1.,d)); vec3 c=mix(uA,uB,vS.x);
           float sel=vS.z; gl_FragColor=vec4(c*(1.+sel*2.5),min(1.,k*(uGlow+sel*2.))*(1.-vD)); }`,
     }), 1.5);
     this.spriteMesh = layer(new THREE.ShaderMaterial({
@@ -609,7 +628,11 @@ export class Stage {
       si[i4] = v.side; si[i4 + 1] = Math.max(0.42, v.size * TILE_M * 0.66); si[i4 + 2] = this.selected === v ? 1 : 0; si[i4 + 3] = 0;
       n++;
     }
-    for (const a of [this.aPos, this.aSize, this.aUV, this.aFx, this.aSide]) a.needsUpdate = true;
+    for (const a of [this.aPos, this.aSize, this.aUV, this.aFx, this.aSide]) {
+      a.clearUpdateRanges();
+      if (n) a.addUpdateRange(0, n * a.itemSize);
+      a.needsUpdate = n > 0;
+    }
     this.spriteMesh.geometry.instanceCount = this.shadowMesh.geometry.instanceCount = this.ringMesh.geometry.instanceCount = n;
     this.drawn = n;
   }
@@ -625,8 +648,10 @@ export class Stage {
     this.pC = new THREE.InstancedBufferAttribute(new Float32Array(MAX_PARTICLES * 4), 4).setUsage(THREE.DynamicDrawUsage); // rgb + add
     this.pS = new THREE.InstancedBufferAttribute(new Float32Array(MAX_PARTICLES * 3), 3).setUsage(THREE.DynamicDrawUsage); // size0, size1, gravity
     g.setAttribute("aP", this.pP); g.setAttribute("aV", this.pV); g.setAttribute("aC", this.pC); g.setAttribute("aS", this.pS);
-    g.instanceCount = MAX_PARTICLES;
-    this.pHead = 0;
+    this.pMax = this.tier.particles;
+    g.instanceCount = this.pMax;
+    this.particleGeo = g;
+    this.pHead = 0; this.pNew = 0;
     const mat = new THREE.ShaderMaterial({
       transparent: true, depthWrite: false,
       blending: THREE.CustomBlending, blendEquation: THREE.AddEquation, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
@@ -637,20 +662,34 @@ export class Stage {
           float s=mix(aS.x,aS.y,k); vec4 mv=viewMatrix*vec4(p,1.); mv.xy+=position.xy*s; vL=position.xy*2.; vC=aC; vA=(1.-k)*(1.-k*k);
           gl_Position=projectionMatrix*mv; }`,
       fragmentShader: /* glsl */`varying vec2 vL; varying vec4 vC; varying float vA;
-        void main(){ float d=length(vL); if(d>1.) discard; float a=pow(1.-d,1.6)*vA; gl_FragColor=vec4(vC.rgb*a,a*(1.-vC.a)); }`,
+        void main(){ float d=length(vL); if(d>1.) discard; float a=pow(max(1.-d,0.),1.6)*vA; gl_FragColor=vec4(vC.rgb*a,a*(1.-vC.a)); }`,
     });
     const m = new THREE.Mesh(g, mat);
     m.frustumCulled = false; m.renderOrder = 4;
     this.scene.add(m);
   }
   particle(x, y, z, vx, vy, vz, life, s0, s1, grav, r, g, b, add = 1) {
-    const i = this.pHead; this.pHead = (i + 1) % MAX_PARTICLES;
+    const i = this.pHead; this.pHead = (i + 1) % this.pMax; this.pNew++;
     const P = this.pP.array, V = this.pV.array, C = this.pC.array, S = this.pS.array;
     P[i * 4] = x; P[i * 4 + 1] = y; P[i * 4 + 2] = z; P[i * 4 + 3] = this.clock;
     V[i * 4] = vx; V[i * 4 + 1] = vy; V[i * 4 + 2] = vz; V[i * 4 + 3] = life;
     C[i * 4] = r; C[i * 4 + 1] = g; C[i * 4 + 2] = b; C[i * 4 + 3] = add;
     S[i * 3] = s0; S[i * 3 + 1] = s1; S[i * 3 + 2] = grav;
-    this.pDirty = true;
+  }
+  flushParticles() {
+    const n = this.pNew, max = this.pMax;
+    if (!n) return;
+    this.pNew = 0;
+    const end = this.pHead, start = (end - (n % max) + max) % max;
+    for (const a of [this.pP, this.pV, this.pC, this.pS]) {
+      const size = a.itemSize;
+      a.clearUpdateRanges();
+      if (n < max) {
+        if (start < end) a.addUpdateRange(start * size, n * size);
+        else { a.addUpdateRange(start * size, (max - start) * size); a.addUpdateRange(0, end * size); }
+      }
+      a.needsUpdate = true;
+    }
   }
   burst(x, y, z, n, c, { speed = 3, up = 1, life = 0.6, size = 0.18, end = 0.02, grav = 4, add = 1, jitter = 0 } = {}) {
     for (let i = 0; i < n; i++) {
@@ -685,8 +724,8 @@ export class Stage {
           float w=aCol.a*(aStyle.x<.5?1.:(1.-k*.7)); p+=side*position.y*w;
           vL=vec2(u,position.y); vC=aCol.rgb; vK=k; vS=aStyle.x; vHead=aStyle.y; gl_Position=projectionMatrix*viewMatrix*vec4(p,1.); }`,
       fragmentShader: /* glsl */`varying vec2 vL; varying vec3 vC; varying float vK; varying float vS; varying float vHead;
-        void main(){ float core=pow(1.-abs(vL.y),2.4); float a;
-          if(vS<.5){ float head=vK/max(vHead,.01); float tail=head-.32; a=smoothstep(tail,head,vL.x)*step(vL.x,min(head,1.))*(head>1.32?0.:1.); core=pow(1.-abs(vL.y),1.5); }
+        void main(){ float edge=max(1.-abs(vL.y),0.); float core=pow(edge,2.4); float a;
+          if(vS<.5){ float head=vK/max(vHead,.01); float tail=head-.32; a=smoothstep(tail,head,vL.x)*step(vL.x,min(head,1.))*(head>1.32?0.:1.); core=pow(edge,1.5); }
           else if(vS<1.5){ a=smoothstep(0.,.02,vL.x)*(1.-vK*vK); } else { a=(1.-vK)*(step(.5,fract(vK*7.))*.45+.55); }
           gl_FragColor=vec4(vC*core*a*(1.+core*2.2),1.); }`,
     });
@@ -721,7 +760,7 @@ export class Stage {
         void main(){ float k=(uTime-aPos.z)/aPos.w; if(k<0.||k>1.||aPos.w<=0.){ gl_Position=vec4(2.,2.,2.,1.); return; } float r=aCol.a*pow(k,.62);
           vec3 p=vec3(aPos.x,.14+aKind*.3*sin(k*3.14),aPos.y)+position*r; vL=position.xz; vK=k; vC=aCol.rgb; vKind=aKind; gl_Position=projectionMatrix*viewMatrix*vec4(p,1.); }`,
       fragmentShader: /* glsl */`varying vec2 vL; varying float vK; varying vec3 vC; varying float vKind;
-        void main(){ float d=length(vL); if(d>1.) discard; float w=vKind>.5?.34:.1; float a=smoothstep(1.-w,1.,d)*smoothstep(1.,.985,d)*(1.-vK)*(1.-vK);
+        void main(){ float d=length(vL); if(d>1.) discard; float w=vKind>.5?.34:.1; float a=smoothstep(1.-w,1.,d)*(1.-smoothstep(.985,1.,d))*(1.-vK)*(1.-vK);
           if(vKind>.5){ float foam=fract(sin(dot(floor(vL*42.),vec2(12.9,78.2)))*43758.5); a*=.6+.8*step(.45,foam); }
           gl_FragColor=vec4(vC*a,1.); }`,
     });
@@ -739,14 +778,15 @@ export class Stage {
   }
 
   buildWeather() {
-    const n = { low: 1200, medium: 2800, high: 5000 }[this.quality] ?? 5000;
+    const n = TIERS.high.weather;
     const q = new THREE.PlaneGeometry(1, 1);
     const g = new THREE.InstancedBufferGeometry();
     g.setAttribute("position", q.attributes.position); g.setIndex(q.index);
     const seedA = new Float32Array(n * 3);
     for (let i = 0; i < n * 3; i++) seedA[i] = Math.random();
     g.setAttribute("aSeed", new THREE.InstancedBufferAttribute(seedA, 3));
-    g.instanceCount = n;
+    g.instanceCount = this.tier.weather;
+    this.weatherGeo = g;
     this.uWeather = { uFall: { value: new THREE.Vector4(0, 0, 0, 0) }, uRainColor: { value: new THREE.Vector4(0, 0, 0, 0) }, uCenter: { value: new THREE.Vector3() } };
     const mat = new THREE.ShaderMaterial({
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
@@ -783,7 +823,7 @@ export class Stage {
         transparent: true, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending,
         uniforms: { uC: side === 0 ? (this.uSideA) : (this.uSideB), uTime: this.U.uTime },
         vertexShader: `varying vec2 vU; void main(){ vU=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }`,
-        fragmentShader: `uniform vec3 uC; varying vec2 vU; void main(){ vec2 e=min(vU,1.-vU)*vec2(${(ZONE * TILE_M).toFixed(1)},${FH.toFixed(1)}); float d=min(e.x,e.y); float a=smoothstep(.18,.03,d)*.9+.04; gl_FragColor=vec4(uC*a,1.); }`,
+        fragmentShader: `uniform vec3 uC; varying vec2 vU; void main(){ vec2 e=min(vU,1.-vU)*vec2(${(ZONE * TILE_M).toFixed(1)},${FH.toFixed(1)}); float d=min(e.x,e.y); float a=(1.-smoothstep(.03,.18,d))*.9+.04; gl_FragColor=vec4(uC*a,1.); }`,
       }));
       m.position.set(((a + b) / 2 - W / 2) * TILE_M, 0.05, 0);
       m.renderOrder = 0.5; m.visible = false;
@@ -795,23 +835,31 @@ export class Stage {
   buildPost() {
     const composer = new EffectComposer(this.renderer);
     composer.addPass(new RenderPass(this.scene, this.camera));
+    // Last line of defence: one NaN pixel reaching bloom smears into a full-screen black flash.
+    composer.addPass(new ShaderPass(new THREE.ShaderMaterial({
+      uniforms: { tDiffuse: { value: null } },
+      vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.,1.); }`,
+      fragmentShader: `uniform sampler2D tDiffuse; varying vec2 vUv; void main(){ vec3 c=texture2D(tDiffuse,vUv).rgb; if(any(isnan(c))||any(isinf(c))) c=vec3(0.); gl_FragColor=vec4(clamp(c,0.,16.),1.); }`,
+    })));
     this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.34, 0.65, 1.55);
+    const bloomSize = this.bloom.setSize.bind(this.bloom);
+    this.bloom.setSize = (w, h) => bloomSize(Math.max(64, w >> 1), Math.max(64, h >> 1)); // glow is soft anyway: half resolution costs a quarter
     composer.addPass(this.bloom);
     this.finalPass = new ShaderPass(new THREE.ShaderMaterial({
       uniforms: {
         tDiffuse: { value: null }, uFocusY: { value: 0.46 }, uBand: { value: 0.2 }, uBlur: { value: 0.0055 }, uAspect: { value: 1 }, uFlash: { value: 0 }, uFlashC: { value: new THREE.Color(1, 1, 1) },
-        uChroma: { value: 0 }, uT: { value: 0 }, uShock: { value: Array.from({ length: 3 }, () => new THREE.Vector4()) }, uGrade: { value: new THREE.Vector3(1, 1, 1) },
+        uChroma: { value: 0 }, uT: { value: 0 }, uTaps: { value: this.tier.taps }, uShock: { value: Array.from({ length: 3 }, () => new THREE.Vector4()) }, uGrade: { value: new THREE.Vector3(1, 1, 1) },
       },
       vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.,1.); }`,
       fragmentShader: /* glsl */`
-        uniform sampler2D tDiffuse; uniform float uFocusY,uBand,uBlur,uAspect,uFlash,uChroma,uT; uniform vec3 uFlashC,uGrade; uniform vec4 uShock[3]; varying vec2 vUv;
+        uniform sampler2D tDiffuse; uniform int uTaps; uniform float uFocusY,uBand,uBlur,uAspect,uFlash,uChroma,uT; uniform vec3 uFlashC,uGrade; uniform vec4 uShock[3]; varying vec2 vUv;
         vec3 aces(vec3 x){ return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14),0.,1.); }
         void main(){ vec2 uv=vUv;
-          for(int i=0;i<3;i++){ vec4 s=uShock[i]; if(s.w<=0.) continue; vec2 d=(uv-s.xy)*vec2(uAspect,1.); float r=length(d); float k=smoothstep(.09,0.,abs(r-s.z))*s.w; uv-=normalize(d+1e-5)*k*.026/vec2(uAspect,1.); }
+          for(int i=0;i<3;i++){ vec4 s=uShock[i]; if(s.w<=0.) continue; vec2 d=(uv-s.xy)*vec2(uAspect,1.); float r=length(d); float k=(1.-smoothstep(0.,.09,abs(r-s.z)))*s.w; uv-=normalize(d+1e-5)*k*.026/vec2(uAspect,1.); }
           float coc=clamp((abs(uv.y-uFocusY)-uBand)/.42,0.,1.); coc=coc*coc*uBlur;
-          vec3 c=vec3(0.); float tw=0.; const float G=2.39996;
-          for(int i=0;i<14;i++){ float f=float(i); float r=sqrt(f/14.); vec2 o=vec2(cos(f*G),sin(f*G))*r*coc*vec2(1./uAspect,1.)*8.; c+=texture2D(tDiffuse,uv+o).rgb; tw+=1.; }
-          c/=tw;
+          vec3 c=vec3(0.); const float G=2.39996;
+          if(coc<.0002) c=texture2D(tDiffuse,uv).rgb; // the in-focus band skips the blur entirely
+          else { float tw=0.; for(int i=0;i<uTaps;i++){ float f=float(i); float r=sqrt(f/float(uTaps)); vec2 o=vec2(cos(f*G),sin(f*G))*r*coc*vec2(1./uAspect,1.)*8.; c+=texture2D(tDiffuse,uv+o).rgb; tw+=1.; } c/=tw; }
           if(uChroma>0.){ vec2 o=(uv-.5)*uChroma; c.r=texture2D(tDiffuse,uv+o).r; c.b=texture2D(tDiffuse,uv-o).b; }
           c=mix(c,uFlashC*2.2,uFlash);
           float luma=dot(c,vec3(.2126,.7152,.0722)); c=max(mix(vec3(luma),c,1.2),0.);
@@ -826,8 +874,13 @@ export class Stage {
     this.composer = composer;
   }
 
-  resize() {
+  // Resizing clears the canvas, so it only ever happens at the top of a frame, right before drawing.
+  requestResize() { this.needResize = true; }
+  applySize() {
+    this.needResize = false;
     const w = innerWidth, h = innerHeight;
+    const fit = Math.sqrt(this.tier.pixels / Math.max(1, w * h));
+    this.pixelRatio = Math.max(0.5, Math.min(devicePixelRatio || 1, this.maxPixelRatio, fit) * this.resScale);
     this.renderer.setPixelRatio(this.pixelRatio);
     this.renderer.setSize(w, h, false);
     this.composer.setPixelRatio(this.pixelRatio);
@@ -835,7 +888,7 @@ export class Stage {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.finalPass.uniforms.uAspect.value = w / h;
-    const r = Math.min(devicePixelRatio || 1, 2);
+    const r = Math.min(devicePixelRatio || 1, 1.5);
     this.overlay.width = w * r; this.overlay.height = h * r;
     this.overlay.style.width = `${w}px`; this.overlay.style.height = `${h}px`;
     this.octx.setTransform(r, 0, 0, r, 0, 0);
@@ -1275,6 +1328,7 @@ export class Stage {
 
   // ---------- frame ----------
   frame(dtReal) {
+    if (this.needResize) this.applySize();
     const dt = Math.min(dtReal, 0.05);
     this.real += dt;
     if (this.slowUntil && this.real > this.slowUntil) { this.timeScale = 1; this.slowUntil = 0; }
@@ -1290,10 +1344,10 @@ export class Stage {
     this.writeUnits();
     this.atlas.flush();
     if (!this.paused) this.ambient(this.dtScaled);
-    if (this.pDirty) { this.pP.needsUpdate = this.pV.needsUpdate = this.pC.needsUpdate = this.pS.needsUpdate = true; this.pDirty = false; }
+    this.flushParticles();
     if (this.bDirty) { this.bA.needsUpdate = this.bB.needsUpdate = this.bC.needsUpdate = this.bS.needsUpdate = true; this.bDirty = false; }
     if (this.rDirty) { this.rP.needsUpdate = this.rC.needsUpdate = this.rK.needsUpdate = true; this.rDirty = false; }
-    if (this.scarDirty && this.real - (this.scarAt ?? 0) > 0.08) { this.scarTex.needsUpdate = true; this.scarDirty = false; this.scarAt = this.real; }
+    if (this.scarDirty && this.real - (this.scarAt ?? 0) > 0.2) { this.scarTex.needsUpdate = true; this.scarDirty = false; this.scarAt = this.real; }
 
     this.directCamera(dt);
     this.uWeather.uCenter.value.copy(this.controls.target);
@@ -1378,18 +1432,38 @@ export class Stage {
     }
   }
 
-  // Keep a playable frame rate: drop render resolution before dropping anything else.
+  setQuality(q) {
+    if (!TIERS[q]) return;
+    this.quality = q;
+    this.tier = TIERS[q];
+    this.grassFrac = 1; this.resScale = 1;
+    for (const { meshes } of this.envCache?.values() ?? []) for (const m of meshes) { this.scene.remove(m); m.geometry.dispose(); m.material.dispose?.(); }
+    this.envCache = new Map();
+    this.envMeshes = [];
+    this.setBiome(this.biomeId);
+    this.pMax = this.tier.particles;
+    this.pHead = 0; this.pNew = 0;
+    this.particleGeo.instanceCount = this.pMax;
+    this.weatherGeo.instanceCount = this.tier.weather;
+    this.finalPass.uniforms.uTaps.value = this.tier.taps;
+    this.requestResize();
+  }
+
+  // Keep a playable frame rate: thin the grass first (no reallocation), then lower resolution, then the whole tier.
   adapt(dt) {
     const P = this.perf;
-    P.t += dt; P.n++;
-    if (P.t < 1.5) return;
-    const avg = P.t / P.n;
-    this.fps = 1 / avg;
-    P.t = 0; P.n = 0;
-    if (avg <= 0.026 || this.lockRes) return;
-    const grass = this.grassMesh?.geometry;
-    if (this.pixelRatio > 1) { this.pixelRatio = Math.max(1, this.pixelRatio - 0.25); this.resize(); }
-    else if (grass && grass.instanceCount > this.grassCount * 0.2) grass.instanceCount = Math.floor(grass.instanceCount * 0.65);
-    else if (this.pixelRatio > 0.65) { this.pixelRatio = Math.max(0.65, this.pixelRatio - 0.15); this.resize(); }
+    P.times.push(dt);
+    if (P.times.length < 90) return;
+    const sorted = P.times.slice().sort((a, b) => a - b), median = sorted[sorted.length >> 1];
+    P.times.length = 0;
+    this.fps = 1 / median;
+    // Median, not mean: one-off stalls (a biome build, a first sprite load) shouldn't cost quality for good.
+    if (median <= 0.025 || this.lockRes || this.real < P.skipUntil) return;
+    P.skipUntil = this.real + 1;
+    if (this.grassFrac > 0.4) {
+      this.grassFrac *= 0.72;
+      this.grassMesh.geometry.instanceCount = Math.floor(this.grassCount * this.grassFrac);
+    } else if (this.resScale > 0.6) { this.resScale *= 0.85; this.requestResize(); }
+    else if (this.quality !== "low") this.setQuality(this.quality === "high" ? "medium" : "low");
   }
 }

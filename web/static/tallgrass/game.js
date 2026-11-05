@@ -18,11 +18,17 @@ const G = {
 let data, stage;
 const sfx = new Sfx();
 
+function savedQuality() {
+  try { return localStorage.getItem("tg-quality") || "auto"; } catch { return "auto"; }
+}
 function quality() {
-  const q = params.get("q");
-  if (q) return q;
-  const small = Math.min(innerWidth, innerHeight) < 600 || /Mobi|Android/i.test(navigator.userAgent);
-  return small ? "low" : (navigator.hardwareConcurrency ?? 8) <= 4 ? "medium" : "high";
+  const q = params.get("q") || savedQuality();
+  if (q !== "auto") return q;
+  if (Math.min(innerWidth, innerHeight) < 600 || /Mobi|Android/i.test(navigator.userAgent)) return "low";
+  // Named discrete GPUs start high; anything else starts medium. Either way it steps down if frames run slow.
+  const gl = document.createElement("canvas").getContext("webgl2"), info = gl?.getExtension("WEBGL_debug_renderer_info");
+  const gpu = info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : "";
+  return /RTX|GTX|Radeon RX|Radeon Pro|Apple M\d|Arc A/i.test(gpu) ? "high" : "medium";
 }
 
 function cssColor(name) {
@@ -46,6 +52,14 @@ async function boot() {
   if (params.get("lockres")) stage.lockRes = true;
   stage.sfx = (n) => { if (n === "rain") sfx.setWeather("rain"); else sfx.play(n); };
   stage.onEvent = moment;
+  stage.onContextLost = () => {
+    // The driver reset (usually an overloaded GPU). Come back one tier lower instead of a dead black canvas.
+    const next = { high: "medium", medium: "low", low: "low" }[stage.quality];
+    try { localStorage.setItem("tg-quality", next); } catch { /* private window */ }
+    $("loading").textContent = "The graphics driver reset. Restarting at lower quality…";
+    document.body.classList.add("is-loading");
+    setTimeout(() => location.reload(), 900);
+  };
   stage.onCamMode = (m) => { $("btnCam").textContent = m === "director" ? "Director cam" : m === "follow" ? "Following" : "Free cam"; $("btnCam").classList.toggle("is-on", m !== "free"); };
   stage.uSideA.value.setRGB(...cssColor("--info"));
   stage.uSideB.value.setRGB(...cssColor("--bad"));
@@ -61,11 +75,17 @@ async function boot() {
   document.body.classList.remove("is-loading");
   let last = performance.now();
   const loop = (now) => {
+    requestAnimationFrame(loop);
+    // A 120 Hz monitor shouldn't make the GPU work twice as hard for a war that reads fine at 60.
+    if (now - last < 13) return;
     const dt = (now - last) / 1000;
     last = now;
     tick();
     stage.frame(dt);
-    requestAnimationFrame(loop);
+    if (now - (G.perfAt ?? 0) > 1000) {
+      G.perfAt = now;
+      if (stage.fps) $("fps").textContent = `${Math.round(stage.fps)} fps`;
+    }
   };
   requestAnimationFrame(loop);
   window.__tg = { G, stage, tick };
@@ -682,6 +702,12 @@ function wire() {
   $("btnReplay").addEventListener("click", () => launch(G.seed));
   $("btnEdit").addEventListener("click", openRoom);
   $("btnEndHome").addEventListener("click", showTitle);
+  $("quality").value = savedQuality();
+  $("quality").addEventListener("change", () => {
+    const v = $("quality").value;
+    try { localStorage.setItem("tg-quality", v); } catch { /* private window */ }
+    stage.setQuality(v === "auto" ? quality() : v);
+  });
   $("btnMute").addEventListener("click", () => {
     sfx.unlock();
     const on = !sfx.muted;

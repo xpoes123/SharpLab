@@ -33,10 +33,22 @@ export const ABILITIES = {
 };
 
 let D = null;
+let preEvo = new Map();
 export function useData(data) {
   D = data;
   for (const [k, m] of Object.entries(data.moves)) m.id = k;
-  STRUGGLE.id = "struggle";
+  preEvo = new Map(Object.values(data.species).filter((s) => s.evoTo).map((s) => [s.evoTo, s]));
+}
+
+// Levels this form can exist at: a Dragonite can't be under 55, a Rattata past 19 would have evolved.
+export function levelRange(sp) {
+  const before = preEvo.get(sp.num);
+  return [before ? before.evoLevel : 5, sp.evoLevel ? sp.evoLevel - 1 : 100];
+}
+
+// Moves this form can know at this level: level-up moves learned by now, plus TMs and tutors.
+export function legalMoves(sp, level) {
+  return [...new Set([...sp.levelup.filter(([l]) => l <= level).map(([, m]) => m), ...sp.tm])].filter((m) => D.moves[m]);
 }
 
 const rand = (w) => {
@@ -61,23 +73,27 @@ export function damage({ level, power, atk, def, stab = 1, eff = 1, roll = 100, 
 }
 
 const XP_AT = {
-  slow: (n) => Math.floor((5 * n ** 3) / 4), medium: (n) => n ** 3, fast: (n) => Math.floor((4 * n ** 3) / 5),
-  "medium-slow": (n) => Math.floor((6 * n ** 3) / 5) - 15 * n ** 2 + 100 * n - 140,
+  slow: (n) => Math.floor((5 * n * n * n) / 4), medium: (n) => n * n * n, fast: (n) => Math.floor((4 * n * n * n) / 5),
+  "medium-slow": (n) => Math.floor((6 * n * n * n) / 5) - 15 * n * n + 100 * n - 140,
 };
 export const xpAt = (growth, n) => (XP_AT[growth] ?? XP_AT.medium)(n);
 const stageMul = (n) => (n >= 0 ? (2 + n) / 2 : 2 / (2 - n));
 const accMul = (n) => (n >= 0 ? (3 + n) / 3 : 3 / (3 - n));
 export const footprint = (sp) => Math.max(1, Math.min(10, Math.round((sp.heightm * 0.6) / TILE_M)));
 
-// A wild Pokémon knows the last four moves it learned by level.
+// A wild Pokémon knows the last four moves it learned by level. One departure from the games: if that leaves it with
+// no attack (level 43 Muk would only have Harden, Poison Gas, Minimize, Screech), it keeps its latest attack instead.
 export function wildMoves(sp, level) {
   const out = [];
+  let lastAttack = null;
   for (const [l, m] of sp.levelup) {
     if (l < 1 || l > level) continue;
+    if (D.moves[m]?.cat !== "status") lastAttack = m;
     if (out.includes(m)) continue;
     out.push(m);
     if (out.length > 4) out.shift();
   }
+  if (lastAttack && !out.some((m) => D.moves[m]?.cat !== "status")) out[0] = lastAttack;
   return out;
 }
 
@@ -85,7 +101,7 @@ export function wildMoves(sp, level) {
 export function defaultLevel(sp) {
   if (sp.evoLevel) return Math.max(sp.evoLevel - 1, 5);
   if (sp.legendary) return 70;
-  const pre = Object.values(D.species).find((s) => s.evoTo === sp.num);
+  const pre = preEvo.get(sp.num);
   return pre ? Math.max(pre.evoLevel + 5, 30) : 40;
 }
 
@@ -148,7 +164,7 @@ export function gap(a, b) {
 // Offsets from an anchor, nearest first, stretched so blocks form a wide battle line rather than a circle.
 const OFFSETS = (() => {
   const out = [];
-  for (let dx = -W; dx <= W; dx++) for (let dy = -H; dy <= H; dy++) out.push([dx, dy, (dx * 1.7) ** 2 + dy * dy]);
+  for (let dx = -W; dx <= W; dx++) for (let dy = -H; dy <= H; dy++) out.push([dx, dy, dx * dx * 2.89 + dy * dy]);
   return out.sort((a, b) => a[2] - b[2]);
 })();
 
@@ -188,7 +204,8 @@ export function autoAnchor(squads, side) {
   let depth = 3;
   for (const { s, sp } of order) {
     const pitch = footprint(sp) >= 5 ? footprint(sp) * 1.7 : footprint(sp);
-    const area = (s.count ?? 1) * (pitch + (s.spacing ?? 1) - 1) ** 2;
+    const cell = pitch + (s.spacing ?? 1) - 1;
+    const area = (s.count ?? 1) * cell * cell;
     const half = Math.ceil(Math.sqrt(area / 1.7) / 1.7);
     depth += half;
     s.x = side === 0 ? ZONE - depth : W - ZONE + depth;
@@ -245,7 +262,7 @@ function nearestFoe(u) {
         for (const o of b[y * BW + x]) {
           if (!o.alive) continue;
           const g = gap(u, o);
-          const d = (u.x - o.x) ** 2 + (u.y - o.y) ** 2;
+          const d = (u.x - o.x) * (u.x - o.x) + (u.y - o.y) * (u.y - o.y);
           if (g < bg || (g === bg && d < bd)) { bg = g; bd = d; best = o; }
         }
       }
@@ -487,7 +504,10 @@ function learn(u, level) {
     const slot = { id, left: D.moves[id].pp, tm: false };
     if (u.moves.length < 4) u.moves.push(slot);
     else {
-      const i = u.moves.findIndex((s) => !s.tm);
+      // forget the oldest move, unless that would leave it with no attack
+      const attacks = u.moves.filter((s) => D.moves[s.id]?.cat !== "status").length;
+      const gainsAttack = D.moves[id]?.cat !== "status";
+      const i = u.moves.findIndex((s) => !s.tm && (gainsAttack || attacks > 1 || D.moves[s.id]?.cat === "status"));
       if (i >= 0) { u.moves.splice(i, 1); u.moves.push(slot); }
     }
   }
@@ -674,13 +694,13 @@ function walk(w, u, t, stopAt, ev) {
   let px = -1, py = -1;
   for (let i = 0; i < n && gap(u, t) > stopAt; i++) {
     const cx = u.x + (s - 1) / 2, cy = u.y + (s - 1) / 2;
-    const cur = (cx - tcx) ** 2 + (cy - tcy) ** 2;
+    const cur = (cx - tcx) * (cx - tcx) + (cy - tcy) * (cy - tcy);
     let bx = -1, by = -1, bd = Infinity;
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
       if (!dx && !dy) continue;
       const x = u.x + dx, y = u.y + dy;
       if (x === px && y === py) continue;
-      const d = (x + (s - 1) / 2 - tcx) ** 2 + (y + (s - 1) / 2 - tcy) ** 2;
+      const ex = x + (s - 1) / 2 - tcx, ey = y + (s - 1) / 2 - tcy, d = ex * ex + ey * ey;
       if (d >= bd || d > cur + 3 || !fits(w.occ, x, y, s, u.id)) continue;
       bd = d; bx = x; by = y;
     }
