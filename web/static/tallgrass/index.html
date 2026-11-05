@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="https://share.djiang.xyz/ui/ui.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tall Grass</title>
+<meta name="description" content="A to-scale Pokémon war simulator running on the real game rules.">
+<link rel="icon" href="/pokehoops/sprites/19.png">
+<link rel="stylesheet" href="./style.css">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.1/examples/jsm/"
+} }
+</script>
+</head>
+<body class="is-loading">
+<canvas id="gl" aria-label="Battlefield"></canvas>
+<canvas id="overlay" aria-hidden="true"></canvas>
+
+<div id="loading"><span>Growing the grass…</span></div>
+
+<section id="title" class="screen" hidden>
+  <header class="t-head">
+    <h1>Tall Grass</h1>
+    <p>A Pokémon war, to scale. Real stats, real moves, real rules, one battlefield.</p>
+    <div class="t-actions">
+      <button class="ui-btn ui-btn--primary" id="btnBuild">Build your own war</button>
+      <button class="ui-btn ui-btn--ghost" id="btnReal">What's real?</button>
+    </div>
+  </header>
+  <div class="t-cards" id="cards" role="list" aria-label="Ready-made wars"></div>
+</section>
+
+<section id="room" class="screen" hidden>
+  <div class="r-top">
+    <button class="ui-btn ui-btn--ghost" id="roomBack" aria-label="Back to title">←</button>
+    <label class="r-field"><span>Battlefield</span><select id="biome"></select></label>
+    <div class="r-forecast" id="forecast" aria-live="polite"></div>
+    <button class="ui-btn" id="btnForecast">Simulate 200 wars</button>
+    <button class="ui-btn ui-btn--primary" id="btnBegin">Begin war</button>
+  </div>
+  <div class="r-side r-a" id="sideA"></div>
+  <div class="r-side r-b" id="sideB"></div>
+  <p class="r-hint">Drag an army to move it. Drag the field to orbit. Right-drag to pan. Click a unit to inspect it.</p>
+</section>
+
+<section id="hud" class="screen" hidden>
+  <div class="h-top">
+    <div class="h-army h-a"><b id="nameA"></b><span id="countA"></span><i class="bar"><em id="barA"></em></i></div>
+    <div class="h-mid"><span id="turn">Turn 0</span><canvas id="chart" width="360" height="56" aria-hidden="true"></canvas><span id="weatherChip"></span></div>
+    <div class="h-army h-b"><b id="nameB"></b><span id="countB"></span><i class="bar"><em id="barB"></em></i></div>
+  </div>
+  <ol id="ticker" aria-live="off"></ol>
+  <div id="banner" aria-live="polite"></div>
+  <div class="h-controls" role="toolbar" aria-label="War controls">
+    <button class="ui-btn ui-btn--sm" id="btnPause" title="Space">Pause</button>
+    <span class="seg" id="speeds"><button class="ui-btn ui-btn--sm" data-speed="1">1×</button><button class="ui-btn ui-btn--sm" data-speed="2">2×</button><button class="ui-btn ui-btn--sm" data-speed="4">4×</button></span>
+    <button class="ui-btn ui-btn--sm" id="btnSkip" title="Jump to the result">Skip</button>
+    <button class="ui-btn ui-btn--sm" id="btnCam" title="C">Director cam</button>
+    <button class="ui-btn ui-btn--sm" id="btnQuit">Quit</button>
+  </div>
+</section>
+
+<aside id="inspect" hidden></aside>
+
+<section id="end" class="screen" hidden>
+  <div class="e-card ui-card">
+    <p class="e-eyebrow" id="endEyebrow"></p>
+    <h2 id="endTitle"></h2>
+    <div class="e-stats" id="endStats"></div>
+    <div class="e-actions">
+      <button class="ui-btn ui-btn--primary" id="btnRematch">New war, same armies</button>
+      <button class="ui-btn" id="btnReplay">Replay this war</button>
+      <button class="ui-btn" id="btnEdit">Edit armies</button>
+      <button class="ui-btn ui-btn--ghost" id="btnEndHome">Title</button>
+    </div>
+  </div>
+</section>
+
+<button id="btnMute" class="ui-btn ui-btn--sm" aria-pressed="false">Sound on</button>
+
+<dialog id="realDialog" class="ui-card">
+  <h2>What's real</h2>
+  <ul>
+    <li><b>From the games:</b> base stats, types, the damage formula, type chart, crits, accuracy, stat stages, PP, Struggle, status, weather, recoil, drain, multi-hit, one-hit KOs, Transform, split XP, level-up moves, evolution levels.</li>
+    <li><b>Wild armies:</b> Red, Blue and Yellow encounter tables. Default moves follow the wild rule: the last four learned by level, from Crystal's learnsets.</li>
+    <li><b>Modern values:</b> stats, moves, types, and abilities use current-generation numbers, so Clefairy is a Fairy type.</li>
+    <li><b>To scale:</b> sprites and footprints use real Pokédex heights, so 44 Rattata can bite an Onix at once and only 8 can reach another Rattata. The smallest bodies are drawn at 0.42 m so you can still see them.</li>
+    <li><b>Invented for the map:</b> tiles, walking speed, and move ranges. Everyone acts each turn in priority and Speed order.</li>
+    <li><b>Not simulated yet:</b> Protect, Substitute, Encore, Counter, Future Sight, entry hazards, held items, and about half of all abilities. The inspect card says when an ability has no effect.</li>
+  </ul>
+  <form method="dialog"><button class="ui-btn">Close</button></form>
+</dialog>
+
+<script type="module" src="./game.js"></script>
+</body>
+</html>
