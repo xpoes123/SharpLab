@@ -511,6 +511,27 @@ def test_discord_wall_starts_only_while_the_tv_is_idle(api, monkeypatch):
     assert c.post("/i/discord/start", json={"urls": ["https://b.tv"]}).status_code == 200
 
 
+def test_discord_wall_starts_past_an_app_left_open_on_a_tv_that_is_off(api, monkeypatch):
+    app, _ = api
+    c = client(app, "100.81.31.34", "s3cret")
+    monkeypatch.setattr("wall.server.tv_active", lambda api: "football")
+    monkeypatch.setattr("wall.server.tv_off", lambda api: True)
+    assert c.post("/i/discord/start", json={"urls": ["https://a.tv"]}).json()["running"]
+
+
+def test_tv_off_reads_healthz_and_an_unreachable_tv_is_not_off(monkeypatch):
+    import io, json
+    from wall import server
+    answers = [{"tv_power": "off"}, {"tv_power": "on"}, {"tv_power": "unknown"}]
+    monkeypatch.setattr("urllib.request.urlopen", lambda url, timeout=0: io.BytesIO(json.dumps(answers.pop(0)).encode()))
+    assert [server.tv_off("http://tv") for _ in range(3)] == [True, False, False]
+
+    def down(url, timeout=0):
+        raise OSError("no route")
+    monkeypatch.setattr("urllib.request.urlopen", down)
+    assert server.tv_off("http://tv") is False
+
+
 def test_discord_wall_mirrors_the_tv_wall_when_the_tv_is_on_it(api, monkeypatch):
     app, _ = api
     local, remote = client(app), client(app, "100.81.31.34", "s3cret")
