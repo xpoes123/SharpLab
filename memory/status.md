@@ -108,3 +108,6 @@ career-fame rank × rookie premium; legendaries 1-of-1; holo/gems; vintage pack 
 quick-sell 75%; packs are a REAL coin spend (not the 1000 faucet). 7 card achievements.
 Known limitation: card team labels track the *current* ESPN roster, not the card's
 season (ESPN only returns currently-rostered players). Extend seasons: re-run seeder.
+
+## Tall Grass (2026-11-05)
+Static WebGL Pokémon war simulator at `/tallgrass/` (`web/static/tallgrass/`), no backend. Simulation and graphics only: no betting, coins, or achievements. Not linked from `/games`. Tune presets with `node scripts/tallgrass.mjs --presets`.
