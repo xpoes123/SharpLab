@@ -56,6 +56,7 @@ sharplab/
 │   ├── sudoku.py figgie.py bingo.py blotto.py minesweeper.py solitairechess.py  # game routers
 │   ├── trading_floor.py
 │   └── static/         # vanilla HTML/CSS/JS frontend (dark theme)
+│       └── tallgrass/  # Tall Grass: 3D Pokémon war simulator (sim.js rules, stage.js renderer, static, no backend)
 ├── db/
 │   ├── schema.py       # CREATE TABLE statements + init_db() (~40 tables)
 │   └── queries.py      # all DB access lives here, nowhere else
@@ -370,6 +371,7 @@ Slash commands in `.claude/commands/`. Type to invoke.
 - **Workflow tests** (`test_workflows.py`) use `WorkflowEnvironment.start_time_skipping()` which downloads a Temporal test server binary on first run (slow once, then cached; ~1s after).
 - **Full suite**: `uv run pytest -q` (~40s, ~1200 tests). Websocket room tests rely on `tests/conftest.py` sharing one event loop per test across TestClient sockets — without it two-socket tests hang intermittently.
 - **Temporal can't deserialize `Optional[X]` / `X | None` return types from activities.** Use `list[X]` instead — empty list = no result, one-item list = result. This is a known SDK limitation.
+- `scripts/tallgrass.mjs` Monte Carlo Tall Grass wars from the terminal (`--presets`, `--find`); rebuild its data with `scripts/build_tallgrass_data.mjs`.
 - Run unit tests with: `uv run pytest tests/test_activities.py -v`
 - Run workflow tests with: `uv run pytest tests/test_workflows.py -v -s` (the `-s` shows Temporal logs)
 
