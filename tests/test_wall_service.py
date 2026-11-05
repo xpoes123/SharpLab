@@ -905,3 +905,10 @@ def test_tvchat_toggle_persists_and_reaches_the_overlay(api):
     lines = c.get("/i/tv/bands").json()["tvchat"]["lines"]
     assert [m["id"] for m in lines] == [2, 3, 4, 5, 6, 7, 8, 9] and [m["fresh"] for m in lines] == [False] * 3 + [True] * 5
     assert lines[6]["sys"] is True and lines[7] == {"id": 9, "name": "u9", "guest": False, "text": "t9", "sys": False, "fresh": True}
+
+
+def test_the_encoder_runs_on_its_own_thread():
+    from wall.headless import ENCODER_QUEUE, gst_cmd
+    cmd = gst_cmd(1, "s")
+    enc = cmd.index("nvh264enc")
+    assert cmd[enc - len(ENCODER_QUEUE) - 1:enc] == [*ENCODER_QUEUE, "!"]

@@ -43,6 +43,7 @@ def free_vram_mb() -> int | None:
 
 # a 3 s queue in front of the mux on each branch: one branch's hiccup never starves the other (mpegtsmux waits for both)
 QUEUE = ["queue", "max-size-buffers=0", "max-size-bytes=0", "max-size-time=3000000000"]
+ENCODER_QUEUE = ["queue", "max-size-buffers=4", "max-size-bytes=0", "max-size-time=0"]
 
 
 def gain_stages(gain: float) -> list[str]:
@@ -66,6 +67,7 @@ def gst_cmd(node: int, sink: str, kbps: int = 4500, fps: int = 30, width: int = 
             "pipewiresrc", f"path={node}", "do-timestamp=true", "keepalive-time=100", "!", "video/x-raw", "!",
             "videorate", "!", f"video/x-raw,framerate={fps}/1", "!", "cudaupload", "!", "cudaconvertscale", "!",
             f"video/x-raw(memory:CUDAMemory),format=NV12,width={width},height={height},pixel-aspect-ratio=1/1", "!",
+            *ENCODER_QUEUE, "!",   # its own thread: an encoder blocking the capture thread held KWin's screencast to ~24 fps
             "nvh264enc", f"gop-size={fps}", f"bitrate={kbps}", "rc-mode=cbr", "preset=low-latency-hq", "zerolatency=true", "!",
             "h264parse", "config-interval=-1", "!", *QUEUE, "!", "mux.",
             "pipewiresrc", *([f"target-object={sink}"] if sink else []), "stream-properties=props,stream.capture.sink=true",
