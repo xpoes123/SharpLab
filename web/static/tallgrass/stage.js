@@ -850,13 +850,12 @@ export class Stage {
       vertexShader: `varying vec3 vW; void main(){ vec4 w=modelMatrix*vec4(position,1.); vW=w.xyz; gl_Position=projectionMatrix*viewMatrix*w; }`,
       fragmentShader: /* glsl */`
         varying vec3 vW; uniform float uTime,uAmount,uSide;
-        float h(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
-        float n(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.-2.*f); return mix(mix(h(i),h(i+vec2(1,0)),f.x),mix(h(i+vec2(0,1)),h(i+vec2(1,1)),f.x),f.y); }
-        float fbm(vec2 p){ return n(p)*.5+n(p*2.1+3.)*.3+n(p*4.3+7.)*.2; }
-        void main(){ vec2 p=vW.xz*.09; float c=fbm(p+vec2(uTime*.07,uTime*.03)); c=c*.6+fbm(p*1.7-vec2(uTime*.05,0.))*.4;
+        // layered sines rather than lattice noise: no cell edges to show through as squares
+        float cloud(vec2 p,float t){ return .5+.17*sin(p.x*1.1+t*.31+sin(p.y*.9-t*.2)*1.6)+.17*sin(p.y*1.4-t*.23+sin(p.x*.7+t*.17)*1.9)+.09*sin((p.x+p.y)*2.3+t*.4)+.07*sin((p.x-p.y)*3.1-t*.33); }
+        void main(){ vec2 p=vW.xz*.09; float c=cloud(p,uTime);
           // distance into enemy ground: the front edge billows instead of being a straight line
           float into=uSide<-.5?9.:(uSide>.5?vW.x:-vW.x)+(c-.5)*9.;
-          float a=smoothstep(-3.,3.,into)*uAmount; a*=smoothstep(uAmount-.75,uAmount+.25,c+uAmount*.75);
+          float a=smoothstep(-3.,3.,into)*smoothstep(0.,.35,uAmount+c*.5-.35)*min(uAmount*2.,1.);
           vec3 col=mix(vec3(.05,.055,.075),vec3(.2,.21,.25),c);
           gl_FragColor=vec4(col,clamp(a,0.,1.)*.985); }`,
     }));
