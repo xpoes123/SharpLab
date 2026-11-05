@@ -337,25 +337,20 @@ def test_the_posted_link_is_sharplab_webs_keyed_one_in_demo_mode(scog):
     assert scog.watch_url({"watch_url": "javascript:x"}) == "https://x/wall" and scog.watch_url(None) == "https://x/wall"
 
 
-async def test_restarts_update_the_embed_instead_of_posting_again(cog):
-    sent, refreshed = [], []
-
-    class Ch:
-        id = 22
-        async def send(self, **kw):
-            sent.append(kw)
-
-    cog.bot = SimpleNamespace(get_channel=lambda cid: Ch())
-
-    async def refresh(gid):
-        refreshed.append(gid)
-
-    cog.refresh = refresh
-    cog.embeds = {1: (22, 500)}
-    cog.last = {"guild": "1", "channel": "22"}
-    assert not await cog.announce({"running": True, "started": 10})                                       # a redeploy/restore
-    assert not await cog.announce({"running": True, "started": 11, "origin": {"guild": "1", "channel": "22"}})   # same channel
-    assert sent == [] and refreshed == [1, 1]
+async def test_a_new_start_posts_a_fresh_message_and_the_same_start_never_reposts(scog, chans):
+    """People get notified of a new message, not an edit to an old one up the channel."""
+    await scog.act(_in("1", 77), {"op": "start", "preset": "Live NFL"})
+    await scog.watch_loop()
+    first = chans[77].sent[-1]
+    count = len(chans[77].sent)
+    assert scog.embeds[1] == (77, first.id)
+    again = w.WallCog(bot=SimpleNamespace(get_channel=chans.get), service=scog.svc, web=FakeWeb())   # a bot restart: same start
+    await again.watch_loop()
+    assert len(chans[77].sent) == count
+    await scog.act(_in("1", 77), {"op": "stop"})
+    await scog.act(_in("1", 77), {"op": "start", "preset": "Live NFL"})
+    await scog.watch_loop()
+    assert len(chans[77].sent) == count + 1 and scog.embeds[1] == (77, chans[77].sent[-1].id) and chans[77].sent[-1].id != first.id
 
 
 async def test_relay_channel_messages_go_to_the_watch_chat(cog, monkeypatch):
