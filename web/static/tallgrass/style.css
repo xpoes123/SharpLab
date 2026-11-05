@@ -62,6 +62,8 @@ body:not(.is-loading) #loading { opacity: 0; }
 .h-army { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; padding: 7px 11px 9px; background: var(--glass); backdrop-filter: blur(10px); border-radius: var(--radius); border: 1px solid var(--line-2); }
 .h-army b { font-family: var(--font-serif); font-style: italic; font-weight: 500; font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .h-army span { font-family: var(--font-mono); font-size: var(--text-sm); align-self: center; }
+.h-army small { grid-column: 1 / 3; min-height: 0; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--accent); }
+.h-army small:empty { display: none; }
 .h-army .bar { grid-column: 1 / 3; display: block; height: 5px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
 .h-army .bar em { display: block; height: 100%; width: 100%; transition: width .35s; }
 .h-a .bar em { background: var(--info); }

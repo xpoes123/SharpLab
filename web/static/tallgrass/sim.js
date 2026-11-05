@@ -9,6 +9,9 @@ const STAGE = { atk: 0, def: 1, spa: 2, spd: 3, spe: 4, accuracy: 5, evasion: 6 
 const WEATHER = { raindance: "rain", sunnyday: "sun", sandstorm: "sand" };
 const STRUGGLE = { id: "struggle", name: "Struggle", type: null, cat: "physical", pow: 50, acc: 0, contact: true, target: "normal", prio: 0, crit: 1 };
 const SANDPROOF = new Set(["rock", "ground", "steel"]);
+const NO_SCREENS = { reflect: 0, lightscreen: 0, tailwind: 0, safeguard: 0, mist: 0 };
+const SCREEN_TURNS = { reflect: 5, lightscreen: 5, tailwind: 4, safeguard: 5, mist: 5 };
+const SUPPORT_REACH = 6;
 
 // Abilities the sim implements, in the player's words. Anything else shows as "not simulated".
 export const ABILITIES = {
@@ -131,7 +134,7 @@ function makeUnit(spec, side, id) {
   const u = {
     id, side, num: spec.num, squad: spec.squad ?? null, level, slot: spec.slot ?? "0", size: footprint(sp), x: 0, y: 0, alive: true,
     st: [0, 0, 0, 0, 0, 0, 0], status: null, sleep: 0, tox: 0, conf: 0, flinch: false, busy: 0, seeded: -1, focus: 0, ffire: false,
-    roared: false, kills: 0, dealt: 0, hitBy: [], evolved: 0, tf: null, moves: [],
+    roared: false, helped: false, lure: 0, kills: 0, dealt: 0, hitBy: [], evolved: 0, tf: null, moves: [],
   };
   setSpecies(u, spec.num);
   if (spec.ability) u.ability = spec.ability;
@@ -217,7 +220,7 @@ export function autoAnchor(squads, side) {
 // squads: [{ side, num, count, level?, moves?, ability?, slot?, x?, y?, spacing? }]. Later squads fill around earlier ones.
 export function createWorld(squads, seed = 1) {
   const w = {
-    r: seed >>> 0, turn: 0, weather: null, screens: [{ reflect: 0, lightscreen: 0 }, { reflect: 0, lightscreen: 0 }],
+    r: seed >>> 0, turn: 0, weather: null, screens: [{ ...NO_SCREENS }, { ...NO_SCREENS }],
     units: [], occ: new Int32Array(W * H), quiet: 0, over: false, peak: [0, 0],
   };
   for (const side of [0, 1]) {
@@ -244,9 +247,17 @@ export function createWorld(squads, seed = 1) {
 export const fork = (w, seed) => { const c = structuredClone(w); c.r = seed >>> 0; return c; };
 
 const buckets = [Array.from({ length: BW * BH }, () => []), Array.from({ length: BW * BH }, () => [])];
+const lures = [[], []];
 function buildBuckets(w) {
   for (const b of buckets) for (const a of b) a.length = 0;
-  for (const u of w.units) if (u.alive) buckets[u.side][(u.y >> 3) * BW + (u.x >> 3)].push(u);
+  lures[0].length = lures[1].length = 0;
+  w.alive = [0, 0];
+  for (const u of w.units) {
+    if (!u.alive) continue;
+    buckets[u.side][(u.y >> 3) * BW + (u.x >> 3)].push(u);
+    w.alive[u.side]++;
+    if (u.lure > 0) lures[u.side].push(u);
+  }
 }
 
 function nearestFoe(u) {
@@ -289,19 +300,20 @@ function around(w, u, r) {
 
 const burst = (u) => BURST + (u.size >> 1);
 const reach = (u, m) => (SPREAD.has(m.target) ? burst(u) : m.contact ? 1 : m.target === "any" ? FAR : NEAR);
-const selfish = (m) => ["self", "allySide", "all", "allyTeam", "adjacentAllyOrSelf"].includes(m.target) || m.id === "teleport" || m.id === "splash";
+const selfish = (m) => ["self", "allySide", "all", "allyTeam", "allies", "adjacentAlly", "adjacentAllyOrSelf"].includes(m.target) || m.id === "teleport" || m.id === "splash" || m.id === "healpulse";
 const weatherOn = (w, k) => w.weather?.kind === k;
 
 function speed(w, u) {
   let s = u.spe * stageMul(u.st[4]);
   if (u.status === "par") s *= 0.5;
+  if (w.screens[u.side].tailwind > 0) s *= 2;
   if ((u.ability === "swiftswim" && weatherOn(w, "rain")) || (u.ability === "chlorophyll" && weatherOn(w, "sun")) || (u.ability === "sandrush" && weatherOn(w, "sand"))) s *= 2;
   return s;
 }
 function steps(w, u) {
   let b = u.baseSpe * stageMul(u.st[4]);
   if (u.status === "par") b *= 0.5;
-  if (speed(w, u) > u.spe * stageMul(u.st[4]) && u.status !== "par") b *= 2;
+  if (u.status !== "par" && speed(w, u) > u.spe * stageMul(u.st[4])) b *= 2;
   return Math.max(1, Math.min(12, Math.round(2 + b / 28)));
 }
 
@@ -344,6 +356,7 @@ function calc(w, u, o, m, roll, crit, spread) {
   if (weatherOn(w, "rain")) other *= m.type === "water" ? 1.5 : m.type === "fire" ? 0.5 : 1;
   if (weatherOn(w, "sun")) other *= m.type === "fire" ? 1.5 : m.type === "water" ? 0.5 : 1;
   if (crit) other *= ua === "sniper" ? 2.25 : 1.5;
+  if (u.helped) other *= 1.5;
 
   let after = 1;
   if (phys && u.status === "brn" && ua !== "guts") after *= 0.5;
@@ -398,41 +411,93 @@ function attackValue(w, u, t, m) {
   return s;
 }
 
-function statusValue(w, u, t, m, inReach) {
-  const id = m.id, frac = u.hp / u.maxHp;
-  if (m.heal || id === "rest" || id === "synthesis" || id === "moonlight" || id === "morningsun") {
-    if (id === "rest") return frac < 0.35 && !u.status ? u.maxHp * 0.6 : 0;
-    return frac < 0.5 ? u.maxHp * 0.5 : 0;
+const alliesNear = (w, u, r) => around(w, u, r).filter((o) => o.side === u.side);
+
+// How hard this unit could hit its target, ignoring range. Sets the scale for every non-attack decision.
+function potential(w, u, t) {
+  let best = 0;
+  for (const s of u.moves) {
+    const m = D.moves[s.id];
+    if (s.left > 0 && m.cat !== "status") best = Math.max(best, expected(w, u, t, m));
   }
+  return best;
+}
+
+// Every option is valued in "damage this turn", so setup and debuffs compete fairly with attacking.
+// `hit` is the unit's best attack on its target, `inReach` whether this move can reach it.
+function statusValue(w, u, t, m, inReach, hit) {
+  const id = m.id, frac = u.hp / u.maxHp;
+  const base = Math.max(hit, 5);
+  const ttk = t.hp / base;                       // turns this unit alone would need
+  const horizon = Math.min(ttk, 3);              // a buff can only pay off while the fight lasts
+
+  if (id === "rest") return frac < 0.35 && !u.status ? u.maxHp * 0.6 : 0;
+  if (id === "healpulse") {
+    const hurt = alliesNear(w, u, SUPPORT_REACH).sort((a, b) => a.hp / a.maxHp - b.hp / b.maxHp)[0];
+    return hurt && hurt.hp / hurt.maxHp < 0.6 ? Math.min(hurt.maxHp - hurt.hp, hurt.maxHp >> 1) : 0;
+  }
+  if (id === "lifedew") return alliesNear(w, u, SUPPORT_REACH).concat(u).reduce((v, o) => v + Math.min(o.maxHp - o.hp, o.maxHp >> 2), 0) * 0.8;
+  if (m.heal || id === "synthesis" || id === "moonlight" || id === "morningsun") return frac < 0.5 ? u.maxHp * 0.5 : 0;
+  if (id === "healbell" || id === "aromatherapy") return alliesNear(w, u, 8).filter((o) => o.status).length * base * 0.8;
   if (m.weather) {
     const kind = WEATHER[m.weather];
     return !kind || weatherOn(w, kind) ? 0 : weatherPlan(w, u.side, kind);
   }
-  if (m.side) return w.screens[u.side][m.side] > 0 ? 0 : 18;
+  if (m.side) return w.screens[u.side][m.side] > 0 ? 0 : base * (1.5 + Math.min(w.alive[u.side], 20) * 0.25);
   if (id === "transform") return u.tf || !inReach ? 0 : 1e6;
-  if (id === "metronome") return inReach ? 25 : 0;
-  if (id === "focusenergy") return u.focus ? 0 : 6;
-  if (id === "haze") return w.units.some((o) => o.alive && o.side !== u.side && o.st.some((x) => x > 1)) ? 20 : 0;
-  if (id === "teleport") return frac < 0.4 && inReach ? 30 : 0;
+  if (id === "metronome") return inReach ? base * 1.1 : 0;
+  if (id === "focusenergy") return u.focus ? 0 : base * 0.5;
+  if (id === "haze") return w.units.some((o) => o.alive && o.side !== u.side && o.st.some((x) => x > 1)) ? base * 2 : 0;
+  if (id === "teleport") return frac < 0.4 && inReach ? base * 2 : 0;
   if (id === "splash") return 0;
-  if (m.target === "self" && m.boosts) {
-    const [stat, n] = Object.entries(m.boosts)[0];
-    if (u.st[STAGE[stat]] >= 3 || n < 0) return 0;
-    return frac > 0.6 ? 12 : 0;
+  if (id === "helpinghand") {
+    const ally = alliesNear(w, u, SUPPORT_REACH).filter((o) => !o.helped && o.moves.some((x) => D.moves[x.id].cat !== "status"))[0];
+    return ally ? potential(w, ally, t) * 0.5 : 0;
   }
-  if (!inReach) return 0;
+  if (id === "followme" || id === "ragepowder") return frac > 0.45 && gap(u, t) <= FAR && alliesNear(w, u, SUPPORT_REACH).length >= 2 ? base * 3 : 0;
+  if (id === "howl") {
+    const ready = alliesNear(w, u, SUPPORT_REACH).concat(u).filter((o) => o.st[0] < 2);
+    return ready.length * base * 0.45;
+  }
+  if (id === "coaching") return alliesNear(w, u, SUPPORT_REACH).some((o) => o.st[0] < 2) ? base * 1.2 : 0;
+
+  if (m.target === "self" && m.boosts) {
+    let v = 0;
+    const attacks = u.moves.map((x) => D.moves[x.id]).filter((x) => x.cat !== "status");
+    for (const [stat, n] of Object.entries(m.boosts)) {
+      const stage = u.st[STAGE[stat]];
+      if (n < 0 || stage >= 2) continue;
+      if (stat === "atk") v += attacks.some((x) => x.cat === "physical") ? base * 0.5 * n * horizon : 0;
+      else if (stat === "spa") v += attacks.some((x) => x.cat === "special") ? base * 0.5 * n * horizon : 0;
+      else if (stat === "def" || stat === "spd") v += base * 0.35 * n;
+      else if (stat === "evasion") v += base * 0.3 * n;
+      else v += base * 0.25 * n;
+    }
+    return frac < 0.5 ? v * 0.3 : v;
+  }
+
+  if (!inReach || ttk < 1.5) return 0;           // don't waste a turn debuffing something about to fall
   const accf = Math.min(1, chanceToHit(u, t, m) / 100);
   if (m.status) {
-    if (t.status || !canHaveStatus(t, m.status) || (m.powder && t.types.includes("grass")) || typeEff(m.type, t.types) === 0) return 0;
-    return t.hp * (m.status === "slp" ? 0.5 : 0.3) * accf;
+    if (t.status || !canHaveStatus(t, m.status) || w.screens[t.side].safeguard > 0 || (m.powder && t.types.includes("grass")) || typeEff(m.type, t.types) === 0) return 0;
+    return Math.max(t.hp * (m.status === "slp" ? 0.5 : m.status === "tox" ? 0.35 : 0.3), base * 1.5) * accf;
   }
-  if (m.vol === "confusion") return t.conf || t.ability === "owntempo" ? 0 : t.hp * 0.2 * accf;
-  if (m.vol === "leechseed") return t.seeded >= 0 || t.types.includes("grass") ? 0 : t.hp * 0.25 * accf;
+  if (m.vol === "confusion") return t.conf || t.ability === "owntempo" || w.screens[t.side].safeguard > 0 ? 0 : Math.max(t.hp * 0.2, base) * accf;
+  if (m.vol === "leechseed") return t.seeded >= 0 || t.types.includes("grass") ? 0 : Math.max(t.hp * 0.25, base) * accf;
   if (m.boosts) {
-    const [stat, n] = Object.entries(m.boosts)[0];
-    if (n > 0 || t.st[STAGE[stat]] <= -2) return 0;
-    const area = SPREAD.has(m.target) ? 3 : 1;
-    return Math.min(t.hp, 60) * 0.12 * area * accf;
+    if (w.screens[t.side].mist > 0) return 0;
+    const friends = Math.min(alliesNear(w, t, 0).length + around(w, t, 4).filter((o) => o.side === u.side).length, 8);
+    const spread = SPREAD.has(m.target) ? Math.min(burstTargets(w, u, m).filter((o) => o.side !== u.side).length, 6) : 1;
+    const floor = ttk > 6 ? -3 : -2;
+    let v = 0;
+    for (const [stat, n] of Object.entries(m.boosts)) {
+      if (n > 0 || t.st[STAGE[stat]] <= floor) continue;
+      const k = -n;
+      if (stat === "def" || stat === "spd") v += base * 0.5 * k * horizon * (1 + friends * 0.3);
+      else if (stat === "atk" || stat === "spa" || stat === "accuracy") v += potential(w, t, u) * 0.4 * k * horizon * (1 + friends * 0.12);
+      else v += base * 0.15 * k;
+    }
+    return v * spread * accf;
   }
   return 0;
 }
@@ -460,7 +525,7 @@ function canHaveStatus(o, s) {
 }
 
 function setStatus(w, o, s, ev) {
-  if (o.status || !o.alive || !canHaveStatus(o, s)) return false;
+  if (o.status || !o.alive || !canHaveStatus(o, s) || w.screens[o.side].safeguard > 0) return false;
   o.status = s;
   if (s === "slp") o.sleep = 1 + Math.floor(rand(w) * 3);
   if (s === "tox") o.tox = 1;
@@ -468,8 +533,9 @@ function setStatus(w, o, s, ev) {
   return true;
 }
 
-function boost(o, stat, n, foeCaused, ev) {
+function boost(w, o, stat, n, foeCaused, ev) {
   if (!o.alive) return;
+  if (foeCaused && n < 0 && w.screens[o.side].mist > 0) return;
   if (foeCaused && n < 0 && (o.ability === "clearbody" || (stat === "atk" && o.ability === "hypercutter") || (stat === "accuracy" && o.ability === "keeneye"))) return;
   const i = STAGE[stat];
   if (i === undefined) return;
@@ -564,10 +630,10 @@ function contactEffects(w, u, o, ev) {
 function secondary(w, u, o, sec, ev) {
   if (!sec || u.ability === "sheerforce" || rand(w) * 100 >= sec.chance) return;
   if (sec.status) setStatus(w, o, sec.status, ev);
-  if (sec.boosts) for (const [s, n] of Object.entries(sec.boosts)) boost(o, s, n, true, ev);
-  if (sec.selfBoosts) for (const [s, n] of Object.entries(sec.selfBoosts)) boost(u, s, n, false, ev);
+  if (sec.boosts) for (const [s, n] of Object.entries(sec.boosts)) boost(w, o, s, n, true, ev);
+  if (sec.selfBoosts) for (const [s, n] of Object.entries(sec.selfBoosts)) boost(w, u, s, n, false, ev);
   if (sec.vol === "flinch" && o.ability !== "innerfocus") o.flinch = true;
-  if (sec.vol === "confusion" && o.ability !== "owntempo" && !o.conf) { o.conf = 2 + Math.floor(rand(w) * 4); ev?.push({ k: "status", o: o.id, s: "conf" }); }
+  if (sec.vol === "confusion" && o.ability !== "owntempo" && !o.conf && w.screens[o.side].safeguard <= 0) { o.conf = 2 + Math.floor(rand(w) * 4); ev?.push({ k: "status", o: o.id, s: "conf" }); }
 }
 
 function isCrit(w, u, o, m) {
@@ -597,7 +663,7 @@ function strike(w, u, m, t, ev) {
         const heal = Math.min(o.maxHp - o.hp, o.maxHp >> 2);
         if (heal > 0) { o.hp += heal; ev?.push({ k: "heal", u: o.id, n: heal }); }
       } else if (a === "flashfire") o.ffire = true;
-      else if (a === "lightningrod") boost(o, "spa", 1, false, ev);
+      else if (a === "lightningrod") boost(w, o, "spa", 1, false, ev);
       ev?.push({ k: "immune", o: o.id });
       continue;
     }
@@ -623,7 +689,8 @@ function strike(w, u, m, t, ev) {
     const heal = Math.min(u.maxHp - u.hp, Math.floor((dealt * m.drain[0]) / m.drain[1]));
     if (heal > 0) { u.hp += heal; ev?.push({ k: "heal", u: u.id, n: heal }); }
   }
-  if (m.selfBoosts) for (const [s, n] of Object.entries(m.selfBoosts)) boost(u, s, n, false, ev);
+  if (m.selfBoosts) for (const [s, n] of Object.entries(m.selfBoosts)) boost(w, u, s, n, false, ev);
+  u.helped = false;
   if (m.faint && u.alive) { u.hp = 0; faint(w, u, ev); }
   if (m.busy) u.busy = 1; // ponytail: charge moves land first, then idle; same tempo as charging first, not the same dodge window
 }
@@ -643,19 +710,44 @@ function statusMove(w, u, m, t, ev) {
     if (kind) setWeather(w, kind, 5, ev);
     return;
   }
-  if (m.side) { w.screens[u.side][m.side] = 5; ev?.push({ k: "screen", side: u.side, s: m.side }); return; }
+  if (m.side) { w.screens[u.side][m.side] = SCREEN_TURNS[m.side] ?? 5; ev?.push({ k: "screen", side: u.side, s: m.side }); return; }
+  if (id === "healpulse") {
+    const hurt = alliesNear(w, u, SUPPORT_REACH).sort((a, b) => a.hp / a.maxHp - b.hp / b.maxHp)[0];
+    if (hurt) { const n = Math.min(hurt.maxHp - hurt.hp, hurt.maxHp >> 1); hurt.hp += n; ev?.push({ k: "support", u: u.id, o: hurt.id, m: id }); ev?.push({ k: "heal", u: hurt.id, n }); }
+    return;
+  }
+  if (id === "lifedew") {
+    for (const o of alliesNear(w, u, SUPPORT_REACH).concat(u)) { const n = Math.min(o.maxHp - o.hp, o.maxHp >> 2); if (n > 0) { o.hp += n; ev?.push({ k: "heal", u: o.id, n }); } }
+    return;
+  }
+  if (id === "healbell" || id === "aromatherapy") {
+    for (const o of alliesNear(w, u, 8).concat(u)) if (o.status) { o.status = null; o.conf = 0; ev?.push({ k: "cure", u: o.id }); }
+    return;
+  }
+  if (id === "helpinghand") {
+    const ally = alliesNear(w, u, SUPPORT_REACH).filter((o) => !o.helped && o.moves.some((x) => D.moves[x.id].cat !== "status"))[0];
+    if (ally) { ally.helped = true; ev?.push({ k: "support", u: u.id, o: ally.id, m: id }); } // ponytail: holds until the ally's next attack, not just this turn, since turn order here has no ally-first step
+    return;
+  }
+  if (id === "followme" || id === "ragepowder") { u.lure = 2; return; }
+  if (id === "howl") { for (const o of alliesNear(w, u, SUPPORT_REACH).concat(u)) boost(w, o, "atk", 1, false, ev); return; }
+  if (id === "coaching") {
+    const ally = alliesNear(w, u, SUPPORT_REACH).filter((o) => o.st[0] < 2).sort((a, b) => b.atk - a.atk)[0];
+    if (ally) { boost(w, ally, "atk", 1, false, ev); boost(w, ally, "def", 1, false, ev); ev?.push({ k: "support", u: u.id, o: ally.id, m: id }); }
+    return;
+  }
   if (id === "transform") return transform(u, t, ev);
   if (id === "focusenergy") { u.focus = 1; return; }
   if (id === "haze") { for (const o of w.units) if (o.alive) o.st.fill(0); return; }
   if (id === "splash") { ev?.push({ k: "splash", u: u.id }); return; }
   if (id === "teleport") return teleport(w, u, ev);
-  if (m.target === "self") { for (const [s, n] of Object.entries(m.boosts ?? {})) boost(u, s, n, false, ev); return; }
+  if (m.target === "self") { for (const [s, n] of Object.entries(m.boosts ?? {})) boost(w, u, s, n, false, ev); return; }
 
   const targets = SPREAD.has(m.target) ? burstTargets(w, u, m).filter((o) => o.side !== u.side) : t ? [t] : [];
   for (const o of targets) {
     if (rand(w) * 100 >= chanceToHit(u, o, m)) { ev?.push({ k: "miss", u: u.id, o: o.id }); continue; }
     if (m.status && !(m.powder && o.types.includes("grass")) && typeEff(m.type, o.types) !== 0) setStatus(w, o, m.status, ev);
-    if (m.boosts) for (const [s, n] of Object.entries(m.boosts)) boost(o, s, n, true, ev);
+    if (m.boosts) for (const [s, n] of Object.entries(m.boosts)) boost(w, o, s, n, true, ev);
     if (m.vol === "confusion" && !o.conf && o.ability !== "owntempo") { o.conf = 2 + Math.floor(rand(w) * 4); ev?.push({ k: "status", o: o.id, s: "conf" }); }
     if (m.vol === "leechseed" && !o.types.includes("grass")) { o.seeded = u.id; ev?.push({ k: "status", o: o.id, s: "seed" }); }
   }
@@ -743,7 +835,7 @@ function intimidate(w, u, t, ev) {
   if (u.roared || u.ability !== "intimidate" || gap(u, t) > 8) return;
   u.roared = true;
   ev?.push({ k: "roar", u: u.id });
-  for (const o of around(w, u, 8)) if (o.side !== u.side) boost(o, "atk", -1, true, ev);
+  for (const o of around(w, u, 8)) if (o.side !== u.side) boost(w, o, "atk", -1, true, ev);
 }
 
 const movesIn = (u) => u.moves.map((s) => [s, D.moves[s.id]]);
@@ -752,6 +844,8 @@ function act(w, u, ev) {
   if (u.busy > 0) { u.busy--; return; }
   let t = u.plan && w.units[u.plan.t]?.alive ? w.units[u.plan.t] : nearestFoe(u);
   if (!t) return;
+  // Follow Me: a nearby enemy lure pulls single-target attacks onto itself.
+  for (const l of lures[1 - u.side]) if (l.alive && l.lure > 0 && gap(u, l) <= FAR) { t = l; break; }
   if (!ableToAct(w, u, ev) || !u.alive) return;
   intimidate(w, u, t, ev);
 
@@ -775,9 +869,10 @@ function act(w, u, ev) {
   }
 
   let best = null, bv = 0;
+  const hit = live.some(([, m]) => m.cat === "status") ? potential(w, u, t) : 0;
   for (const [s, m] of live) {
     const inReach = gap(u, t) <= reach(u, m);
-    const v = m.cat === "status" ? statusValue(w, u, t, m, inReach) : inReach ? attackValue(w, u, t, m) : 0;
+    const v = m.cat === "status" ? statusValue(w, u, t, m, inReach, hit) : inReach ? attackValue(w, u, t, m) : 0;
     if (v > bv) { bv = v; best = [s, m]; }
   }
   if (!best) {
@@ -818,11 +913,12 @@ function endOfTurn(w, ev) {
       hurt(w, u, n, null, ev, "seed");
       if (src?.alive) src.hp = Math.min(src.maxHp, src.hp + n);
     }
-    if (u.alive && u.ability === "speedboost") boost(u, "spe", 1, false, ev);
+    if (u.alive && u.ability === "speedboost") boost(w, u, "spe", 1, false, ev);
     u.flinch = false;
   }
   if (w.weather && --w.weather.turns <= 0) { w.weather = null; ev?.push({ k: "weather", kind: null }); }
-  for (const s of w.screens) { if (s.reflect > 0) s.reflect--; if (s.lightscreen > 0) s.lightscreen--; }
+  for (const u of w.units) if (u.lure > 0) u.lure--;
+  for (const s of w.screens) for (const k of Object.keys(s)) if (s[k] > 0) s[k]--;
 }
 
 // Advance one turn. Pass an array to collect events for the renderer; `order` on each event is its action slot.
@@ -843,7 +939,8 @@ export function step(w, ev = null) {
     let prio = 0;
     if (t) for (const s of u.moves) {
       const m = D.moves[s.id];
-      if (s.left > 0 && m.prio > 0 && m.cat !== "status" && gap(u, t) <= steps(w, u) + reach(u, m)) prio = Math.max(prio, m.prio);
+      if (s.left <= 0 || m.prio <= 0) continue;
+      if (m.cat === "status" ? gap(u, t) <= FAR : gap(u, t) <= steps(w, u) + reach(u, m)) prio = Math.max(prio, m.prio);
     }
     queue.push([prio, speed(w, u) + rand(w), u]);
   }

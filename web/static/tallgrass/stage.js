@@ -504,7 +504,7 @@ export class Stage {
       vertexShader: /* glsl */`${V_COMMON} attribute vec3 iPos; attribute vec2 iSize; attribute vec4 iSide; attribute vec4 iFx; varying vec2 vL; varying vec4 vS; varying float vD;
         void main(){ float r=iSide.y; vec2 xz=iPos.xz+vec2(position.x*2.,(position.y-.5)*2.)*r; vL=vec2(position.x*2.,(position.y-.5)*2.); vS=iSide; vD=iFx.y; gl_Position=projectionMatrix*viewMatrix*vec4(xz.x,.03+quakeAt(xz),xz.y,1.); }`,
       fragmentShader: /* glsl */`uniform vec3 uA,uB; uniform float uGlow; varying vec2 vL; varying vec4 vS; varying float vD;
-        void main(){ float d=length(vL); if(d>1.) discard; float k=(1.-smoothstep(.82,1.,d))*smoothstep(.4,.82,d)+.14*(1.-smoothstep(.2,1.,d)); vec3 c=mix(uA,uB,vS.x);
+        void main(){ float d=length(vL); if(d>1.) discard; float k=(1.-smoothstep(.82,1.,d))*smoothstep(.4,.82,d)+.14*(1.-smoothstep(.2,1.,d)); vec3 c=mix(uA,uB,vS.x); if(vS.w>.5) c=vec3(.45,1.,.62); else if(vS.w<-.5) c=vec3(.86,.38,1.);
           float sel=vS.z; gl_FragColor=vec4(c*(1.+sel*2.5),min(1.,k*(uGlow+sel*2.))*(1.-vD)); }`,
     }), 1.5);
     this.spriteMesh = layer(new THREE.ShaderMaterial({
@@ -625,7 +625,10 @@ export class Stage {
       // sprites face left in the art: flip when the unit's heading points screen-right
       const flip = v.dir * rx + v.dz * rz > 0;
       fx[i4] = v.flash; fx[i4 + 1] = v.dissolve; fx[i4 + 2] = v.tilt; fx[i4 + 3] = flip ? 1 : 0;
-      si[i4] = v.side; si[i4 + 1] = Math.max(0.42, v.size * TILE_M * 0.66); si[i4 + 2] = this.selected === v ? 1 : 0; si[i4 + 3] = 0;
+      const unit = this.world.units[v.id];
+      let mood = 0;
+      if (unit) for (const x of unit.st) mood += x;
+      si[i4] = v.side; si[i4 + 1] = Math.max(0.42, v.size * TILE_M * 0.66); si[i4 + 2] = this.selected === v ? 1 : unit?.lure > 0 ? 0.55 : 0; si[i4 + 3] = mood > 0 ? 1 : mood < 0 ? -1 : 0;
       n++;
     }
     for (const a of [this.aPos, this.aSize, this.aUV, this.aFx, this.aSide]) {
@@ -858,7 +861,7 @@ export class Stage {
           for(int i=0;i<3;i++){ vec4 s=uShock[i]; if(s.w<=0.) continue; vec2 d=(uv-s.xy)*vec2(uAspect,1.); float r=length(d); float k=(1.-smoothstep(0.,.09,abs(r-s.z)))*s.w; uv-=normalize(d+1e-5)*k*.026/vec2(uAspect,1.); }
           float coc=clamp((abs(uv.y-uFocusY)-uBand)/.42,0.,1.); coc=coc*coc*uBlur;
           vec3 c=vec3(0.); const float G=2.39996;
-          if(coc<.0002) c=texture2D(tDiffuse,uv).rgb; // the in-focus band skips the blur entirely
+          if(coc<.00005) c=texture2D(tDiffuse,uv).rgb; // the in-focus band skips the blur entirely
           else { float tw=0.; for(int i=0;i<uTaps;i++){ float f=float(i); float r=sqrt(f/float(uTaps)); vec2 o=vec2(cos(f*G),sin(f*G))*r*coc*vec2(1./uAspect,1.)*8.; c+=texture2D(tDiffuse,uv+o).rgb; tw+=1.; } c/=tw; }
           if(uChroma>0.){ vec2 o=(uv-.5)*uChroma; c.r=texture2D(tDiffuse,uv+o).r; c.b=texture2D(tDiffuse,uv-o).b; }
           c=mix(c,uFlashC*2.2,uFlash);
@@ -962,6 +965,8 @@ export class Stage {
       case "boost": {
         const o = V[e.o]; if (!o) break;
         const up = e.n > 0, [x, y, z] = this.chest(o);
+        if (o.h >= 0.6 || Math.random() < 0.25) this.float(o, `${{ atk: "ATK", def: "DEF", spa: "SPA", spd: "SPD", spe: "SPE", accuracy: "ACC", evasion: "EVA" }[e.stat] ?? e.stat}${up ? "↑" : "↓"}`, up ? "#7fe6ff" : "#ff8a7a", 12);
+        this.onEvent(e);
         for (let i = 0; i < 5; i++) this.particle(x + (Math.random() - 0.5) * o.h * 0.5, y - o.h * 0.3, z + (Math.random() - 0.5) * o.h * 0.5, 0, up ? 1.6 : -0.9, 0, 0.6, 0.11, 0.03, 0, ...(up ? hex(0x62c8ff, 1.6) : hex(0xff5a4a, 1.5)));
         break;
       }
@@ -1011,9 +1016,18 @@ export class Stage {
         break;
       }
       case "screen": {
-        const c = e.s === "reflect" ? 0x62c8ff : 0xffd21f;
+        const c = { reflect: 0x62c8ff, lightscreen: 0xffd21f, tailwind: 0xcfe4ff, safeguard: 0x8affc8, mist: 0xc8d8ff }[e.s] ?? 0xffffff;
         for (const v of V) if (v.alive && v.side === e.side && Math.random() < 0.25) { const [x, y, z] = this.chest(v); this.burst(x, y, z, 3, hex(c, 1.6), { speed: 0.5, up: 1, life: 0.7, size: 0.2, grav: 0 }); }
         this.onEvent(e);
+        break;
+      }
+      case "support": {
+        const v = V[e.u], o = V[e.o];
+        if (!v || !o) break;
+        const c = { healpulse: 0x7cff9a, helpinghand: 0xffd86a, coaching: 0xff9a5a }[e.m] ?? 0xffffff;
+        this.beam(this.chest(v), this.chest(o), hex(c, 2.4), { width: 0.07, life: 0.36, style: 0, travel: 0.7 });
+        const [x, y, z] = this.chest(o);
+        this.burst(x, y, z, 7, hex(c, 1.9), { speed: 0.7, up: 1.6, life: 0.5, size: 0.09, grav: -1 });
         break;
       }
       case "splash": {
@@ -1045,6 +1059,13 @@ export class Stage {
     this.note(v, big ? 8 : 0.4);
 
     if (D.cat === "status") {
+      if (e.m === "howl") { this.ring(v.x, v.z, 3.4, hex(0xff9a4a, 1.7), 0.5); this.sfx("thud"); return; }
+      if (e.m === "followme" || e.m === "ragepowder") { this.ring(v.x, v.z, 2.2, hex(0xff8ad0, 1.8), 0.6); this.burst(sx, sy, sz, 10, hex(0xff8ad0, 1.8), { speed: 1, up: 1.6, life: 0.6, size: 0.1, grav: -1 }); return; }
+      if (e.m === "tailwind") {
+        for (const a of V) if (a.alive && a.side === v.side && Math.random() < 0.5) this.particle(a.x - a.dir * 0.3, 0.3 + Math.random() * 2, a.z, (a.side === 0 ? 1 : -1) * (8 + Math.random() * 7), 0.2, (Math.random() - 0.5), 0.7, 0.14, 0.02, 0, 1.4, 1.6, 1.9);
+        this.sfx("wind");
+        return;
+      }
       if (t) this.beam([sx, sy, sz], [tx, ty, tz], c, { width: 0.05, life: 0.34, style: 0, travel: 0.7 });
       else this.burst(sx, sy, sz, 7, c, { speed: 0.9, up: 1.6, life: 0.6, size: 0.1, grav: -1, jitter: v.h * 0.5 });
       return;

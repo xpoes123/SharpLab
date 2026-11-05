@@ -19,7 +19,13 @@ const get = async (url) => {
   }
 };
 
-const [sdMoves, sdDex] = await Promise.all([get(`${SD}/moves.json`), get(`${SD}/pokedex.json`)]);
+const [sdMoves, sdDex, sdLearn] = await Promise.all([get(`${SD}/moves.json`), get(`${SD}/pokedex.json`), get(`${SD}/learnsets.json`)]);
+
+// Gen 1-2 has almost no way to help an ally, so these team and debuff moves come from each species' modern learnset.
+const TACTICS = new Set([
+  "helpinghand", "followme", "ragepowder", "howl", "tailwind", "healpulse", "lifedew", "coaching", "healbell", "aromatherapy", "safeguard", "mist",
+  "featherdance", "tickle", "faketears", "metalsound", "willowisp", "charm", "screech", "scaryface", "stunspore", "sleeppowder", "thunderwave", "toxic",
+]);
 
 // Power for moves whose base power is computed in-game. Flail and Reversal are computed from HP in sim.js.
 const POWER = { flail: 1, reversal: 1, return: 102, frustration: 102, magnitude: 71, present: 40, lowkick: 60 };
@@ -27,7 +33,8 @@ const STATUS_SPECIAL = new Set(["transform", "metronome", "splash", "teleport", 
 const SKIP = new Set(["futuresight", "snore", "dreameater", "sleeptalk"]);
 
 function supported(key, m) {
-  if (m.num < 1 || m.num > 251 || SKIP.has(key)) return false;
+  if (m.num < 1 || (m.num > 251 && !TACTICS.has(key)) || SKIP.has(key)) return false;
+  if (TACTICS.has(key)) return true;
   if (m.category !== "Status") return m.basePower > 0 || m.damage || m.ohko || POWER[key] || key === "superfang" || key === "psywave";
   if (STATUS_SPECIAL.has(key)) return true;
   if (m.heal && m.target === "self") return true;
@@ -70,8 +77,9 @@ await Promise.all(TYPES.map(async (t) => {
 const clean = (s) => s.replace(/­[\n\f\s]*/g, "").replace(/-[\n\f]+/g, "").replace(/\s+/g, " ").replace(/POK[Éé]MON/g, "Pokémon").trim();
 const areas = {};
 
-function learnsets(p) {
+function learnsets(p, name) {
   const levelup = [], tm = new Set();
+  for (const key of Object.keys(sdLearn[id(name)]?.learnset ?? {})) if (TACTICS.has(key) && moves[key]) tm.add(key);
   for (const { move, version_group_details: vs } of p.moves) {
     const key = id(move.name);
     if (!moves[key]) continue;
@@ -113,7 +121,7 @@ async function speciesRow(s) {
     abilityNames: s.abilities, evoTo: levelEvo?.num ?? null, evoLevel: levelEvo?.evoLevel ?? null,
     growth: sp.growth_rate.name, baseExp: p.base_experience, catchRate: sp.capture_rate,
     legendary: sp.is_legendary || sp.is_mythical, dex: dex ? clean(dex.flavor_text) : "",
-    ...learnsets(p),
+    ...learnsets(p, s.name),
   };
 }
 

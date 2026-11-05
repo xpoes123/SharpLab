@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CHECK = r"""
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { createWorld, damage, footprint, gainXp, outcome, run, step, typeEff, useData, wildMoves } from "./web/static/tallgrass/sim.js";
+import { createWorld, damage, defaultLevel, footprint, gainXp, legalMoves, outcome, run, step, typeEff, useData, wildMoves } from "./web/static/tallgrass/sim.js";
 import { PRESETS, WILDS, resolveSquads, wildHorde } from "./web/static/tallgrass/presets.js";
 const data = JSON.parse(readFileSync("web/static/tallgrass/data.json"));
 useData(data);
@@ -99,6 +99,24 @@ assert.equal(karp.num, num("Magikarp"));
 gainXp(pair, karp, 100000);
 assert.ok(karp.num === num("Gyarados") && karp.evolved === 1);
 
+// A support unit's moves actually fire: Follow Me draws fire, Howl raises allies, Tailwind doubles the side's speed.
+const camp = createWorld([squad(0, "Clefable", 3, 50, ["followme", "doubleslap"]), squad(0, "Arcanine", 8, 50, ["howl", "flamethrower"]), squad(0, "Pidgeot", 3, 50, ["tailwind", "wingattack"]), squad(1, "Tauros", 30, 50)], 4);
+const used = {};
+let lured = 0;
+for (let i = 0; i < 30 && !camp.over; i++) {
+  const e = []; step(camp, e);
+  for (const x of e) {
+    if (x.k === "use") used[x.m] = (used[x.m] ?? 0) + 1;
+    if (x.k === "hit" && camp.units[x.u].side === 1 && camp.units[x.o].num === num("Clefable")) lured++;
+  }
+}
+for (const m of ["followme", "howl", "tailwind"]) assert.ok(used[m] > 0, `${m} never used: ${JSON.stringify(used)}`);
+assert.ok(lured > 0, "Follow Me drew no attacks");
+const breeze = createWorld([squad(0, "Pidgeot", 1, 50, ["tailwind"]), squad(1, "Tauros", 1, 50)], 1);
+step(breeze);
+assert.ok(breeze.screens[0].tailwind > 0);
+
+
 // Sleep skips turns; Static can paralyze on contact.
 const asleep = createWorld([squad(0, "Rattata", 1, 50, ["tackle"]), squad(1, "Jigglypuff", 1, 50, ["sing"])], 9);
 asleep.units[0].status = "slp"; asleep.units[0].sleep = 3;
@@ -109,7 +127,7 @@ assert.ok(skip.some((e) => e.k === "skip" && e.why === "slp"));
 for (const p of PRESETS) {
   const squads = resolveSquads(p, data);
   for (const s of squads) {
-    const sp = data.species[s.num], legal = new Set([...sp.levelup.map(([, m]) => m), ...sp.tm]);
+    const sp = data.species[s.num], legal = new Set(legalMoves(sp, s.level ?? defaultLevel(sp)));
     for (const m of s.moves ?? []) {
       assert.ok(data.moves[m], `${p.id}: unknown move ${m}`);
       assert.ok(legal.has(m), `${p.id}: ${sp.name} can't learn ${m}`);

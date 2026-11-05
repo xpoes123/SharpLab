@@ -1,5 +1,5 @@
 // Tall Grass: title, army builder, and war playback. Rules live in sim.js, drawing in stage.js.
-import { ABILITIES, createWorld, defaultLevel, footprint, outcome, step, useData, W, wildMoves, xpAt, zoneOf } from "./sim.js";
+import { ABILITIES, createWorld, defaultLevel, footprint, legalMoves, outcome, step, useData, W, wildMoves, xpAt, zoneOf } from "./sim.js";
 import { BIOMES, Stage } from "./stage.js";
 import { PRESETS, WILDS, resolveSquads, wildHorde } from "./presets.js";
 import { Sfx } from "./sfx.js";
@@ -127,7 +127,7 @@ function buildTitle() {
   }
 }
 
-const DEMOS = ["rats", "chain", "storm", "goliath", "hive", "mines", "legends"];
+const DEMOS = ["rats", "chain", "arms", "storm", "goliath", "hive", "mines", "legends"];
 async function showTitle() {
   show("title");
   await runDemo();
@@ -257,6 +257,10 @@ function updateHud() {
   $("barA").style.width = `${a * 100}%`;
   $("barB").style.width = `${b * 100}%`;
   $("turn").textContent = `Turn ${w.turn}`;
+  const screenNames = { reflect: "Reflect", lightscreen: "Light Screen", tailwind: "Tailwind", safeguard: "Safeguard", mist: "Mist" };
+  for (const [side, id] of [[0, "chipsA"], [1, "chipsB"]]) {
+    $(id).textContent = Object.entries(w.screens[side]).filter(([, n]) => n > 0).map(([k, n]) => `${screenNames[k]} ${n}`).join(" · ");
+  }
   $("weatherChip").textContent = w.weather ? { rain: "Rain", sun: "Harsh sun", sand: "Sandstorm" }[w.weather.kind] : " ";
   drawChart();
 }
@@ -316,8 +320,20 @@ function moment(e) {
   if (G.demo || G.mode !== "war") return;
   const cls = (id) => (G.world.units[id]?.side === 0 ? "a" : "b");
   switch (e.k) {
+    case "boost": {
+      const u = G.world.units[e.o];
+      if (!u || e.n > 0) break;
+      const label = { atk: "Attack", def: "Defense", spa: "Sp. Atk", spd: "Sp. Def", spe: "Speed", accuracy: "Accuracy", evasion: "Evasion" }[e.stat];
+      if (label) tickerAdd(`${G.names[u.side]}: ${label} fell`, u.side === 0 ? "a" : "b");
+      break;
+    }
+    case "screen": {
+      const label = { reflect: "Reflect", lightscreen: "Light Screen", tailwind: "Tailwind", safeguard: "Safeguard", mist: "Mist" }[e.s];
+      if (label) tickerAdd(`${G.names[e.side]} raised ${label}`, e.side === 0 ? "a" : "b");
+      break;
+    }
     case "use": {
-      if (!LOUD.has(e.m)) break;
+      if (!LOUD.has(e.m) && data.moves[e.m]?.cat !== "status") break;
       const key = `${e.u}:${e.m}`, now = performance.now();
       const moveKey = `m:${e.m}`;
       if (now - (G.tickerLast[moveKey] ?? 0) < 1400 || now - (G.tickerLast[key] ?? 0) < 4000) break;
@@ -554,12 +570,22 @@ function closeInspect() {
   if (stage) { stage.selected = null; if (stage.camMode === "follow") stage.setCamMode("director"); }
 }
 
+// What a non-attack is for, shown wherever moves are listed.
+function moveRole(d) {
+  if (d.side || d.weather || ["allies", "adjacentAlly", "allyTeam", "allySide"].includes(d.target) || d.id === "healpulse" || d.id === "followme" || d.id === "ragepowder") return "team";
+  if (d.heal || d.id === "rest") return "heal";
+  if (d.boosts && d.target === "self") return "setup";
+  if (d.boosts) return "debuff";
+  if (d.status || d.vol) return "status";
+  return "status";
+}
+
 function moveRows(box, moves, showPp) {
   const list = el("div", "i-moves");
   for (const m of moves) {
     const d = data.moves[m.id];
     if (!d) continue;
-    list.append(el("span", null, d.name), el("span", null, d.pow ? `${d.pow} pw` : d.cat === "status" ? "status" : "—"), el("span", null, showPp ? `${m.left}/${d.pp} PP` : `${d.pp} PP`));
+    list.append(el("span", null, d.name), el("span", null, d.cat === "status" ? moveRole(d) : d.pow ? `${d.pow} pw` : "—"), el("span", null, showPp ? `${m.left}/${d.pp} PP` : `${d.pp} PP`));
   }
   box.append(list);
 }
@@ -608,6 +634,10 @@ function renderInspect(v) {
   if (u.alive) box.append(el("div", "i-sub", `HP ${Math.max(0, u.hp)}/${u.maxHp}${u.status ? ` · ${u.status.toUpperCase()}` : ""}${u.kills ? ` · ${u.kills} KO` : ""}`));
   else box.append(el("div", "i-sub", "Fainted"));
   statGrid(box, [u.maxHp, u.atk, u.def, u.spa, u.spd, u.spe]);
+  const stages = ["Atk", "Def", "SpA", "SpD", "Spe", "Acc", "Eva"].map((n, i) => (u.st[i] ? `${n} ${u.st[i] > 0 ? "+" : "−"}${Math.abs(u.st[i])}` : null)).filter(Boolean);
+  if (u.helped) stages.push("Helping Hand ready");
+  if (u.lure > 0) stages.push("Drawing fire");
+  if (stages.length) box.append(el("div", "i-sub", stages.join(" · ")));
   moveRows(box, u.moves, true);
   const here = data.species[u.num];
   if (here.evoLevel && !u.tf) {
@@ -639,7 +669,7 @@ function inspectSpec(s, teach = false) {
   const moves = s.moves ?? wildMoves(sp, level);
   moveRows(box, moves.map((id) => ({ id })), false);
   if (teach) {
-    const legal = [...new Set([...sp.levelup.map(([, m]) => m), ...sp.tm])].filter((m) => data.moves[m]).sort((a, b) => data.moves[a].name.localeCompare(data.moves[b].name));
+    const legal = legalMoves(sp, level).sort((a, b) => data.moves[a].name.localeCompare(data.moves[b].name));
     const grid = el("div", "i-teach");
     const picks = [0, 1, 2, 3].map((i) => {
       const sel = el("select");
@@ -647,7 +677,11 @@ function inspectSpec(s, teach = false) {
       const none = el("option", null, "—");
       none.value = "";
       sel.append(none);
-      for (const m of legal) { const o = el("option", null, data.moves[m].name); o.value = m; sel.append(o); }
+      for (const m of legal) {
+        const d = data.moves[m], o = el("option", null, `${d.name} (${d.cat === "status" ? moveRole(d) : `${d.pow || "—"} pw`})`);
+        o.value = m;
+        sel.append(o);
+      }
       sel.value = moves[i] ?? "";
       sel.addEventListener("change", () => {
         const next = picks.map((p) => p.value).filter(Boolean);
