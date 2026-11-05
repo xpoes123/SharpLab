@@ -206,3 +206,11 @@ def test_all_paginates_and_maps_auth_errors():
     asyncio.run(run())
     assert str(seen[0].url) == ka.KALSHI_BASE + "/portfolio/fills?min_ts=5&limit=200"
     assert seen[1].url.params["cursor"] == "c1"
+
+
+def test_group_fills_rows_merges_buffered():
+    from shared.kalshi_account import group_fills_rows
+    a = {"ticker": "T", "action": "buy", "side": "yes", "qty": 10.0, "cost": 4.0, "fee": 0.1, "avg": 0.4}
+    b = {**a, "qty": 30.0, "cost": 15.0, "fee": 0.2, "avg": 0.5}
+    (g,) = group_fills_rows([a, b])
+    assert g["qty"] == 40 and g["cost"] == 19 and round(g["avg"], 3) == 0.475

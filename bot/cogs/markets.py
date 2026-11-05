@@ -13,6 +13,8 @@ RECAP_CHANNEL_ID = 1515214409079853116
 FILLS_CHANNEL_ID = 1563303484697350286  # live trade feed
 FILLS_ROLE_NAME = "Kalshi Trades"  # self-assign via the ⚡ panel in #roles
 ROLES_CHANNEL_ID = 1510113941148405780  # #roles
+SMALL_FILL_USD = 25.0  # grouped fills under this cost don't post live; they batch into a digest
+SMALL_FLUSH_SECS = 1800  # digest posts this long after the first buffered small fill
 
 import discord
 import httpx
@@ -148,6 +150,7 @@ class MarketsCog(commands.Cog):
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
+        self._small: dict[str, list] = {}  # uid -> [first_ts, rows]; ponytail: in-memory, lost on restart
         self.recap_loop.start()
         self.fills_loop.start()
         self.week_loop.start()
@@ -188,16 +191,22 @@ class MarketsCog(commands.Cog):
                 if not fills:
                     continue
                 await queries.set_bot_setting(fkey, str(max(int(ka._f(f.get("ts"))) for f in fills) or int(time.time())))
-                if fills:
-                    embed = await _fills_embed(ka.group_fills(fills))
-                    user = self.bot.get_user(int(uid)) or await self.bot.fetch_user(int(uid))
-                    embed.set_author(name=user.display_name, icon_url=user.display_avatar.url)
-                    embed.set_footer(text="🫡 tail · 🙅 fade")
-                    msg = await channel.send(embed=embed)
-                    for emoji in ("🫡", "🙅"):
-                        await msg.add_reaction(emoji)
+                rows = ka.group_fills(fills)
+                big = [r for r in rows if r["cost"] >= SMALL_FILL_USD]
+                small = [r for r in rows if r["cost"] < SMALL_FILL_USD]
+                if small:
+                    self._small.setdefault(uid, [time.time(), []])[1].extend(small)
+                if big:
+                    await self._post_fills(channel, uid, big, react=True)
             except Exception:
                 log.warning("kalshi fills poll failed for %s", uid, exc_info=True)
+        for uid, (first, rows) in list(self._small.items()):
+            if time.time() - first >= SMALL_FLUSH_SECS:
+                del self._small[uid]
+                try:
+                    await self._post_fills(channel, uid, ka.group_fills_rows(rows), react=False)
+                except Exception:
+                    log.warning("kalshi small-fill digest failed for %s", uid, exc_info=True)
         try:
             res = ka.resolutions(settles_by_user, settle_since)
             if res:
@@ -205,6 +214,19 @@ class MarketsCog(commands.Cog):
                     await channel.send(embed=embed)
         except Exception:
             log.warning("kalshi resolution post failed", exc_info=True)
+
+    async def _post_fills(self, channel, uid: str, rows: list[dict], react: bool) -> None:
+        embed = await _fills_embed(rows)
+        if not react:
+            embed.title = f"🧾 Small trades ({len(rows)})"
+        user = self.bot.get_user(int(uid)) or await self.bot.fetch_user(int(uid))
+        embed.set_author(name=user.display_name, icon_url=user.display_avatar.url)
+        if react:
+            embed.set_footer(text="🫡 tail · 🙅 fade")
+        msg = await channel.send(embed=embed)
+        if react:
+            for emoji in ("🫡", "🙅"):
+                await msg.add_reaction(emoji)
 
     @fills_loop.before_loop
     async def _before_fills(self) -> None:
