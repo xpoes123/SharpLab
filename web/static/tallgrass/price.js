@@ -1,11 +1,11 @@
 // What a Pokémon costs in a duel. A formula covers stats, level and moves; prices.json holds per-species
 // corrections fitted by Monte Carlo (scripts/tallgrass_prices.mjs) so no pure army dominates at equal money.
-import { H, levelRange, legalMoves, statAt, wildMoves, zoneOf } from "./sim.js";
+import { H, defaultLevel, levelRange, legalMoves, statAt, wildMoves, zoneOf } from "./sim.js";
 
 export const BUDGETS = [["Skirmish", 20000], ["War", 50000], ["Total War", 150000]];
 export const MAX_UNITS = 1500;
 const REF = 102; // a typical defensive stat: level 50, base 90
-const FLOOR = 10;
+const FLOOR = 10, ELITE = 4000;
 const SPREAD = new Set(["allAdjacent", "allAdjacentFoes"]);
 
 let D = null, K = {};
@@ -47,17 +47,25 @@ function raw(sp, level, ids) {
   return 30 * Math.sqrt(dmg * hp * bulk) * (0.75 + statAt(sp.base[5], level) / 400) * mods;
 }
 
+// The fitted points for a species: its lowest level, the level people usually field it at, and its highest.
+export function pricePoints(sp) {
+  const [lo, hi] = levelRange(sp);
+  return [lo, Math.max(lo, Math.min(hi, defaultLevel(sp))), hi];
+}
+
 function correction(num, level) {
   const k = K[num];
   if (!k) return 1;
-  const [lo, hi] = levelRange(D.species[num]);
-  const t = hi > lo ? (level - lo) / (hi - lo) : 0;
-  return Math.exp(Math.log(k[0]) * (1 - t) + Math.log(k[1]) * t);
+  const [lo, mid, hi] = pricePoints(D.species[num]);
+  const between = (a, b, x, y) => (y > x ? Math.exp(Math.log(a) * (1 - (level - x) / (y - x)) + Math.log(b) * ((level - x) / (y - x))) : a);
+  return level <= mid ? between(k[0], k[1], lo, mid) : between(k[1], k[2], mid, hi);
 }
 
 export function unitPrice(num, level, moves) {
   const sp = D.species[num];
-  const p = raw(sp, level, moves ?? wildMoves(sp, level)) * correction(num, level);
+  let p = raw(sp, level, moves ?? wildMoves(sp, level)) * correction(num, level);
+  // Very few expensive pure armies exist for the fit to learn from, and they came out strong, so the top end pays a premium.
+  if (p > ELITE) p *= (p / ELITE) ** 0.3;
   return Math.max(FLOOR, Math.round(p / 10) * 10);
 }
 

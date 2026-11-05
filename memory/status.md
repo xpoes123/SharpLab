@@ -110,4 +110,5 @@ Known limitation: card team labels track the *current* ESPN roster, not the card
 season (ESPN only returns currently-rostered players). Extend seasons: re-run seeder.
 
 ## Tall Grass (2026-11-05)
-Static WebGL Pokémon war simulator at `/tallgrass/` (`web/static/tallgrass/`), no backend. Simulation and graphics only: no betting, coins, or achievements. Not linked from `/games`. Tune presets with `node scripts/tallgrass.mjs --presets`.
+WebGL Pokémon war simulator at `/tallgrass/` (`web/static/tallgrass/`). Simulation and graphics only: no betting, coins, or achievements. Not linked from `/games`. Tune presets with `node scripts/tallgrass.mjs --presets`.
+Blind two-player duels at `/tallgrass/?duel=CODE` (`web/g_tallgrass.py`, rooms in memory). Budget money is the only currency. Refit prices after rules changes with `node scripts/tallgrass_prices.mjs`.
