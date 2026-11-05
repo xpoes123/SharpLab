@@ -32,6 +32,7 @@ from shared import election_markets as em
 from shared import election_pulse as ep
 from shared import kalshi_account as ka
 from shared import kalshi_election as ke
+from wall import modes
 from web import wall, wall_bets
 from wall import election as we
 
@@ -384,7 +385,7 @@ async def get_map(request: Request):
     return {"races": em.map_races(snap.get("races") or []), "offices": snap.get("offices") or {}, "source": snap.get("source", ""),
             "updated": snap.get("updated", 0), "error": snap.get("error", ""), "calls": (snap.get("calls") or [])[:8],
             "states": we.STATES, "member": bool(user), "owner": bool(user and wall.hub.is_owner(user["id"])),
-            "public": not user, "now": snap.get("now")}
+            "public": not user, "now": snap.get("now"), "on_air": modes.of_state(wall.hub.wall).id == "election"}
 
 
 _pulse_cache: dict = {"at": 0.0, "data": None}
