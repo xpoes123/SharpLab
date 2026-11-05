@@ -48,9 +48,9 @@
 
 <section id="hud" class="screen" hidden>
   <div class="h-top">
-    <div class="h-army h-a"><b id="nameA"></b><span id="countA"></span><i class="bar"><em id="barA"></em></i></div>
+    <div class="h-army h-a"><b id="nameA"></b><span id="countA"></span><i class="bar"><em id="barA"></em></i><small id="chipsA"></small></div>
     <div class="h-mid"><span id="turn">Turn 0</span><canvas id="chart" width="360" height="56" aria-hidden="true"></canvas><span id="weatherChip"></span></div>
-    <div class="h-army h-b"><b id="nameB"></b><span id="countB"></span><i class="bar"><em id="barB"></em></i></div>
+    <div class="h-army h-b"><b id="nameB"></b><span id="countB"></span><i class="bar"><em id="barB"></em></i><small id="chipsB"></small></div>
   </div>
   <ol id="ticker" aria-live="off"></ol>
   <div id="banner" aria-live="polite"></div>
@@ -93,6 +93,7 @@
     <li><b>Modern values:</b> stats, moves, types, and abilities use current-generation numbers, so Clefairy is a Fairy type.</li>
     <li><b>To scale:</b> sprites and footprints use real Pokédex heights, so 44 Rattata can bite an Onix at once and only 8 can reach another Rattata. The smallest bodies are drawn at 0.42 m so you can still see them.</li>
     <li><b>Invented for the map:</b> tiles, walking speed, and move ranges. Everyone acts each turn in priority and Speed order.</li>
+    <li><b>Team tactics:</b> Gen 1 and 2 have almost no way to help an ally, so Helping Hand, Follow Me, Rage Powder, Howl, Tailwind, Heal Pulse, Life Dew and Coaching come from each species' modern learnset. "Nearby" means within 3 metres.</li>
     <li><b>Not simulated yet:</b> Protect, Substitute, Encore, Counter, Future Sight, entry hazards, held items, and about half of all abilities. The inspect card says when an ability has no effect.</li>
   </ul>
   <form method="dialog"><button class="ui-btn">Close</button></form>
