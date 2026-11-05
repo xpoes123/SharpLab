@@ -28,6 +28,16 @@ assert.equal(typeEff("ice", ["dragon", "ground"]), 4);
 assert.deepEqual(wildMoves(data.species[num("Rattata")], 3), ["tackle", "tailwhip"]);
 assert.ok(wildMoves(data.species[num("Rattata")], 19).includes("hyperfang"));
 
+// An army can always fight: if a species has learned any attack by this level, its wild set contains one.
+for (const sp of Object.values(data.species)) for (let lv = 1; lv <= 100; lv++) {
+  const hasAttack = sp.levelup.some(([l, m]) => l >= 1 && l <= lv && data.moves[m]?.cat !== "status");
+  if (hasAttack) assert.ok(wildMoves(sp, lv).some((m) => data.moves[m].cat !== "status"), `${sp.name} L${lv} has no attack`);
+}
+const mukWar = createWorld([squad(0, "Muk", 60, 43), squad(1, "Mewtwo", 20, 70)], 3);
+let mukHits = 0;
+for (let i = 0; i < 40 && !mukWar.over; i++) { const e = []; step(mukWar, e); mukHits += e.filter((x) => x.k === "hit" && mukWar.units[x.u].side === 0).length; }
+assert.ok(mukHits > 0, "Muk attack");
+
 // Footprint comes from real height.
 assert.equal(footprint(data.species[num("Rattata")]), 1);
 assert.equal(footprint(data.species[num("Onix")]), 10);
