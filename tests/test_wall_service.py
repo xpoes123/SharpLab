@@ -519,6 +519,16 @@ def test_discord_wall_starts_past_an_app_left_open_on_a_tv_that_is_off(api, monk
     assert c.post("/i/discord/start", json={"urls": ["https://a.tv"]}).json()["running"]
 
 
+def test_a_bare_discord_start_with_nothing_to_mirror_asks_for_live_nba(api, monkeypatch):
+    app, _ = api
+    c = client(app, "100.81.31.34", "s3cret")
+    monkeypatch.setattr("wall.server.tv_active", lambda api: None)
+    asked = []
+    monkeypatch.setattr("wall.instance.Instance.start", lambda self, **k: asked.append(k) or self.state())
+    assert c.post("/i/discord/start", json={"mirror": True}).status_code == 200
+    assert asked[0]["live"] == "nba" and asked[0]["tiles"] == 4
+
+
 def test_tv_off_reads_healthz_and_an_unreachable_tv_is_not_off(monkeypatch):
     import io, json
     from wall import server
@@ -709,7 +719,7 @@ def test_mirror_start_with_only_refused_tiles_fails_cleanly(api, monkeypatch):
     assert r.status_code == 409 and "can be streamed" in r.json()["error"]
     monkeypatch.setattr("wall.server.tv_active", lambda api: None)
     r = remote.post("/i/discord/start", json={"mirror": True})
-    assert r.status_code == 409 and "isn't on the wall" in r.json()["error"]
+    assert r.status_code == 409 and "no NBA games" in r.json()["error"]   # nothing to mirror: it tries tonight's NBA instead
 
 
 def test_mirror_streams_the_tvs_screen_and_leaves_with_it(api, monkeypatch):

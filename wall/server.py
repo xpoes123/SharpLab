@@ -563,7 +563,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
             elif busy and not await asyncio.to_thread(tv_off, cfg.tv_overlay_api):
                 raise WallError(f"the TV is in use ({busy}) — try again when it's free")
             elif mirror or (preset is None and not urls and not d.get("live")):
-                raise WallError("the TV isn't on the wall — open the wall on the TV first, or pick a preset, live games or URLs")
+                d = {**d, "live": "nba"}   # a bare /wall start with nothing to mirror: tonight's NBA
         if i.headless and urls:
             await asyncio.to_thread(lambda: [public_url(u) for u in urls])
         return await asyncio.to_thread(i.start, preset=preset, urls=urls, live=d.get("live") or "", tiles=tiles,
