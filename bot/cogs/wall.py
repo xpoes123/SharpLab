@@ -7,7 +7,8 @@ edited in place on every change and every 30 s while the wall runs.
 
 When the wall starts (a /wall command, the panel, a vote that passed, the web page), the embed with the watch link and
 Get my link is posted in the channel the start came from (a start carries its origin through the vote to the wall
-service); a start from the web page goes to the last channel used, else WALL_CHANNEL_ID. Where the embeds are, the last
+service); a start from the web page goes to the last channel used, else WALL_CHANNEL_ID. Each new start is a new message,
+so people get notified; the previous embed is retired. Where the embeds are, the last
 channel and the last start announced persist in WALL_BOT_STATE, so a restart keeps editing them and the panel's
 buttons keep working (a persistent view).
 """
@@ -422,11 +423,6 @@ class WallCog(commands.Cog):
         self.announced = started
         self.save()
         ch_id = announce_target(st, self.last, CHANNEL_ID)
-        same = [g for g, (c, _) in self.embeds.items() if c == ch_id]
-        if same:   # that channel already has the /wall embed (restarts, redeploys, repeat starts): update it, no new message
-            for gid in same:
-                await self.refresh(gid)
-            return False
         ch = self.bot.get_channel(ch_id) if ch_id else None
         if ch is None:
             log.info("wall started, but no channel to post the link in (%s)", ch_id)
