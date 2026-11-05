@@ -74,6 +74,16 @@ def tv_active(api: str) -> str | None:
         return None
 
 
+def tv_off(api: str) -> bool:
+    """Is the TV itself switched off (TV OS /healthz "tv_power")? Then an app left open on it isn't in anyone's way."""
+    import json, urllib.request
+    try:
+        with urllib.request.urlopen(api.rstrip("/") + "/healthz", timeout=2) as r:
+            return json.load(r).get("tv_power") == "off"
+    except (OSError, ValueError):
+        return False
+
+
 def tv_board(api: str) -> str:
     """Which board the TV router's wall overlay has (its overlay state lives there, not here)."""
     import json, urllib.request
@@ -545,12 +555,12 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
         mirror, origin = d.get("mirror") is True, clean_origin(d.get("origin"))
         if i.headless and i.urls and mirror:   # already on: "same as the TV" = follow it again
             return await asyncio.to_thread(i.follow_source)
-        if i.headless and not i.urls:   # anyone may start the discord wall, but only while nobody is using the TV
+        if i.headless and not i.urls:   # anyone may start the discord wall, but only while nobody is using the TV (off = not in use)
             busy = await asyncio.to_thread(tv_active, cfg.tv_overlay_api)
             tv = instances.get("tv")
             if busy == "wall" and tv and tv.urls and i.source is not None:   # the TV is on the wall: stream it, and follow it
                 return await asyncio.to_thread(i.start_mirror, origin)
-            elif busy:
+            elif busy and not await asyncio.to_thread(tv_off, cfg.tv_overlay_api):
                 raise WallError(f"the TV is in use ({busy}) — try again when it's free")
             elif mirror or (preset is None and not urls and not d.get("live")):
                 raise WallError("the TV isn't on the wall — open the wall on the TV first, or pick a preset, live games or URLs")
