@@ -296,6 +296,17 @@ def group_fills(fills: list[dict]) -> list[dict]:
     return list(out.values())
 
 
+def group_fills_rows(rows: list[dict]) -> list[dict]:
+    """Re-merge already-grouped rows (buffered across polls) by (ticker, action, side)."""
+    out: dict[tuple, dict] = {}
+    for r in rows:
+        g = out.setdefault((r["ticker"], r["action"], r["side"]), {**r, "qty": 0.0, "cost": 0.0, "fee": 0.0})
+        g["qty"] += r["qty"]; g["cost"] += r["cost"]; g["fee"] += r["fee"]
+    for g in out.values():
+        g["avg"] = g["cost"] / g["qty"] if g["qty"] else 0.0
+    return list(out.values())
+
+
 def market_url(ticker: str) -> str:
     """kalshi.com page for a market's event: KXNBAGAME-26OCT23LALGSW-LAL -> /markets/kxnbagame/kxnbagame-26oct23lalgsw."""
     t = ticker.lower()
