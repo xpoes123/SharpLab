@@ -204,3 +204,13 @@ def test_feed_goes_blank_when_the_web_stays_down():
     now[0] += 60
     f.poll([{"id": "1"}])
     assert f.games == {}
+
+
+def test_the_score_reader_can_be_switched_off(monkeypatch, tmp_path):
+    from wall import scorebug, sync
+    monkeypatch.setattr(scorebug, "available", lambda: True)
+    make = lambda: sync.Runner(sync.SyncStore(tmp_path / "sync.json"), {}, None, fetch_json=lambda *a, **k: {})
+    monkeypatch.delenv("WALL_SYNC_OCR", raising=False)
+    assert make().enabled
+    monkeypatch.setenv("WALL_SYNC_OCR", "0")
+    assert not make().enabled

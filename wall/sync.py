@@ -303,7 +303,7 @@ class Runner:
         self.trackers: dict[str, Tracker] = {}
         self.pbp: dict[str, tuple[float, list]] = {}
         self.status: dict[str, str] = {}       # url → what the auto sync is doing ("scorebug found", "no scorebug", …)
-        self.enabled = scorebug.available()
+        self.enabled = scorebug.available() and os.environ.get("WALL_SYNC_OCR", "1") != "0"   # 0: its screenshots flash the tile; delays stay manual or saved
 
     def plays(self, game: dict, fresh: bool = False) -> list[tuple[float, int, int]]:
         key = f"{game['league']}:{game['id']}"
