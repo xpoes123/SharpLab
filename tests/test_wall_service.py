@@ -966,3 +966,8 @@ def test_a_game_goes_on_the_wall_once(tmp_path):
 
 def test_encoder_vbv_holds_two_frames():
     assert "vbv-buffer-size=116" in gst_cmd(97, "sink", kbps=3500, fps=60)
+
+
+def test_capture_never_holds_kwins_buffers():
+    cmd = gst_cmd(97, "sink")
+    assert "always-copy=true" in cmd and cmd.index("max-size-buffers=8") < cmd.index("videorate")
