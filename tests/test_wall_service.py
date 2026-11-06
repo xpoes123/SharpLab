@@ -948,3 +948,17 @@ def test_a_url_goes_on_the_wall_once(api):
     assert c.post("/i/discord/tile", json={"i": 1, "url": "https://a.tv/2"}).status_code == 200   # its own tile: a reload
     assert c.delete("/i/discord/tile/0").json()["urls"] == ["https://a.tv/2"]
     assert c.post("/i/discord/tile", json={"i": 1, "url": "https://a.tv/1"}).status_code == 200   # gone, so it may come back
+
+
+def test_a_game_goes_on_the_wall_once(tmp_path):
+    def team(name): return {"name": name, "abbr": name[:3].upper()}
+    game = lambda state: {"state": state, "home": team("Warriors"), "away": team("Heat")}
+    heat, gsw = "https://topstreamer.site/nba/heat", "https://topstreamer.site/nba/warriors"
+    data = {"nba": {"games": [game("in")]}}
+    i = Instance("discord", Session("discord"), PresetStore(str(tmp_path)), FakeScores(data), driver=FakeDriver(), run=lambda f: None)
+    i.urls = [gsw, "https://a.tv"]
+    with pytest.raises(WallError, match="already on the wall"):
+        i.set_tile(2, heat)   # the other team's page: the same game
+    assert i.set_tile(0, heat)["urls"][0] == heat   # another feed for that tile: fine
+    data["nba"]["games"] = [game("post")]
+    assert i.set_tile(2, gsw)["urls"][2] == gsw   # that game is over: these pages are about the next one
