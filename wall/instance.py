@@ -13,7 +13,7 @@ import time
 
 from wall.engine import Driver, Session, sound_tile
 from wall.headless import Headless, free_vram_mb
-from wall.live import LEAGUES, REFRESH_S, LiveRun, Scores, carries, matchup
+from wall.live import LEAGUES, REFRESH_S, LiveRun, Scores, carries, matchup, same_game
 from wall.presets import PresetStore, check_url
 from wall.rotate import EVERY_S, MARK, Rotation, kind, next_url, screen
 from wall import streams
@@ -235,10 +235,11 @@ class Instance:
 
     def set_tile(self, i: int, url: str) -> dict:
         url = check_url(url)
+        game_on_wall = same_game(url, self.urls[:i] + self.urls[i + 1:], self.scores)   # may fetch: outside the lock
         with self.lock:
             self._need()
             self._own()
-            if url in self.urls[:i] + self.urls[i + 1:]:   # ponytail: exact URL, so ?t=30 counts as another page
+            if url in self.urls[:i] + self.urls[i + 1:] or game_on_wall:   # ponytail: exact URL, so ?t=30 counts as another page
                 raise WallError("that's already on the wall")
             if 0 <= i < len(self.urls):
                 self.urls[i] = url

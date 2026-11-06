@@ -88,6 +88,17 @@ def stream_urls(league: str, g: dict) -> list[str]:
     return [f"{STREAM}/{league}/{s}" for s in (team_slug(league, g["home"]), team_slug(league, g["away"])) if s]
 
 
+def same_game(url: str, urls: list[str], scores: "Scores") -> bool:
+    """Is one of urls another team's page for the game url shows? Fails open: no scoreboard, no answer."""
+    for league in LEAGUES:
+        if f"{STREAM}/{league}/" in url:
+            for g in (scores.get(league) or {}).get("games") or []:
+                feeds = stream_urls(league, g)
+                if g.get("state") in ("in", "pre") and url in feeds and any(u in feeds for u in urls):
+                    return True
+    return False
+
+
 def stream_url(league: str, g: dict, check=None) -> str:
     """The page to put on a tile: the first team page check(url) confirms carries a game, else the home team's ("" =
     neither team has a topstreamer page)."""
