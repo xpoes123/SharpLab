@@ -111,7 +111,8 @@ All JSON. `{inst}` is `tv` or `discord`. Errors: `{"error": "…"}` with 4xx.
 
 ### Budget / auto-stop
 
-* **GPU:** `discord` refuses to start when free VRAM (`nvidia-smi`) is under `WALL_MIN_FREE_MB` (default 2500); the
+* **GPU:** `discord` clears the LLM, waits up to `WALL_GPU_WAIT_S` (default 10) and only then refuses a start when free
+  VRAM (`nvidia-smi`) is under `WALL_MIN_FREE_MB` (default 2500); the
   stream is 1080p30 NVENC (`preset=low-latency-hq`, ~4.5 Mb/s CBR), and the nested KWin renders with the GPU. The TV
   OS already unloads Ollama models while its own wall runs (`llm_guard`); the service does not touch Ollama.
 * **Idle stop:** `discord` stops when no playlist fetch for `WALL_IDLE_S` (default 600 s) after the first viewer, or
@@ -156,7 +157,8 @@ while the TV is on its wall mirrors too. The service then:
 * **The local LLM steps aside** (`wall/llm.py`, `WALL_LLM_GUARD=unload|stop|off`): with any wall up, Ollama's models are
   unloaded every 10 s (and before a discord start, so the VRAM check counts them), warmed back after. Sage's
   `local_chat` keeps working meanwhile (it reloads the model, which the next tick evicts); `stop` mode stops
-  ollama.service instead so Sage goes straight to its cloud path (needs `deploy/ollama-wall.polkit.rules`).
+  ollama.service instead, which kills in-flight requests and fails queued callers fast until the walls stop (needs
+  `deploy/ollama-wall.polkit.rules`; the homelab runs this mode).
 * **Stall watchdog** (the CDP loop, every 2 s per tile): a video stuck 3 s jumps to the next buffered range + 0.3 s,
   after 10 s with nothing ahead to the live edge − 3 s, after 30 s the tile reloads.
 

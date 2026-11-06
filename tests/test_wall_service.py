@@ -808,6 +808,30 @@ def test_llm_guard_parks_models_while_a_wall_runs_and_never_warms_them_back():
     assert ctl == ["stop", "start"]
 
 
+def test_a_start_waits_for_the_llm_to_leave_the_gpu(tmp_path):
+    frees = iter([2259, 2259, 10886])   # Ollama answers the unload before the memory is back
+    i, d, clock = inst(tmp_path, {}, headless=FakeHeadless(tmp_path), min_free_mb=2500, gpu_wait_s=5, vram=lambda: next(frees))
+    parks = []
+    i.before_start = lambda: parks.append(1)
+    assert i.start(urls=["https://a.tv"])["urls"] == ["https://a.tv"]
+    assert len(parks) == 3
+
+
+def test_a_start_still_refuses_when_the_gpu_stays_full(tmp_path):
+    i, d, clock = inst(tmp_path, {}, headless=FakeHeadless(tmp_path), min_free_mb=2500, gpu_wait_s=0.3, vram=lambda: 500)
+    with pytest.raises(WallError, match="GPU busy: 500 MB"):
+        i.start(urls=["https://a.tv"])
+
+
+def test_the_guard_brings_ollama_back_after_a_service_restart():
+    ctl = []
+    g = LLMGuard(call=lambda *a, **k: {"models": []}, systemctl=ctl.append, mode="stop")
+    g.tick(False); g.tick(False)
+    assert ctl == ["start"]
+    g.tick(True); g.tick(True)   # stopped: no more /api/ps calls or stops
+    assert ctl == ["start", "stop"]
+
+
 def test_the_guard_runs_before_a_headless_start(tmp_path):
     order = []
     h = FakeHeadless(tmp_path)
