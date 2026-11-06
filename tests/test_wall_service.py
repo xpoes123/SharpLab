@@ -936,3 +936,15 @@ def test_the_encoder_runs_on_its_own_thread():
     cmd = gst_cmd(1, "s")
     enc = cmd.index("nvh264enc")
     assert cmd[enc - len(ENCODER_QUEUE) - 1:enc] == [*ENCODER_QUEUE, "!"]
+
+
+def test_a_url_goes_on_the_wall_once(api):
+    app, _ = api
+    c = client(app)
+    assert c.post("/i/discord/start", json={"urls": ["https://a.tv/1", "https://a.tv/1", "https://a.tv/2"]}).json()["urls"] == \
+        ["https://a.tv/1", "https://a.tv/2"]
+    assert c.post("/i/discord/tile", json={"i": 2, "url": "https://a.tv/1"}).status_code == 409   # add
+    assert c.post("/i/discord/tile", json={"i": 1, "url": "https://a.tv/1"}).status_code == 409   # swap
+    assert c.post("/i/discord/tile", json={"i": 1, "url": "https://a.tv/2"}).status_code == 200   # its own tile: a reload
+    assert c.delete("/i/discord/tile/0").json()["urls"] == ["https://a.tv/2"]
+    assert c.post("/i/discord/tile", json={"i": 1, "url": "https://a.tv/1"}).status_code == 200   # gone, so it may come back

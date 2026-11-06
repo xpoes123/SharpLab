@@ -89,7 +89,7 @@ All JSON. `{inst}` is `tv` or `discord`. Errors: `{"error": "…"}` with 4xx.
   is kept in the state so the bot posts the link where the start came from.
 * `POST /i/{inst}/follow` → mirror the TV again (after a change on this wall stopped the following)
 * `POST /i/{inst}/stop` → state
-* `POST /i/{inst}/tile` `{"i": 1, "url": "…"}` → swap tile i (i == len → add; ≤ 4). A live tile set this way leaves the auto-swap.
+* `POST /i/{inst}/tile` `{"i": 1, "url": "…"}` → swap tile i (i == len → add; ≤ 4; 409 if another tile has that URL). A live tile set this way leaves the auto-swap.
 * `DELETE /i/{inst}/tile/{i}` → remove (never the last one)
 * `POST /i/{inst}/move` `{"i": 0, "j": 2}`
 * `POST /i/{inst}/sound` `{"i": 2}` → sound (and key focus) to tile i
