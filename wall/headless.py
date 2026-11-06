@@ -68,7 +68,8 @@ def gst_cmd(node: int, sink: str, kbps: int = 4500, fps: int = 30, width: int = 
             "videorate", "!", f"video/x-raw,framerate={fps}/1", "!", "cudaupload", "!", "cudaconvertscale", "!",
             f"video/x-raw(memory:CUDAMemory),format=NV12,width={width},height={height},pixel-aspect-ratio=1/1", "!",
             *ENCODER_QUEUE, "!",   # its own thread: an encoder blocking the capture thread held KWin's screencast to ~24 fps
-            "nvh264enc", f"gop-size={fps}", f"bitrate={kbps}", "rc-mode=cbr", "preset=low-latency-hq", "zerolatency=true", "!",
+            # a 2-frame VBV: the default lets one huge frame spend the budget and skips the next 3 (15 real fps at 60, 3.5 Mb/s)
+            "nvh264enc", f"gop-size={fps}", f"bitrate={kbps}", f"vbv-buffer-size={kbps * 2 // fps}", "rc-mode=cbr", "preset=low-latency-hq", "zerolatency=true", "!",
             "h264parse", "config-interval=-1", "!", *QUEUE, "!", "mux.",
             "pipewiresrc", *([f"target-object={sink}"] if sink else []), "stream-properties=props,stream.capture.sink=true",
             "do-timestamp=true", "!", "audio/x-raw,format=F32LE,rate=48000,channels=2", "!",

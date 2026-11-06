@@ -962,3 +962,7 @@ def test_a_game_goes_on_the_wall_once(tmp_path):
     assert i.set_tile(0, heat)["urls"][0] == heat   # another feed for that tile: fine
     data["nba"]["games"] = [game("post")]
     assert i.set_tile(2, gsw)["urls"][2] == gsw   # that game is over: these pages are about the next one
+
+
+def test_encoder_vbv_holds_two_frames():
+    assert "vbv-buffer-size=116" in gst_cmd(97, "sink", kbps=3500, fps=60)
