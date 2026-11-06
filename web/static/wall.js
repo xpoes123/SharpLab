@@ -395,6 +395,10 @@
         const j = el("button", null, "Swap"); j.title = "Ask DJ Jev for another stream";
         j.onclick = () => propose({ op: "jevswap", i }); t.append(j);
       }
+      if ((wall.urls || []).length >= 2) {   // the last one goes with Stop
+        const r = el("button", null, "Remove"); r.title = "Remove this tile";
+        r.onclick = () => propose({ op: "remove", i, label: name }); t.append(r);
+      }
       const live = (wall.streams || [])[i];   // a YouTube tile: is it on yet (wall/streams.py)
       if (live) t.append(el("span", "small " + (live.live ? "live-on" : "muted"), live.live ? "Live" : live.starts
         ? `Starts ${new Date(live.starts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : live.live === false ? "Not live" : ""));

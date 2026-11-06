@@ -132,7 +132,7 @@ class Instance:
         if p:
             urls, live, tiles, fixed = list(p["urls"]), p.get("live", ""), p.get("tiles", 4), bool(p.get("fixed"))
             board = board if board is not None else p.get("overlay") or p.get("live") or ""
-        urls = [check_url(u) for u in (urls or [])][:4]
+        urls = list(dict.fromkeys(check_url(u) for u in (urls or [])))[:4]   # a page goes on the wall once
         fixed = bool(fixed and live and urls)
         if live and live not in LEAGUES:
             raise WallError("live is nfl or nba")
@@ -238,6 +238,8 @@ class Instance:
         with self.lock:
             self._need()
             self._own()
+            if url in self.urls[:i] + self.urls[i + 1:]:   # ponytail: exact URL, so ?t=30 counts as another page
+                raise WallError("that's already on the wall")
             if 0 <= i < len(self.urls):
                 self.urls[i] = url
                 self.driver.set_tile(i, url)
