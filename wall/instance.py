@@ -32,7 +32,7 @@ class WallError(Exception):
 class Instance:
     def __init__(self, name: str, session: Session, store: PresetStore, scores: Scores, *, headless: Headless | None = None,
                  driver: Driver | None = None, check=carries, run=None, clock=time.time, idle_s: float = 600,
-                 first_viewer_s: float = 900, max_hours: float = 6, min_free_mb: int = 0, vram=free_vram_mb,
+                 first_viewer_s: float = 900, max_hours: float = 6, min_free_mb: int = 0, gpu_wait_s: float = 0, vram=free_vram_mb,
                  max_load: float = 16, min_avail_mb: int = 3072, sysload=None) -> None:
         self.name, self.session, self.store, self.scores = name, session, store, scores
         self.headless = headless
@@ -41,7 +41,7 @@ class Instance:
         self.run = run or (lambda f: threading.Thread(target=f, name=f"wall-{name}-live", daemon=True).start())
         self.clock = clock
         self.idle_s, self.first_viewer_s, self.max_s = idle_s, first_viewer_s, max_hours * 3600
-        self.min_free_mb, self.vram = min_free_mb, vram
+        self.min_free_mb, self.gpu_wait_s, self.vram = min_free_mb, gpu_wait_s, vram
         self.max_load, self.min_avail_mb, self.sysload = max_load, min_avail_mb, sysload or system_load
         self._over_since = 0.0
         self.before_start = lambda: None   # e.g. the LLM guard parking Ollama's models
@@ -166,8 +166,7 @@ class Instance:
             self._stop_locked("")
             if self.headless:
                 self._guard()
-                self.before_start()
-                free = self.vram()
+                free = self._clear_gpu()
                 if free is not None and free < self.min_free_mb:
                     raise WallError(f"GPU busy: {free} MB free, the headless wall wants {self.min_free_mb}")
                 try:
@@ -633,6 +632,18 @@ class Instance:
         return before != (list(self.urls), self.driver.sound, self.board, self.visible, self.layout)
 
     # ---- resource guard (headless) ------------------------------------------------------------------------------------------
+    def _clear_gpu(self) -> int | None:
+        """Free VRAM after asking the LLM to leave. Ollama answers an unload before the memory is back (~0.4 s), and a
+        model mid-request holds it until the request ends, so keep asking for a few seconds before giving up."""
+        self.before_start()
+        free = self.vram()
+        deadline = time.monotonic() + self.gpu_wait_s
+        while free is not None and free < self.min_free_mb and time.monotonic() < deadline:
+            time.sleep(0.25)
+            self.before_start()
+            free = self.vram()
+        return free
+
     def _guard(self) -> None:
         if not self.headless:
             return

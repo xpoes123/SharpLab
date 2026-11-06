@@ -35,10 +35,11 @@ class LLMGuard:
         self.base, self.mode, self.call, self.systemctl = base.rstrip("/"), mode, call, systemctl
         self.parked: list[str] = []
         self.stopped = False
+        self.ensure_up = mode == "stop"   # a service restart forgets it stopped ollama: start it at the first idle tick
 
     def park(self) -> None:
         """Free the GPU now (before a wall starts, so its VRAM check sees what the LLM held)."""
-        if self.mode == "off":
+        if self.mode == "off" or self.stopped:
             return
         try:
             for m in self.call(self.base, "/api/ps", timeout=5).get("models", []):
@@ -62,10 +63,10 @@ class LLMGuard:
         if walls_up:
             self.park()
             return
-        if self.stopped:
+        if self.stopped or self.ensure_up:
             try:
                 self.systemctl("start")
-                self.stopped = False
+                self.stopped = self.ensure_up = False
                 log.info("started ollama again")
             except Exception as e:  # noqa: BLE001
                 log.warning("llm guard: can't start ollama: %s", e)

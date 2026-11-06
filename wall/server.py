@@ -165,6 +165,7 @@ class Cfg:
         self.first_viewer_s = float(env.get("WALL_FIRST_VIEWER_S", "900"))
         self.max_hours = float(env.get("WALL_MAX_HOURS", "6"))
         self.min_free_mb = int(env.get("WALL_MIN_FREE_MB", "2500"))
+        self.gpu_wait_s = float(env.get("WALL_GPU_WAIT_S", "10"))   # under the bot client's 15 s timeout
         self.discord = env.get("WALL_DISCORD", "1") not in ("0", "false", "")
         self.tv = env.get("WALL_TV", "1") not in ("0", "false", "")
         self.tv_output = env.get("WALL_TV_OUTPUT", "HDMI-A-1")   # mirror mode streams this output of the TV ("" = copy with tiles)
@@ -217,7 +218,7 @@ def build(cfg: Cfg | None = None, instances: dict[str, Instance] | None = None, 
                                    overlay_api=f"http://127.0.0.1:{cfg.port}/i/discord", bets_api=f"http://127.0.0.1:{cfg.port}/i/discord",
                                    extra_flags=["--ozone-platform=wayland"]),
                 store, scores, headless=Headless("discord", cfg.state), idle_s=cfg.idle_s, first_viewer_s=cfg.first_viewer_s,
-                max_hours=cfg.max_hours, min_free_mb=cfg.min_free_mb, max_load=cfg.max_load, min_avail_mb=cfg.min_avail_mb)
+                max_hours=cfg.max_hours, min_free_mb=cfg.min_free_mb, gpu_wait_s=cfg.gpu_wait_s, max_load=cfg.max_load, min_avail_mb=cfg.min_avail_mb)
     disc, tv = instances.get("discord"), instances.get("tv")
     if disc is not None and disc.headless and tv is not None and disc.source is None:   # the discord wall can mirror the TV's
         disc.source, disc.vet = tv, public_url
