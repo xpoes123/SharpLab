@@ -15,6 +15,7 @@ FILLS_ROLE_NAME = "Kalshi Trades"  # self-assign via the ⚡ panel in #roles
 ROLES_CHANNEL_ID = 1510113941148405780  # #roles
 SMALL_FILL_USD = 25.0  # grouped fills under this cost don't post live; they batch into a digest
 SMALL_FLUSH_SECS = 1800  # digest posts this long after the first buffered small fill
+PRIVATE_FEED = {"240608458888445953": 1485475287054418151}  # uid -> channel: their fills + resolutions post here, not the feed
 
 import discord
 import httpx
@@ -164,7 +165,9 @@ class MarketsCog(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def fills_loop(self) -> None:
-        channel = self.bot.get_channel(FILLS_CHANNEL_ID) or await self.bot.fetch_channel(FILLS_CHANNEL_ID)
+        async def chan(uid=None):
+            cid = PRIVATE_FEED.get(uid, FILLS_CHANNEL_ID)
+            return self.bot.get_channel(cid) or await self.bot.fetch_channel(cid)
         settles_by_user, settle_since = {}, {}
         for uid in await queries.list_kalshi_account_users():
             fkey, skey = f"kalshi_fills_ts:{uid}", f"kalshi_settle_ts:{uid}"
@@ -197,23 +200,27 @@ class MarketsCog(commands.Cog):
                 if small:
                     self._small.setdefault(uid, [time.time(), []])[1].extend(small)
                 if big:
-                    await self._post_fills(channel, uid, big, react=True)
+                    await self._post_fills(await chan(uid), uid, big, react=True)
             except Exception:
                 log.warning("kalshi fills poll failed for %s", uid, exc_info=True)
         for uid, (first, rows) in list(self._small.items()):
             if time.time() - first >= SMALL_FLUSH_SECS:
                 del self._small[uid]
                 try:
-                    await self._post_fills(channel, uid, ka.group_fills_rows(rows), react=False)
+                    await self._post_fills(await chan(uid), uid, ka.group_fills_rows(rows), react=False)
                 except Exception:
                     log.warning("kalshi small-fill digest failed for %s", uid, exc_info=True)
-        try:
-            res = ka.resolutions(settles_by_user, settle_since)
-            if res:
-                for embed in await _resolution_embeds(self.bot, res):
-                    await channel.send(embed=embed)
-        except Exception:
-            log.warning("kalshi resolution post failed", exc_info=True)
+        public = {u: s for u, s in settles_by_user.items() if u not in PRIVATE_FEED}
+        groups = [(None, public)] + [(u, {u: settles_by_user[u]}) for u in PRIVATE_FEED if u in settles_by_user]
+        for uid, by_user in groups:
+            try:
+                res = ka.resolutions(by_user, settle_since)
+                if res:
+                    channel = await chan(uid)
+                    for embed in await _resolution_embeds(self.bot, res):
+                        await channel.send(embed=embed)
+            except Exception:
+                log.warning("kalshi resolution post failed", exc_info=True)
 
     async def _post_fills(self, channel, uid: str, rows: list[dict], react: bool) -> None:
         embed = await _fills_embed(rows)
