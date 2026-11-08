@@ -320,6 +320,25 @@ def _iso_ts(iso: str | None) -> int:
         return 0
 
 
+def bot_ledger(path: str) -> tuple[set[str], set[str]]:
+    """(order ids, tickers) the Vigil lock bot placed, from its sqlite ledger on the same VPS; empty if unreadable."""
+    import sqlite3
+    try:
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            rows = con.execute("select order_id, ticker from orders where dry = 0 and order_id is not null").fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return set(), set()
+    return {o for o, _ in rows}, {t for _, t in rows}
+
+
+def split(rows: list[dict], key: str, owned: set[str]) -> tuple[list[dict], list[dict]]:
+    """(rows whose `key` is in owned, the rest)."""
+    return [r for r in rows if r.get(key) in owned], [r for r in rows if r.get(key) not in owned]
+
+
 def resolutions(by_user: dict[str, list[dict]], since: dict[str, int]) -> dict[str, dict]:
     """New settled markets (all sports) across users: {ticker: {result, holders: [(uid, side, pnl)]}}.
     Filters by settled_time client-side too, so a server ignoring min_ts can't replay history."""

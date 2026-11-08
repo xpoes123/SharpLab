@@ -214,3 +214,19 @@ def test_group_fills_rows_merges_buffered():
     b = {**a, "qty": 30.0, "cost": 15.0, "fee": 0.2, "avg": 0.5}
     (g,) = group_fills_rows([a, b])
     assert g["qty"] == 40 and g["cost"] == 19 and round(g["avg"], 3) == 0.475
+
+
+def test_bot_ledger_and_split(tmp_path):
+    import sqlite3
+    db = tmp_path / "lock_live.db"
+    con = sqlite3.connect(db)
+    con.execute("create table orders(ticker text, order_id text, dry int)")
+    con.executemany("insert into orders values (?,?,?)", [("KXNBAREB-A", "o1", 0), ("KXNBAREB-B", None, 0), ("KXNBAREB-C", "o3", 1)])
+    con.commit(); con.close()
+    ids, tickers = ka.bot_ledger(str(db))
+    assert ids == {"o1"} and tickers == {"KXNBAREB-A"}, "live bot orders only"
+    assert ka.bot_ledger(str(tmp_path / "missing.db")) == (set(), set())
+    fills = [{"order_id": "o1", "ticker": "KXNBAREB-A"}, {"order_id": "me", "ticker": "KXNFLGAME-X"}]
+    bot, human = ka.split(fills, "order_id", ids)
+    assert [f["order_id"] for f in bot] == ["o1"] and [f["order_id"] for f in human] == ["me"]
+    assert ka.split([{"ticker": "KXNFLGAME-X"}], "ticker", tickers) == ([], [{"ticker": "KXNFLGAME-X"}])
