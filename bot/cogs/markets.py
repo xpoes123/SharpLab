@@ -15,7 +15,8 @@ FILLS_ROLE_NAME = "Kalshi Trades"  # self-assign via the ⚡ panel in #roles
 ROLES_CHANNEL_ID = 1510113941148405780  # #roles
 SMALL_FILL_USD = 25.0  # grouped fills under this cost don't post live; they batch into a digest
 SMALL_FLUSH_SECS = 1800  # digest posts this long after the first buffered small fill
-PRIVATE_FEED = {"240608458888445953": 1485475287054418151}  # uid -> channel: their fills + resolutions post here, not the feed
+PRIVATE_FEED = {"240608458888445953": 1485475287054418151}  # uid -> channel for that account's BOT trades (Vigil lock bot); their own trades stay in the feed
+LOCKBOT_DB = os.getenv("LOCKBOT_DB", "/opt/vigil/lock_live.db")  # the lock bot's ledger: its order ids tell bot fills from human ones
 
 import discord
 import httpx
@@ -169,6 +170,7 @@ class MarketsCog(commands.Cog):
             cid = PRIVATE_FEED.get(uid, FILLS_CHANNEL_ID)
             return self.bot.get_channel(cid) or await self.bot.fetch_channel(cid)
         settles_by_user, settle_since = {}, {}
+        bot_ids, bot_tickers = ka.bot_ledger(LOCKBOT_DB)
         for uid in await queries.list_kalshi_account_users():
             fkey, skey = f"kalshi_fills_ts:{uid}", f"kalshi_settle_ts:{uid}"
             try:
@@ -182,6 +184,7 @@ class MarketsCog(commands.Cog):
                 if not row:
                     continue
                 pem_key = ka.load_key(ka.decrypt(row[1]))
+                await self._backfill(uid, row[0], pem_key, bot_ids, bot_tickers)
                 # ponytail: min_ts is whole seconds, so last+1 can skip a fill landing in the same second as the previous poll's newest
                 async with httpx.AsyncClient(timeout=20) as c:
                     fills = await ka._all(c, row[0], pem_key, f"/portfolio/fills?min_ts={int(last) + 1}", "fills")
@@ -194,24 +197,35 @@ class MarketsCog(commands.Cog):
                 if not fills:
                     continue
                 await queries.set_bot_setting(fkey, str(max(int(ka._f(f.get("ts"))) for f in fills) or int(time.time())))
+                if uid in PRIVATE_FEED:                      # bot fills go to the private channel, the account's own stay public
+                    mine, fills = ka.split(fills, "order_id", bot_ids)
+                    if mine:
+                        await self._post_fills(await chan(uid), uid, ka.group_fills(mine), react=False)
+                    if not fills:
+                        continue
                 rows = ka.group_fills(fills)
                 big = [r for r in rows if r["cost"] >= SMALL_FILL_USD]
                 small = [r for r in rows if r["cost"] < SMALL_FILL_USD]
                 if small:
                     self._small.setdefault(uid, [time.time(), []])[1].extend(small)
                 if big:
-                    await self._post_fills(await chan(uid), uid, big, react=True)
+                    await self._post_fills(await chan(), uid, big, react=True)
             except Exception:
                 log.warning("kalshi fills poll failed for %s", uid, exc_info=True)
         for uid, (first, rows) in list(self._small.items()):
             if time.time() - first >= SMALL_FLUSH_SECS:
                 del self._small[uid]
                 try:
-                    await self._post_fills(await chan(uid), uid, ka.group_fills_rows(rows), react=False)
+                    await self._post_fills(await chan(), uid, ka.group_fills_rows(rows), react=False)
                 except Exception:
                     log.warning("kalshi small-fill digest failed for %s", uid, exc_info=True)
-        public = {u: s for u, s in settles_by_user.items() if u not in PRIVATE_FEED}
-        groups = [(None, public)] + [(u, {u: settles_by_user[u]}) for u in PRIVATE_FEED if u in settles_by_user]
+        public, private = {}, {}
+        for u, s in settles_by_user.items():
+            if u in PRIVATE_FEED:                            # resolutions of bot-traded tickers go private
+                private[u], public[u] = ka.split(s, "ticker", bot_tickers)
+            else:
+                public[u] = s
+        groups = [(None, public)] + [(u, {u: private[u]}) for u in private if private[u]]
         for uid, by_user in groups:
             try:
                 res = ka.resolutions(by_user, settle_since)
@@ -221,6 +235,29 @@ class MarketsCog(commands.Cog):
                         await channel.send(embed=embed)
             except Exception:
                 log.warning("kalshi resolution post failed", exc_info=True)
+
+    async def _backfill(self, uid: str, key_id: str, pem_key, bot_ids: set[str], bot_tickers: set[str]) -> None:
+        """One-shot: bot setting kalshi_backfill:<uid> = unix ts reposts that account's own (non-bot) fills and
+        resolutions since then to the public feed, then clears itself. Used when they were routed private by mistake."""
+        bkey = f"kalshi_backfill:{uid}"
+        since = await queries.get_bot_setting(bkey)
+        if not since:
+            return
+        await queries.set_bot_setting(bkey, "")
+        async with httpx.AsyncClient(timeout=20) as c:
+            fills = await ka._all(c, key_id, pem_key, f"/portfolio/fills?min_ts={int(since)}", "fills")
+            settles = await ka._all(c, key_id, pem_key, f"/portfolio/settlements?min_ts={int(since)}", "settlements")
+        human = ka.split(fills, "order_id", bot_ids)[1]
+        if human:
+            await self._post_fills(await self._channel(FILLS_CHANNEL_ID), uid, ka.group_fills(human), react=False)
+        res = ka.resolutions({uid: ka.split(settles, "ticker", bot_tickers)[1]}, {uid: int(since)})
+        if res:
+            channel = await self._channel(FILLS_CHANNEL_ID)
+            for embed in await _resolution_embeds(self.bot, res):
+                await channel.send(embed=embed)
+
+    async def _channel(self, cid: int):
+        return self.bot.get_channel(cid) or await self.bot.fetch_channel(cid)
 
     async def _post_fills(self, channel, uid: str, rows: list[dict], react: bool) -> None:
         embed = await _fills_embed(rows)
