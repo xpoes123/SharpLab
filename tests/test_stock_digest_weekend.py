@@ -52,3 +52,22 @@ def test_skips_weekday_before_close(monkeypatch):
     # Monday 10am ET — before the close, should not run yet.
     get_setting = _run_digest_at(monkeypatch, datetime(2026, 6, 8, 10, 0, tzinfo=ET))
     get_setting.assert_not_awaited()
+
+
+def test_period_reports_due():
+    from datetime import date
+    keys = lambda d: [k for k, _, _ in stock._period_reports_due(d)]
+    assert keys(date(2026, 11, 9)) == []                         # plain Monday
+    assert keys(date(2026, 11, 13)) == ["week_base"]             # Friday
+    assert keys(date(2026, 11, 30)) == ["month_base"]            # Mon, last weekday of Nov
+    assert keys(date(2026, 10, 30)) == ["week_base", "month_base"]  # Fri, Oct 31 is Sat
+    assert keys(date(2026, 10, 29)) == []                        # Thu before that Friday
+
+
+def test_period_report_lines_ranks_by_pct():
+    rows = [{"user_id": "a", "account_value": 110.0, "week_base": 100.0},
+            {"user_id": "b", "account_value": 1100.0, "week_base": 1000.0 * 1.2},
+            {"user_id": "c", "account_value": 50.0, "week_base": None}]
+    lines = stock._period_report_lines(rows, "week_base", {"a": "A", "b": "B"})
+    assert len(lines) == 2 and "**A**" in lines[0] and "+10.00%" in lines[0]
+    assert "**B**" in lines[1] and "🔴" in lines[1]

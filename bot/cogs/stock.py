@@ -1764,10 +1764,12 @@ async def _leaderboard_rows(users: list[str]) -> list[dict]:
     now = datetime.now(timezone.utc)
     week_cut = (now - timedelta(days=7)).isoformat()
     ytd_cut = datetime(now.year, 1, 1, tzinfo=timezone.utc).isoformat()
+    month_cut = datetime(now.year, now.month, 1, tzinfo=timezone.utc).isoformat()
 
-    week_snaps, ytd_snaps = await asyncio.gather(
+    week_snaps, ytd_snaps, month_snaps = await asyncio.gather(
         queries.get_all_snapshot_values_asof(week_cut),
         queries.get_all_snapshot_values_asof(ytd_cut),
+        queries.get_all_snapshot_values_asof(month_cut),
     )
 
     rows: list[dict] = []
@@ -1815,8 +1817,38 @@ async def _leaderboard_rows(users: list[str]) -> list[dict]:
             "day_base": stock_value_prev,
             "week_base": week_snaps.get(uid),
             "ytd_base": ytd_snaps.get(uid),
+            "month_base": month_snaps.get(uid),
         })
     return rows
+
+
+def _period_reports_due(d: date) -> list[tuple[str, str, str]]:
+    """(base_key, title, footer label) for the period reports due at this weekday's close:
+    weekly on Fridays, monthly on the month's last weekday."""
+    # ponytail: ignores market holidays — a holiday Friday/month-end still posts (same numbers).
+    due = []
+    if d.weekday() == 4:
+        due.append(("week_base", "📅 Weekly Portfolio Report", "week"))
+    nxt = d + timedelta(days=3 if d.weekday() == 4 else 1)
+    if nxt.month != d.month:
+        due.append(("month_base", "🗓️ Monthly Portfolio Report", d.strftime("%B")))
+    return due
+
+
+def _period_report_lines(rows: list[dict], base_key: str, names: dict[str, str]) -> list[str]:
+    """Rank traders by % account-value change since their `base_key` snapshot."""
+    scored = [{**r, "gain": r["account_value"] - r[base_key]} for r in rows
+              if r.get(base_key) and r[base_key] > 0]
+    for r in scored:
+        r["pct"] = r["gain"] / r[base_key] * 100
+    scored.sort(key=lambda r: r["pct"], reverse=True)
+    lines = []
+    for i, r in enumerate(scored[:25], 1):
+        medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"`#{i:>2}`")
+        nm = names.get(r["user_id"], f"Player {r['user_id'][:6]}")
+        emoji = "🟢" if r["pct"] >= 0 else "🔴"
+        lines.append(f"{medal} **{nm}** {emoji} {r['pct']:+.2f}% · {_fmt_money(r['gain'])}")
+    return lines
 
 
 def _pct_str(pct: float) -> str:
@@ -2784,21 +2816,30 @@ class StockCog(commands.Cog):
             scored = [{**r, "day_pct": r["day_gain"] / r["day_base"] * 100}
                       for r in rows if r.get("day_base") and r["day_base"] > 0]
             channel = self.bot.get_channel(await self._alerts_channel_id())
-            if not scored or channel is None:
+            if not rows or channel is None:
                 await queries.set_bot_setting(_DIGEST_SETTING, today)  # nothing to post today
                 return
             scored.sort(key=lambda r: r["day_pct"], reverse=True)
-            names = await self._resolve_names([r["user_id"] for r in scored])
+            names = await self._resolve_names([r["user_id"] for r in rows])
             lines = []
             for i, r in enumerate(scored[:25], 1):
                 medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"`#{i:>2}`")
                 nm = names.get(r["user_id"], f"Player {r['user_id'][:6]}")
                 emoji = "🟢" if r["day_pct"] >= 0 else "🔴"
                 lines.append(f"{medal} **{nm}** {emoji} {r['day_pct']:+.2f}% · {_fmt_money(r['day_gain'])}")
-            embed = discord.Embed(title="📊 Daily Portfolio Report",
-                                  description="\n".join(lines), colour=0x57F287)
-            embed.set_footer(text=f"{et.strftime('%b %d')} close · stocks only · sorted by % move")
-            await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+            if lines:
+                embed = discord.Embed(title="📊 Daily Portfolio Report",
+                                      description="\n".join(lines), colour=0x57F287)
+                embed.set_footer(text=f"{et.strftime('%b %d')} close · stocks only · sorted by % move")
+                await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+            for base_key, title, label in _period_reports_due(et.date()):
+                plines = _period_report_lines(rows, base_key, names)
+                if not plines:
+                    continue
+                embed = discord.Embed(title=title, description="\n".join(plines), colour=0x5865F2)
+                embed.set_footer(text=f"{label} through {et.strftime('%b %d')} close · "
+                                      "account value incl. options + cash · sorted by % move")
+                await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
             await queries.set_bot_setting(_DIGEST_SETTING, today)
         except Exception:
             log.exception("daily stock digest failed")
