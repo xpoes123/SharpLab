@@ -109,3 +109,46 @@ export function wildHorde(wild, count, data, side, seedRand = Math.random) {
   }
   return [...picks.values()];
 }
+
+// Ready-made duel armies for when building from scratch is too much. Each squad is [species, share of the budget,
+// level, moves]; no moves means its battle set (bestMoves). Counts are filled in for the budget by armyFrom.
+export const ARMIES = [
+  { id: "rain", title: "Rain Team", blurb: "Everyone calls rain; Swift Swim doubles their speed and Surf hits 50% harder.", squads: [
+    ["Ludicolo", 0.35, 50, ["raindance", "surf", "gigadrain", "icebeam"]], ["Kingdra", 0.35, 50, ["raindance", "surf", "icebeam", "dragonbreath"]],
+    ["Omastar", 0.3, 50, ["raindance", "surf", "icebeam", "rockslide"]]] },
+  { id: "sun", title: "Sun Team", blurb: "Harsh sun: Chlorophyll doubles speed, Fire hits 50% harder.", squads: [
+    ["Exeggutor", 0.35, 50, ["sunnyday", "psychic", "gigadrain", "hypnosis"]], ["Shiftry", 0.3, 50, ["sunnyday", "swordsdance", "explosion", "shadowball"]],
+    ["Arcanine", 0.35, 50, ["sunnyday", "flamethrower", "extremespeed", "howl"]]] },
+  { id: "sand", title: "Sandstorm", blurb: "Tyranitar's Sand Stream chips everyone else; Sand Veil makes the rest hard to hit.", squads: [
+    ["Tyranitar", 0.45, 55], ["Sandslash", 0.3, 50], ["Cacturne", 0.25, 50]] },
+  { id: "setup", title: "Setup Sweepers", blurb: "Dragon Dance, Swords Dance, Calm Mind and Bulk Up while they march, then they hit hard.", squads: [
+    ["Gyarados", 0.3, 50], ["Scizor", 0.25, 50], ["Alakazam", 0.2, 50], ["Machamp", 0.25, 50]] },
+  { id: "support", title: "Support Corps", blurb: "Clefable draws fire, Chansey heals, Arcanine howls, Pidgeot calls Tailwind for a Tauros stampede.", squads: [
+    ["Clefable", 0.12, 50, ["followme", "healbell", "icepunch", "lifedew"]], ["Chansey", 0.15, 50, ["healpulse", "lifedew", "helpinghand", "eggbomb"]],
+    ["Arcanine", 0.2, 50, ["howl", "flamethrower", "extremespeed", "scaryface"]], ["Pidgeot", 0.13, 50, ["tailwind", "featherdance", "steelwing", "fly"]],
+    ["Tauros", 0.4, 50]] },
+  { id: "bugs", title: "Bug Swarm", blurb: "Ninjask speed up every turn; Beedrill bring Swarm. Both Swords Dance.", squads: [
+    ["Ninjask", 0.5, 30], ["Beedrill", 0.5, 30]] },
+  { id: "hoenn", title: "Hoenn Starters", blurb: "Blaziken, Swampert and Sceptile cover each other's weaknesses.", squads: [
+    ["Blaziken", 0.34, 50], ["Swampert", 0.33, 50], ["Sceptile", 0.33, 50]] },
+  { id: "eon", title: "Eon Duo", blurb: "Latios and Latias: few, legendary, Calm Mind and Recover.", squads: [
+    ["Latios", 0.5, 50], ["Latias", 0.5, 50]] },
+  { id: "horde", title: "Route 1 Horde", blurb: "Hundreds of early-route Pokémon. Quantity has a quality of its own.", squads: [
+    ["Rattata", 0.35, 19, null], ["Zigzagoon", 0.35, 19, null], ["Poochyena", 0.3, 17, null]] },
+];
+
+// A ready-made army sized for this budget: [{ num, level, count, moves? }]. moves null keeps wild moves.
+// Squads that can't afford even one unit drop out, and leftover money tops up the cheapest squad.
+export function armyFrom(army, budget, data, price, bestMoves) {
+  const byName = new Map(Object.values(data.species).map((sp) => [norm(sp.name), sp]));
+  const out = [];
+  for (const [name, share, level, moves] of army.squads) {
+    const sp = byName.get(norm(name));
+    const q = { num: sp.num, level, ...(moves !== null ? { moves: moves ?? bestMoves(sp, level) } : {}) };
+    q.count = Math.min(1500, Math.floor((budget * share) / price(q.num, q.level, q.moves)));
+    if (q.count > 0) out.push(q);
+  }
+  const cheap = out.map((q) => [q, price(q.num, q.level, q.moves)]).sort((a, b) => a[1] - b[1])[0];
+  if (cheap) cheap[0].count += Math.floor((budget - out.reduce((t, q) => t + q.count * price(q.num, q.level, q.moves), 0)) / cheap[1]);
+  return out;
+}

@@ -15,7 +15,7 @@ function moveDamage(sp, level, m) {
   const atk = statAt(sp.base[m.cat === "physical" ? 1 : 3], level);
   if (m.damage) return (m.damage === "level" ? level : m.damage) * ((m.acc || 100) / 100);
   if (m.ohko) return 90;
-  const pow = m.id === "superfang" ? 70 : m.id === "flail" || m.id === "reversal" ? 60 : m.id === "psywave" ? 60 : m.pow;
+  const pow = m.id === "superfang" ? 70 : m.id === "flail" || m.id === "reversal" ? 60 : m.id === "psywave" ? 60 : m.id === "eruption" || m.id === "waterspout" ? 100 : m.pow;
   const hits = !m.hits ? 1 : typeof m.hits === "number" ? m.hits : 3;
   let d = (Math.floor((2 * level) / 5 + 2) * pow * atk / REF / 50 + 2) * hits * ((m.acc || 100) / 100);
   if (m.type && sp.types.includes(m.type)) d *= 1.5;
@@ -28,7 +28,7 @@ function moveDamage(sp, level, m) {
 
 // Formula part, before the fitted correction.
 function raw(sp, level, ids) {
-  let dmg = 1, mods = 1, splash = false, sleep = false, control = false, heal = false;
+  let dmg = 1, mods = 1, splash = false, sleep = false, control = false, heal = false, setup = false;
   for (const id of ids) {
     const m = D.moves[id];
     if (!m) continue;
@@ -37,12 +37,14 @@ function raw(sp, level, ids) {
       if (SPREAD.has(m.target) && m.pow >= 50) splash = true;
     } else if (m.heal || id === "rest" || id === "synthesis" || id === "moonlight" || id === "morningsun") heal = true;
     else if (m.status === "slp") sleep = true;
+    else if (setupValue(m, "physical") >= 1 || setupValue(m, "special") >= 1) setup = true;
     else if (m.status || m.vol || m.boosts) control = true;
   }
   if (splash) mods *= 1.3;
   if (heal) mods *= 1.15;
   if (sleep) mods *= 1.12;
   if (control) mods *= 1.04;
+  if (setup) mods *= 1.12;
   const hp = statAt(sp.base[0], level, true), bulk = (statAt(sp.base[2], level) + statAt(sp.base[4], level)) / 2 / REF;
   return 30 * Math.sqrt(dmg * hp * bulk) * (0.75 + statAt(sp.base[5], level) / 400) * mods;
 }
@@ -72,20 +74,39 @@ export function unitPrice(num, level, moves) {
 export const squadPrice = (s) => unitPrice(s.num, s.level, s.moves) * s.count;
 export const armyPrice = (squads) => squads.reduce((t, s) => t + squadPrice(s), 0);
 
-// The strongest legal set: up to three hard-hitting moves of different types, plus a heal if it has one.
+// What a self-buff does for a sweeper of this category: Swords Dance 2, Dragon Dance 1.5, Bulk Up 1.25, Calm Mind 1.25.
+function setupValue(m, cat) {
+  if (m.cat !== "status" || m.target !== "self" || !m.boosts) return 0;
+  const b = m.boosts, main = b[cat === "physical" ? "atk" : "spa"] ?? 0;
+  if (main <= 0) return 0;
+  return (b[cat === "physical" ? "atk" : "spa"] ?? 0) + (b.spe ?? 0) * 0.5 + ((b.def ?? 0) + (b.spd ?? 0)) * 0.25;
+}
+
+// A battle set, not just the hardest hitters: a setup move that boosts its main attack, two or three attacks of
+// different types (its own types first), then a heal, sleep, its own weather, a crippling status, or Rest.
 export function bestMoves(sp, level) {
   const legal = legalMoves(sp, level).map((id) => D.moves[id]);
   const hits = legal.filter((m) => m.cat !== "status").map((m) => ({ m, v: moveDamage(sp, level, m) * (SPREAD.has(m.target) ? 1.3 : 1) })).sort((a, b) => b.v - a.v);
+  if (!hits.length) return wildMoves(sp, level);
+  const cat = hits[0].m.cat;
+  const setup = legal.map((m) => [m, setupValue(m, cat)]).filter(([, v]) => v >= 1).sort((a, b) => b[1] - a[1])[0]?.[0];
+  const ownWeather = legal.find((m) => (m.id === "raindance" && sp.types.includes("water")) || (m.id === "sunnyday" && sp.types.includes("fire")) || (m.id === "sandstorm" && sp.types.some((t) => ["rock", "ground", "steel"].includes(t))));
+  const extra = legal.find((m) => m.heal || ["synthesis", "moonlight", "morningsun"].includes(m.id)) ?? legal.find((m) => m.status === "slp")
+    ?? ownWeather ?? legal.find((m) => ["thunderwave", "willowisp", "toxic", "stunspore"].includes(m.id)) ?? legal.find((m) => m.id === "rest");
+  const room = 4 - (setup ? 1 : 0) - (extra ? 1 : 0);
   const out = [], types = new Set();
-  for (const { m } of hits) {
-    if (out.length >= 3) break;
+  // after a setup move, attacks of the boosted category come first
+  const ranked = setup ? [...hits.filter((h) => h.m.cat === cat), ...hits.filter((h) => h.m.cat !== cat)] : hits;
+  for (const { m } of ranked) {
+    if (out.length >= room) break;
     if (types.has(m.type)) continue;
     types.add(m.type);
     out.push(m.id);
   }
-  const extra = legal.find((m) => m.heal) ?? legal.find((m) => m.status === "slp") ?? hits.find(({ m }) => !out.includes(m.id))?.m;
-  if (extra && !out.includes(extra.id)) out.push(extra.id);
-  return out.length ? out : wildMoves(sp, level);
+  if (setup) out.push(setup.id);
+  if (extra) out.push(extra.id);
+  for (const { m } of hits) if (out.length < 4 && !out.includes(m.id)) out.push(m.id);
+  return out;
 }
 
 const MAX_SQUADS = 40;
