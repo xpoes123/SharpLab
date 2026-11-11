@@ -65,6 +65,19 @@ CREATE TABLE IF NOT EXISTS injuries (
 );
 CREATE INDEX IF NOT EXISTS idx_injuries_team ON injuries(team);
 
+-- Append-only log of every injury status change (injuries keeps only the latest per player).
+CREATE TABLE IF NOT EXISTS injury_history (
+    record_id    TEXT NOT NULL,
+    player_name  TEXT NOT NULL,
+    team         TEXT NOT NULL,
+    status       TEXT NOT NULL,
+    prev_status  TEXT,
+    detail       TEXT,
+    updated_at   TEXT NOT NULL,
+    recorded_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_injury_history_team_time ON injury_history(team, recorded_at);
+
 CREATE TABLE IF NOT EXISTS wallets (
     discord_user  TEXT PRIMARY KEY,
     balance       INTEGER NOT NULL DEFAULT 0,

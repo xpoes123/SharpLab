@@ -760,6 +760,19 @@ async def update_game_status(game_id: str, status: str) -> None:
 _PREVIOUSLY_INJURED = {"Out", "Doubtful", "Questionable", "Day-To-Day"}
 
 
+async def _log_injury_change(db, record_id, player_name, team, status, prev_status, detail, updated_at) -> None:
+    """Append to injury_history; called inside the same transaction as the injuries write."""
+    await db.execute(
+        """
+        INSERT INTO injury_history
+            (record_id, player_name, team, status, prev_status, detail, updated_at, recorded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (record_id, player_name, team, status, prev_status, detail, updated_at,
+         datetime.now(timezone.utc).isoformat()),
+    )
+
+
 async def upsert_injury_status(
     record_id: str,
     player_name: str,
@@ -796,6 +809,7 @@ async def upsert_injury_status(
                 """,
                 (record_id, player_name, team, status, detail, now_iso, notified),
             )
+            await _log_injury_change(db, record_id, player_name, team, status, None, detail, now_iso)
             await db.commit()
             return "" if status == "Out" else None
 
@@ -816,6 +830,7 @@ async def upsert_injury_status(
             """,
             (player_name, team, status, current_status, detail, now_iso, notified, record_id),
         )
+        await _log_injury_change(db, record_id, player_name, team, status, current_status, detail, now_iso)
         await db.commit()
         # Only return non-None (triggering odds re-fetch) when going Out
         return current_status if going_out else None
@@ -856,6 +871,8 @@ async def record_injury_alert(alert: InjuryAlert) -> None:
                     alert.prev_status, alert.detail, alert.updated_at_utc_iso,
                 ),
             )
+            await _log_injury_change(db, alert.record_id, alert.player_name, alert.team, alert.status,
+                                     alert.prev_status, alert.detail, alert.updated_at_utc_iso)
         elif row["status"] != alert.status:
             # Status changed — reset notification flag so Discord gets alerted
             await db.execute(
@@ -869,6 +886,8 @@ async def record_injury_alert(alert: InjuryAlert) -> None:
                     alert.detail, alert.updated_at_utc_iso, alert.record_id,
                 ),
             )
+            await _log_injury_change(db, alert.record_id, alert.player_name, alert.team, alert.status,
+                                     alert.prev_status, alert.detail, alert.updated_at_utc_iso)
         # else: status unchanged — leave notified flag alone (may already be processed)
         await db.commit()
 
