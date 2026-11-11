@@ -1,7 +1,7 @@
 // Tall Grass: title, army builder, and war playback. Rules live in sim.js, drawing in stage.js.
 import { ABILITIES, createWorld, defaultLevel, footprint, legalMoves, levelRange, outcome, step, useData, W, wildMoves, xpAt, zoneOf } from "./sim.js";
 import { BIOMES, Stage } from "./stage.js";
-import { PRESETS, WILDS, resolveSquads, wildHorde } from "./presets.js";
+import { ARMIES, PRESETS, WILDS, armyFrom, resolveSquads, wildHorde } from "./presets.js";
 import { BUDGETS, armyPrice, bestMoves, squadPrice, unitPrice, usePrices, validateArmy } from "./price.js";
 import { Sfx } from "./sfx.js";
 
@@ -567,7 +567,7 @@ function addForm(side) {
   row.append(inp, count, go);
   if (G.duel) {
     count.value = 10;
-    box.append(row);
+    box.append(row, quickRow(side, count));
     box.addEventListener("submit", (ev) => {
       ev.preventDefault();
       const q = inp.value.trim().toLowerCase();
@@ -593,7 +593,7 @@ function addForm(side) {
     changed();
   });
   row2.append(wild);
-  box.append(row, row2);
+  box.append(row, row2, quickRow(side, count));
   box.addEventListener("submit", (ev) => {
     ev.preventDefault();
     const q = inp.value.trim().toLowerCase();
@@ -603,6 +603,34 @@ function addForm(side) {
     changed();
   });
   return box;
+}
+
+// Ready-made armies and random picks, for when building from scratch is too much. In a duel they spend what's left.
+function quickRow(side, count) {
+  const row = el("div", "row");
+  const left = () => (G.duel ? G.duel.view.budget - armyPrice(G.squads) : 50000);
+  const pick = el("select");
+  pick.setAttribute("aria-label", "Ready-made army");
+  const blank = el("option", null, "Ready-made army…");
+  blank.value = "";
+  pick.append(blank);
+  for (const [i, a] of ARMIES.entries()) { const o = el("option", null, a.title); o.value = i; o.title = a.blurb; pick.append(o); }
+  pick.addEventListener("change", () => {
+    if (pick.value === "") return;
+    for (const q of armyFrom(ARMIES[+pick.value], left(), data, unitPrice, bestMoves)) addSquad({ side, ...q });
+    changed();
+  });
+  const rnd = el("button", "ui-btn ui-btn--sm", "Random");
+  rnd.type = "button"; rnd.title = "Add a random Pokémon";
+  rnd.addEventListener("click", () => {
+    const all = Object.values(data.species), sp = all[Math.floor(Math.random() * all.length)];
+    const [lo, hi] = levelRange(sp), level = Math.max(lo, Math.min(hi, defaultLevel(sp)));
+    const n = G.duel ? Math.floor(Math.min(left(), G.duel.view.budget / 3) / unitPrice(sp.num, level)) : +count.value || 30;
+    addSquad({ side, num: sp.num, level, count: Math.max(1, Math.min(1500, n)) });
+    changed();
+  });
+  row.append(pick, rnd);
+  return row;
 }
 
 function addSquad(s) {
@@ -778,7 +806,7 @@ function inspectSpec(s, teach = false) {
     });
     box.append(grid);
     if (G.duel) {
-      const best = el("button", "ui-btn ui-btn--sm i-best", "Strongest moves");
+      const best = el("button", "ui-btn ui-btn--sm i-best", "Battle set");
       best.type = "button";
       best.addEventListener("click", () => { s.moves = bestMoves(sp, level); changed(); inspectSpec(s, true); });
       box.append(best, el("div", "i-sub", `₽${unitPrice(s.num, level, s.moves).toLocaleString()} each with these moves`));

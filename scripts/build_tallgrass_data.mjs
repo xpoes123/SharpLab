@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Build web/static/tallgrass/data.json for all 251 Gen 1-2 species. Run locally and commit the output.
-// Stats, abilities, heights and move rules come from Showdown; level-up and TM learnsets (Crystal), catch rate,
+// Build web/static/tallgrass/data.json for all 386 Gen 1-3 species. Run locally and commit the output.
+// Stats, abilities, heights and move rules come from Showdown; level-up and TM learnsets (Crystal, then Emerald/FRLG), catch rate,
 // XP, type chart, Pokédex text and Red/Blue/Yellow wild encounters come from PokeAPI.
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -21,19 +21,20 @@ const get = async (url) => {
 
 const [sdMoves, sdDex, sdLearn] = await Promise.all([get(`${SD}/moves.json`), get(`${SD}/pokedex.json`), get(`${SD}/learnsets.json`)]);
 
-// Gen 1-2 has almost no way to help an ally, so these team and debuff moves come from each species' modern learnset.
+// Gens 1-3 have almost no way to help an ally, so these team and debuff moves come from each species' modern learnset.
 const TACTICS = new Set([
   "helpinghand", "followme", "ragepowder", "howl", "tailwind", "healpulse", "lifedew", "coaching", "healbell", "aromatherapy", "safeguard", "mist",
   "featherdance", "tickle", "faketears", "metalsound", "willowisp", "charm", "screech", "scaryface", "stunspore", "sleeppowder", "thunderwave", "toxic",
 ]);
 
 // Power for moves whose base power is computed in-game. Flail and Reversal are computed from HP in sim.js.
-const POWER = { flail: 1, reversal: 1, return: 102, frustration: 102, magnitude: 71, present: 40, lowkick: 60 };
+const POWER = { flail: 1, reversal: 1, eruption: 150, waterspout: 150, return: 102, frustration: 102, magnitude: 71, present: 40, lowkick: 60 };
 const STATUS_SPECIAL = new Set(["transform", "metronome", "splash", "teleport", "haze", "focusenergy", "rest", "synthesis", "moonlight", "morningsun"]);
-const SKIP = new Set(["futuresight", "snore", "dreameater", "sleeptalk"]);
+// Fake Out would flinch-lock every turn, Belly Drum skip its HP cost and Focus Punch never fail here; Doom Desire, Hail and Memento aren't modelled.
+const SKIP = new Set(["futuresight", "snore", "dreameater", "sleeptalk", "fakeout", "bellydrum", "doomdesire", "hail", "memento", "focuspunch"]);
 
 function supported(key, m) {
-  if (m.num < 1 || (m.num > 251 && !TACTICS.has(key)) || SKIP.has(key)) return false;
+  if (m.num < 1 || (m.num > 354 && !TACTICS.has(key)) || SKIP.has(key)) return false;
   if (TACTICS.has(key)) return true;
   if (m.category !== "Status") return m.basePower > 0 || m.damage || m.ohko || POWER[key] || key === "superfang" || key === "psywave";
   if (STATUS_SPECIAL.has(key)) return true;
@@ -63,7 +64,7 @@ for (const [key, m] of Object.entries(sdMoves)) {
   };
 }
 
-const bySpecies = Object.values(sdDex).filter((s) => s.num >= 1 && s.num <= 251 && !s.forme);
+const bySpecies = Object.values(sdDex).filter((s) => s.num >= 1 && s.num <= 386 && !s.forme);
 
 const TYPES = ["normal", "fire", "water", "electric", "grass", "ice", "fighting", "poison", "ground", "flying", "psychic", "bug", "rock", "ghost", "dragon", "dark", "steel", "fairy"];
 const typeChart = {};
@@ -77,17 +78,25 @@ await Promise.all(TYPES.map(async (t) => {
 const clean = (s) => s.replace(/­[\n\f\s]*/g, "").replace(/-[\n\f]+/g, "").replace(/\s+/g, " ").replace(/POK[Éé]MON/g, "Pokémon").trim();
 const areas = {};
 
-function learnsets(p, name) {
-  const levelup = [], tm = new Set();
+// Level-up moves from the species' own generation (Crystal for 1-2, Emerald for 3, or RS/FRLG where Emerald has none); Gen 1-2 species also pick up
+// Emerald level-up moves they never had (Gyarados's Dragon Dance), at Emerald's level. TMs and tutors from every game.
+function learnsets(p, name, num) {
+  const levelup = [], tm = new Set(), have = new Set();
   for (const key of Object.keys(sdLearn[id(name)]?.learnset ?? {})) if (TACTICS.has(key) && moves[key]) tm.add(key);
+  const hasLevelup = (vg) => p.moves.some((m) => m.version_group_details.some((v) => v.version_group.name === vg && v.move_learn_method.name === "level-up"));
+  for (const vg of num <= 251 ? ["crystal", "emerald"] : [["emerald", "ruby-sapphire", "firered-leafgreen"].find(hasLevelup)]) {
+    const fresh = [];
+    for (const { move, version_group_details: vs } of p.moves) {
+      const key = id(move.name);
+      if (!moves[key] || have.has(key)) continue;
+      for (const v of vs) if (v.version_group.name === vg && v.move_learn_method.name === "level-up") fresh.push([v.level_learned_at, key]);
+    }
+    for (const [, key] of fresh) have.add(key);
+    levelup.push(...fresh);
+  }
   for (const { move, version_group_details: vs } of p.moves) {
     const key = id(move.name);
-    if (!moves[key]) continue;
-    for (const v of vs) {
-      if (v.version_group.name !== "crystal") continue;
-      if (v.move_learn_method.name === "level-up") levelup.push([v.level_learned_at, key]);
-      else if (v.move_learn_method.name === "machine" || v.move_learn_method.name === "tutor") tm.add(key);
-    }
+    if (moves[key] && vs.some((v) => ["crystal", "emerald", "firered-leafgreen"].includes(v.version_group.name) && ["machine", "tutor"].includes(v.move_learn_method.name))) tm.add(key);
   }
   return { levelup: levelup.sort((a, b) => a[0] - b[0]), tm: [...tm] };
 }
@@ -109,11 +118,11 @@ async function speciesRow(s) {
     }
     if (row) (areas[e.location_area.name] ??= []).push(row);
   }
-  const evos = (s.evos ?? []).map((n) => sdDex[id(n)]).filter((e) => e && e.num <= 251);
+  const evos = (s.evos ?? []).map((n) => sdDex[id(n)]).filter((e) => e && e.num <= 386);
   const levelEvo = evos.find((e) => e.evoLevel && !e.evoType);
   const b = s.baseStats;
   const flavor = sp.flavor_text_entries.filter((f) => f.language.name === "en");
-  const dex = flavor.find((f) => f.version.name === "crystal") ?? flavor[0];
+  const dex = flavor.find((f) => f.version.name === "crystal") ?? flavor.find((f) => f.version.name === "emerald") ?? flavor[0];
   return {
     num: s.num, name: s.name, types: s.types.map((t) => t.toLowerCase()),
     base: [b.hp, b.atk, b.def, b.spa, b.spd, b.spe], bst: b.hp + b.atk + b.def + b.spa + b.spd + b.spe,
@@ -121,7 +130,7 @@ async function speciesRow(s) {
     abilityNames: s.abilities, evoTo: levelEvo?.num ?? null, evoLevel: levelEvo?.evoLevel ?? null,
     growth: sp.growth_rate.name, baseExp: p.base_experience, catchRate: sp.capture_rate,
     legendary: sp.is_legendary || sp.is_mythical, dex: dex ? clean(dex.flavor_text) : "",
-    ...learnsets(p, s.name),
+    ...learnsets(p, s.name, s.num),
   };
 }
 

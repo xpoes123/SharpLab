@@ -336,6 +336,7 @@ function calc(w, u, o, m, roll, crit, spread) {
     const f = u.hp / u.maxHp;
     pow = f < 0.05 ? 200 : f < 0.1 ? 150 : f < 0.2 ? 100 : f < 0.35 ? 80 : f < 0.7 ? 40 : 20;
   }
+  if (m.id === "eruption" || m.id === "waterspout") pow = Math.max(1, Math.floor((150 * u.hp) / u.maxHp));
   if (ua === "technician" && pow <= 60) pow *= 1.5;
   if (ua === "ironfist" && m.punch) pow *= 1.2;
   if (ua === "sheerforce" && m.sec) pow *= 1.3;
