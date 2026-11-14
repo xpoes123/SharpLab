@@ -14,7 +14,7 @@ import os
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from shared.daily_games import countdown, mastermind, rushhour, trappig
+from shared.daily_games import countdown, mastermind, rushhour, trappig, unlock
 
 ET = ZoneInfo("America/New_York")
 ROLLOVER_HOUR = 4                # a puzzle-day runs 4am ET → 4am ET
@@ -24,7 +24,7 @@ EPOCH = date(2026, 1, 1)         # day_index origin
 # been retired from the active rotation (see _ERAS) so historical Mastermind days still render on
 # leaderboards; it just never gets scheduled again.
 DAILY_GAMES = {trappig.ID: trappig, rushhour.ID: rushhour,
-               mastermind.ID: mastermind, countdown.ID: countdown}
+               mastermind.ID: mastermind, countdown.ID: countdown, unlock.ID: unlock}
 
 # Rotation eras: (start_day, pool). A day uses the LATEST era whose start_day <= it; before the
 # first era only Trap the Pig runs. Each era is anchored at its own start, so introducing or
@@ -40,6 +40,9 @@ _ERAS: list[tuple[str, list[str]]] = [
     ("2026-09-19", [countdown.ID, rushhour.ID, trappig.ID]),
     ("2026-09-24", [countdown.ID, rushhour.ID, trappig.ID]),
 ]
+
+# day → (game_id, difficulty) for trial runs of new games. Forward-only, like the Sunday override.
+TRIAL_DAYS: dict[str, tuple[str, str]] = {}
 
 
 # ── puzzle-day & rotation ─────────────────────────────────────────────────────
@@ -78,6 +81,10 @@ def schedule(day: str) -> tuple[str, str]:
     era the game rotates through that era's pool, anchored at the era's start (so retiring/adding a
     game never disturbs earlier days). Difficulty cycles easy→medium→hard, except the first
     RAMP_EASY_DAYS from launch are all easy."""
+    # Trial games: a one-off sneak-peek day, OUT of the rotation. Promote into _ERAS only once
+    # daily_results shows people played it (Mastermind/Windmill were pulled within days).
+    if day in TRIAL_DAYS:
+        return TRIAL_DAYS[day]
     # Super-hard Sundays: an 8×8 expert Rush Hour (plus a one-off sneak peek on 2026-11-03).
     # Forward-only: earlier days keep their scheduled game so cached puzzles/leaderboards resolve.
     if day >= "2026-11-03" and (date.fromisoformat(day).weekday() == 6 or day == "2026-11-03"):

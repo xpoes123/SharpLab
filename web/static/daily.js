@@ -79,11 +79,14 @@ function gameId() {
 const isRush = () => gameId() === "rushhour";
 const isMind = () => gameId() === "mastermind";
 const isCount = () => gameId() === "countdown";
-const unitWord = () => (isCount() ? "numbers" : isMind() ? "guesses" : isRush() ? "moves" : "fences"); // lowercase, for prose
-const unitLabel = () => (isCount() ? "Numbers" : isMind() ? "Guesses" : isRush() ? "Moves" : "Fences"); // Titlecase, for headers
-const solvedTitle = () => (isMind() ? "🎉 Cracked!" : isRush() || isCount() ? "🎉 Solved!" : "🎉 Trapped!");
-const solvedVerb = () => (isMind() ? "Cracked" : "Solved");
+const isUnlock = () => gameId() === "unlock";
+const unitWord = () => (isUnlock() ? "dots" : isCount() ? "numbers" : isMind() ? "guesses" : isRush() ? "moves" : "fences"); // lowercase, for prose
+const unitLabel = () => (isUnlock() ? "Dots" : isCount() ? "Numbers" : isMind() ? "Guesses" : isRush() ? "Moves" : "Fences"); // Titlecase, for headers
+const solvedTitle = () => (isUnlock() ? "🔓 Unlocked!" : isMind() ? "🎉 Cracked!" : isRush() || isCount() ? "🎉 Solved!" : "🎉 Trapped!");
+const solvedVerb = () => (isUnlock() ? "Unlocked" : isMind() ? "Cracked" : "Solved");
 function ruleText() {
+  if (isUnlock())
+    return "Redraw the phone's unlock pattern — find an order of dots that draws exactly these lines. Everyone gets today's pattern; fastest unlock wins.";
   if (isCount())
     return "Use the six numbers and + − × ÷ to hit the target exactly — everyone gets today's numbers; fastest exact solve wins, fewest numbers breaks ties.";
   if (isMind())
