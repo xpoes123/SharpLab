@@ -4,9 +4,11 @@ You see a finished pattern on an n×n grid of dots — just the lines, no order.
 dots that draws exactly that picture under Android rules:
   · you can only move TO a dot you haven't used yet;
   · a stroke may pass OVER a used dot freely, but passing over an unused dot selects it.
-The trap (per the "Android pattern password" puzzle): every segment gets drawn end-to-end in one
-motion, so the obvious trace usually covers a used dot's segment twice or strands a midpoint.
-Generation keeps the candidate with the FEWEST valid orders, so there's little room to bluff.
+Degree-reading (start/end on the odd-degree dots, like an Euler trail) cracks naive patterns, so
+difficulty is scored by a solver that plays like a person: try odd-degree dots first, short strokes
+first, and count the partial orders it explores before one works (`effort`). Walks are biased toward
+strokes that CROSS used dots, which retrace lines and fake pass-throughs — that breaks the parity
+read. Easy takes a middling board, medium/hard the highest-effort of many candidates.
 
 Dots are indexed r*n + c. The picture is the set of PRIMITIVE edges (adjacent collinear lattice
 points along each stroke), so a 2-long stroke and two 1-long strokes over the same dots are equal.
@@ -33,13 +35,16 @@ HOWTO = (
     "to be drawn, and nothing extra. Tap **Undo** to step back. Fastest unlock wins."
 )
 
-# difficulty → (grid size, (min, max) dots in the pattern, candidates tried)
+# difficulty → (grid size, (min, max) dots, candidates tried, target effort or None = hardest found)
 _PARAMS = {
-    "easy":   (3, (5, 7), 40),
-    "medium": (4, (7, 10), 40),
-    "hard":   (5, (9, 13), 30),
+    "easy":   (4, (8, 11), 30, 60),
+    "medium": (4, (9, 13), 60, None),
+    "hard":   (5, (12, 18), 60, None),
 }
-_SOLVE_BUDGET = 200_000     # DFS nodes per count — a 5×5 pattern prunes far below this
+_SOLVE_BUDGET = 200_000     # DFS nodes per solution count
+_EFFORT_BUDGET = 40_000     # cap on the person-like solver (a capped board is simply "very hard")
+_MAX_SOLUTIONS = 3          # a pattern with many valid orders is easy to stumble into
+_CROSS_BIAS = 3             # walk weight per used dot a stroke crosses (retraces / fake pass-throughs)
 
 
 def _step(n: int, a: int, b: int) -> list[int]:
@@ -107,6 +112,35 @@ def count_solutions(n: int, edges: set, cap: int = 50) -> int:
     return found[0]
 
 
+def effort(n: int, edges: set) -> int:
+    """Partial orders a degree-reading solver explores before finding a solution: starts on
+    odd-degree dots first, prefers short strokes. Higher = more plausible dead ends."""
+    dots = {d for e in edges for d in e}
+    deg = {d: sum(d in e for e in edges) for d in dots}
+    nodes, found = [0], [False]
+
+    def dfs(cur, used, drawn):
+        if found[0] or nodes[0] >= _EFFORT_BUDGET:
+            return
+        nodes[0] += 1
+        if drawn == edges:
+            found[0] = True
+            return
+        for t in sorted(_next_moves(n, cur, used), key=lambda t: len(_step(n, cur, t))):
+            if t not in dots:
+                continue
+            path = _step(n, cur, t)
+            new = {_edge(p, q) for p, q in zip(path, path[1:])}
+            if new <= edges:
+                dfs(t, used | {t}, drawn | new)
+
+    for d in sorted(dots, key=lambda d: (deg[d] % 2 == 0, d)):
+        dfs(d, {d}, frozenset())
+        if found[0]:
+            break
+    return nodes[0]
+
+
 def _random_pattern(rng: random.Random, n: int, length: int) -> list[int]:
     seq = [rng.randrange(n * n)]
     used = {seq[0]}
@@ -114,28 +148,32 @@ def _random_pattern(rng: random.Random, n: int, length: int) -> list[int]:
         opts = _next_moves(n, seq[-1], used)
         if not opts:
             break
-        t = rng.choice(opts)
+        weights = [1 + _CROSS_BIAS * (len(_step(n, seq[-1], t)) - 2) for t in opts]
+        t = rng.choices(opts, weights)[0]
         used.add(t)
         seq.append(t)
     return seq
 
 
 def build_solvable(seed: int, difficulty: str) -> dict:
-    """Random walks are solvable by construction (the walk is a witness); keep the one with the
-    fewest valid orders, tie-break on more lines. `_witness` is stripped before shipping."""
-    n, (lo, hi), tries = _PARAMS.get(difficulty, _PARAMS["medium"])
+    """Random walks are solvable by construction (the walk is a witness). Score candidates by
+    `effort`, then take the best-scoring one with at most _MAX_SOLUTIONS orders: closest to the
+    target effort (easy) or the highest (medium/hard). `_witness`/`_effort` are stripped before shipping."""
+    n, (lo, hi), tries, want = _PARAMS.get(difficulty, _PARAMS["medium"])
     rng = random.Random(seed)
-    best = None
+    cands = []
     for _ in range(tries):
         walk = _random_pattern(rng, n, rng.randint(lo, hi))
-        if len(walk) < lo:
-            continue
-        _, edges = replay(n, walk)
-        key = (count_solutions(n, edges), -len(edges))
-        if best is None or key < best[0]:
-            best = (key, walk, edges)
-    _, walk, edges = best
-    return {"n": n, "edges": sorted(list(e) for e in edges), "_witness": walk}
+        if len(walk) >= lo:
+            edges = replay(n, walk)[1]
+            cands.append((effort(n, edges), walk, edges))
+    rank = (lambda c: abs(c[0] - want)) if want else (lambda c: -c[0])
+    cands.sort(key=rank)
+    # Counting is the slow part, so only count down the ranked list until one passes.
+    pick = next((c for c in cands if count_solutions(n, c[2], cap=_MAX_SOLUTIONS + 1) <= _MAX_SOLUTIONS),
+                cands[0])
+    eff, walk, edges = pick
+    return {"n": n, "edges": sorted(list(e) for e in edges), "_witness": walk, "_effort": eff}
 
 
 def generate(seed: int, difficulty: str) -> dict:
@@ -174,6 +212,7 @@ if __name__ == "__main__":
     assert replay(3, [1, 0, 2]) == ([1, 0, 2], {(0, 1), (1, 2)})       # pass over a USED dot is fine
     assert replay(3, [0, 1, 0]) is None                                 # can't land on a used dot
     assert count_solutions(3, {(0, 1), (1, 2)}) == 4                    # 0→2, 2→0, 1→0→2, 1→2→0
+    assert effort(3, {(0, 1), (1, 2)}) >= 1
     p = build_solvable(7, "easy")
     assert validate(p, {"moves": p["_witness"]})["solved"]
     assert validate(p, {"moves": p["_witness"][:-1]}) is None
