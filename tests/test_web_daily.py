@@ -205,3 +205,9 @@ def test_guest_plays_shows_unranked_and_never_counts(monkeypatch):
                    for r in await q.get_daily_results("trappig", day))  # payouts/bot never see guests
 
     _run(go())
+
+
+def test_preview_never_ships_private_fields():
+    web_daily._preview_cache.clear()
+    out = _run(web_daily.preview("unlock", "easy"))
+    assert out["board"]["edges"] and not any(k.startswith("_") for k in out["board"])

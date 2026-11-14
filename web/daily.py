@@ -254,6 +254,7 @@ async def preview(game_id: str, difficulty: str = "easy"):
                 gen = game.build_solvable if hasattr(game, "build_solvable") else game.generate
                 board = await asyncio.to_thread(gen, seed, diff)
                 par_v, _ = await asyncio.to_thread(game.par, board)
+                board = {k: v for k, v in board.items() if not k.startswith("_")}   # e.g. _witness
                 entry = (board, par_v, time.monotonic())
                 _preview_cache[key] = entry
     board, par_v = entry[0], entry[1]
