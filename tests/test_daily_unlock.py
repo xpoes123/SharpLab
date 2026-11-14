@@ -38,3 +38,9 @@ def test_trial_day_is_out_of_rotation(monkeypatch):
     monkeypatch.setitem(daily.TRIAL_DAYS, "2026-11-15", ("unlock", "medium"))   # a Sunday
     assert daily.schedule("2026-11-15") == ("unlock", "medium")         # beats the Sunday override
     assert all(daily.schedule(f"2026-12-{d:02d}")[0] != "unlock" for d in range(1, 29))
+
+
+def test_difficulty_tracks_solver_effort():
+    eff = {d: ul.build_solvable(daily.seed_for("unlock", "2026-11-20"), d)["_effort"] for d in ("easy", "medium")}
+    assert eff["easy"] < eff["medium"]
+    assert ul.build_solvable(1, "easy")["n"] == 4                       # 3×3 is too trivial to ship
