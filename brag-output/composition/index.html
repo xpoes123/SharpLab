@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=1920, height=1080">
+<title>SharpLab: Not a gambling product</title>
+<script src="assets/gsap.min.js"></script>
+<style>
+:root{--ink:#0e0e14;--bone:#f4efe2;--gold:#e0b458;--lab:#a78bd0;--dim:#6f6f82}
+body{margin:0;background:var(--ink)}
+#root{position:relative;width:100%;height:100%;overflow:hidden;background:var(--ink);color:var(--bone)}
+.clip{position:absolute;inset:0}
+#punch{position:absolute;inset:0;filter:contrast(1.14) saturate(1.28) brightness(1.04)}
+.shot{width:100%;height:100%;object-fit:cover}
+.over h2{font:400 176px/0.92 'League Gothic';text-transform:uppercase;margin:0;letter-spacing:.005em;text-shadow:0 6px 44px rgba(8,8,12,.95),0 2px 6px rgba(8,8,12,.9)}
+.over p{font:700 31px/1.3 'IBM Plex Mono';color:var(--gold);margin:14px 0 0;text-shadow:0 2px 16px rgba(8,8,12,1),0 0 4px rgba(8,8,12,1)}
+.cap{position:absolute;bottom:112px;max-width:1500px}
+.cap.l{left:80px} .cap.r{right:80px;text-align:right} #o-mew{background:linear-gradient(to left,rgba(8,8,12,.95) 0,rgba(8,8,12,.9) 36%,rgba(8,8,12,0) 52%)} #o-mew .cap{max-width:800px}
+.exh{position:absolute;left:80px;right:80px;top:20px;height:40px;display:flex;justify-content:space-between;align-items:center;font:400 28px 'IBM Plex Mono';color:#c9c6d6;z-index:5}
+.exh span:first-child{color:var(--gold);font-weight:700;text-transform:uppercase;letter-spacing:.12em}
+.bar{position:absolute;left:0;right:0;height:78px;background:#08080c;z-index:4}
+#vig{background:radial-gradient(ellipse at 50% 46%,rgba(8,8,12,0) 46%,rgba(8,8,12,.82) 100%),linear-gradient(to top,rgba(8,8,12,.86) 0,rgba(8,8,12,0) 46%)}
+#grain{position:absolute;inset:0;background:url(assets/img/grain.png);opacity:.075;mix-blend-mode:overlay;pointer-events:none;z-index:9}
+#flash{position:absolute;inset:0;background:var(--bone);opacity:0;z-index:8;pointer-events:none}
+/* README */
+#hook{background:#101018}
+#doc{position:absolute;left:150px;top:262px;right:110px;transform-origin:18% 66%}
+.ln{display:grid;grid-template-columns:96px 1fr;font:400 64px/1.32 'IBM Plex Mono';margin-bottom:38px}
+.ln i{font-style:normal;color:#9a9aae;font-size:38px;padding-top:16px}
+.dimt{color:#b4b4c6}
+.ch{opacity:0}
+#l5{font:400 216px/1 'League Gothic';text-transform:uppercase;color:var(--gold);letter-spacing:.005em;margin-top:-8px}
+#fname{position:absolute;left:150px;top:96px;font:400 30px 'IBM Plex Mono';color:#b4b4c6}
+/* audit */
+#games{width:100%;height:100%;object-fit:cover;filter:grayscale(.55) contrast(1.1) brightness(.22)}
+#ledger{position:absolute;left:110px;right:110px;top:110px}
+#ledger h3{font:700 30px 'IBM Plex Mono';letter-spacing:.14em;color:var(--gold);margin:0 0 20px;text-transform:uppercase}
+.row{position:relative;display:flex;justify-content:space-between;align-items:flex-end;border-top:3px solid #55556a;padding:10px 0 0}
+.row b{font:400 40px 'IBM Plex Mono';color:#dedbe8;padding-bottom:30px}
+.row span{font:400 190px/1 'League Gothic'}
+#r3{border-top-color:var(--gold)}
+#r3 b{color:var(--gold);font-weight:700;font-size:52px;padding-bottom:64px}
+#r3 span{color:var(--gold);font-size:340px;line-height:.92}
+/* title */
+#title{background:#0a0a10;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+#word{font:400 520px/.9 'League Gothic';letter-spacing:.008em}
+#word em{font-style:normal;color:var(--lab)}
+#tag{font:700 60px 'IBM Plex Mono';color:var(--gold);margin-top:16px}
+#repo{font:400 31px 'IBM Plex Mono';color:#b5b3c4;margin-top:30px}
+</style></head><body>
+<div id="root" data-composition-id="main" data-start="0" data-width="1920" data-height="1080" data-duration="25">
+<audio id="music" data-start="0" data-duration="25" data-track-index="10" data-volume="0.5" src="assets/music/close-eyes-15-40.wav"></audio>
+<audio id="sfx-line5" data-start="3.0" data-duration="0.65" data-track-index="20" data-volume="0.8" src="assets/sfx/impactPunch_heavy_000.ogg"></audio>
+<audio id="sfx-pack" data-start="9.375" data-duration="0.9" data-track-index="21" data-volume="0.85" src="assets/sfx/cards-pack-open-1.ogg"></audio>
+<audio id="sfx-flip" data-start="10.0" data-duration="0.5" data-track-index="22" data-volume="0.8" src="assets/sfx/card-place-1.ogg"></audio>
+<audio id="sfx-81" data-start="20.625" data-duration="0.49" data-track-index="23" data-volume="0.85" src="assets/sfx/impactPlate_heavy_000.ogg"></audio>
+<audio id="sfx-81b" data-start="20.65" data-duration="0.5" data-track-index="24" data-volume="0.5" src="assets/sfx/error_005.ogg"></audio>
+<audio id="sfx-title" data-start="22.5" data-duration="1.48" data-track-index="25" data-volume="0.8" src="assets/sfx/impactBell_heavy_000.ogg"></audio>
+<audio id="key1" data-start="0.35" data-duration="0.25" data-track-index="26" data-volume="0.55" src="assets/sfx/keypress-002.wav"></audio>
+<audio id="key2" data-start="0.5" data-duration="0.25" data-track-index="27" data-volume="0.55" src="assets/sfx/keypress-003.wav"></audio>
+<audio id="key3" data-start="0.65" data-duration="0.25" data-track-index="28" data-volume="0.55" src="assets/sfx/keypress-004.wav"></audio>
+<audio id="key4" data-start="0.8" data-duration="0.25" data-track-index="29" data-volume="0.55" src="assets/sfx/keypress-005.wav"></audio>
+<audio id="key5" data-start="0.95" data-duration="0.25" data-track-index="30" data-volume="0.55" src="assets/sfx/keypress-006.wav"></audio>
+<audio id="key6" data-start="1.1" data-duration="0.25" data-track-index="31" data-volume="0.55" src="assets/sfx/keypress-007.wav"></audio>
+<audio id="key7" data-start="1.25" data-duration="0.25" data-track-index="32" data-volume="0.55" src="assets/sfx/keypress-008.wav"></audio>
+<audio id="key8" data-start="1.4" data-duration="0.25" data-track-index="33" data-volume="0.55" src="assets/sfx/keypress-009.wav"></audio>
+<audio id="key9" data-start="1.55" data-duration="0.25" data-track-index="34" data-volume="0.55" src="assets/sfx/keypress-001.wav"></audio>
+<audio id="key10" data-start="1.7" data-duration="0.25" data-track-index="35" data-volume="0.55" src="assets/sfx/keypress-002.wav"></audio>
+<audio id="key11" data-start="1.85" data-duration="0.25" data-track-index="36" data-volume="0.55" src="assets/sfx/keypress-003.wav"></audio>
+<audio id="key12" data-start="2.0" data-duration="0.25" data-track-index="37" data-volume="0.55" src="assets/sfx/keypress-004.wav"></audio>
+<audio id="key13" data-start="2.15" data-duration="0.25" data-track-index="38" data-volume="0.55" src="assets/sfx/keypress-005.wav"></audio>
+<audio id="key14" data-start="2.3" data-duration="0.25" data-track-index="39" data-volume="0.55" src="assets/sfx/keypress-006.wav"></audio>
+
+<div id="hook" class="clip" data-start="0" data-duration="5" data-track-index="1">
+  <div id="fname">README.md</div>
+  <div id="doc">
+    <div class="ln"><i>3</i><div class="dimt"><span class="ch">A</span><span class="ch"> </span><span class="ch">p</span><span class="ch">e</span><span class="ch">r</span><span class="ch">s</span><span class="ch">o</span><span class="ch">n</span><span class="ch">a</span><span class="ch">l</span><span class="ch"> </span><span class="ch">q</span><span class="ch">u</span><span class="ch">a</span><span class="ch">n</span><span class="ch">t</span><span class="ch">i</span><span class="ch">t</span><span class="ch">a</span><span class="ch">t</span><span class="ch">i</span><span class="ch">v</span><span class="ch">e</span><span class="ch"> </span><span class="ch">s</span><span class="ch">p</span><span class="ch">o</span><span class="ch">r</span><span class="ch">t</span><span class="ch">s</span><span class="ch"> </span><span class="ch">b</span><span class="ch">e</span><span class="ch">t</span><span class="ch">t</span><span class="ch">i</span><span class="ch">n</span><span class="ch">g</span><span class="ch"> </span><span class="ch">r</span><span class="ch">e</span><span class="ch">s</span><span class="ch">e</span><span class="ch">a</span><span class="ch">r</span><span class="ch">c</span><span class="ch">h</span><span class="ch"> </span><span class="ch">l</span><span class="ch">a</span><span class="ch">b</span><span class="ch">.</span></div></div>
+    <div class="ln" id="row5"><i>5</i><div id="l5">Not a gambling product.</div></div>
+  </div>
+</div>
+
+<div id="punch">
+<video id="v-plinko" class="clip shot" muted playsinline data-start="5.0" data-duration="1.25" data-track-index="2" src="assets/clips/plinko.mp4"></video>
+<video id="v-crash" class="clip shot" muted playsinline data-start="6.25" data-duration="1.25" data-track-index="2" src="assets/clips/crash.mp4"></video>
+<video id="v-horse" class="clip shot" muted playsinline data-start="7.5" data-duration="1.875" data-track-index="2" src="assets/clips/horse.mp4"></video>
+<video id="v-pack" class="clip shot" muted playsinline data-start="9.375" data-duration="0.625" data-track-index="2" src="assets/clips/pack.mp4"></video>
+<video id="v-flips" class="clip shot" muted playsinline data-start="10.0" data-duration="1.875" data-track-index="2" src="assets/clips/flips.mp4"></video>
+<img id="v-mew" class="clip shot" alt="" data-start="11.875" data-duration="1.875" data-track-index="2" src="assets/img/mew.png">
+<video id="v-court" class="clip shot" muted playsinline data-start="13.75" data-duration="1.875" data-track-index="2" src="assets/clips/court.mp4"></video>
+<video id="v-pig" class="clip shot" muted playsinline data-start="15.625" data-duration="1.25" data-track-index="2" src="assets/clips/pig.mp4"></video>
+<video id="v-wall" class="clip shot" muted playsinline data-start="16.875" data-duration="2.5" data-track-index="2" src="assets/clips/wall.mp4"></video>
+<div id="vig" class="clip" data-start="5" data-duration="14.375" data-track-index="8"></div>
+</div>
+<div id="bars" class="clip" data-start="5" data-duration="14.375" data-track-index="3"><div class="bar" style="top:0"></div><div class="bar" style="bottom:0"></div></div>
+<div id="o-plinko" class="clip over" data-start="5.0" data-duration="1.25" data-track-index="4"><div class="exh"><span>Exhibit A</span><span>casino.html</span></div><div class="cap l"><h2 id="c-plinko">Stochastic research</h2><p id="p-plinko">server-settled wagers.</p></div></div>
+<div id="o-crash" class="clip over" data-start="6.25" data-duration="1.25" data-track-index="4"><div class="exh"><span>Exhibit B</span><span>casino.html</span></div><div class="cap l"><h2 id="c-crash">Risk management</h2><p id="p-crash">busted at 1.41×.</p></div></div>
+<div id="o-horse" class="clip over" data-start="7.5" data-duration="1.875" data-track-index="4"><div class="exh"><span>Exhibit C</span><span>horserace.html</span></div><div class="cap l"><h2 id="c-horse">Equine research</h2><p id="p-horse">real odds. fake horses.</p></div></div>
+<div id="o-pack" class="clip over" data-start="9.375" data-duration="0.625" data-track-index="4"><div class="exh"><span>Exhibit D</span><span>cards.html</span></div></div>
+<div id="o-flips" class="clip over" data-start="10.0" data-duration="1.875" data-track-index="4"><div class="exh"><span>Exhibit D</span><span>cards.html</span></div><div class="cap l"><h2 id="c-flips">Alternative assets</h2><p id="p-flips">pull-rate odds, per set.</p></div></div>
+<div id="o-mew" class="clip over" data-start="11.875" data-duration="1.875" data-track-index="4"><div class="exh"><span>Exhibit E</span><span>pokehoops.html</span></div><div class="cap r"><h2 id="c-mew">Mew plays point guard</h2><p id="p-mew">“Tiny, though.”</p></div></div>
+<div id="o-court" class="clip over" data-start="13.75" data-duration="1.875" data-track-index="4"><div class="exh"><span>Exhibit F</span><span>pokehoops.html</span></div><div class="cap l"><h2 id="c-court">3v3 to 11</h2><p id="p-court">moves. stamina. weather.</p></div></div>
+<div id="o-pig" class="clip over" data-start="15.625" data-duration="1.25" data-track-index="4"><div class="exh"><span>Exhibit G</span><span>trappig.html</span></div><div class="cap l"><h2 id="c-pig">Pork futures</h2><p id="p-pig">provably solvable boards.</p></div></div>
+<div id="o-wall" class="clip over" data-start="16.875" data-duration="2.5" data-track-index="4"><div class="exh"><span>Exhibit H</span><span>wall.html</span></div><div class="cap l"><h2 id="c-wall">Live election TV</h2><p id="p-wall">14 hours on air. one GPU.</p></div></div>
+
+<video id="games" class="clip" muted playsinline data-start="19.375" data-duration="3.125" data-track-index="6" src="assets/clips/games.mp4"></video>
+<div id="audit" class="clip" data-start="19.375" data-duration="3.125" data-track-index="5">
+  <div id="ledger">
+    <h3>Audit of findings</h3>
+    <div class="row" id="r1"><b>Odds snapshots taken</b><span id="n1">2.9M</span></div>
+    <div class="row" id="r2"><b>Casino rounds played</b><span id="n2">7,923</span></div>
+    <div class="row" id="r3"><b>Bets logged</b><span id="n3">81</span></div>
+  </div>
+</div>
+
+<div id="title" class="clip" data-start="22.5" data-duration="2.5" data-track-index="7">
+  <div id="word">SHARP<em>LAB</em></div>
+  <div id="tag">Not a gambling product.</div>
+  <div id="repo">1,027 commits. 144,784 lines of Python.</div>
+</div>
+
+<div id="flash"></div>
+<div id="grain"></div>
+</div>
+<script>
+const tl = gsap.timeline({ paused: true });
+const SHOTS = [["plinko", 5.0, 1.25, [1.04, 1.1, "50% 40%", 0]], ["crash", 6.25, 1.25, [1.1, 1.22, "50% 45%", 0]], ["horse", 7.5, 1.875, [1.12, 1.2, "50% 60%", 0]], ["pack", 9.375, 0.625, [2.3, 2.7, "50% 46%", 0]], ["flips", 10.0, 1.875, [1.7, 1.85, "50% 30%", 0]], ["mew", 11.875, 1.875, [1.9, 2.05, "23.4% 51.7%", 0]], ["court", 13.75, 1.875, [1.28, 1.38, "50% 58%", 300]], ["pig", 15.625, 1.25, [1.3, 1.4, "50% 55%", 300]], ["wall", 16.875, 2.5, [1.42, 1.56, "25% 58%", 0]]];
+const KICKS = [5.03, 5.23, 5.68, 6.33, 6.84, 7.11, 7.44, 7.88, 8.13, 8.45, 8.77, 9.09, 9.79, 10.06, 10.68, 11.32, 12.1, 13.18, 13.77, 13.97, 14.4, 14.59, 15.02, 15.65, 15.87, 16.11, 16.47, 16.71, 17.1, 17.52, 17.76, 18.07, 18.39, 18.64, 19.03, 19.28, 19.59, 20.01, 20.21, 20.85, 21.3, 21.47, 21.91];
+const CUTS = [5.0, 6.25, 7.5, 9.375, 10.0, 11.875, 13.75, 15.625, 16.875, 19.375];
+let seed = 1337;
+const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+
+// hook: type line 3, slam line 5 on the track's hit at 18.0 s (video 3.0)
+const chars = gsap.utils.toArray(".ch");
+const step = (2.35 - 0.35) / chars.length;
+chars.forEach((c, i) => {
+  const t = 0.35 + i * step;
+  tl.set(c, { opacity: 1, backgroundColor: "#e0b458", color: "#101018" }, t);
+  tl.set(c, { backgroundColor: "transparent", color: "#b4b4c6" }, i === chars.length - 1 ? 2.95 : t + step);
+});
+gsap.set("#row5", { opacity: 0 });
+tl.set("#row5", { opacity: 1 }, 3.0); // beat-locked: 3.00 (track 18.0)
+tl.fromTo("#l5", { scale: 1.5, x: 120 }, { scale: 1, x: 0, duration: 0.14, ease: "power4.in", transformOrigin: "0% 60%" }, 2.92);
+tl.fromTo("#doc", { scale: 1 }, { scale: 1.06, duration: 3.0, ease: "none" }, 0);
+tl.to("#doc", { scale: 1.2, duration: 2, ease: "power1.in" }, 3.0);
+tl.fromTo("#hook", { x: -14 }, { x: 0, duration: 0.2, ease: "power2.out" }, 3.0);
+
+// footage: each shot pushes in; captions slam
+SHOTS.forEach(([id, st, d, m]) => {
+  const [from, to, origin, x] = m;
+  gsap.set("#v-" + id, { transformOrigin: origin });
+  tl.fromTo("#v-" + id, { scale: from, x }, { scale: to, x, duration: d, ease: "none", immediateRender: true }, st);
+  const h = document.getElementById("c-" + id);
+  if (!h) return;
+  tl.fromTo(h, { scale: 1.34, y: 26, opacity: 0 }, { scale: 1, y: 0, opacity: 1, duration: 0.11, ease: "power4.out", transformOrigin: "50% 100%" }, st + 0.02);
+  tl.fromTo(h, { textShadow: "16px 0 0 rgba(224,62,62,.85),-16px 0 0 rgba(90,170,220,.85)" }, { textShadow: "0px 6px 44px rgba(8,8,12,.95),0px 2px 6px rgba(8,8,12,.9)", duration: 0.26, ease: "power2.out" }, st + 0.02);
+  tl.fromTo("#p-" + id, { opacity: 0, x: -26 }, { opacity: 1, x: 0, duration: 0.12, ease: "power3.out" }, st + 0.16);
+});
+
+// footage punches on the measured kick onsets
+KICKS.forEach((t) => {
+  if (t >= 19.375) return;
+  const a = (rnd() - 0.5) * 22, b = (rnd() - 0.5) * 14;
+  tl.fromTo("#punch", { scale: 1.035, x: a, y: b }, { scale: 1, x: 0, y: 0, duration: 0.17, ease: "power3.out" }, t);
+});
+
+// flash frames on the cuts. the drop gets the big one.
+gsap.set("#flash", { opacity: 0 });
+tl.fromTo("#flash", { opacity: 1 }, { opacity: 0, duration: 0.2, ease: "power2.out", immediateRender: false }, 5.0); // beat-locked: 5.00 (track 20.0)
+CUTS.slice(1).forEach((t) => tl.fromTo("#flash", { opacity: 0.32 }, { opacity: 0, duration: 0.1, ease: "power2.out", immediateRender: false }, t));
+
+// audit: one row per beat, the set then holds. beat-grid: 19.375, 20.0, 20.625
+[["#r1", 19.45], ["#r2", 20.0], ["#r3", 20.625]].forEach(([s, t]) => {
+  tl.fromTo(s, { opacity: 0, x: 70 }, { opacity: 1, x: 0, duration: 0.1, ease: "power4.out" }, t);
+});
+tl.fromTo("#ledger", { opacity: 0 }, { opacity: 1, duration: 0.05 }, 19.375);
+tl.fromTo("#n3", { scale: 1.5 }, { scale: 1, duration: 0.12, ease: "power4.out", transformOrigin: "100% 70%" }, 20.625);
+tl.fromTo("#audit", { x: 26 }, { x: 0, duration: 0.3, ease: "power3.out" }, 20.625);
+tl.fromTo("#ledger", { scale: 1 }, { scale: 1.03, duration: 1.875, ease: "none" }, 20.625);
+
+// title lands on the break. hard end on the re-entry at 25.0.
+tl.fromTo("#word", { scale: 1.2, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.16, ease: "power4.out" }, 22.5); // beat-locked: 22.50 (track 37.5)
+tl.fromTo("#word", { y: 0 }, { y: -6, duration: 2.3, ease: "none" }, 22.66);
+tl.fromTo("#tag", { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.16, ease: "power3.out" }, 22.95);
+tl.fromTo("#repo", { opacity: 0 }, { opacity: 1, duration: 0.14, ease: "none" }, 23.2);
+
+// grain steps at 15 fps. pre-seeded, so seeks are deterministic.
+for (let f = 0; f < 375; f++) tl.set("#grain", { backgroundPosition: Math.floor(rnd() * 512) + "px " + Math.floor(rnd() * 512) + "px" }, f / 15);
+
+window.__timelines["main"] = tl;
+</script>
+</body></html>
