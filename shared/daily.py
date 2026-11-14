@@ -42,7 +42,7 @@ _ERAS: list[tuple[str, list[str]]] = [
 ]
 
 # day → (game_id, difficulty) for trial runs of new games. Forward-only, like the Sunday override.
-TRIAL_DAYS: dict[str, tuple[str, str]] = {}
+TRIAL_DAYS: dict[str, tuple[str, str]] = {"2026-11-14": (unlock.ID, "medium")}   # Unlock debut
 
 
 # ── puzzle-day & rotation ─────────────────────────────────────────────────────
