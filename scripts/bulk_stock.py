@@ -16,6 +16,9 @@ the same ticker may appear once per account:
     AAPL,3,163.74,Roth IRA
     AAPL,1,170.00,Brokerage
 
+A raw Fidelity "Portfolio_Positions_*.csv" download also works as-is (see
+parse_fidelity): positions keep their account, money-market sweeps become cash.
+
 Self-test: ./venv/bin/python scripts/bulk_stock.py --selftest
 
 ponytail: stock-only, full-replace. No option rows, no per-lot edits — add a
@@ -25,6 +28,7 @@ import argparse
 import asyncio
 import csv
 import io
+import re
 import sys
 from pathlib import Path
 
@@ -55,6 +59,70 @@ def parse_csv(text: str) -> list[dict]:
     return rows
 
 
+# Fidelity account names -> the sub-account names the brokerage already uses.
+FIDELITY_ACCOUNTS = {"individual - tod": "Brokerage", "individual": "Brokerage",
+                     "roth ira": "Roth IRA", "health savings account": "HSA",
+                     "traditional ira": "Traditional IRA", "rollover ira": "Traditional IRA"}
+# Fidelity drops the class dash Yahoo needs (BRKB -> BRK-B).
+FIDELITY_SYMBOLS = {"BRKB": "BRK-B", "BRKA": "BRK-A", "BFB": "BF-B", "BFA": "BF-A"}
+_OPT_RE = re.compile(r"^-([A-Z.]+)(\d{2})(\d{2})(\d{2})([CP])([\d.]+)$")
+
+
+def _money(v: str) -> float | None:
+    v = (v or "").replace("$", "").replace(",", "").replace("+", "").strip()
+    try:
+        return float(v)
+    except ValueError:
+        return None
+
+
+def parse_fidelity(text: str) -> tuple[list[dict], list[dict], float]:
+    """Parse a raw Fidelity Portfolio_Positions export -> (stock rows, option rows, cash).
+    Lots of the same ticker in the same account (Cash+Margin) merge at blended cost;
+    money-market sweeps (SPAXX**, FDRXX**) sum into cash; "Pending activity" is skipped."""
+    reader = csv.DictReader(io.StringIO(text))
+    stocks: dict[tuple, dict] = {}
+    options, cash = [], 0.0
+    for raw in reader:
+        r = {(k or "").strip().lower(): (v or "").strip() for k, v in raw.items() if k}
+        sym = r.get("symbol", "").upper().replace(" ", "")
+        if not sym or not r.get("account name"):
+            continue   # the disclaimer footer
+        acct = FIDELITY_ACCOUNTS.get(r["account name"].lower(), r["account name"])
+        if sym.endswith("**"):
+            cash += _money(r.get("current value", "")) or 0.0
+            continue
+        qty, cost = _money(r.get("quantity", "")), _money(r.get("cost basis total", ""))
+        if not qty or not cost or cost <= 0:
+            continue   # pending activity, or a lot with no basis
+        m = _OPT_RE.match(sym)
+        if m:
+            u, yy, mm, dd, cp, strike = m.groups()
+            options.append({"underlying": u, "opt_type": "call" if cp == "C" else "put",
+                            "strike": float(strike), "expiry": f"20{yy}-{mm}-{dd}",
+                            "side": "buy" if qty > 0 else "sell", "contracts": int(abs(qty)),
+                            "premium": round(cost / (abs(qty) * 100), 4), "account": acct})
+            continue
+        sym = FIDELITY_SYMBOLS.get(sym, sym)
+        lot = stocks.setdefault((sym, acct), {"ticker": sym, "shares": 0.0, "cost": 0.0, "account": acct})
+        lot["shares"] += qty
+        lot["cost"] += cost
+    rows = [{"ticker": l["ticker"], "shares": round(l["shares"], 6),
+             "price": round(l["cost"] / l["shares"], 6), "account": l["account"]}
+            for l in stocks.values() if l["shares"] > 0]
+    if not rows and not options:
+        raise ValueError("no positions found in that Fidelity export")
+    return rows, options, round(cash, 2)
+
+
+def parse_portfolio(text: str) -> tuple[list[dict], list[dict], float | None]:
+    """Either format -> (stock rows, option rows, cash or None). Sniffs the header."""
+    first = text.lstrip("\ufeff").split("\n", 1)[0].lower()
+    if "symbol" in first and "cost basis total" in first:
+        return parse_fidelity(text.lstrip("\ufeff"))
+    return parse_csv(text), [], None
+
+
 async def resolve_user(who: str) -> str:
     """Accept a raw discord id or a username; return the id."""
     if who.isdigit():
@@ -68,9 +136,11 @@ async def resolve_user(who: str) -> str:
     return row[0]
 
 
-async def apply_portfolio(user: str, rows: list[dict], cash: float | None) -> dict:
-    """Wipe the user's stock+option trades and reseed one buy per row; optionally
-    set cash. Returns {positions, cash}. Shared by the CLI and /stock import."""
+async def apply_portfolio(user: str, rows: list[dict], cash: float | None,
+                          options: list[dict] = ()) -> dict:
+    """Wipe the user's stock+option trades and reseed one buy per row (plus any
+    option rows); optionally set cash. Returns {positions, options, cash}.
+    Shared by the CLI, /stock import and the HQ upload page."""
     for s in await queries.get_stock_positions_full(user):
         await queries.delete_stock_trades_for_ticker(user, s["ticker"])
     for t in await queries.get_option_trades(user):
@@ -78,15 +148,19 @@ async def apply_portfolio(user: str, rows: list[dict], cash: float | None) -> di
     for r in rows:
         await queries.add_stock_trade(user, r["ticker"], "buy", r["shares"], r["price"],
                                       notes="bulk import", account=r.get("account"))
+    for o in options:
+        await queries.add_option_trade(user, o["underlying"], o["opt_type"], o["strike"], o["expiry"],
+                                       o["side"], o["contracts"], o["premium"], notes="bulk import")
     if cash is not None:
         await queries.set_stock_cash(user, cash)
     left = await queries.get_stock_holdings(user)
     left_opt = [o for o in await queries.get_option_positions_full(user) if not o["closed"]]
-    assert len(left) == len({r["ticker"] for r in rows}) and not left_opt, "post-import position count mismatch"
-    return {"positions": len(left), "cash": await queries.get_stock_cash(user)}
+    assert len(left) == len({r["ticker"] for r in rows}) and len(left_opt) == len(options), \
+        "post-import position count mismatch"
+    return {"positions": len(left), "options": len(left_opt), "cash": await queries.get_stock_cash(user)}
 
 
-async def apply(user: str, rows: list[dict], cash: float | None, commit: bool):
+async def apply(user: str, rows: list[dict], cash: float | None, commit: bool, options=()):
     old_stocks = await queries.get_stock_positions_full(user)
     old_opts = await queries.get_option_positions_full(user)
     old_cash = await queries.get_stock_cash(user)
@@ -103,7 +177,7 @@ async def apply(user: str, rows: list[dict], cash: float | None, commit: bool):
     if not commit:
         print("\nDRY RUN — re-run with --apply to commit.")
         return
-    res = await apply_portfolio(user, rows, cash)
+    res = await apply_portfolio(user, rows, cash, options)
     print(f"\n✅ applied: {res['positions']} open positions, cash ${res['cash']:,.2f}")
 
 
@@ -119,6 +193,22 @@ def selftest():
             parse_csv(bad); assert False, f"should have raised: {bad!r}"
         except ValueError:
             pass
+    fid = ("\ufeffAccount number,Account name,Symbol,Description,Quantity,Current value,Cost basis total,Type\n"
+           "X1,Individual - TOD,SPAXX**,MM,,$682.95,,Cash,\n"
+           "X1,Individual - TOD,Pending activity,,,$37.48,,,\n"
+           "2,ROTH IRA,BRKB,BRK,20,$1.00,$9000.00,Cash,\n"
+           "2,ROTH IRA,BRKB,BRK,2,$1.00,$1461.59,Margin,\n"
+           "2,ROTH IRA, -WDS260717C25,WDS CALL,3,$75.00,$566.01,Cash,\n"
+           "3,Health Savings Account,FDRXX**,MM,,$38.35,,Cash,\n"
+           "3,Health Savings Account,VOO,VOO,2,$1.00,$1000.00,Cash,\n"
+           '\n"Date downloaded Nov-23-2026 2:05 p.m ET"\n')
+    rows, opts, cash = parse_portfolio(fid)
+    assert cash == 721.30, cash
+    assert rows == [{"ticker": "BRK-B", "shares": 22.0, "price": round(10461.59 / 22, 6), "account": "Roth IRA"},
+                    {"ticker": "VOO", "shares": 2.0, "price": 500.0, "account": "HSA"}], rows
+    assert opts == [{"underlying": "WDS", "opt_type": "call", "strike": 25.0, "expiry": "2026-07-17",
+                     "side": "buy", "contracts": 3, "premium": 1.8867, "account": "Roth IRA"}], opts
+    assert parse_portfolio("ticker,shares,price\nAAPL,1,2\n")[2] is None
     print("selftest OK")
 
 
@@ -134,11 +224,13 @@ def main():
         selftest(); return
     if not a.user or not a.csv:
         ap.error("user and csv are required")
-    rows = parse_csv(Path(a.csv).read_text())
+    rows, options, cash = parse_portfolio(Path(a.csv).read_text())
+    if options:
+        print(f"note: {len(options)} option position(s) will be imported too")
 
     async def run():
         uid = await resolve_user(a.user)
-        await apply(uid, rows, a.cash, a.apply)
+        await apply(uid, rows, a.cash if a.cash is not None else cash, a.apply, options)
     asyncio.run(run())
 
 

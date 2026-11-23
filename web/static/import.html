@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><link rel="stylesheet" href="https://share.djiang.xyz/ui/ui.css">
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SharpLab HQ — Upload Portfolio</title>
+<link rel="stylesheet" href="/hqstyle.css" />
+<style>
+  .drop { border: 2px dashed var(--line-2); border-radius: var(--radius); padding: var(--space-6, 24px); text-align: center; cursor: pointer; }
+  .drop.over { border-color: var(--accent); }
+  #out table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  #out td, #out th { padding: 4px 8px; border-bottom: 1px solid var(--line); text-align: left; }
+  .num { text-align: right !important; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><a href="/">Sharp<span>Lab</span> HQ</a></div>
+  <nav class="nav"><a href="/">Server</a><a href="/stocks">Stocks</a><a href="/lines">Lines</a><a href="/pickem">Pick'em</a><a href="/cards">Cards</a><a href="/games">Games</a><a href="/vid">Video</a></nav>
+  <div></div>
+</header>
+<main class="ui-stack" style="max-width:860px;margin:0 auto;padding:16px">
+  <h1>Upload your portfolio</h1>
+  <p class="muted">Fidelity → Positions → Download, then drop the <code>Portfolio_Positions_…csv</code> here as-is.
+    A plain <code>ticker,shares,price[,account]</code> CSV works too. This <b>replaces your whole portfolio</b>
+    (stocks, options, cash) — you'll see a preview first.</p>
+  <label class="drop" id="drop">
+    <input type="file" id="file" accept=".csv,text/csv" hidden />
+    <span id="dropmsg">Click or drop a CSV</span>
+  </label>
+  <div id="out"></div>
+</main>
+<script>
+const out = document.getElementById("out");
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const usd = n => "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+let csvText = null;
+
+async function send(apply) {
+  const r = await fetch("/api/v1/hq/stocks/import", {
+    method: "POST", credentials: "include", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({csv: csvText, apply}),
+  });
+  if (r.status === 401) {
+    out.innerHTML = `<p>Log in first: <a class="ui-btn" href="/api/v1/auth/discord/login?next=/import.html">Log in with Discord</a></p>`;
+    return null;
+  }
+  const d = await r.json();
+  if (!r.ok) { out.innerHTML = `<p style="color:var(--bad)">${esc(d.error || "upload failed")}</p>`; return null; }
+  return d;
+}
+
+async function preview(file) {
+  csvText = await file.text();
+  document.getElementById("dropmsg").textContent = file.name;
+  out.innerHTML = `<p class="muted">Reading…</p>`;
+  const d = await send(false);
+  if (!d) return;
+  const total = d.rows.reduce((s, r) => s + r.shares * r.price, 0);
+  out.innerHTML = `
+    <div class="ui-card ui-stack">
+      <p><b>${d.rows.length}</b> positions · cost basis <b>${usd(total)}</b>
+        ${d.options.length ? ` · <b>${d.options.length}</b> option(s)` : ""}
+        · cash <b>${d.cash == null ? "unchanged" : usd(d.cash)}</b></p>
+      <div class="table-wrap"><table>
+        <tr><th>Ticker</th><th>Account</th><th class="num">Shares</th><th class="num">Avg cost</th></tr>
+        ${d.rows.map(r => `<tr><td>${esc(r.ticker)}</td><td>${esc(r.account || "")}</td>
+          <td class="num">${+r.shares.toFixed(4)}</td><td class="num">${usd(r.price)}</td></tr>`).join("")}
+        ${d.options.map(o => `<tr><td>${esc(o.underlying)} ${o.strike}${o.opt_type[0].toUpperCase()} ${esc(o.expiry)}</td>
+          <td>${esc(o.account || "")}</td><td class="num">${o.side === "sell" ? "-" : ""}${o.contracts} ct</td>
+          <td class="num">${usd(o.premium)}</td></tr>`).join("")}
+      </table></div>
+      <button class="ui-btn" id="go">Replace my portfolio</button>
+    </div>`;
+  document.getElementById("go").onclick = async (e) => {
+    e.target.disabled = true;
+    const res = await send(true);
+    if (res) out.innerHTML = `<div class="ui-card"><p>✅ Imported <b>${res.positions}</b> positions
+      ${res.options ? `+ ${res.options} option(s)` : ""}, cash <b>${usd(res.cash)}</b>.
+      <a href="/stocks">View stocks →</a></p></div>`;
+  };
+}
+
+const drop = document.getElementById("drop");
+document.getElementById("file").onchange = e => e.target.files[0] && preview(e.target.files[0]);
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); e.dataTransfer.files[0] && preview(e.dataTransfer.files[0]); };
+</script>
+<script src="/track.js"></script>
+</body>
+</html>

@@ -1129,6 +1129,34 @@ async def hq_stock_trade(body: StockTradeIn, request: Request):
             "short_shares": short_shares}
 
 
+class PortfolioImportIn(BaseModel):
+    csv: str
+    apply: bool = False
+
+
+@router.post("/hq/stocks/import")
+async def hq_stock_import(body: PortfolioImportIn, request: Request):
+    """Self-serve portfolio upload (/import.html): preview, then apply=true to replace
+    the caller's whole portfolio. Same parser + full-replace as /stock import."""
+    sess = auth.read_session(request)
+    if not sess:
+        return JSONResponse({"error": "not_authenticated"}, status_code=401)
+    if len(body.csv) > 200_000:
+        return JSONResponse({"error": "CSV too big (max 200 KB)"}, status_code=400)
+    from scripts.bulk_stock import apply_portfolio, parse_portfolio
+    try:
+        rows, options, cash = parse_portfolio(body.csv)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    if any(r["shares"] * r["price"] > 100_000_000 for r in rows):
+        return JSONResponse({"error": "a position is over $100M — check the file"}, status_code=400)
+    if not body.apply:
+        return {"ok": True, "applied": False, "rows": rows, "options": options, "cash": cash}
+    res = await apply_portfolio(sess["id"], rows, cash, options)
+    _CACHE.invalidate("stocks", f"trader:{sess['id']}", "earnings")
+    return {"ok": True, "applied": True, **res}
+
+
 class OptionTradeIn(BaseModel):
     underlying: str
     opt_type: str   # call | put

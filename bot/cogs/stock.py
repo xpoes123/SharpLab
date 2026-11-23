@@ -38,7 +38,7 @@ from discord.ext import commands, tasks
 
 from bot.cogs._movers_helpers import build_movers_embed
 from db import queries
-from scripts.bulk_stock import apply_portfolio, parse_csv
+from scripts.bulk_stock import apply_portfolio, parse_portfolio
 
 log = logging.getLogger(__name__)
 
@@ -2739,11 +2739,12 @@ class _TradeEditView(discord.ui.View):
 class ConfirmImportView(discord.ui.View):
     """Confirm gate for /stock import — replaces the caller's whole portfolio."""
 
-    def __init__(self, author_id: int, rows: list[dict], cash: float | None):
+    def __init__(self, author_id: int, rows: list[dict], cash: float | None, options: list[dict] = ()):
         super().__init__(timeout=300)
         self.author_id = author_id
         self.rows = rows
         self.cash = cash
+        self.options = options
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author_id:
@@ -2754,7 +2755,7 @@ class ConfirmImportView(discord.ui.View):
     @discord.ui.button(label="✅ Replace my portfolio", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await interaction.response.defer()
-        res = await apply_portfolio(str(self.author_id), self.rows, self.cash)
+        res = await apply_portfolio(str(self.author_id), self.rows, self.cash, self.options)
         await interaction.edit_original_response(
             content=f"✅ Imported **{res['positions']}** positions. Cash: **${res['cash']:,.2f}**.",
             embed=None, view=None)
@@ -3685,9 +3686,9 @@ class StockCog(commands.Cog):
 
     # ── /stock sell ──────────────────────────────────────────────────────────
 
-    @stock.command(name="import", description="Bulk-replace your whole portfolio from a CSV (ticker,shares,price)")
+    @stock.command(name="import", description="Bulk-replace your whole portfolio from a CSV or Fidelity export")
     @app_commands.describe(
-        file="CSV header: ticker,shares,price[,account] (price = your avg cost)",
+        file="Fidelity Portfolio_Positions CSV, or ticker,shares,price[,account] (price = avg cost)",
         cash="Optional: set your cash balance too",
     )
     async def import_portfolio(
@@ -3701,7 +3702,7 @@ class StockCog(commands.Cog):
             await interaction.followup.send("CSV too big (max 100 KB).", ephemeral=True)
             return
         try:
-            rows = parse_csv((await file.read()).decode("utf-8-sig"))
+            rows, options, file_cash = parse_portfolio((await file.read()).decode("utf-8-sig"))
         except (ValueError, UnicodeDecodeError) as e:
             await interaction.followup.send(f"Couldn't read that CSV: {e}", ephemeral=True)
             return
@@ -3710,6 +3711,10 @@ class StockCog(commands.Cog):
                             + (f" · {r['account']}" if r.get("account") else "") for r in rows[:40])
         if len(rows) > 40:
             preview += f"\n… +{len(rows) - 40} more"
+        if options:
+            preview += f"\n+ {len(options)} option position(s)"
+        if cash is None:
+            cash = file_cash
         embed = discord.Embed(
             title="Import preview",
             description=f"This **replaces your entire portfolio** ({len(rows)} positions) — "
@@ -3719,7 +3724,7 @@ class StockCog(commands.Cog):
         if cash is not None:
             embed.add_field(name="Cash", value=f"set to ${cash:,.2f}")
         await interaction.followup.send(
-            embed=embed, view=ConfirmImportView(interaction.user.id, rows, cash), ephemeral=True)
+            embed=embed, view=ConfirmImportView(interaction.user.id, rows, cash, options), ephemeral=True)
 
     @stock.command(name="sell", description="Record a stock sale (realized P/L is computed)")
     @app_commands.describe(
