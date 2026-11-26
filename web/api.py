@@ -58,6 +58,7 @@ from web.g_stockguess import router as stockguess_router
 from web.g_quizbowl import router as quizbowl_router
 from web.g_sequence import router as sequence_router
 from web.g_valorant import router as valorant_router
+from web.g_showdown import router as showdown_router
 from web.blackjack import router as blackjack_router
 from web.baccarat import router as baccarat_router
 from web.breakout import router as breakout_router
@@ -214,6 +215,7 @@ app.include_router(nbaguess_router)
 app.include_router(stockguess_router)
 app.include_router(quizbowl_router)
 app.include_router(sequence_router)
+app.include_router(showdown_router)
 app.include_router(valorant_router)
 app.include_router(blackjack_router)
 app.include_router(baccarat_router)
