@@ -1074,6 +1074,17 @@ async def init_db() -> None:
             await db.commit()
         except Exception:
             pass
+        try:  # Showdown daily Time Trial: one ranked run per user per (day, variant, hands)
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS showdown_runs ("
+                "puzzle_date TEXT NOT NULL, variant TEXT NOT NULL, hands INTEGER NOT NULL, "
+                "discord_user TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, "
+                "elapsed_ms INTEGER, wrong INTEGER, score_ms INTEGER, "
+                "PRIMARY KEY (puzzle_date, variant, hands, discord_user))"
+            )
+            await db.commit()
+        except Exception:
+            pass
         try:  # skill-game leaderboards: each player's best timed run per game
             await db.execute(
                 "CREATE TABLE IF NOT EXISTS skill_scores ("

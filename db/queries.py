@@ -6428,3 +6428,54 @@ async def count_shipped_requests(discord_user: str) -> int:
         cur = await db.execute(
             "SELECT COUNT(*) FROM feature_requests WHERE discord_user = ? AND status = 'done'", (discord_user,))
         return (await cur.fetchone())[0]
+
+
+# ── Showdown daily Time Trial (web/g_showdown.py) ────────────────────────────────
+
+async def get_or_create_showdown_start(discord_user: str, day: str, variant: str, hands: int) -> dict:
+    """The user's run row for this table today, created on first Start. The clock anchors to that
+    first Start, so reloading the page doesn't restart it."""
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute(
+            "INSERT OR IGNORE INTO showdown_runs (puzzle_date, variant, hands, discord_user, started_at) "
+            "VALUES (?, ?, ?, ?, ?)", (day, variant, hands, discord_user, now))
+        await db.commit()
+        cur = await db.execute(
+            "SELECT * FROM showdown_runs WHERE puzzle_date=? AND variant=? AND hands=? AND discord_user=?",
+            (day, variant, hands, discord_user))
+        return dict(await cur.fetchone())
+
+
+async def get_showdown_run(discord_user: str, day: str, variant: str, hands: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM showdown_runs WHERE puzzle_date=? AND variant=? AND hands=? AND discord_user=?",
+            (day, variant, hands, discord_user))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def finish_showdown_run(discord_user: str, day: str, variant: str, hands: int,
+                              elapsed_ms: int, wrong: int, score_ms: int) -> bool:
+    """Record the result once. False if the run was never started or is already finished."""
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "UPDATE showdown_runs SET finished_at=?, elapsed_ms=?, wrong=?, score_ms=? "
+            "WHERE puzzle_date=? AND variant=? AND hands=? AND discord_user=? AND finished_at IS NULL",
+            (now, elapsed_ms, wrong, score_ms, day, variant, hands, discord_user))
+        await db.commit()
+        return cur.rowcount == 1
+
+
+async def get_showdown_board(day: str, variant: str, hands: int, limit: int = 50) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT discord_user, elapsed_ms, wrong, score_ms FROM showdown_runs "
+            "WHERE puzzle_date=? AND variant=? AND hands=? AND finished_at IS NOT NULL "
+            "ORDER BY score_ms ASC, finished_at ASC LIMIT ?", (day, variant, hands, limit))
+        return [dict(r) for r in await cur.fetchall()]
